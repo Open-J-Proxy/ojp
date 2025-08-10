@@ -55,7 +55,16 @@ public class Lob {
     @SneakyThrows
     public String getUUID() {
         log.debug("getUUID called");
-        return (this.lobReference != null) ? this.lobReference.get().getUuid() : null;
+        if (this.lobReference == null) {
+            return null;
+        }
+        try {
+            LobReference ref = this.lobReference.get();
+            return ref != null ? ref.getUuid() : null;
+        } catch (Exception e) {
+            log.error("Exception getting LOB UUID", e);
+            return null;
+        }
     }
 
     public long length() throws SQLException {
@@ -131,9 +140,15 @@ public class Lob {
     @SneakyThrows
     protected void haveLobReferenceValidation() throws SQLException {
         log.debug("haveLobReferenceValidation called");
-        if (this.lobReference.get() == null) {
-            log.error("No reference to a LOB object found.");
-            throw new SQLException("No reference to a LOB object found.");
+        try {
+            LobReference ref = this.lobReference.get();
+            if (ref == null) {
+                log.error("No reference to a LOB object found.");
+                throw new SQLException("No reference to a LOB object found.");
+            }
+        } catch (Exception e) {
+            log.error("Error accessing LOB reference: " + e.getMessage(), e);
+            throw new SQLException("Blob object is null for UUID " + getUUID() + ". This may indicate a race condition or session management issue.", e);
         }
     }
 

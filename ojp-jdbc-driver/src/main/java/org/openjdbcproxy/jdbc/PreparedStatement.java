@@ -431,7 +431,17 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public void setBlob(int parameterIndex, Blob x) throws SQLException {
         log.debug("setBlob: {}, {}", parameterIndex, x);
         this.checkClosed();
-        String blobUUID = (x != null) ? ((org.openjdbcproxy.jdbc.Blob) x).getUUID() : null;
+        String blobUUID = null;
+        if (x != null) {
+            org.openjdbcproxy.jdbc.Blob ojpBlob = (org.openjdbcproxy.jdbc.Blob) x;
+            // Ensure the LOB reference is available before getting UUID
+            try {
+                ojpBlob.getLobReference().get(); // Wait for async operation to complete
+                blobUUID = ojpBlob.getUUID();
+            } catch (Exception e) {
+                throw new SQLException("Unable to get Blob UUID: " + e.getMessage(), e);
+            }
+        }
         this.paramsMap.put(parameterIndex,
                 Parameter.builder()
                         .type(BLOB)
@@ -636,11 +646,21 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
                 byteRead = inputStream.read();
             }
             os.close();
+            
+            // Wait for async operation to complete before getting UUID
+            String blobUUID;
+            try {
+                blob.getLobReference().get(); // Wait for async operation to complete
+                blobUUID = blob.getUUID();
+            } catch (Exception e) {
+                throw new SQLException("Unable to get Blob UUID after writing: " + e.getMessage(), e);
+            }
+            
             this.paramsMap.put(parameterIndex,
                     Parameter.builder()
                             .type(BLOB)
                             .index(parameterIndex)
-                            .values(Arrays.asList(blob.getUUID()))
+                            .values(Arrays.asList(blobUUID))
                             .build()
             );
         } catch (IOException e) {

@@ -45,6 +45,10 @@ public class GrpcServer {
             grpcTelemetry = ojpServerTelemetry.createNoOpGrpcTelemetry();
         }
 
+        // Force IPv4 to avoid IPv6 connection issues in CI environments
+        System.setProperty("java.net.preferIPv4Stack", "true");
+        System.setProperty("java.net.preferIPv4Addresses", "true");
+        
         // Build server with configuration
         ServerBuilder<?> serverBuilder = NettyServerBuilder
                 .forPort(config.getServerPort())
@@ -61,7 +65,7 @@ public class GrpcServer {
 
         Server server = serverBuilder.build();
 
-        logger.info("Starting OJP gRPC Server on port {}", config.getServerPort());
+        logger.info("Starting OJP gRPC Server on port {} (IPv4 forced)", config.getServerPort());
         logger.info("Server configuration applied successfully");
         
         server.start();

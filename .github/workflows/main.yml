@@ -147,10 +147,27 @@ jobs:
         run: mvn test -pl ojp-server
 
       - name: Run (ojp-server)
-        run: mvn verify -pl ojp-server -Prun-ojp-server > /tmp/ojp-server.log 2>&1 &
+        run: mvn verify -pl ojp-server -Prun-ojp-server -Djava.net.preferIPv4Stack=true > /tmp/ojp-server.log 2>&1 &
 
       - name: Wait for ojp-server to start
-        run: sleep 10
+        run: |
+          echo "Waiting for OJP server to start..."
+          # Wait up to 30 seconds for server to become available
+          for i in {1..30}; do
+            if curl -f --connect-timeout 1 http://localhost:1059 2>/dev/null; then
+              echo "Server is responding on port 1059"
+              break
+            fi
+            echo "Attempt $i: Server not ready yet, waiting..."
+            sleep 1
+          done
+          
+          # Additional wait to ensure server is fully initialized
+          sleep 5
+          
+          # Show server log to help debug any issues
+          echo "=== Server startup log ==="
+          tail -50 /tmp/ojp-server.log || echo "No server log available yet"
 
       - name: Set up JDK ${{ matrix.java-version }} for ojp-grpc-commons and ojp-jdbc-driver
         uses: actions/setup-java@v4

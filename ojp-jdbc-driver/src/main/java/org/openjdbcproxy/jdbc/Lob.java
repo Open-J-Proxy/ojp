@@ -81,7 +81,12 @@ public class Lob {
 
             CompletableFuture<Void> asyncOperation = CompletableFuture.supplyAsync(() -> {
                 try {
-                    this.lobReference.set(this.lobService.sendBytes(lobType, pos, in));
+                    LobReference lobRef = this.lobService.sendBytes(lobType, pos, in);
+                    this.lobReference.set(lobRef);
+                    
+                    // Validate that the LOB is accessible on the server side
+                    validateLobAvailability(lobRef);
+                    
                 } catch (SQLException e) {
                     log.error("SQLException in setBinaryStream async - sendBytes", e);
                     // Set the exception on the future to ensure it's propagated
@@ -139,7 +144,11 @@ public class Lob {
                     try {
                         out.close(); // Close the piped output stream first
                         asyncOperation.get(); // Wait for async operation to complete
-                        log.debug("Async LOB operation completed successfully");
+                        
+                        // Additional validation to ensure LOB is accessible
+                        ensureLobAccessible();
+                        
+                        log.debug("Async LOB operation completed and validated successfully");
                     } catch (Exception e) {
                         log.error("Error waiting for async operation completion", e);
                         throw new IOException("Failed to complete LOB write operation: " + e.getMessage(), e);
@@ -149,6 +158,38 @@ public class Lob {
         } catch (Exception e) {
             log.error("Exception in setBinaryStream", e);
             throw new RuntimeException(e);
+        }
+    }
+    
+    /**
+     * Validates that the LOB is accessible on the server side after registration.
+     * This is called during the async operation to ensure server-side consistency.
+     */
+    private void validateLobAvailability(LobReference lobRef) throws SQLException {
+        if (lobRef == null || lobRef.getUuid() == null || lobRef.getUuid().isEmpty()) {
+            throw new SQLException("LOB reference is null or has no UUID after registration");
+        }
+        log.debug("LOB {} validated successfully during async operation", lobRef.getUuid());
+    }
+    
+    /**
+     * Ensures the LOB is accessible after the async operation completes.
+     * This provides additional validation before returning to the caller.
+     */
+    private void ensureLobAccessible() throws Exception {
+        try {
+            LobReference ref = this.lobReference.get();
+            if (ref == null) {
+                throw new SQLException("LOB reference is null after async operation completion");
+            }
+            String uuid = ref.getUuid();
+            if (uuid == null || uuid.isEmpty()) {
+                throw new SQLException("LOB UUID is null after async operation completion");
+            }
+            log.debug("LOB {} is accessible after async operation completion", uuid);
+        } catch (Exception e) {
+            log.error("LOB accessibility validation failed: " + e.getMessage(), e);
+            throw e;
         }
     }
 

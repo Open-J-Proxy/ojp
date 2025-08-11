@@ -437,8 +437,14 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
             // Ensure the LOB reference is available before getting UUID
             try {
                 ojpBlob.getLobReference().get(); // Wait for async operation to complete
+                
+                // Validate that the server-side blob is actually available
+                ojpBlob.validateServerSideLobAvailabilityWithRetry();
+                
                 blobUUID = ojpBlob.getUUID();
+                log.debug("Blob UUID obtained successfully: {}", blobUUID);
             } catch (Exception e) {
+                log.error("Unable to get Blob UUID", e);
                 throw new SQLException("Unable to get Blob UUID: " + e.getMessage(), e);
             }
         }
@@ -645,15 +651,37 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
                 writtenLength++;
                 byteRead = inputStream.read();
             }
-            os.close();
+            os.close(); // This will wait for async operation and validate server-side availability
             
-            // Wait for async operation to complete before getting UUID
-            String blobUUID;
-            try {
-                blob.getLobReference().get(); // Wait for async operation to complete
-                blobUUID = blob.getUUID();
-            } catch (Exception e) {
-                throw new SQLException("Unable to get Blob UUID after writing: " + e.getMessage(), e);
+            // Additional validation with retry logic for getting UUID
+            String blobUUID = null;
+            int maxRetries = 3;
+            int retryDelayMs = 50;
+            Exception lastException = null;
+            
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    blob.getLobReference().get(); // Wait for async operation to complete
+                    blob.validateServerSideLobAvailabilityWithRetry(); // Validate server-side availability
+                    blobUUID = blob.getUUID();
+                    log.debug("Blob UUID obtained successfully on attempt {}: {}", attempt, blobUUID);
+                    break;
+                } catch (Exception e) {
+                    lastException = e;
+                    log.warn("Failed to get Blob UUID on attempt {}: {}", attempt, e.getMessage());
+                    
+                    if (attempt < maxRetries) {
+                        try {
+                            Thread.sleep(retryDelayMs);
+                            retryDelayMs *= 2; // Exponential backoff
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new SQLException("Interrupted while retrying to get Blob UUID", ie);
+                        }
+                    } else {
+                        throw new SQLException("Unable to get Blob UUID after writing: " + e.getMessage(), e);
+                    }
+                }
             }
             
             this.paramsMap.put(parameterIndex,
@@ -664,6 +692,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
                             .build()
             );
         } catch (IOException e) {
+            log.error("IOException in setBlob with InputStream", e);
             throw new SQLException("Unable to write BLOB bytes: " + e.getMessage(), e);
         }
     }

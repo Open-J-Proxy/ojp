@@ -157,28 +157,30 @@ public class MySQLPreparedStatementExtensiveTests {
     public void testBinaryParameterSetters(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
 
-        ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, data) VALUES (?, ?, ?)");
+        PreparedStatement psInsert = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, data) VALUES (?, ?, ?)");
 
         byte[] testData = "Hello World".getBytes();
-        ps.setInt(1, 20);
-        ps.setString(2, "BinaryTest");
-        ps.setBytes(3, testData);
-        Assert.assertEquals(1, ps.executeUpdate());
+        psInsert.setInt(1, 20);
+        psInsert.setString(2, "BinaryTest");
+        psInsert.setBytes(3, testData);
+        Assert.assertEquals(1, psInsert.executeUpdate());
 
         // Test with InputStream
-        ps.setInt(1, 21);
-        ps.setString(2, "StreamTest");
-        ps.setBinaryStream(3, new ByteArrayInputStream(testData));
-        Assert.assertEquals(1, ps.executeUpdate());
+        psInsert.setInt(1, 21);
+        psInsert.setString(2, "StreamTest");
+        psInsert.setBinaryStream(3, new ByteArrayInputStream(testData));
+        Assert.assertEquals(1, psInsert.executeUpdate());
 
         // Verify the data
-        ps = connection.prepareStatement("SELECT data FROM " + tableName + " WHERE id = ?");
-        ps.setInt(1, 20);
-        ResultSet rs = ps.executeQuery();
+        PreparedStatement psSelect = connection.prepareStatement("SELECT data FROM " + tableName + " WHERE id = ?");
+        psSelect.setInt(1, 20);
+        ResultSet rs = psSelect.executeQuery();
         Assert.assertTrue(rs.next());
         byte[] retrievedData = rs.getBytes("data");
         Assert.assertEquals("Hello World", new String(retrievedData));
         rs.close();
+        psInsert.close();
+        psSelect.close();
     }
 
     @ParameterizedTest

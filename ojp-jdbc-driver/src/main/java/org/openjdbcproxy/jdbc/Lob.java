@@ -79,7 +79,7 @@ public class Lob {
             PipedInputStream in = new PipedInputStream();
             PipedOutputStream out = new PipedOutputStream(in);
 
-            CompletableFuture.supplyAsync(() -> {
+            CompletableFuture<Void> asyncOperation = CompletableFuture.supplyAsync(() -> {
                 try {
                     this.lobReference.set(this.lobService.sendBytes(lobType, pos, in));
                 } catch (SQLException e) {
@@ -112,7 +112,40 @@ public class Lob {
                 return null;
             });
 
-            return out;
+            // Return a wrapped OutputStream that waits for async operation on close
+            return new OutputStream() {
+                @Override
+                public void write(int b) throws IOException {
+                    out.write(b);
+                }
+                
+                @Override
+                public void write(byte[] b) throws IOException {
+                    out.write(b);
+                }
+                
+                @Override
+                public void write(byte[] b, int off, int len) throws IOException {
+                    out.write(b, off, len);
+                }
+                
+                @Override
+                public void flush() throws IOException {
+                    out.flush();
+                }
+                
+                @Override
+                public void close() throws IOException {
+                    try {
+                        out.close(); // Close the piped output stream first
+                        asyncOperation.get(); // Wait for async operation to complete
+                        log.debug("Async LOB operation completed successfully");
+                    } catch (Exception e) {
+                        log.error("Error waiting for async operation completion", e);
+                        throw new IOException("Failed to complete LOB write operation: " + e.getMessage(), e);
+                    }
+                }
+            };
         } catch (Exception e) {
             log.error("Exception in setBinaryStream", e);
             throw new RuntimeException(e);

@@ -437,10 +437,6 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
             // Ensure the LOB reference is available before getting UUID
             try {
                 ojpBlob.getLobReference().get(); // Wait for async operation to complete
-                
-                // Validate that the server-side blob is actually available
-                ojpBlob.validateServerSideLobAvailabilityWithRetry();
-                
                 blobUUID = ojpBlob.getUUID();
                 log.debug("Blob UUID obtained successfully: {}", blobUUID);
             } catch (Exception e) {
@@ -662,7 +658,6 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
             for (int attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
                     blob.getLobReference().get(); // Wait for async operation to complete
-                    blob.validateServerSideLobAvailabilityWithRetry(); // Validate server-side availability
                     blobUUID = blob.getUUID();
                     log.debug("Blob UUID obtained successfully on attempt {}: {}", attempt, blobUUID);
                     break;

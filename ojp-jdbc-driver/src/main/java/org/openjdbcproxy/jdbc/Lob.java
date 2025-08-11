@@ -140,13 +140,6 @@ public class Lob {
                         out.close(); // Close the piped output stream first
                         asyncOperation.get(); // Wait for async operation to complete
                         log.debug("Async LOB operation completed successfully");
-                        
-                        // Validate that the server-side LOB is actually available
-                        validateServerSideLobAvailabilityWithRetry();
-                        log.debug("Server-side LOB validation completed successfully");
-                    } catch (SQLException e) {
-                        log.error("Server-side LOB validation failed", e);
-                        throw new IOException("Failed to complete LOB write operation: " + e.getMessage(), e);
                     } catch (Exception e) {
                         log.error("Error waiting for async operation completion", e);
                         throw new IOException("Failed to complete LOB write operation: " + e.getMessage(), e);
@@ -171,15 +164,6 @@ public class Lob {
             //Refresh Session object. Will wait until lobReference is set to progress.
             this.connection.setSession(this.lobReference.get().getSession());
             
-            // Validate that the server-side LOB is actually available
-            try {
-                validateServerSideLobAvailabilityWithRetry();
-                log.debug("Server-side LOB validation completed successfully in sendBinaryStream");
-            } catch (SQLException e) {
-                log.error("Server-side LOB validation failed in sendBinaryStream", e);
-                throw new RuntimeException("Server-side LOB validation failed: " + e.getMessage(), e);
-            }
-            
             return this.lobReference.get();
         } catch (Exception e) {
             log.error("Exception in sendBinaryStream", e);
@@ -200,58 +184,6 @@ public class Lob {
             log.error("Error accessing LOB reference: " + e.getMessage(), e);
             throw new SQLException("Blob object is null for UUID " + getUUID() + ". This may indicate a race condition or session management issue.", e);
         }
-    }
-
-    /**
-     * Validates that the LOB is actually available on the server side by attempting to get its length.
-     * This helps detect server-side race conditions where the UUID exists but the blob object is null.
-     */
-    protected boolean validateServerSideLobAvailability() {
-        log.debug("validateServerSideLobAvailability called");
-        try {
-            // First ensure we have a valid LOB reference
-            haveLobReferenceValidation();
-            
-            // Try to access the length - this will fail if the server-side blob is null
-            long length = this.length();
-            log.debug("Server-side LOB validation successful, length: {}", length);
-            return true;
-        } catch (Exception e) {
-            log.warn("Server-side LOB validation failed: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Validates server-side LOB availability with retry logic for transient issues.
-     */
-    protected void validateServerSideLobAvailabilityWithRetry() throws SQLException {
-        log.debug("validateServerSideLobAvailabilityWithRetry called");
-        int maxRetries = 3;
-        int retryDelayMs = 100;
-        
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            if (validateServerSideLobAvailability()) {
-                log.debug("Server-side LOB validation succeeded on attempt {}", attempt);
-                return;
-            }
-            
-            if (attempt < maxRetries) {
-                log.warn("Server-side LOB validation failed on attempt {}, retrying in {}ms", attempt, retryDelayMs);
-                try {
-                    Thread.sleep(retryDelayMs);
-                    retryDelayMs *= 2; // Exponential backoff
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new SQLException("Interrupted while waiting to retry LOB validation", e);
-                }
-            }
-        }
-        
-        // If we get here, all retries failed
-        String uuid = getUUID();
-        throw new SQLException("Server-side LOB validation failed after " + maxRetries + " attempts for UUID " + uuid + 
-                ". This indicates a server-side race condition or resource availability issue.");
     }
 
     protected InputStream getBinaryStream(long pos, long length) throws SQLException {

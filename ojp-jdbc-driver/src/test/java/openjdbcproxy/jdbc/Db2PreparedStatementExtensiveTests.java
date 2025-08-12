@@ -26,6 +26,7 @@ public class Db2PreparedStatementExtensiveTests {
     private static boolean isTestDisabled;
 
     private Connection connection;
+    private PreparedStatement ps;
     private String tableName;
 
     @BeforeAll
@@ -36,16 +37,16 @@ public class Db2PreparedStatementExtensiveTests {
     public void setUp(String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(isTestDisabled, "DB2 tests are disabled");
         
+        // Create unique table name for test isolation
+        String uniqueSuffix = System.nanoTime() + "_" + Thread.currentThread().getId();
+        this.tableName = "DB2INST1.db2_prepared_stmt_test_" + uniqueSuffix;
+        
         connection = DriverManager.getConnection(url, user, password);
         
         // Set schema explicitly to avoid "object not found" errors
         try (Statement schemaStmt = connection.createStatement()) {
             schemaStmt.execute("SET SCHEMA DB2INST1");
         }
-        
-        // Generate unique table name to avoid conflicts in concurrent execution
-        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
-        tableName = "DB2INST1.db2_prepared_stmt_test_" + uniqueId;
         
         Statement stmt = connection.createStatement();
         try {
@@ -69,10 +70,13 @@ public class Db2PreparedStatementExtensiveTests {
 
     @AfterEach
     public void tearDown() throws SQLException {
+        if (ps != null) {
+            ps.close();
+        }
         if (connection != null) {
             Statement stmt = connection.createStatement();
             try {
-                stmt.execute("DROP TABLE " + tableName);
+                stmt.execute("DROP TABLE " + tableName + "");
             } catch (SQLException e) {
                 // Ignore
             }
@@ -87,7 +91,7 @@ public class Db2PreparedStatementExtensiveTests {
         setUp(driverClass, url, user, password);
 
         // Test INSERT operation
-        ps = connection.prepareStatement("INSERT INTO DB2INST1.db2_prepared_stmt_test (id, name, age, salary, is_active) VALUES (?, ?, ?, ?, ?)");
+        ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age, salary, is_active) VALUES (?, ?, ?, ?, ?)");
         ps.setInt(1, 1);
         ps.setString(2, "John Doe");
         ps.setInt(3, 30);
@@ -99,7 +103,7 @@ public class Db2PreparedStatementExtensiveTests {
         ps.close();
 
         // Test SELECT operation
-        ps = connection.prepareStatement("SELECT id, name, age, salary, is_active FROM DB2INST1.db2_prepared_stmt_test WHERE id = ?");
+        ps = connection.prepareStatement("SELECT id, name, age, salary, is_active FROM " + tableName + " WHERE id = ?");
         ps.setInt(1, 1);
         
         ResultSet rs = ps.executeQuery();
@@ -114,7 +118,7 @@ public class Db2PreparedStatementExtensiveTests {
         ps.close();
 
         // Test UPDATE operation
-        ps = connection.prepareStatement("UPDATE DB2INST1.db2_prepared_stmt_test SET age = ?, salary = ? WHERE id = ?");
+        ps = connection.prepareStatement("UPDATE " + tableName + " SET age = ?, salary = ? WHERE id = ?");
         ps.setInt(1, 31);
         ps.setBigDecimal(2, new BigDecimal("55000.00"));
         ps.setInt(3, 1);
@@ -124,7 +128,7 @@ public class Db2PreparedStatementExtensiveTests {
         ps.close();
 
         // Verify update
-        ps = connection.prepareStatement("SELECT age, salary FROM DB2INST1.db2_prepared_stmt_test WHERE id = ?");
+        ps = connection.prepareStatement("SELECT age, salary FROM " + tableName + " WHERE id = ?");
         ps.setInt(1, 1);
         rs = ps.executeQuery();
         assertTrue(rs.next());
@@ -140,7 +144,7 @@ public class Db2PreparedStatementExtensiveTests {
         setUp(driverClass, url, user, password);
 
         // Test various data types
-        ps = connection.prepareStatement("INSERT INTO DB2INST1.db2_prepared_stmt_test (id, name, age, salary, is_active, created_date) VALUES (?, ?, ?, ?, ?, ?)");
+        ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age, salary, is_active, created_date) VALUES (?, ?, ?, ?, ?, ?)");
         
         ps.setInt(1, 2);
         ps.setString(2, "Jane Smith");
@@ -154,7 +158,7 @@ public class Db2PreparedStatementExtensiveTests {
         ps.close();
 
         // Verify data types
-        ps = connection.prepareStatement("SELECT * FROM DB2INST1.db2_prepared_stmt_test WHERE id = ?");
+        ps = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         ps.setInt(1, 2);
         
         ResultSet rs = ps.executeQuery();
@@ -175,7 +179,7 @@ public class Db2PreparedStatementExtensiveTests {
         setUp(driverClass, url, user, password);
 
         // Test NULL values
-        ps = connection.prepareStatement("INSERT INTO DB2INST1.db2_prepared_stmt_test (id, name, age, salary, is_active) VALUES (?, ?, ?, ?, ?)");
+        ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age, salary, is_active) VALUES (?, ?, ?, ?, ?)");
         
         ps.setInt(1, 3);
         ps.setString(2, null);
@@ -188,7 +192,7 @@ public class Db2PreparedStatementExtensiveTests {
         ps.close();
 
         // Verify NULL handling
-        ps = connection.prepareStatement("SELECT name, age, salary, is_active FROM DB2INST1.db2_prepared_stmt_test WHERE id = ?");
+        ps = connection.prepareStatement("SELECT name, age, salary, is_active FROM " + tableName + " WHERE id = ?");
         ps.setInt(1, 3);
         
         ResultSet rs = ps.executeQuery();
@@ -211,7 +215,7 @@ public class Db2PreparedStatementExtensiveTests {
         setUp(driverClass, url, user, password);
 
         // Test batch operations
-        ps = connection.prepareStatement("INSERT INTO DB2INST1.db2_prepared_stmt_test (id, name, age, salary, is_active) VALUES (?, ?, ?, ?, ?)");
+        ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age, salary, is_active) VALUES (?, ?, ?, ?, ?)");
         
         // Add multiple batch entries
         for (int i = 10; i < 15; i++) {
@@ -231,7 +235,7 @@ public class Db2PreparedStatementExtensiveTests {
         ps.close();
 
         // Verify batch insert
-        ps = connection.prepareStatement("SELECT COUNT(*) FROM DB2INST1.db2_prepared_stmt_test WHERE id >= 10 AND id < 15");
+        ps = connection.prepareStatement("SELECT COUNT(*) FROM " + tableName + " WHERE id >= 10 AND id < 15");
         ResultSet rs = ps.executeQuery();
         assertTrue(rs.next());
         assertEquals(5, rs.getInt(1));

@@ -431,19 +431,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public void setBlob(int parameterIndex, Blob x) throws SQLException {
         log.debug("setBlob: {}, {}", parameterIndex, x);
         this.checkClosed();
-        String blobUUID = null;
-        if (x != null) {
-            org.openjdbcproxy.jdbc.Blob ojpBlob = (org.openjdbcproxy.jdbc.Blob) x;
-            // Ensure the LOB reference is available before getting UUID
-            try {
-                ojpBlob.getLobReference().get(); // Wait for async operation to complete
-                blobUUID = ojpBlob.getUUID();
-                log.debug("Blob UUID obtained successfully: {}", blobUUID);
-            } catch (Exception e) {
-                log.error("Unable to get Blob UUID", e);
-                throw new SQLException("Unable to get Blob UUID: " + e.getMessage(), e);
-            }
-        }
+        String blobUUID = (x != null) ? ((org.openjdbcproxy.jdbc.Blob) x).getUUID() : null;
         this.paramsMap.put(parameterIndex,
                 Parameter.builder()
                         .type(BLOB)
@@ -647,47 +635,15 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
                 writtenLength++;
                 byteRead = inputStream.read();
             }
-            os.close(); // This will wait for async operation and validate server-side availability
-            
-            // Additional validation with retry logic for getting UUID
-            String blobUUID = null;
-            int maxRetries = 3;
-            int retryDelayMs = 50;
-            Exception lastException = null;
-            
-            for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    blob.getLobReference().get(); // Wait for async operation to complete
-                    blobUUID = blob.getUUID();
-                    log.debug("Blob UUID obtained successfully on attempt {}: {}", attempt, blobUUID);
-                    break;
-                } catch (Exception e) {
-                    lastException = e;
-                    log.warn("Failed to get Blob UUID on attempt {}: {}", attempt, e.getMessage());
-                    
-                    if (attempt < maxRetries) {
-                        try {
-                            Thread.sleep(retryDelayMs);
-                            retryDelayMs *= 2; // Exponential backoff
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new SQLException("Interrupted while retrying to get Blob UUID", ie);
-                        }
-                    } else {
-                        throw new SQLException("Unable to get Blob UUID after writing: " + e.getMessage(), e);
-                    }
-                }
-            }
-            
+            os.close();
             this.paramsMap.put(parameterIndex,
                     Parameter.builder()
                             .type(BLOB)
                             .index(parameterIndex)
-                            .values(Arrays.asList(blobUUID))
+                            .values(Arrays.asList(blob.getUUID()))
                             .build()
             );
         } catch (IOException e) {
-            log.error("IOException in setBlob with InputStream", e);
             throw new SQLException("Unable to write BLOB bytes: " + e.getMessage(), e);
         }
     }

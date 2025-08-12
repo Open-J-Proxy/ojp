@@ -36,9 +36,9 @@ public class BinaryStreamIntegrationTest {
 
         System.out.println("Testing for url -> " + url);
 
-        // Generate unique table name to avoid conflicts in concurrent execution
-        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
-        String tableName = "binary_stream_test_blob_" + uniqueId;
+        // Create unique table name for test isolation
+        String uniqueSuffix = System.nanoTime() + "_" + Thread.currentThread().getId();
+        String tableName = "binary_stream_test_blob_" + uniqueSuffix;
 
         try {
             executeUpdate(conn, "drop table " + tableName);
@@ -87,8 +87,7 @@ public class BinaryStreamIntegrationTest {
         String fromBlobByIdx2 = new String(blobResult2.readAllBytes());
         Assert.assertEquals(testString.substring(0, 5), fromBlobByIdx2);
 
-        executeUpdate(conn, "delete from " + tableName
-        );
+        executeUpdate(conn, "delete from " + tableName);
 
         resultSet.close();
         psSelect.close();
@@ -106,9 +105,9 @@ public class BinaryStreamIntegrationTest {
 
         System.out.println("Testing for url -> " + url);
 
-        // Generate unique table name to avoid conflicts in concurrent execution
-        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
-        String tableName = "binary_stream_test_blob_" + uniqueId;
+        // Create unique table name for test isolation
+        String uniqueSuffix = System.nanoTime() + "_" + Thread.currentThread().getId();
+        String tableName = "binary_stream_test_blob_" + uniqueSuffix;
 
         try {
             executeUpdate(conn, "drop table " + tableName);
@@ -133,7 +132,7 @@ public class BinaryStreamIntegrationTest {
 
         psInsert.executeUpdate();
 
-        PreparedStatement psSelect = conn.prepareStatement("select val_blob from " + tableName + " ");
+        PreparedStatement psSelect = conn.prepareStatement("select val_blob from " + tableName);
         ResultSet resultSet = psSelect.executeQuery();
         resultSet.next();
         InputStream inputStreamBlob = resultSet.getBinaryStream(1);

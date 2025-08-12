@@ -102,14 +102,6 @@ public class SessionManagerImpl implements SessionManager {
             throw new RuntimeException("Session not found: " + sessionInfo.getSessionUUID());
         }
         session.addLob(lobUuid, lob);
-        
-        // Ensure LOB is immediately accessible by performing a quick validation
-        Object retrievedLob = session.getLob(lobUuid);
-        if (retrievedLob == null) {
-            log.error("LOB registration failed - LOB with UUID {} not retrievable after registration", lobUuid);
-            throw new RuntimeException("LOB registration failed for UUID: " + lobUuid);
-        }
-        log.debug("LOB {} registered and validated successfully", lobUuid);
     }
 
     @Override

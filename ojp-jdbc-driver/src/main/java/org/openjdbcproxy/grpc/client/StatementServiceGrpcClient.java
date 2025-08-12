@@ -78,10 +78,6 @@ public class StatementServiceGrpcClient implements StatementService {
                 throw new RuntimeException("Invalid OJP host or port.");
             }
 
-            // Force IPv4 to avoid IPv6 connection issues in CI environments
-            System.setProperty("java.net.preferIPv4Stack", "true");
-            System.setProperty("java.net.preferIPv4Addresses", "true");
-            
             //Once channel is open it remains open and is shared among all requests.
             String target = DNS_PREFIX + host + COLON + port;
             ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
@@ -90,8 +86,6 @@ public class StatementServiceGrpcClient implements StatementService {
 
             this.statemetServiceBlockingStub = StatementServiceGrpc.newBlockingStub(channel);
             this.statemetServiceStub = StatementServiceGrpc.newStub(channel);
-            
-            log.debug("gRPC client connected to {} (IPv4 forced)", target);
         }
     }
 

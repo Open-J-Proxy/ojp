@@ -36,9 +36,9 @@ public class BlobIntegrationTest {
 
     public void setUp(String driverClass, String url, String user, String pwd) throws SQLException, ClassNotFoundException {
 
-        // Generate unique table name to avoid conflicts in concurrent execution
-        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
-        this.tableName = "blob_test_blob_" + uniqueId;
+        // Create unique table name for test isolation
+        String uniqueSuffix = System.nanoTime() + "_" + Thread.currentThread().getId();
+        this.tableName = "blob_test_blob_" + uniqueSuffix;
         if (url.toLowerCase().contains("mysql")) {
             assumeFalse(isMySQLTestDisabled, "MySQL tests are disabled");
             this.tableName += "_mysql";

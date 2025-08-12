@@ -55,16 +55,7 @@ public class Lob {
     @SneakyThrows
     public String getUUID() {
         log.debug("getUUID called");
-        if (this.lobReference == null) {
-            return null;
-        }
-        try {
-            LobReference ref = this.lobReference.get();
-            return ref != null ? ref.getUuid() : null;
-        } catch (Exception e) {
-            log.error("Exception getting LOB UUID", e);
-            return null;
-        }
+        return (this.lobReference != null) ? this.lobReference.get().getUuid() : null;
     }
 
     public long length() throws SQLException {
@@ -79,106 +70,43 @@ public class Lob {
             PipedInputStream in = new PipedInputStream();
             PipedOutputStream out = new PipedOutputStream(in);
 
-            CompletableFuture<Void> asyncOperation = CompletableFuture.supplyAsync(() -> {
+            CompletableFuture.supplyAsync(() -> {
                 try {
-                    LobReference lobRef = this.lobService.sendBytes(lobType, pos, in);
-                    this.lobReference.set(lobRef);
-                    
-                    // Refresh Session object IMMEDIATELY after getting LOB reference
-                    // This ensures the LOB is accessible with the updated session info
-                    this.connection.setSession(lobRef.getSession());
-                    log.debug("Session refreshed with LOB reference session for UUID: {}", lobRef.getUuid());
-                    
-                    // Validate that the LOB is accessible on the server side
-                    validateLobAvailability(lobRef);
-                    
+                    this.lobReference.set(this.lobService.sendBytes(lobType, pos, in));
                 } catch (SQLException e) {
                     log.error("SQLException in setBinaryStream async - sendBytes", e);
                     // Set the exception on the future to ensure it's propagated
                     this.lobReference.setException(e);
                     throw new RuntimeException(e);
                 } catch (Exception e) {
-                    log.error("Unexpected exception in setBinaryStream async", e);
+                    log.error("Unexpected exception in setBinaryStream async - sendBytes", e);
                     // Set the exception on the future to ensure it's propagated
+                    this.lobReference.setException(e);
+                    throw new RuntimeException(e);
+                }
+                //Refresh Session object.
+                try {
+                    this.connection.setSession(this.lobReference.get().getSession());
+                } catch (InterruptedException e) {
+                    log.error("InterruptedException in setBinaryStream async - setSession", e);
+                    this.lobReference.setException(e);
+                    throw new RuntimeException(e);
+                } catch (ExecutionException e) {
+                    log.error("ExecutionException in setBinaryStream async - setSession", e);
+                    this.lobReference.setException(e);
+                    throw new RuntimeException(e);
+                } catch (Exception e) {
+                    log.error("Unexpected exception in setBinaryStream async - setSession", e);
                     this.lobReference.setException(e);
                     throw new RuntimeException(e);
                 }
                 return null;
             });
 
-            // Return a wrapped OutputStream that waits for async operation on close
-            return new OutputStream() {
-                @Override
-                public void write(int b) throws IOException {
-                    out.write(b);
-                }
-                
-                @Override
-                public void write(byte[] b) throws IOException {
-                    out.write(b);
-                }
-                
-                @Override
-                public void write(byte[] b, int off, int len) throws IOException {
-                    out.write(b, off, len);
-                }
-                
-                @Override
-                public void flush() throws IOException {
-                    out.flush();
-                }
-                
-                @Override
-                public void close() throws IOException {
-                    try {
-                        out.close(); // Close the piped output stream first
-                        asyncOperation.get(); // Wait for async operation to complete
-                        
-                        // Additional validation to ensure LOB is accessible
-                        ensureLobAccessible();
-                        
-                        log.debug("Async LOB operation completed and validated successfully");
-                    } catch (Exception e) {
-                        log.error("Error waiting for async operation completion", e);
-                        throw new IOException("Failed to complete LOB write operation: " + e.getMessage(), e);
-                    }
-                }
-            };
+            return out;
         } catch (Exception e) {
             log.error("Exception in setBinaryStream", e);
             throw new RuntimeException(e);
-        }
-    }
-    
-    /**
-     * Validates that the LOB is accessible on the server side after registration.
-     * This is called during the async operation to ensure server-side consistency.
-     */
-    private void validateLobAvailability(LobReference lobRef) throws SQLException {
-        if (lobRef == null || lobRef.getUuid() == null || lobRef.getUuid().isEmpty()) {
-            throw new SQLException("LOB reference is null or has no UUID after registration");
-        }
-        log.debug("LOB {} validated successfully during async operation", lobRef.getUuid());
-    }
-    
-    /**
-     * Ensures the LOB is accessible after the async operation completes.
-     * This provides additional validation before returning to the caller.
-     */
-    private void ensureLobAccessible() throws Exception {
-        try {
-            LobReference ref = this.lobReference.get();
-            if (ref == null) {
-                throw new SQLException("LOB reference is null after async operation completion");
-            }
-            String uuid = ref.getUuid();
-            if (uuid == null || uuid.isEmpty()) {
-                throw new SQLException("LOB UUID is null after async operation completion");
-            }
-            log.debug("LOB {} is accessible after async operation completion", uuid);
-        } catch (Exception e) {
-            log.error("LOB accessibility validation failed: " + e.getMessage(), e);
-            throw e;
         }
     }
 
@@ -193,7 +121,6 @@ public class Lob {
             }
             //Refresh Session object. Will wait until lobReference is set to progress.
             this.connection.setSession(this.lobReference.get().getSession());
-            
             return this.lobReference.get();
         } catch (Exception e) {
             log.error("Exception in sendBinaryStream", e);
@@ -204,15 +131,9 @@ public class Lob {
     @SneakyThrows
     protected void haveLobReferenceValidation() throws SQLException {
         log.debug("haveLobReferenceValidation called");
-        try {
-            LobReference ref = this.lobReference.get();
-            if (ref == null) {
-                log.error("No reference to a LOB object found.");
-                throw new SQLException("No reference to a LOB object found.");
-            }
-        } catch (Exception e) {
-            log.error("Error accessing LOB reference: " + e.getMessage(), e);
-            throw new SQLException("Blob object is null for UUID " + getUUID() + ". This may indicate a race condition or session management issue.", e);
+        if (this.lobReference.get() == null) {
+            log.error("No reference to a LOB object found.");
+            throw new SQLException("No reference to a LOB object found.");
         }
     }
 

@@ -84,6 +84,11 @@ public class Lob {
                     LobReference lobRef = this.lobService.sendBytes(lobType, pos, in);
                     this.lobReference.set(lobRef);
                     
+                    // Refresh Session object IMMEDIATELY after getting LOB reference
+                    // This ensures the LOB is accessible with the updated session info
+                    this.connection.setSession(lobRef.getSession());
+                    log.debug("Session refreshed with LOB reference session for UUID: {}", lobRef.getUuid());
+                    
                     // Validate that the LOB is accessible on the server side
                     validateLobAvailability(lobRef);
                     
@@ -93,24 +98,8 @@ public class Lob {
                     this.lobReference.setException(e);
                     throw new RuntimeException(e);
                 } catch (Exception e) {
-                    log.error("Unexpected exception in setBinaryStream async - sendBytes", e);
+                    log.error("Unexpected exception in setBinaryStream async", e);
                     // Set the exception on the future to ensure it's propagated
-                    this.lobReference.setException(e);
-                    throw new RuntimeException(e);
-                }
-                //Refresh Session object.
-                try {
-                    this.connection.setSession(this.lobReference.get().getSession());
-                } catch (InterruptedException e) {
-                    log.error("InterruptedException in setBinaryStream async - setSession", e);
-                    this.lobReference.setException(e);
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    log.error("ExecutionException in setBinaryStream async - setSession", e);
-                    this.lobReference.setException(e);
-                    throw new RuntimeException(e);
-                } catch (Exception e) {
-                    log.error("Unexpected exception in setBinaryStream async - setSession", e);
                     this.lobReference.setException(e);
                     throw new RuntimeException(e);
                 }

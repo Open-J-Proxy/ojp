@@ -34,7 +34,7 @@ public class OraclePreparedStatementExtensiveTests {
     private static boolean isTestDisabled;
 
     private Connection connection;
-    private PreparedStatement ps;
+    private String tableName;
 
     @BeforeAll
     public static void checkTestConfiguration() {
@@ -45,12 +45,17 @@ public class OraclePreparedStatementExtensiveTests {
         assumeFalse(isTestDisabled, "Oracle tests are disabled");
         
         connection = DriverManager.getConnection(url, user, password);
+        
+        // Generate unique table name to avoid conflicts in concurrent execution
+        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
+        tableName = "" + tableName + "_" + uniqueId;
+        
         Statement stmt = connection.createStatement();
         try {
-            stmt.execute("DROP TABLE oracle_prepared_stmt_test");
+            stmt.execute("DROP TABLE " + tableName);
         } catch (SQLException ignore) {}
         // Oracle-compatible table creation
-        stmt.execute("CREATE TABLE oracle_prepared_stmt_test (" +
+        stmt.execute("CREATE TABLE " + tableName + " (" +
                 "id NUMBER(10) PRIMARY KEY, " +
                 "name VARCHAR2(255), " +
                 "age NUMBER(10), " +
@@ -62,14 +67,14 @@ public class OraclePreparedStatementExtensiveTests {
 
     @AfterEach
     public void tearDown() throws Exception {
-        TestDBUtils.closeQuietly(ps, connection);
+        TestDBUtils.closeQuietly(connection);
     }
 
     @ParameterizedTest
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testBasicParameterSetting(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         ps.setInt(1, 1);
         ps.setString(2, "John Doe");
@@ -79,7 +84,7 @@ public class OraclePreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify the insert
-        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM oracle_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 1);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -94,7 +99,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testNullParameterHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         ps.setInt(1, 2);
         ps.setNull(2, Types.VARCHAR);
@@ -104,7 +109,7 @@ public class OraclePreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify the insert
-        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM oracle_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 2);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -125,10 +130,10 @@ public class OraclePreparedStatementExtensiveTests {
         
         // Test BigDecimal
         Statement stmt = connection.createStatement();
-        stmt.execute("ALTER TABLE oracle_prepared_stmt_test ADD salary NUMBER(10,2)");
+        stmt.execute("ALTER TABLE " + tableName + " ADD salary NUMBER(10,2)");
         stmt.close();
         
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, salary) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, salary) VALUES (?, ?, ?)");
         ps.setInt(1, 3);
         ps.setString(2, "Jane");
         ps.setBigDecimal(3, new BigDecimal("50000.50"));
@@ -137,7 +142,7 @@ public class OraclePreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify
-        PreparedStatement selectPs = connection.prepareStatement("SELECT salary FROM oracle_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT salary FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 3);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -150,7 +155,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testDateTimeParameterTypes(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, dt) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, dt) VALUES (?, ?, ?)");
         
         java.sql.Date sqlDate = new java.sql.Date(System.currentTimeMillis());
         ps.setInt(1, 4);
@@ -175,7 +180,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testLargeObjectHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, data, info) VALUES (?, ?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, data, info) VALUES (?, ?, ?, ?)");
         
         byte[] testData = "This is test binary data".getBytes();
         String testText = "This is test text data";
@@ -189,7 +194,7 @@ public class OraclePreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify
-        PreparedStatement selectPs = connection.prepareStatement("SELECT data, info FROM oracle_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT data, info FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 6);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -205,7 +210,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testStreamHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, data, info) VALUES (?, ?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, data, info) VALUES (?, ?, ?, ?)");
         
         byte[] testData = "Stream binary data".getBytes();
         String testText = "Stream text data";
@@ -225,7 +230,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testParameterMetaData(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         // Basic parameter metadata operations
         assertNotNull(ps.getParameterMetaData());
@@ -239,7 +244,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testBatchOperations(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         // Add multiple batches
         ps.setInt(1, 8);
@@ -269,7 +274,7 @@ public class OraclePreparedStatementExtensiveTests {
         this.setUp(driverClass, url, user, password);
         
         // Insert test data first
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         ps.setInt(1, 10);
         ps.setString(2, "QueryTest");
         ps.setInt(3, 40);
@@ -277,7 +282,7 @@ public class OraclePreparedStatementExtensiveTests {
         ps.close();
         
         // Test query
-        ps = connection.prepareStatement("SELECT * FROM oracle_prepared_stmt_test WHERE id = ?");
+        PreparedStatement ps = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         ps.setInt(1, 10);
         
         boolean hasResultSet = ps.execute();
@@ -312,7 +317,7 @@ public class OraclePreparedStatementExtensiveTests {
                 "number_col NUMBER(10,2))");
         stmt.close();
         
-        ps = connection.prepareStatement("INSERT INTO oracle_specific_types_test " +
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO oracle_specific_types_test " +
                 "(id, binary_float_col, binary_double_col, nvarchar_col, number_col) VALUES (?, ?, ?, ?, ?)");
         
         ps.setInt(1, 1);
@@ -341,7 +346,7 @@ public class OraclePreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/oracle_connections.csv")
     public void testErrorHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         // Test setting invalid parameter index - Oracle would throw an exception but as OJP delays the
         // formation of the PreparedStatement to not allocate the connection too early, this error will
@@ -350,7 +355,7 @@ public class OraclePreparedStatementExtensiveTests {
         assertThrows(SQLException.class, () -> ps.executeUpdate());
 
         // Reset and test executing without setting all parameters
-        ps = connection.prepareStatement("INSERT INTO oracle_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         ps.setInt(1, 11);
         // Don't set parameters 2 and 3
         assertThrows(SQLException.class, () -> ps.executeUpdate());

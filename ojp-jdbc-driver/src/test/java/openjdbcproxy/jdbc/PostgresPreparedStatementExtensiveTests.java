@@ -34,7 +34,7 @@ public class PostgresPreparedStatementExtensiveTests {
     private static boolean isTestDisabled;
 
     private Connection connection;
-    private PreparedStatement ps;
+    private String tableName;
 
     @BeforeAll
     public static void checkTestConfiguration() {
@@ -45,12 +45,17 @@ public class PostgresPreparedStatementExtensiveTests {
         assumeFalse(isTestDisabled, "Postgres tests are disabled");
         
         connection = DriverManager.getConnection(url, user, password);
+        
+        // Generate unique table name to avoid conflicts in concurrent execution
+        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
+        tableName = "" + tableName + "_" + uniqueId;
+        
         Statement stmt = connection.createStatement();
         try {
-            stmt.execute("DROP TABLE postgres_prepared_stmt_test");
+            stmt.execute("DROP TABLE " + tableName);
         } catch (SQLException ignore) {}
         // PostgreSQL-compatible table creation
-        stmt.execute("CREATE TABLE postgres_prepared_stmt_test (" +
+        stmt.execute("CREATE TABLE " + tableName + " (" +
                 "id INT PRIMARY KEY, " +
                 "name VARCHAR(255), " +
                 "age INT, " +
@@ -62,14 +67,14 @@ public class PostgresPreparedStatementExtensiveTests {
 
     @AfterEach
     public void tearDown() throws Exception {
-        TestDBUtils.closeQuietly(ps, connection);
+        TestDBUtils.closeQuietly(connection);
     }
 
     @ParameterizedTest
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testBasicParameterSetting(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         ps.setInt(1, 1);
         ps.setString(2, "John Doe");
@@ -79,7 +84,7 @@ public class PostgresPreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify the insert
-        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM postgres_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 1);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -94,7 +99,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testNullParameterHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         ps.setInt(1, 2);
         ps.setNull(2, Types.VARCHAR);
@@ -104,7 +109,7 @@ public class PostgresPreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify the insert
-        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM postgres_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 2);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -125,10 +130,10 @@ public class PostgresPreparedStatementExtensiveTests {
         
         // Test BigDecimal
         Statement stmt = connection.createStatement();
-        stmt.execute("ALTER TABLE postgres_prepared_stmt_test ADD COLUMN salary DECIMAL(10,2)");
+        stmt.execute("ALTER TABLE " + tableName + " ADD COLUMN salary DECIMAL(10,2)");
         stmt.close();
         
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, salary) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, salary) VALUES (?, ?, ?)");
         ps.setInt(1, 3);
         ps.setString(2, "Jane");
         ps.setBigDecimal(3, new BigDecimal("50000.50"));
@@ -137,7 +142,7 @@ public class PostgresPreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify
-        PreparedStatement selectPs = connection.prepareStatement("SELECT salary FROM postgres_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT salary FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 3);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -150,7 +155,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testDateTimeParameterTypes(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, dt) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, dt) VALUES (?, ?, ?)");
         
         java.sql.Date sqlDate = new java.sql.Date(System.currentTimeMillis());
         ps.setInt(1, 4);
@@ -175,7 +180,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testLargeObjectHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, data, info) VALUES (?, ?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, data, info) VALUES (?, ?, ?, ?)");
         
         byte[] testData = "This is test binary data".getBytes();
         String testText = "This is test text data";
@@ -189,7 +194,7 @@ public class PostgresPreparedStatementExtensiveTests {
         assertEquals(1, affected);
         
         // Verify
-        PreparedStatement selectPs = connection.prepareStatement("SELECT data, info FROM postgres_prepared_stmt_test WHERE id = ?");
+        PreparedStatement selectPs = connection.prepareStatement("SELECT data, info FROM " + tableName + " WHERE id = ?");
         selectPs.setInt(1, 6);
         ResultSet rs = selectPs.executeQuery();
         assertTrue(rs.next());
@@ -205,7 +210,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testStreamHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, data, info) VALUES (?, ?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, data, info) VALUES (?, ?, ?, ?)");
         
         byte[] testData = "Stream binary data".getBytes();
         String testText = "Stream text data";
@@ -225,7 +230,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testParameterMetaData(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         // Basic parameter metadata operations
         assertNotNull(ps.getParameterMetaData());
@@ -238,7 +243,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testBatchOperations(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         // Add multiple batches
         ps.setInt(1, 8);
@@ -268,7 +273,7 @@ public class PostgresPreparedStatementExtensiveTests {
         this.setUp(driverClass, url, user, password);
         
         // Insert test data first
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         ps.setInt(1, 10);
         ps.setString(2, "QueryTest");
         ps.setInt(3, 40);
@@ -276,7 +281,7 @@ public class PostgresPreparedStatementExtensiveTests {
         ps.close();
         
         // Test query
-        ps = connection.prepareStatement("SELECT * FROM postgres_prepared_stmt_test WHERE id = ?");
+        PreparedStatement ps = connection.prepareStatement("SELECT * FROM " + tableName + " WHERE id = ?");
         ps.setInt(1, 10);
         
         boolean hasResultSet = ps.execute();
@@ -296,7 +301,7 @@ public class PostgresPreparedStatementExtensiveTests {
     @CsvFileSource(resources = "/postgres_connection.csv")
     public void testErrorHandling(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         
         // Test setting invalid parameter index - PostgreSQL may allow this without immediate error
         try {
@@ -309,7 +314,7 @@ public class PostgresPreparedStatementExtensiveTests {
         }
         
         // Reset and test executing without setting all parameters
-        ps = connection.prepareStatement("INSERT INTO postgres_prepared_stmt_test (id, name, age) VALUES (?, ?, ?)");
+        PreparedStatement ps = connection.prepareStatement("INSERT INTO " + tableName + " (id, name, age) VALUES (?, ?, ?)");
         ps.setInt(1, 11);
         // Don't set parameters 2 and 3
         assertThrows(SQLException.class, () -> ps.executeUpdate());

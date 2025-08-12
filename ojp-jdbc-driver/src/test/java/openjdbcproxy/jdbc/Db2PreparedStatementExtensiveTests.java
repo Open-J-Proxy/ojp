@@ -26,7 +26,7 @@ public class Db2PreparedStatementExtensiveTests {
     private static boolean isTestDisabled;
 
     private Connection connection;
-    private PreparedStatement ps;
+    private String tableName;
 
     @BeforeAll
     public static void checkTestConfiguration() {
@@ -43,15 +43,19 @@ public class Db2PreparedStatementExtensiveTests {
             schemaStmt.execute("SET SCHEMA DB2INST1");
         }
         
+        // Generate unique table name to avoid conflicts in concurrent execution
+        String uniqueId = String.valueOf(System.nanoTime() + Thread.currentThread().getId());
+        tableName = "DB2INST1.db2_prepared_stmt_test_" + uniqueId;
+        
         Statement stmt = connection.createStatement();
         try {
-            stmt.execute("DROP TABLE DB2INST1.db2_prepared_stmt_test");
+            stmt.execute("DROP TABLE " + tableName);
         } catch (SQLException e) {
             // Table doesn't exist
         }
         
         // Create table with DB2-compatible syntax
-        stmt.execute("CREATE TABLE DB2INST1.db2_prepared_stmt_test (" +
+        stmt.execute("CREATE TABLE " + tableName + " (" +
                 "id INTEGER NOT NULL PRIMARY KEY, " +
                 "name VARCHAR(100), " +
                 "age INTEGER, " +
@@ -65,13 +69,10 @@ public class Db2PreparedStatementExtensiveTests {
 
     @AfterEach
     public void tearDown() throws SQLException {
-        if (ps != null) {
-            ps.close();
-        }
         if (connection != null) {
             Statement stmt = connection.createStatement();
             try {
-                stmt.execute("DROP TABLE DB2INST1.db2_prepared_stmt_test");
+                stmt.execute("DROP TABLE " + tableName);
             } catch (SQLException e) {
                 // Ignore
             }

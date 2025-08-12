@@ -10,14 +10,10 @@ on:
     branches: [ main ]
 
 jobs:
-  build-test:
-    name: Build & Test
+  test-java-11:
+    name: Build & Test (Java 11)
     runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
-    strategy:
-      fail-fast: false
-      matrix:
-        java-version: [ 11, 17, 21, 22 ]
 
     services:
 
@@ -152,10 +148,478 @@ jobs:
       - name: Wait for ojp-server to start
         run: sleep 10
 
-      - name: Set up JDK ${{ matrix.java-version }} for ojp-grpc-commons and ojp-jdbc-driver
+      - name: Set up JDK 11 for ojp-grpc-commons and ojp-jdbc-driver
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ matrix.java-version }}
+          java-version: 11
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build (ojp-jdbc-driver)
+        run: mvn clean install -pl ojp-jdbc-driver -DskipTests -Dgpg.skip=true
+
+      - name: Test (ojp-jdbc-driver)
+        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true
+
+      - name: Show ojp-server.log
+        if: always()  # ensures it runs even if previous steps fail
+        run: cat /tmp/ojp-server.log || echo "/tmp/ojp-server.log not found"
+
+  test-java-17:
+    name: Build & Test (Java 17)
+    runs-on: ubuntu-latest
+    needs: test-java-11
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
+
+    services:
+
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_DATABASE: defaultdb
+          MARIADB_USER: testuser
+          MARIADB_PASSWORD: testpassword
+          MARIADB_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3307:3306
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: defaultdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+          MYSQL_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3306:3306
+
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: defaultdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      #TODO maybe put proprietary DBs in separated workflows, seem to be insufficient memory in github to run all at once
+      #oracle:
+      #  image: gvenzl/oracle-xe:21-slim
+      #  env:
+      #    ORACLE_PASSWORD: testpassword
+      #    APP_USER: testuser
+      #    APP_USER_PASSWORD: testpassword
+      #  options: >-
+      #    --name ojp-oracle
+      #    --health-cmd "echo 'SELECT 1 FROM DUAL;' | sqlplus -s system/testpassword@localhost/XEPDB1"
+      #    --health-interval 10s
+      #    --health-timeout 5s
+      #    --health-retries 5
+      #  ports:
+      #    - 1521:1521
+
+      #sqlserver:
+      #  image: mcr.microsoft.com/mssql/server:2022-latest
+      #  env:
+      #    ACCEPT_EULA: Y
+      #    SA_PASSWORD: TestPassword123!
+      #  options: >-
+      #    --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P TestPassword123! -Q 'SELECT 1'"
+      #    --health-interval 10s
+      #    --health-timeout 5s
+      #    --health-retries 5
+      #  ports:
+      #    - 1433:1433
+
+      #db2:
+      #  image: ibmcom/db2:11.5.8.0
+      #  env:
+      #    LICENSE: accept
+      #    DB2INSTANCE: db2inst1
+      #    DB2INST1_PASSWORD: testpassword
+      #    DBNAME: defaultdb
+      #    BLU: false
+      #    ENABLE_ORACLE_COMPATIBILITY: false
+      #    UPDATEAVAIL: NO
+      #    TO_CREATE_SAMPLEDB: false
+      #    REPODB: false
+      #    IS_OSXFS: false
+      #    PERSISTENT_HOME: false
+      #    HADR_ENABLED: false
+      #    ETCD_ENDPOINT: 
+      #    ETCD_USERNAME: 
+      #    ETCD_PASSWORD: 
+      #  options: >-
+      #    --name ojp-db2
+      #    --health-cmd "db2 connect to defaultdb user testuser using testpassword; db2 'select 1 from sysibm.sysdummy1'"
+      #    --health-interval 30s
+      #    --health-timeout 10s
+      #    --health-retries 5
+      #  ports:
+      #    - 50000:50000
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 22 for ojp-server
+        uses: actions/setup-java@v4
+        with:
+          java-version: 22
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -DskipTests -Dgpg.skip=true
+
+      - name: Test (ojp-grpc-commons)
+        run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
+
+      - name: Build (ojp-server)
+        run: mvn clean install -DskipTests  -Dgpg.skip=true
+
+      - name: Test (ojp-server)
+        run: mvn test -pl ojp-server
+
+      - name: Run (ojp-server)
+        run: mvn verify -pl ojp-server -Prun-ojp-server > /tmp/ojp-server.log 2>&1 &
+
+      - name: Wait for ojp-server to start
+        run: sleep 10
+
+      - name: Set up JDK 17 for ojp-grpc-commons and ojp-jdbc-driver
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build (ojp-jdbc-driver)
+        run: mvn clean install -pl ojp-jdbc-driver -DskipTests -Dgpg.skip=true
+
+      - name: Test (ojp-jdbc-driver)
+        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true
+
+      - name: Show ojp-server.log
+        if: always()  # ensures it runs even if previous steps fail
+        run: cat /tmp/ojp-server.log || echo "/tmp/ojp-server.log not found"
+
+  test-java-21:
+    name: Build & Test (Java 21)
+    runs-on: ubuntu-latest
+    needs: test-java-17
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
+
+    services:
+
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_DATABASE: defaultdb
+          MARIADB_USER: testuser
+          MARIADB_PASSWORD: testpassword
+          MARIADB_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3307:3306
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: defaultdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+          MYSQL_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3306:3306
+
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: defaultdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      #TODO maybe put proprietary DBs in separated workflows, seem to be insufficient memory in github to run all at once
+      #oracle:
+      #  image: gvenzl/oracle-xe:21-slim
+      #  env:
+      #    ORACLE_PASSWORD: testpassword
+      #    APP_USER: testuser
+      #    APP_USER_PASSWORD: testpassword
+      #  options: >-
+      #    --name ojp-oracle
+      #    --health-cmd "echo 'SELECT 1 FROM DUAL;' | sqlplus -s system/testpassword@localhost/XEPDB1"
+      #    --health-interval 10s
+      #    --health-timeout 5s
+      #    --health-retries 5
+      #  ports:
+      #    - 1521:1521
+
+      #sqlserver:
+      #  image: mcr.microsoft.com/mssql/server:2022-latest
+      #  env:
+      #    ACCEPT_EULA: Y
+      #    SA_PASSWORD: TestPassword123!
+      #  options: >-
+      #    --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P TestPassword123! -Q 'SELECT 1'"
+      #    --health-interval 10s
+      #    --health-timeout 5s
+      #    --health-retries 5
+      #  ports:
+      #    - 1433:1433
+
+      #db2:
+      #  image: ibmcom/db2:11.5.8.0
+      #  env:
+      #    LICENSE: accept
+      #    DB2INSTANCE: db2inst1
+      #    DB2INST1_PASSWORD: testpassword
+      #    DBNAME: defaultdb
+      #    BLU: false
+      #    ENABLE_ORACLE_COMPATIBILITY: false
+      #    UPDATEAVAIL: NO
+      #    TO_CREATE_SAMPLEDB: false
+      #    REPODB: false
+      #    IS_OSXFS: false
+      #    PERSISTENT_HOME: false
+      #    HADR_ENABLED: false
+      #    ETCD_ENDPOINT: 
+      #    ETCD_USERNAME: 
+      #    ETCD_PASSWORD: 
+      #  options: >-
+      #    --name ojp-db2
+      #    --health-cmd "db2 connect to defaultdb user testuser using testpassword; db2 'select 1 from sysibm.sysdummy1'"
+      #    --health-interval 30s
+      #    --health-timeout 10s
+      #    --health-retries 5
+      #  ports:
+      #    - 50000:50000
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 22 for ojp-server
+        uses: actions/setup-java@v4
+        with:
+          java-version: 22
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -DskipTests -Dgpg.skip=true
+
+      - name: Test (ojp-grpc-commons)
+        run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
+
+      - name: Build (ojp-server)
+        run: mvn clean install -DskipTests  -Dgpg.skip=true
+
+      - name: Test (ojp-server)
+        run: mvn test -pl ojp-server
+
+      - name: Run (ojp-server)
+        run: mvn verify -pl ojp-server -Prun-ojp-server > /tmp/ojp-server.log 2>&1 &
+
+      - name: Wait for ojp-server to start
+        run: sleep 10
+
+      - name: Set up JDK 21 for ojp-grpc-commons and ojp-jdbc-driver
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build (ojp-jdbc-driver)
+        run: mvn clean install -pl ojp-jdbc-driver -DskipTests -Dgpg.skip=true
+
+      - name: Test (ojp-jdbc-driver)
+        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true
+
+      - name: Show ojp-server.log
+        if: always()  # ensures it runs even if previous steps fail
+        run: cat /tmp/ojp-server.log || echo "/tmp/ojp-server.log not found"
+
+  test-java-22:
+    name: Build & Test (Java 22)
+    runs-on: ubuntu-latest
+    needs: test-java-21
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
+
+    services:
+
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_DATABASE: defaultdb
+          MARIADB_USER: testuser
+          MARIADB_PASSWORD: testpassword
+          MARIADB_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3307:3306
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: defaultdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+          MYSQL_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3306:3306
+
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: defaultdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      #TODO maybe put proprietary DBs in separated workflows, seem to be insufficient memory in github to run all at once
+      #oracle:
+      #  image: gvenzl/oracle-xe:21-slim
+      #  env:
+      #    ORACLE_PASSWORD: testpassword
+      #    APP_USER: testuser
+      #    APP_USER_PASSWORD: testpassword
+      #  options: >-
+      #    --name ojp-oracle
+      #    --health-cmd "echo 'SELECT 1 FROM DUAL;' | sqlplus -s system/testpassword@localhost/XEPDB1"
+      #    --health-interval 10s
+      #    --health-timeout 5s
+      #    --health-retries 5
+      #  ports:
+      #    - 1521:1521
+
+      #sqlserver:
+      #  image: mcr.microsoft.com/mssql/server:2022-latest
+      #  env:
+      #    ACCEPT_EULA: Y
+      #    SA_PASSWORD: TestPassword123!
+      #  options: >-
+      #    --health-cmd "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P TestPassword123! -Q 'SELECT 1'"
+      #    --health-interval 10s
+      #    --health-timeout 5s
+      #    --health-retries 5
+      #  ports:
+      #    - 1433:1433
+
+      #db2:
+      #  image: ibmcom/db2:11.5.8.0
+      #  env:
+      #    LICENSE: accept
+      #    DB2INSTANCE: db2inst1
+      #    DB2INST1_PASSWORD: testpassword
+      #    DBNAME: defaultdb
+      #    BLU: false
+      #    ENABLE_ORACLE_COMPATIBILITY: false
+      #    UPDATEAVAIL: NO
+      #    TO_CREATE_SAMPLEDB: false
+      #    REPODB: false
+      #    IS_OSXFS: false
+      #    PERSISTENT_HOME: false
+      #    HADR_ENABLED: false
+      #    ETCD_ENDPOINT: 
+      #    ETCD_USERNAME: 
+      #    ETCD_PASSWORD: 
+      #  options: >-
+      #    --name ojp-db2
+      #    --health-cmd "db2 connect to defaultdb user testuser using testpassword; db2 'select 1 from sysibm.sysdummy1'"
+      #    --health-interval 30s
+      #    --health-timeout 10s
+      #    --health-retries 5
+      #  ports:
+      #    - 50000:50000
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 22 for ojp-server
+        uses: actions/setup-java@v4
+        with:
+          java-version: 22
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -DskipTests -Dgpg.skip=true
+
+      - name: Test (ojp-grpc-commons)
+        run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
+
+      - name: Build (ojp-server)
+        run: mvn clean install -DskipTests  -Dgpg.skip=true
+
+      - name: Test (ojp-server)
+        run: mvn test -pl ojp-server
+
+      - name: Run (ojp-server)
+        run: mvn verify -pl ojp-server -Prun-ojp-server > /tmp/ojp-server.log 2>&1 &
+
+      - name: Wait for ojp-server to start
+        run: sleep 10
+
+      - name: Set up JDK 22 for ojp-grpc-commons and ojp-jdbc-driver
+        uses: actions/setup-java@v4
+        with:
+          java-version: 22
           distribution: 'temurin'
           cache: maven
 
@@ -171,6 +635,7 @@ jobs:
 
   notify-integration:
     runs-on: ubuntu-latest
+    needs: test-java-22
     steps:
       - name: Trigger OJP Framework Integration Repo Workflow
         uses: peter-evans/repository-dispatch@v3

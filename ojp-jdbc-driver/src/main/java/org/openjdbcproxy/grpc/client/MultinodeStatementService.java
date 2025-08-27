@@ -470,14 +470,19 @@ public class MultinodeStatementService implements StatementService {
     }
     
     private ConnectionDetails enhanceConnectionDetailsWithServerList(ConnectionDetails original) {
-        // Create a comma-separated list of all known servers
-        String serverList = MultinodeUrlParser.formatServerList(connectionManager.getServerEndpoints());
+        // Create a list of all known server endpoints
+        List<String> serverEndpoints = connectionManager.getServerEndpoints().stream()
+                .map(ServerEndpoint::getAddress)
+                .collect(java.util.stream.Collectors.toList());
         
-        // For now, we'll add this as a property that the server can read
-        // In the future, we might want to extend the protobuf definition
-        log.debug("Enhanced connection details with server list: {}", serverList);
+        // Create enhanced connection details with server list
+        ConnectionDetails.Builder builder = original.toBuilder();
+        builder.addAllServerEndpoints(serverEndpoints);
         
-        return original; // Return original for now, enhancement can be added later
+        log.debug("Enhanced connection details with {} server endpoints: {}", 
+                serverEndpoints.size(), serverEndpoints);
+        
+        return builder.build();
     }
     
     @FunctionalInterface

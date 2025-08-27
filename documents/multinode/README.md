@@ -59,9 +59,9 @@ ojp.connection.pool.idleTimeout=300000
 ojp.connection.pool.maxLifetime=900000
 ojp.connection.pool.connectionTimeout=15000
 
-# Multinode-specific configuration (future enhancement)
-# ojp.multinode.retryAttempts=-1
-# ojp.multinode.retryDelayMs=5000
+# Multinode configuration constants (defined in code)
+# DEFAULT_MULTINODE_RETRY_ATTEMPTS=-1 (retry indefinitely)
+# DEFAULT_MULTINODE_RETRY_DELAY_MS=5000 (5 seconds between retries)
 ```
 
 ### Server-Side Configuration
@@ -204,13 +204,16 @@ No code changes are required - simply update the JDBC URL to include multiple se
 
 ## Limitations
 
-1. **Pool Coordination**: Currently, pool rebalancing based on server count is not implemented
+1. **Configuration Properties**: Multinode retry settings are currently hardcoded constants and not configurable via properties files
 2. **Configuration Sync**: Servers do not automatically synchronize configuration changes
 3. **Split-Brain**: No coordination mechanism exists between servers to prevent split-brain scenarios
+4. **Dynamic Rebalancing**: Pool rebalancing occurs only when new connections are established, not dynamically for existing pools
 
 ## Future Enhancements
 
-1. **Dynamic Pool Rebalancing**: Automatically adjust pool sizes based on active server count
-2. **Server Discovery**: Automatic discovery of new servers in the cluster
-3. **Health Check Endpoints**: Dedicated health check endpoints for monitoring systems
-4. **Configuration Synchronization**: Automatic synchronization of configuration changes across servers
+1. **Configurable Retry Settings**: Make retry attempts and delay configurable via properties files
+2. **Dynamic Pool Rebalancing**: Implement real-time pool size adjustment when server topology changes
+3. **Server Discovery**: Automatic discovery of new servers in the cluster
+4. **Health Check Endpoints**: Dedicated health check endpoints for monitoring systems
+5. **Configuration Synchronization**: Automatic synchronization of configuration changes across servers
+6. **Advanced Load Balancing**: Support for weighted round-robin and other load balancing algorithms

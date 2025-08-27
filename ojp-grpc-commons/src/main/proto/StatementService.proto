@@ -8,6 +8,7 @@ message ConnectionDetails {
     string password = 3;
     string clientUUID = 4;
     bytes properties = 6;
+    repeated string serverEndpoints = 7; // List of server endpoints in the cluster
 }
 
 enum DbName {

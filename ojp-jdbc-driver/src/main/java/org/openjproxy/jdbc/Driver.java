@@ -15,6 +15,7 @@ import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.util.List;
 import java.util.Properties;
 
 import static org.openjproxy.jdbc.Constants.PASSWORD;
@@ -48,7 +49,18 @@ public class Driver implements java.sql.Driver {
     @Override
     public java.sql.Connection connect(String url, Properties info) throws SQLException {
         log.debug("connect: url={}, info={}", url, info);
-        
+
+        // Parse server endpoints from URL
+        List<ServerEndpoint> serverEndpoints;
+        try {
+            serverEndpoints = MultinodeUrlParser.parseServerEndpoints(url);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException("Invalid OJP URL format: " + e.getMessage(), e);
+        }
+
+        // Initialize appropriate StatementService based on number of servers
+        StatementService service = getOrCreateStatementService(serverEndpoints);
+
         // Load ojp.properties file if it exists
         Properties ojpProperties = loadOjpProperties();
         ByteString propertiesBytes = ByteString.EMPTY;
@@ -56,7 +68,7 @@ public class Driver implements java.sql.Driver {
             propertiesBytes = ByteString.copyFrom(SerializationHandler.serialize(ojpProperties));
             log.debug("Loaded ojp.properties with {} properties", ojpProperties.size());
         }
-        
+
         SessionInfo sessionInfo = statementService
                 .connect(ConnectionDetails.newBuilder()
                         .setUrl(url)
@@ -69,10 +81,26 @@ public class Driver implements java.sql.Driver {
         log.debug("Returning new Connection with sessionInfo: {}", sessionInfo);
         return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(url));
     }
-    
+
+    private synchronized StatementService getOrCreateStatementService(List<ServerEndpoint> serverEndpoints) {
+        // For single server, use existing implementation for backward compatibility
+        if (serverEndpoints.size() == 1) {
+            if (statementService == null || !(statementService instanceof StatementServiceGrpcClient)) {
+                log.debug("Initializing StatementServiceGrpcClient for single server");
+                statementService = new StatementServiceGrpcClient();
+            }
+        } else {
+            // For multiple servers, always create new multinode service
+            log.debug("Initializing MultinodeStatementService for {} servers", serverEndpoints.size());
+            statementService = new MultinodeStatementService(serverEndpoints);
+        }
+
+        return statementService;
+    }
+
     private Properties loadOjpProperties() {
         Properties properties = new Properties();
-        
+
         // Only try to load from resources/ojp.properties in the classpath
         try (InputStream is = Driver.class.getClassLoader().getResourceAsStream("ojp.properties")) {
             if (is != null) {
@@ -83,7 +111,7 @@ public class Driver implements java.sql.Driver {
         } catch (IOException e) {
             log.debug("Could not load ojp.properties from resources folder: {}", e.getMessage());
         }
-        
+
         log.debug("No ojp.properties file found, using server defaults");
         return null;
     }

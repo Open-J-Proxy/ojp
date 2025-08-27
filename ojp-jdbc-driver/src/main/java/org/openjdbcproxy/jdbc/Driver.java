@@ -6,6 +6,9 @@ import com.openjdbcproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.openjdbcproxy.database.DatabaseUtils;
 import org.openjdbcproxy.grpc.SerializationHandler;
+import org.openjdbcproxy.grpc.client.MultinodeStatementService;
+import org.openjdbcproxy.grpc.client.MultinodeUrlParser;
+import org.openjdbcproxy.grpc.client.ServerEndpoint;
 import org.openjdbcproxy.grpc.client.StatementService;
 import org.openjdbcproxy.grpc.client.StatementServiceGrpcClient;
 
@@ -15,6 +18,7 @@ import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.util.List;
 import java.util.Properties;
 
 import static org.openjdbcproxy.jdbc.Constants.PASSWORD;
@@ -35,19 +39,24 @@ public class Driver implements java.sql.Driver {
     private static StatementService statementService;
 
     public Driver() {
-        if (statementService == null) {
-            synchronized (Driver.class) {
-                if (statementService == null) {
-                    log.debug("Initializing StatementServiceGrpcClient");
-                    statementService = new StatementServiceGrpcClient();
-                }
-            }
-        }
+        // StatementService initialization is deferred to connect() method
+        // to support multinode URLs
     }
 
     @Override
     public java.sql.Connection connect(String url, Properties info) throws SQLException {
         log.debug("connect: url={}, info={}", url, info);
+        
+        // Parse server endpoints from URL
+        List<ServerEndpoint> serverEndpoints;
+        try {
+            serverEndpoints = MultinodeUrlParser.parseServerEndpoints(url);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException("Invalid OJP URL format: " + e.getMessage(), e);
+        }
+        
+        // Initialize appropriate StatementService based on number of servers
+        StatementService service = getOrCreateStatementService(serverEndpoints);
         
         // Load ojp.properties file if it exists
         Properties ojpProperties = loadOjpProperties();
@@ -57,7 +66,7 @@ public class Driver implements java.sql.Driver {
             log.debug("Loaded ojp.properties with {} properties", ojpProperties.size());
         }
         
-        SessionInfo sessionInfo = statementService
+        SessionInfo sessionInfo = service
                 .connect(ConnectionDetails.newBuilder()
                         .setUrl(url)
                         .setUser((String) ((info.get(USER) != null)? info.get(USER) : ""))
@@ -67,7 +76,23 @@ public class Driver implements java.sql.Driver {
                         .build()
                 );
         log.debug("Returning new Connection with sessionInfo: {}", sessionInfo);
-        return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(url));
+        return new Connection(sessionInfo, service, DatabaseUtils.resolveDbName(url));
+    }
+    
+    private synchronized StatementService getOrCreateStatementService(List<ServerEndpoint> serverEndpoints) {
+        // For single server, use existing implementation for backward compatibility
+        if (serverEndpoints.size() == 1) {
+            if (statementService == null || !(statementService instanceof StatementServiceGrpcClient)) {
+                log.debug("Initializing StatementServiceGrpcClient for single server");
+                statementService = new StatementServiceGrpcClient();
+            }
+        } else {
+            // For multiple servers, always create new multinode service
+            log.debug("Initializing MultinodeStatementService for {} servers", serverEndpoints.size());
+            statementService = new MultinodeStatementService(serverEndpoints);
+        }
+        
+        return statementService;
     }
     
     private Properties loadOjpProperties() {

@@ -1,10 +1,10 @@
 # OJP JDBC Driver Configuration Guide
 
-This document covers configuration options for the OJP JDBC driver, including client-side connection pool settings.
+This document covers configuration options for the OJP JDBC driver, including client-side connection pool settings and multiple data sources configuration.
 
 ## Client-Side Connection Pool Configuration
 
-The OJP JDBC driver supports configurable connection pool settings via an `ojp.properties` file. This allows customization of HikariCP connection pool behavior on a per-client basis.
+The OJP JDBC driver supports configurable connection pool settings via an `ojp.properties` file. This allows customization of HikariCP connection pool behavior on a per-client basis, with support for multiple data sources configuration.
 
 ### How to Configure
 
@@ -22,22 +22,156 @@ The OJP JDBC driver supports configurable connection pool settings via an `ojp.p
 | `ojp.connection.pool.maxLifetime`     | long | 1800000 | Maximum lifetime (ms) of a connection (30 minutes)       |
 | `ojp.connection.pool.connectionTimeout` | long | 10000   | Maximum time (ms) to wait for a connection (10 seconds)  |
 
-### Example ojp.properties File
+### Multiple Data Sources Configuration
+
+OJP supports multiple data source configurations, scoped by both database name and username. This allows different connection pool settings for different databases and users within the same application.
+
+#### Configuration Hierarchy
+
+The configuration supports three levels of specificity, with more specific configurations taking precedence:
+
+1. **Database + User Specific**: `actualDbName.actualUserName.ojp.connection.pool.*`
+2. **Database Specific**: `actualDbName.ojp.connection.pool.*` 
+3. **Global Default**: `ojp.connection.pool.*`
+
+#### Configuration Resolution
+
+When establishing a connection, OJP resolves configuration properties using the following priority order:
+
+1. **Most Specific**: Look for `databaseName.userName.ojp.connection.pool.propertyName`
+2. **Database Specific**: If not found, look for `databaseName.ojp.connection.pool.propertyName`
+3. **Global Default**: If still not found, use `ojp.connection.pool.propertyName`
+4. **System Default**: If no configuration is found, use the built-in default value
+
+#### Database Name Extraction
+
+The actual database name is automatically extracted from the JDBC URL:
+
+- **PostgreSQL**: `jdbc:postgresql://host:port/databaseName` → `databaseName`
+- **MySQL**: `jdbc:mysql://host:port/databaseName` → `databaseName`
+- **MariaDB**: `jdbc:mariadb://host:port/databaseName` → `databaseName`
+- **Oracle**: `jdbc:oracle:thin:@host:port/serviceName` → `serviceName` (or SID for SID format)
+- **SQL Server**: `jdbc:sqlserver://host:port;databaseName=dbName` → `dbName`
+- **DB2**: `jdbc:db2://host:port/databaseName` → `databaseName`
+- **H2**: `jdbc:h2:mem:databaseName` → `databaseName`
+
+#### Example Configurations
+
+**Basic Global Configuration:**
+```properties
+# Global defaults for all connections
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+ojp.connection.pool.connectionTimeout=10000
+```
+
+**Database-Specific Configuration:**
+```properties
+# Global defaults
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+
+# Specific settings for 'myapp' database
+myapp.ojp.connection.pool.maximumPoolSize=50
+myapp.ojp.connection.pool.minimumIdle=10
+```
+
+**Database + User Specific Configuration:**
+```properties
+# Global defaults
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+
+# Settings for 'myapp' database
+myapp.ojp.connection.pool.maximumPoolSize=50
+myapp.ojp.connection.pool.minimumIdle=10
+
+# Specific settings for 'admin' user on 'myapp' database
+myapp.admin.ojp.connection.pool.maximumPoolSize=100
+myapp.admin.ojp.connection.pool.minimumIdle=20
+myapp.admin.ojp.connection.pool.connectionTimeout=30000
+```
+
+**Complete Multi-Database Example:**
+```properties
+# Global defaults
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+ojp.connection.pool.idleTimeout=600000
+ojp.connection.pool.maxLifetime=1800000
+ojp.connection.pool.connectionTimeout=10000
+
+# Production database settings
+production.ojp.connection.pool.maximumPoolSize=100
+production.ojp.connection.pool.minimumIdle=20
+
+# Reporting database settings (read-heavy workload)
+reporting.ojp.connection.pool.maximumPoolSize=50
+reporting.ojp.connection.pool.minimumIdle=10
+reporting.ojp.connection.pool.connectionTimeout=30000
+
+# Admin user gets larger pools
+production.admin.ojp.connection.pool.maximumPoolSize=150
+reporting.admin.ojp.connection.pool.maximumPoolSize=75
+
+# Service account gets smaller pools
+production.service.ojp.connection.pool.maximumPoolSize=30
+production.service.ojp.connection.pool.minimumIdle=5
+```
+
+#### Configuration Validation and Error Handling
+
+OJP validates configuration prefixes at startup to ensure they match the actual database and user combinations:
+
+**Valid Prefixes:**
+- `actualDatabaseName.ojp.connection.pool.*` (database-specific)
+- `actualDatabaseName.actualUserName.ojp.connection.pool.*` (database+user specific)
+- `ojp.connection.pool.*` (global default)
+
+**Invalid Prefixes (Will Cause Startup Failure):**
+- `wrongDatabaseName.ojp.connection.pool.*` (database name doesn't match)
+- `userName.ojp.connection.pool.*` (username-only prefixes are not supported)
+- `wrongDb.wrongUser.ojp.connection.pool.*` (neither database nor user matches)
+
+**Error Examples:**
+```properties
+# This will FAIL if connecting to 'myapp' database
+wrongdb.ojp.connection.pool.maximumPoolSize=30
+
+# This will FAIL - username-only prefixes are not supported
+admin.ojp.connection.pool.maximumPoolSize=50
+
+# This will SUCCEED when connecting to 'myapp' database as 'admin' user
+myapp.admin.ojp.connection.pool.maximumPoolSize=50
+```
+
+When invalid prefixes are detected, OJP will fail fast with a clear error message indicating:
+- Which prefixes are invalid
+- What the expected prefixes should be for the current connection
+- The current database name and username
+
+#### Partial Configuration Support
+
+You can configure only some properties at each level:
 
 ```properties
-# Connection pool configuration
-ojp.connection.pool.maximumPoolSize=25
-ojp.connection.pool.minimumIdle=5
-ojp.connection.pool.idleTimeout=300000
-ojp.connection.pool.maxLifetime=900000
-ojp.connection.pool.connectionTimeout=15000
+# Global timeout settings
+ojp.connection.pool.connectionTimeout=10000
+ojp.connection.pool.idleTimeout=600000
+
+# Database-specific pool sizes
+myapp.ojp.connection.pool.maximumPoolSize=50
+
+# User-specific minimum idle (inherits other settings from above)
+myapp.admin.ojp.connection.pool.minimumIdle=15
 ```
 
 ### Connection Pool Fallback Behavior
 
 - If no `ojp.properties` file is found, all default values are used
-- If a property is missing from the file, its default value is used
-- If a property has an invalid value, the default is used and a warning is logged
+- If a property is missing from the file, the hierarchical lookup is performed
+- If a property has an invalid value, it falls back to the next level in the hierarchy
+- If no valid value is found at any level, the built-in default is used
 - All validation and configuration logic is handled on the server side
 
 ## JDBC Driver Usage

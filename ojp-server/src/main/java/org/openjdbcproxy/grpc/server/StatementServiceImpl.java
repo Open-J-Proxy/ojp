@@ -40,6 +40,7 @@ import org.openjdbcproxy.grpc.dto.Parameter;
 import org.openjdbcproxy.grpc.server.utils.DateTimeUtils;
 import org.openjdbcproxy.database.DatabaseUtils;
 import org.openjdbcproxy.grpc.server.utils.DriverUtils;
+import org.openjdbcproxy.grpc.server.pool.DataSourcePoolManager;
 import org.openjdbcproxy.grpc.server.pool.ConnectionPoolConfigurer;
 import org.openjdbcproxy.grpc.server.utils.ConnectionHashGenerator;
 import org.openjdbcproxy.grpc.server.utils.UrlParser;
@@ -52,6 +53,7 @@ import org.openjdbcproxy.grpc.server.resultset.ResultSetWrapper;
 import org.openjdbcproxy.grpc.server.lob.LobProcessor;
 import org.openjdbcproxy.grpc.server.utils.StatementRequestValidator;
 
+import java.security.MessageDigest;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.Reader;
@@ -105,6 +107,9 @@ import static org.openjdbcproxy.grpc.server.GrpcExceptionHandler.sendSQLExceptio
 public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceImplBase {
 
     private final Map<String, HikariDataSource> datasourceMap = new ConcurrentHashMap<>();
+    private final DataSourcePoolManager dataSourcePoolManager = new DataSourcePoolManager();
+    private final Map<String, String> dataSourceToConnHashMap = new ConcurrentHashMap<>();
+    private boolean dataSourcePoolsInitialized = false;
     private final SessionManager sessionManager;
     private final CircuitBreaker circuitBreaker;
     
@@ -125,24 +130,74 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
     @Override
     public void connect(ConnectionDetails connectionDetails, StreamObserver<SessionInfo> responseObserver) {
-        String connHash = ConnectionHashGenerator.hashConnectionDetails(connectionDetails);
-        log.info("connect connHash = " + connHash);
-
+        // Initialize data source pools if not already done (startup initialization)
+        if (!dataSourcePoolsInitialized) {
+            synchronized (this) {
+                if (!dataSourcePoolsInitialized) {
+                    try {
+                        dataSourcePoolManager.initializeDataSources(connectionDetails);
+                        dataSourcePoolsInitialized = true;
+                        log.info("Data source pools initialized at startup");
+                    } catch (Exception e) {
+                        log.error("Failed to initialize data source pools: {}", e.getMessage(), e);
+                        responseObserver.onError(io.grpc.Status.INTERNAL
+                            .withDescription("Failed to initialize data source pools: " + e.getMessage())
+                            .asRuntimeException());
+                        return;
+                    }
+                }
+            }
+        }
+        
+        // Get the dataSource name (empty string means default)
+        String dataSourceName = connectionDetails.getDataSourceName();
+        if (dataSourceName == null || dataSourceName.trim().isEmpty()) {
+            dataSourceName = "default";
+        }
+        
+        log.info("connect for dataSource = {}", dataSourceName);
+        
+        // Check if data source exists
+        if (!dataSourcePoolManager.hasDataSource(dataSourceName)) {
+            String errorMessage = String.format(
+                "Data source '%s' not found. Available data sources: %s. " +
+                "Please ensure the data source is configured in your ojp.properties file " +
+                "using the format: %s.ojp.connection.pool.* or ojp.connection.pool.* for the default data source.",
+                dataSourceName, dataSourcePoolManager.getDataSourceNames(), dataSourceName
+            );
+            log.error(errorMessage);
+            responseObserver.onError(io.grpc.Status.INVALID_ARGUMENT
+                .withDescription(errorMessage)
+                .asRuntimeException());
+            return;
+        }
+        
+        // Generate a unique connection hash for this connection request
+        // This maintains compatibility with existing SessionManager
+        String connHash = generateConnectionHashForDataSource(connectionDetails, dataSourceName);
+        
+        // Get or create the HikariDataSource for backward compatibility
         HikariDataSource ds = this.datasourceMap.get(connHash);
         if (ds == null) {
-            HikariConfig config = new HikariConfig();
-            config.setJdbcUrl(UrlParser.parseUrl(connectionDetails.getUrl()));
-            config.setUsername(connectionDetails.getUser());
-            config.setPassword(connectionDetails.getPassword());
-
-            // Configure HikariCP using client properties or defaults
-            ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails);
-
-            ds = new HikariDataSource(config);
-            this.datasourceMap.put(connHash, ds);
-            
-            // Create a slow query segregation manager for this datasource
-            createSlowQuerySegregationManagerForDatasource(connHash, config.getMaximumPoolSize());
+            try {
+                // Get the data source from the pool manager
+                ds = dataSourcePoolManager.getDataSource(dataSourceName);
+                this.datasourceMap.put(connHash, ds);
+                
+                // Map dataSource name to connection hash for future reference
+                dataSourceToConnHashMap.put(dataSourceName, connHash);
+                
+                // Create a slow query segregation manager for this datasource
+                createSlowQuerySegregationManagerForDatasource(connHash, ds.getMaximumPoolSize());
+                
+                log.info("Associated dataSource '{}' with connection hash {}", dataSourceName, connHash);
+            } catch (Exception e) {
+                log.error("Failed to get data source '{}': {}", dataSourceName, e.getMessage(), e);
+                responseObserver.onError(io.grpc.Status.INVALID_ARGUMENT
+                    .withDescription("Failed to get data source: " + e.getMessage())
+                    .asRuntimeException());
+                return;
+            }
         }
 
         this.sessionManager.registerClientUUID(connHash, connectionDetails.getClientUUID());
@@ -156,6 +211,25 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         this.dbNameMap.put(connHash, DatabaseUtils.resolveDbName(connectionDetails.getUrl()));
 
         responseObserver.onCompleted();
+    }
+    
+    /**
+     * Generates a unique connection hash for a data source connection.
+     * This maintains backward compatibility with existing session management.
+     */
+    private String generateConnectionHashForDataSource(ConnectionDetails connectionDetails, String dataSourceName) {
+        try {
+            MessageDigest messageDigest = MessageDigest.getInstance(SHA_256);
+            String input = connectionDetails.getUrl() + 
+                          connectionDetails.getUser() + 
+                          connectionDetails.getPassword() + 
+                          dataSourceName + 
+                          connectionDetails.getClientUUID();
+            messageDigest.update(input.getBytes());
+            return new String(messageDigest.digest());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to generate connection hash for data source: " + dataSourceName, e);
+        }
     }
     
     /**

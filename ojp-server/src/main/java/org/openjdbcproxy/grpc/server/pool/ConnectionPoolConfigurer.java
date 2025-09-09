@@ -24,7 +24,17 @@ public class ConnectionPoolConfigurer {
      */
     public static void configureHikariPool(HikariConfig config, ConnectionDetails connectionDetails) {
         Properties clientProperties = extractClientProperties(connectionDetails);
-
+        configureHikariPoolWithProperties(config, clientProperties, "default");
+    }
+    
+    /**
+     * Configures a HikariCP connection pool with specific properties and data source name.
+     *
+     * @param config            The HikariConfig to configure
+     * @param clientProperties  The client properties to use
+     * @param dataSourceName    The name of the data source for logging
+     */
+    public static void configureHikariPoolWithProperties(HikariConfig config, Properties clientProperties, String dataSourceName) {
         // Configure basic connection pool settings first
         config.addDataSourceProperty("cachePrepStmts", "true");
         config.addDataSourceProperty("prepStmtCacheSize", "250");
@@ -43,14 +53,14 @@ public class ConnectionPoolConfigurer {
         config.setInitializationFailTimeout(10000); // 10 seconds - fail fast on initialization issues
         
         // Set pool name for better monitoring
-        String poolName = "OJP-Pool-" + System.currentTimeMillis();
+        String poolName = "OJP-Pool-" + dataSourceName + "-" + System.currentTimeMillis();
         config.setPoolName(poolName);
         
         // Enable JMX for monitoring if not explicitly disabled
         config.setRegisterMbeans(true);
 
-        log.info("HikariCP configured with maximumPoolSize={}, minimumIdle={}, connectionTimeout={}ms, poolName={}",
-                config.getMaximumPoolSize(), config.getMinimumIdle(), config.getConnectionTimeout(), poolName);
+        log.info("HikariCP configured for data source '{}' with maximumPoolSize={}, minimumIdle={}, connectionTimeout={}ms, poolName={}",
+                dataSourceName, config.getMaximumPoolSize(), config.getMinimumIdle(), config.getConnectionTimeout(), poolName);
     }
 
     /**
@@ -59,7 +69,7 @@ public class ConnectionPoolConfigurer {
      * @param connectionDetails The connection details
      * @return Properties object or null if not available
      */
-    private static Properties extractClientProperties(ConnectionDetails connectionDetails) {
+    public static Properties extractClientProperties(ConnectionDetails connectionDetails) {
         if (connectionDetails.getProperties().isEmpty()) {
             return null;
         }

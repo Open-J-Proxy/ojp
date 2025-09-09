@@ -8,6 +8,7 @@ message ConnectionDetails {
     string password = 3;
     string clientUUID = 4;
     bytes properties = 6;
+    string dataSourceName = 7;
 }
 
 enum DbName {

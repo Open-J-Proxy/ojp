@@ -149,11 +149,8 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
             }
         }
         
-        // Get the dataSource name (empty string means default)
-        String dataSourceName = connectionDetails.getDataSourceName();
-        if (dataSourceName == null || dataSourceName.trim().isEmpty()) {
-            dataSourceName = "default";
-        }
+        // Extract dataSource name from URL
+        String dataSourceName = org.openjdbcproxy.utils.DataSourceUrlParser.extractDataSourceName(connectionDetails.getUrl());
         
         log.info("connect for dataSource = {}", dataSourceName);
         

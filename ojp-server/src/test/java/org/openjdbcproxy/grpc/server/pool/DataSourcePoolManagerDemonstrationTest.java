@@ -86,34 +86,31 @@ public class DataSourcePoolManagerDemonstrationTest {
     }
 
     @Test
-    @DisplayName("Demonstrate security benefits - no database name in config keys")
-    public void testSecurityBenefits() {
+    @DisplayName("Demonstrate flexibility of data source configuration")
+    public void testDataSourceFlexibility() {
         Properties clientProperties = new Properties();
         
-        // Old approach would have exposed database/user info in keys
-        // e.g., "mydb.myuser.ojp.connection.pool.maximumPoolSize" 
-        
-        // New approach uses abstract data source names
+        // Data source-based approach uses abstract data source names
         clientProperties.setProperty("prod-api.ojp.connection.pool.maximumPoolSize", "100");
         clientProperties.setProperty("prod-batch.ojp.connection.pool.maximumPoolSize", "20");
         clientProperties.setProperty("dev-testing.ojp.connection.pool.maximumPoolSize", "5");
         
         var dataSourceProperties = DataSourcePropertiesParser.parseDataSourceProperties(clientProperties);
         
-        // Verify all data sources are parsed correctly without exposing sensitive info
+        // Verify all data sources are parsed correctly
         assertEquals(3, dataSourceProperties.size());
         assertTrue(dataSourceProperties.containsKey("prod-api"));
         assertTrue(dataSourceProperties.containsKey("prod-batch"));
         assertTrue(dataSourceProperties.containsKey("dev-testing"));
         
-        // The data source names are meaningful to the application but don't expose DB details
+        // The data source names are meaningful to the application
         Properties prodApiProps = dataSourceProperties.get("prod-api");
         assertEquals("100", prodApiProps.getProperty("ojp.connection.pool.maximumPoolSize"));
         
-        System.out.println("🔒 Security demonstration completed:");
+        System.out.println("🎯 Flexibility demonstration completed:");
         System.out.println("   - Data source names are application-defined: " + dataSourceProperties.keySet());
-        System.out.println("   - No database names or usernames exposed in configuration keys");
         System.out.println("   - Multiple pools can use same DB connection parameters");
+        System.out.println("   - Different pool configurations for different use cases");
     }
 
     @Test

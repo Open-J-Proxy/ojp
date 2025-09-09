@@ -36,7 +36,6 @@ analytics.ojp.connection.pool.maxLifetime=1800000
 
 ```java
 import java.sql.*;
-import java.util.Properties;
 
 public class DataSourceExample {
     public static void main(String[] args) throws SQLException {
@@ -45,20 +44,12 @@ public class DataSourceExample {
             "jdbc:ojp[localhost:1059]_h2:mem:myapp", "sa", "");
         
         // Using the fast data source for real-time operations
-        Properties fastProps = new Properties();
-        fastProps.setProperty("user", "sa");
-        fastProps.setProperty("password", "");
-        fastProps.setProperty("dataSourceName", "fast");
         Connection fastConn = DriverManager.getConnection(
-            "jdbc:ojp[localhost:1059]_h2:mem:myapp", fastProps);
+            "jdbc:ojp[localhost:1059>fast]_h2:mem:myapp", "sa", "");
         
         // Using the batch data source for background processing
-        Properties batchProps = new Properties();
-        batchProps.setProperty("user", "sa");
-        batchProps.setProperty("password", "");
-        batchProps.setProperty("dataSourceName", "batch");
         Connection batchConn = DriverManager.getConnection(
-            "jdbc:ojp[localhost:1059]_h2:mem:myapp", batchProps);
+            "jdbc:ojp[localhost:1059>batch]_h2:mem:myapp", "sa", "");
         
         // Use connections for different purposes...
         performFastOperation(fastConn);
@@ -127,31 +118,25 @@ reports.ojp.connection.pool.maxLifetime=1200000
 ```java
 public class UserService {
     private Connection getConnection() throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", "app_user");
-        props.setProperty("password", "app_password");
-        props.setProperty("dataSourceName", "user-service");  // Dedicated pool
-        return DriverManager.getConnection("jdbc:ojp[localhost:1059]_postgresql://localhost/myapp", props);
+        return DriverManager.getConnection(
+            "jdbc:ojp[localhost:1059>user-service]_postgresql://localhost/myapp", 
+            "app_user", "app_password");
     }
 }
 
 public class ReportService {
     private Connection getConnection() throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", "report_user");
-        props.setProperty("password", "report_password");
-        props.setProperty("dataSourceName", "reports");  // Optimized for long-running queries
-        return DriverManager.getConnection("jdbc:ojp[localhost:1059]_postgresql://localhost/analytics", props);
+        return DriverManager.getConnection(
+            "jdbc:ojp[localhost:1059>reports]_postgresql://localhost/analytics", 
+            "report_user", "report_password");
     }
 }
 
 public class BatchProcessor {
     private Connection getConnection() throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", "batch_user");
-        props.setProperty("password", "batch_password");
-        props.setProperty("dataSourceName", "batch-processing");  // Smaller pool, longer timeouts
-        return DriverManager.getConnection("jdbc:ojp[localhost:1059]_postgresql://localhost/myapp", props);
+        return DriverManager.getConnection(
+            "jdbc:ojp[localhost:1059>batch-processing]_postgresql://localhost/myapp", 
+            "batch_user", "batch_password");
     }
 }
 ```
@@ -164,15 +149,6 @@ public class BatchProcessor {
 - Avoid database-specific names for security: use `primary-read` instead of `userdb-read`
 - Use consistent naming conventions: `service-operation` or `service_operation`
 
-### Pool Sizing Guidelines
-
-| Use Case | Max Pool Size | Min Idle | Connection Timeout | Idle Timeout |
-|----------|---------------|----------|-------------------|--------------|
-| Real-time API | 50-100 | 10-20 | 3-5 seconds | 5-10 minutes |
-| Background Jobs | 5-15 | 2-5 | 10-30 seconds | 10-30 minutes |
-| Reporting | 10-25 | 3-8 | 10-15 seconds | 15-60 minutes |
-| ETL/Batch | 5-20 | 2-5 | 30-60 seconds | 30-120 minutes |
-
 ### Error Handling
 
 If you request a non-existent data source, OJP will fail fast with a clear error:
@@ -182,27 +158,3 @@ Data source 'unknown' not found. Available data sources: [default, fast, batch, 
 Please ensure the data source is configured in your ojp.properties file using the format: 
 unknown.ojp.connection.pool.* or ojp.connection.pool.* for the default data source.
 ```
-
-## Migration from Old Configuration
-
-### Before (Simple Configuration)
-```properties
-ojp.connection.pool.maximumPoolSize=25
-ojp.connection.pool.minimumIdle=5
-```
-
-### After (Data Source-based Configuration)
-```properties
-# Default remains the same
-ojp.connection.pool.maximumPoolSize=25
-ojp.connection.pool.minimumIdle=5
-
-# Add specific data sources for optimization
-fast-api.ojp.connection.pool.maximumPoolSize=50
-fast-api.ojp.connection.pool.minimumIdle=10
-
-batch-jobs.ojp.connection.pool.maximumPoolSize=10
-batch-jobs.ojp.connection.pool.minimumIdle=2
-```
-
-Your existing code will continue to work with the default data source, and you can gradually migrate to use specific data sources where beneficial.

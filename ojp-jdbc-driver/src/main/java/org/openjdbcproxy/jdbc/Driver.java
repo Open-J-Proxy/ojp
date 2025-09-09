@@ -8,6 +8,7 @@ import org.openjdbcproxy.database.DatabaseUtils;
 import org.openjdbcproxy.grpc.SerializationHandler;
 import org.openjdbcproxy.grpc.client.StatementService;
 import org.openjdbcproxy.grpc.client.StatementServiceGrpcClient;
+import org.openjdbcproxy.utils.DataSourceUrlParser;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -49,9 +50,9 @@ public class Driver implements java.sql.Driver {
     public java.sql.Connection connect(String url, Properties info) throws SQLException {
         log.debug("connect: url={}, info={}", url, info);
         
-        // Extract dataSource name from connection info or use default
-        String dataSourceName = extractDataSourceName(info);
-        log.debug("Using dataSource name: {}", dataSourceName);
+        // Extract dataSource name from URL
+        String dataSourceName = DataSourceUrlParser.extractDataSourceName(url);
+        log.debug("Extracted dataSource name from URL: {}", dataSourceName);
         
         // Load ojp.properties file if it exists
         Properties ojpProperties = loadOjpProperties();
@@ -68,27 +69,10 @@ public class Driver implements java.sql.Driver {
                         .setPassword((String) ((info.get(PASSWORD) != null) ? info.get(PASSWORD) : ""))
                         .setClientUUID(ClientUUID.getUUID())
                         .setProperties(propertiesBytes)
-                        .setDataSourceName(dataSourceName)
                         .build()
                 );
         log.debug("Returning new Connection with sessionInfo: {}", sessionInfo);
         return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(url));
-    }
-    
-    /**
-     * Extracts the dataSource name from connection properties.
-     * Supports both "dataSourceName" property and URL parameter.
-     */
-    private String extractDataSourceName(Properties info) {
-        // First check for explicit dataSourceName property
-        String dataSourceName = (String) info.get("dataSourceName");
-        if (dataSourceName != null && !dataSourceName.trim().isEmpty()) {
-            return dataSourceName.trim();
-        }
-        
-        // Could also support URL parameter in future: jdbc:ojp:...?dataSourceName=myDS
-        // For now, return empty string which will be treated as default
-        return "";
     }
     
     private Properties loadOjpProperties() {

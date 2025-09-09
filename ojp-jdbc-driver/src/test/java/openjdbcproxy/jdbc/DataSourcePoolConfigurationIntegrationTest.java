@@ -174,13 +174,15 @@ public class DataSourcePoolConfigurationIntegrationTest {
      */
     private Connection createConnectionWithDataSource(String url, String dataSourceName, String user, String password) 
             throws SQLException {
-        Properties props = new Properties();
-        props.setProperty("user", user);
-        props.setProperty("password", password);
+        String finalUrl = url;
+        
         if (dataSourceName != null) {
-            props.setProperty("dataSourceName", dataSourceName);
+            // Convert from "jdbc:ojp[localhost:1059]_h2:mem:testdb" 
+            // to "jdbc:ojp[localhost:1059>dataSourceName]_h2:mem:testdb"
+            finalUrl = url.replace("ojp[localhost:1059]", "ojp[localhost:1059>" + dataSourceName + "]");
         }
-        return DriverManager.getConnection(url, props);
+        
+        return DriverManager.getConnection(finalUrl, user, password);
     }
 
     /**

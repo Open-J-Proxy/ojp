@@ -1,6 +1,6 @@
 # OJP JDBC Driver Configuration Guide
 
-This document covers configuration options for the OJP JDBC driver, including the new **Data Source-based Connection Pool Configuration** that provides improved security and flexibility.
+This document covers configuration options for the OJP JDBC driver, including the new **Data Source-based Connection Pool Configuration** that provides improved flexibility.
 
 ## Data Source-based Connection Pool Configuration
 
@@ -8,7 +8,6 @@ The OJP JDBC driver supports configurable connection pool settings via an `ojp.p
 
 ### Key Benefits
 
-- **Security**: Avoid exposing database names or usernames in configuration keys
 - **Flexibility**: Configure multiple pools with different settings for the same database
 - **Isolation**: Separate connection pools for different application components
 - **Performance**: Optimize pool settings per use case
@@ -64,18 +63,19 @@ ojp.connection.pool.idleTimeout=300000
 
 ### Using Named Data Sources in Your Application
 
-Specify the data source name when creating connections:
+Specify the data source name in the URL:
 
 ```java
-Properties props = new Properties();
-props.setProperty("user", "myuser");
-props.setProperty("password", "mypassword");
-props.setProperty("dataSourceName", "fast");  // Use the 'fast' data source
+// Use the 'fast' data source
+Connection conn = DriverManager.getConnection("jdbc:ojp[localhost:1059>fast]_h2:mem:testdb", "user", "password");
 
-Connection conn = DriverManager.getConnection("jdbc:ojp[localhost:1059]_h2:mem:testdb", props);
+// Use the default data source (no dataSourceName specified)
+Connection conn = DriverManager.getConnection("jdbc:ojp[localhost:1059]_h2:mem:testdb", "user", "password");
 ```
 
-If no `dataSourceName` is specified, the default data source will be used.
+The URL format is: `jdbc:ojp[host:port>dataSourceName]_database://...`
+- If no `>dataSourceName` is specified, the default data source will be used.
+- The dataSourceName must match a configured data source in your `ojp.properties` file.
 
 ### Example ojp.properties File
 
@@ -111,18 +111,9 @@ reports.ojp.connection.pool.maxLifetime=1200000
 - If a property has an invalid value, the default is used and a warning is logged
 - All validation and configuration logic is handled on the server side
 
-### Security Considerations
-
-This new configuration approach improves security by:
-
-- **Avoiding Database Name Exposure**: No need to include database names in property keys
-- **Username Independence**: Configuration is independent of database usernames
-- **Flexible Mapping**: Multiple data sources can use the same database connection parameters
-- **Clear Separation**: Different application components can use dedicated pools
-
 ## JDBC Driver Usage
 
-The OJP JDBC driver follows standard JDBC patterns with the addition of data source name support:
+The OJP JDBC driver follows standard JDBC patterns with the addition of data source name support in the URL:
 
 ```java
 // Using the default data source
@@ -130,12 +121,8 @@ Connection conn1 = DriverManager.getConnection(
     "jdbc:ojp[localhost:1059]_postgresql://localhost/mydb", "user", "pass");
 
 // Using a named data source
-Properties props = new Properties();
-props.setProperty("user", "user");
-props.setProperty("password", "pass");
-props.setProperty("dataSourceName", "analytics");
 Connection conn2 = DriverManager.getConnection(
-    "jdbc:ojp[localhost:1059]_postgresql://localhost/mydb", props);
+    "jdbc:ojp[localhost:1059>analytics]_postgresql://localhost/mydb", "user", "pass");
 ```
 
 ### Adding OJP Driver to Your Project

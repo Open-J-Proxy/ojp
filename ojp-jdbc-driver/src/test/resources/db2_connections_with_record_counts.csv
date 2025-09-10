@@ -1,6 +1,6 @@
-1,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
-99,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
-100,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
-101,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
-1000,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
-10000,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
+1,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass
+99,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass
+100,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass
+101,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass
+1000,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass
+10000,org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass

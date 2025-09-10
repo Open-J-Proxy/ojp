@@ -24,14 +24,13 @@ import org.openjdbcproxy.constants.CommonConstants;
 import org.openjdbcproxy.grpc.dto.Parameter;
 import org.openjdbcproxy.jdbc.Connection;
 import org.openjdbcproxy.jdbc.LobGrpcIterator;
+import org.openjdbcproxy.utils.DataSourceUrlParser;
 
 import java.sql.SQLException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.openjdbcproxy.grpc.SerializationHandler.serialize;
 import static org.openjdbcproxy.grpc.client.GrpcExceptionHandler.handle;
@@ -45,7 +44,6 @@ public class StatementServiceGrpcClient implements StatementService {
     private static final String DEFAULT_HOST = "localhost";
     private static final String DNS_PREFIX = "dns:///";
     private static final String COLON = ":";
-    private final Pattern pattern = Pattern.compile(CommonConstants.OJP_REGEX_PATTERN);
 
     private StatementServiceGrpc.StatementServiceBlockingStub statemetServiceBlockingStub;
     private StatementServiceGrpc.StatementServiceStub statemetServiceStub;
@@ -65,15 +63,18 @@ public class StatementServiceGrpcClient implements StatementService {
 
     private void grpcChannelOpenAndStubsInitialized(String url) {
         if (this.statemetServiceStub == null && this.statemetServiceBlockingStub == null) {
-            Matcher matcher = pattern.matcher(url);
             String host = DEFAULT_HOST;
             int port = CommonConstants.DEFAULT_PORT_NUMBER;
 
-            if (matcher.find()) {
-                String hostPort = matcher.group(1);
+            // Use DataSourceUrlParser to extract host:port correctly, handling dataSource names
+            String hostPort = DataSourceUrlParser.extractHostPort(url);
+            
+            if (hostPort != null && !hostPort.isEmpty()) {
                 String[] hostPortSplit = hostPort.split(":");
                 host = hostPortSplit[0];
-                port = Integer.parseInt(hostPortSplit[1]);
+                if (hostPortSplit.length > 1) {
+                    port = Integer.parseInt(hostPortSplit[1]);
+                }
             } else {
                 throw new RuntimeException("Invalid OJP host or port.");
             }

@@ -1,7 +1,7 @@
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_h2:~/test,sa,
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_postgresql://localhost:5432/defaultdb,testuser,testpassword
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_mysql://localhost:3306/defaultdb,testuser,testpassword
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_mariadb://localhost:3307/defaultdb,testuser,testpassword
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_oracle:thin:@localhost:1521/XEPDB1,testuser,testpassword
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_sqlserver://localhost:1433;databaseName=defaultdb;encrypt=false;trustServerCertificate=true,testuser,TestPassword123!
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_h2:~/test,sa,
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_postgresql://localhost:5432/defaultdb,testuser,testpassword
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_mysql://localhost:3306/defaultdb,testuser,testpassword
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_mariadb://localhost:3307/defaultdb,testuser,testpassword
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_oracle:thin:@localhost:1521/XEPDB1,testuser,testpassword
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_sqlserver://localhost:1433;databaseName=defaultdb;encrypt=false;trustServerCertificate=true,testuser,TestPassword123!
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass

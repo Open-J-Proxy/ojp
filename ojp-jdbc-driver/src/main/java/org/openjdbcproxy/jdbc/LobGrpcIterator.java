@@ -31,7 +31,15 @@ public class LobGrpcIterator implements Iterator<LobDataBlock> {
         if (this.error != null) {
             throw new RuntimeException(this.error);
         }
+        
+        // Add timeout to prevent infinite loops
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = 30000; // 30 seconds timeout
+        
         while (blocksReceived.isEmpty() && !finished) {
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                throw new RuntimeException("Timeout waiting for LOB data blocks after " + timeoutMs + "ms");
+            }
             try {
                 Thread.sleep(1);//TODO implement this wait in a more efficient way.
             } catch (InterruptedException e) {

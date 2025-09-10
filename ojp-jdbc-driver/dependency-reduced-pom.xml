@@ -3,12 +3,12 @@
   <parent>
     <artifactId>ojp-parent</artifactId>
     <groupId>org.openjdbcproxy</groupId>
-    <version>0.1.0-beta</version>
+    <version>0.1.1-beta</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>ojp-jdbc-driver</artifactId>
   <name>OJP JDBC Driver</name>
-  <version>0.1.0-beta</version>
+  <version>0.1.1-beta</version>
   <description>JDBC driver for OJP (Open JDBC Proxy)</description>
   <url>https://github.com/Open-JDBC-Proxy/ojp</url>
   <developers>

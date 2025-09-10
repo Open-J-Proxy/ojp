@@ -5,12 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>ojp-server</artifactId>
-    <version>0.1.0-beta</version>
+    <version>0.1.1-beta</version>
 
     <parent>
         <groupId>org.openjdbcproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>0.1.0-beta</version>
+        <version>0.1.1-beta</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -27,7 +27,7 @@
         <dependency>
             <groupId>org.openjdbcproxy</groupId>
             <artifactId>ojp-grpc-commons</artifactId>
-            <version>0.1.0-beta</version>
+            <version>0.1.1-beta</version>
         </dependency>
 
         <dependency>
@@ -225,7 +225,7 @@
                         <image>eclipse-temurin:22-jre</image>
                     </from>
                     <to>
-                        <image>rrobetti/ojp:0.1.0-beta</image>
+                        <image>rrobetti/ojp:0.1.1-beta</image>
                     </to>
                     <container>
                         <mainClass>org.openjdbcproxy.grpc.server.GrpcServer</mainClass>

@@ -1,1 +1,1 @@
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_db2://localhost:50000/testdb,db2inst1,testpass
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_db2://localhost:50000/testdb,db2inst1,testpass

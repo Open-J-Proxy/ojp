@@ -1,1 +1,1 @@
-org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059>default]_sqlserver://localhost:1433;databaseName=defaultdb;encrypt=false;trustServerCertificate=true,testuser,TestPassword123!
+org.openjdbcproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_sqlserver://localhost:1433;databaseName=defaultdb;encrypt=false;trustServerCertificate=true,testuser,TestPassword123!

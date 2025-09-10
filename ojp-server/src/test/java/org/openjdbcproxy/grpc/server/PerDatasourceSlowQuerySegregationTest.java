@@ -6,6 +6,7 @@ import com.openjdbcproxy.grpc.SessionInfo;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.openjdbcproxy.grpc.SerializationHandler;
 import org.openjdbcproxy.grpc.server.utils.ConnectionHashGenerator;
@@ -36,21 +37,25 @@ public class PerDatasourceSlowQuerySegregationTest {
 
     @Test
     public void testPerDatasourceSlowQuerySegregationManagerCreation() throws Exception {
-        // Create properties for first connection
+        // Create properties for both dataSources in the first connection
         Properties clientProperties1 = new Properties();
-        clientProperties1.setProperty("ojp.connection.pool.maximumPoolSize", "10");
-        clientProperties1.setProperty("ojp.connection.pool.minimumIdle", "2");
+        clientProperties1.setProperty("ds1.ojp.connection.pool.maximumPoolSize", "10");
+        clientProperties1.setProperty("ds1.ojp.connection.pool.minimumIdle", "2");
+        clientProperties1.setProperty("ds2.ojp.connection.pool.maximumPoolSize", "20");
+        clientProperties1.setProperty("ds2.ojp.connection.pool.minimumIdle", "5");
         byte[] serializedProperties1 = SerializationHandler.serialize(clientProperties1);
 
-        // Create properties for second connection
+        // Create properties for both dataSources in the second connection (same as first)
         Properties clientProperties2 = new Properties();
-        clientProperties2.setProperty("ojp.connection.pool.maximumPoolSize", "20");
-        clientProperties2.setProperty("ojp.connection.pool.minimumIdle", "5");
+        clientProperties2.setProperty("ds1.ojp.connection.pool.maximumPoolSize", "10");
+        clientProperties2.setProperty("ds1.ojp.connection.pool.minimumIdle", "2");
+        clientProperties2.setProperty("ds2.ojp.connection.pool.maximumPoolSize", "20");
+        clientProperties2.setProperty("ds2.ojp.connection.pool.minimumIdle", "5");
         byte[] serializedProperties2 = SerializationHandler.serialize(clientProperties2);
 
-        // Create two different connection details with different pool sizes
+        // Create two different connection details with different dataSources
         ConnectionDetails connectionDetails1 = ConnectionDetails.newBuilder()
-                .setUrl("jdbc:h2:mem:test1")
+                .setUrl("jdbc:ojp[localhost:1059>ds1]_h2:mem:test1")
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("client-1")
@@ -58,21 +63,33 @@ public class PerDatasourceSlowQuerySegregationTest {
                 .build();
 
         ConnectionDetails connectionDetails2 = ConnectionDetails.newBuilder()
-                .setUrl("jdbc:h2:mem:test2")
+                .setUrl("jdbc:ojp[localhost:1059>ds2]_h2:mem:test2")
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("client-2")
                 .setProperties(ByteString.copyFrom(serializedProperties2))
                 .build();
 
+        // Mock StreamObservers to capture SessionInfo
         StreamObserver<SessionInfo> responseObserver1 = Mockito.mock(StreamObserver.class);
         StreamObserver<SessionInfo> responseObserver2 = Mockito.mock(StreamObserver.class);
+        
+        // Use ArgumentCaptors to capture the SessionInfo
+        ArgumentCaptor<SessionInfo> sessionInfoCaptor1 = ArgumentCaptor.forClass(SessionInfo.class);
+        ArgumentCaptor<SessionInfo> sessionInfoCaptor2 = ArgumentCaptor.forClass(SessionInfo.class);
 
         // Connect with first datasource
         statementService.connect(connectionDetails1, responseObserver1);
 
         // Connect with second datasource  
         statementService.connect(connectionDetails2, responseObserver2);
+
+        // Verify that onNext was called and capture the SessionInfo
+        Mockito.verify(responseObserver1).onNext(sessionInfoCaptor1.capture());
+        Mockito.verify(responseObserver2).onNext(sessionInfoCaptor2.capture());
+        
+        SessionInfo sessionInfo1 = sessionInfoCaptor1.getValue();
+        SessionInfo sessionInfo2 = sessionInfoCaptor2.getValue();
 
         // Use reflection to access the private slowQuerySegregationManagers map
         Field managersField = StatementServiceImpl.class.getDeclaredField("slowQuerySegregationManagers");
@@ -85,9 +102,9 @@ public class PerDatasourceSlowQuerySegregationTest {
         // Verify that we have two separate managers
         assertEquals(2, managers.size(), "Should have created separate managers for each datasource");
 
-        // Get the managers for each connection hash
-        String connHash1 = ConnectionHashGenerator.hashConnectionDetails(connectionDetails1);
-        String connHash2 = ConnectionHashGenerator.hashConnectionDetails(connectionDetails2);
+        // Get the managers for each actual connection hash
+        String connHash1 = sessionInfo1.getConnHash();
+        String connHash2 = sessionInfo2.getConnHash();
 
         SlowQuerySegregationManager manager1 = managers.get(connHash1);
         SlowQuerySegregationManager manager2 = managers.get(connHash2);
@@ -124,25 +141,34 @@ public class PerDatasourceSlowQuerySegregationTest {
 
     @Test
     public void testManagerRetrievalForExistingConnection() throws Exception {
-        // Create properties
+        // Create properties for the testDS dataSource
         Properties clientProperties = new Properties();
-        clientProperties.setProperty("ojp.connection.pool.maximumPoolSize", "15");
+        clientProperties.setProperty("testDS.ojp.connection.pool.maximumPoolSize", "15");
         byte[] serializedProperties = SerializationHandler.serialize(clientProperties);
 
-        // Create connection
+        // Create connection with proper OJP URL format
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
-                .setUrl("jdbc:h2:mem:test")
+                .setUrl("jdbc:ojp[localhost:1059>testDS]_h2:mem:test")
                 .setUser("test")
                 .setPassword("test")
                 .setClientUUID("client-1")
                 .setProperties(ByteString.copyFrom(serializedProperties))
                 .build();
 
+        // Mock StreamObserver to capture the SessionInfo
         StreamObserver<SessionInfo> responseObserver = Mockito.mock(StreamObserver.class);
+        
+        // Use ArgumentCaptor to capture the SessionInfo
+        ArgumentCaptor<SessionInfo> sessionInfoCaptor = ArgumentCaptor.forClass(SessionInfo.class);
+        
         statementService.connect(connectionDetails, responseObserver);
-
-        // Use reflection to call the private method to get manager
-        String connHash = ConnectionHashGenerator.hashConnectionDetails(connectionDetails);
+        
+        // Verify that onNext was called and capture the SessionInfo
+        Mockito.verify(responseObserver).onNext(sessionInfoCaptor.capture());
+        SessionInfo sessionInfo = sessionInfoCaptor.getValue();
+        
+        // Use the actual connection hash from the SessionInfo
+        String connHash = sessionInfo.getConnHash();
         
         java.lang.reflect.Method getManagerMethod = StatementServiceImpl.class
                 .getDeclaredMethod("getSlowQuerySegregationManagerForConnection", String.class);

@@ -3,6 +3,7 @@ package org.openjdbcproxy.grpc.server.pool;
 import com.openjdbcproxy.grpc.ConnectionDetails;
 import com.google.protobuf.ByteString;
 import org.openjdbcproxy.grpc.SerializationHandler;
+import org.openjdbcproxy.utils.DataSourceUrlParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 
@@ -41,11 +42,10 @@ public class DataSourcePoolManagerDemonstrationTest {
         
         // 3. Create ConnectionDetails with serialized properties (as gRPC would do)
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
-                .setUrl("jdbc:h2:mem:testdb")
+                .setUrl("jdbc:ojp[localhost:1059>fast]_h2:mem:testdb")
                 .setUser("sa")
                 .setPassword("")
                 .setClientUUID("test-client-uuid")
-                .setDataSourceName("fast")  // Request specific data source
                 .setProperties(ByteString.copyFrom(serializedProperties))
                 .build();
         
@@ -59,7 +59,7 @@ public class DataSourcePoolManagerDemonstrationTest {
         assertEquals(3, dataSourceProperties.size()); // default, fast, batch
         
         // 6. Get properties for the requested data source
-        String requestedDataSource = connectionDetails.getDataSourceName();
+        String requestedDataSource = DataSourceUrlParser.extractDataSourceName(connectionDetails.getUrl());
         Properties fastProperties = DataSourcePropertiesParser.getPropertiesForDataSource(
                 dataSourceProperties, requestedDataSource);
         

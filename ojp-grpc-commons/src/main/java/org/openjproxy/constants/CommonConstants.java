@@ -24,6 +24,14 @@ public class CommonConstants {
     public static final String OJP_REGEX_PATTERN = "ojp\\[([^\\]]+)\\]";
     public static final String OJP_CLOB_PREFIX = "OJP_CLOB_PREFIX:";
 
+    // Configuration property keys
+    public static final String DATASOURCE_NAME_PROPERTY = "ojp.datasource.name";
+    public static final String MAXIMUM_POOL_SIZE_PROPERTY = "ojp.connection.pool.maximumPoolSize";
+    public static final String MINIMUM_IDLE_PROPERTY = "ojp.connection.pool.minimumIdle";
+    public static final String IDLE_TIMEOUT_PROPERTY = "ojp.connection.pool.idleTimeout";
+    public static final String MAX_LIFETIME_PROPERTY = "ojp.connection.pool.maxLifetime";
+    public static final String CONNECTION_TIMEOUT_PROPERTY = "ojp.connection.pool.connectionTimeout";
+
     // HikariCP default connection pool settings - optimized for high concurrency
     // ISSUE #29 FIX: Updated these values to prevent indefinite blocking under high load
     public static final int DEFAULT_MAXIMUM_POOL_SIZE = 20;  // Increased from 10 to handle more concurrent requests

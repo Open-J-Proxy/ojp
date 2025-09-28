@@ -41,6 +41,7 @@ import org.openjproxy.grpc.server.utils.DateTimeUtils;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.grpc.server.utils.DriverUtils;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
+import org.openjproxy.grpc.server.pool.DataSourceConfigurationManager;
 import org.openjproxy.grpc.server.utils.ConnectionHashGenerator;
 import org.openjproxy.grpc.server.utils.UrlParser;
 import org.openjproxy.grpc.server.utils.MethodReflectionUtils;
@@ -130,19 +131,31 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
         HikariDataSource ds = this.datasourceMap.get(connHash);
         if (ds == null) {
-            HikariConfig config = new HikariConfig();
-            config.setJdbcUrl(UrlParser.parseUrl(connectionDetails.getUrl()));
-            config.setUsername(connectionDetails.getUser());
-            config.setPassword(connectionDetails.getPassword());
+            try {
+                HikariConfig config = new HikariConfig();
+                config.setJdbcUrl(UrlParser.parseUrl(connectionDetails.getUrl()));
+                config.setUsername(connectionDetails.getUser());
+                config.setPassword(connectionDetails.getPassword());
 
-            // Configure HikariCP using client properties or defaults
-            ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails);
+                // Configure HikariCP using datasource-specific configuration
+                DataSourceConfigurationManager.DataSourceConfiguration dsConfig = 
+                        ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails);
 
-            ds = new HikariDataSource(config);
-            this.datasourceMap.put(connHash, ds);
-            
-            // Create a slow query segregation manager for this datasource
-            createSlowQuerySegregationManagerForDatasource(connHash, config.getMaximumPoolSize());
+                ds = new HikariDataSource(config);
+                this.datasourceMap.put(connHash, ds);
+                
+                // Create a slow query segregation manager for this datasource
+                createSlowQuerySegregationManagerForDatasource(connHash, config.getMaximumPoolSize());
+                
+                log.info("Created new HikariDataSource for dataSource '{}' with connHash: {}", 
+                        dsConfig.getDataSourceName(), connHash);
+                
+            } catch (Exception e) {
+                log.error("Failed to create datasource for connection hash {}: {}", connHash, e.getMessage(), e);
+                SQLException sqlException = new SQLException("Failed to create datasource: " + e.getMessage(), e);
+                sendSQLExceptionMetadata(sqlException, responseObserver);
+                return;
+            }
         }
 
         this.sessionManager.registerClientUUID(connHash, connectionDetails.getClientUUID());

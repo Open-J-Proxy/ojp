@@ -167,10 +167,6 @@ public class BlobIntegrationTest {
         while (byteFile != -1) {
             count++;
             int blobByte = inputStreamBlob.read();
-            //TODO remove after debugging
-            if (byteFile != blobByte) {
-                System.out.println(count);
-            }
 
             Assert.assertEquals(byteFile, blobByte);
             byteFile = inputStreamTestFile.read();

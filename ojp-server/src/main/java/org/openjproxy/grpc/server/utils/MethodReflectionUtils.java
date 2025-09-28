@@ -27,7 +27,7 @@ public class MethodReflectionUtils {
                     for (int i = 0; i < params.size(); i++) {
                         java.lang.reflect.Parameter reflectParam = method.getParameters()[i];
                         Object receivedParam = params.get(i);
-                        //TODO there is a potential issue here, if parameters are received null and more than one method receives the same amount of parameters there is no way to distinguish. Maybe send a Null object with the class type as an attribute and parse it back to null in server is a solution.
+                        //TODO there is a potential issue here, if parameters are received null and more than one method receives the same amount of parameters there is no way to distinguish. Maybe send a Null object with the class type as an attribute and parse it back to null in server is a solution. This situation has not surfaced yet.
                         Class<?> reflectType = getWrapperType(reflectParam.getType());
                         if (receivedParam != null && (!reflectType.equals(receivedParam.getClass()) &&
                                 !reflectType.isAssignableFrom(receivedParam.getClass()))) {

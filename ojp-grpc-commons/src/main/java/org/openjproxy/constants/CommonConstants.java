@@ -22,6 +22,10 @@ public class CommonConstants {
     public static final String RESULT_SET_ROW_BY_ROW_MODE = "RESULT_SET_ROW_BY_ROW_MODE";
     public static final int DEFAULT_PORT_NUMBER = 1059;
     public static final String OJP_REGEX_PATTERN = "ojp\\[([^\\]]+)\\]";
+    
+    // Multinode configuration constants
+    public static final int DEFAULT_MULTINODE_RETRY_ATTEMPTS = -1; // -1 = retry indefinitely
+    public static final long DEFAULT_MULTINODE_RETRY_DELAY_MS = 5000; // 5 seconds
     public static final String OJP_CLOB_PREFIX = "OJP_CLOB_PREFIX:";
 
     // HikariCP default connection pool settings - optimized for high concurrency

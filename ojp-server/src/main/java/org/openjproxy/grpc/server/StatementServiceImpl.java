@@ -111,6 +111,9 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     // Per-datasource slow query segregation managers
     private final Map<String, SlowQuerySegregationManager> slowQuerySegregationManagers = new ConcurrentHashMap<>();
     
+    // Multinode server manager for pool rebalancing
+    private final MultinodeServerManager multinodeServerManager = new MultinodeServerManager();
+    
     // Server configuration for creating segregation managers
     private final ServerConfiguration serverConfiguration;
     
@@ -129,7 +132,43 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         log.info("connect connHash = " + connHash);
 
         HikariDataSource ds = this.datasourceMap.get(connHash);
-        if (ds == null) {
+        boolean isNewDataSource = (ds == null);
+        
+        // Process multinode server list if provided
+        MultinodeServerManager.PoolConfiguration poolConfig = null;
+        if (!connectionDetails.getServerEndpointsList().isEmpty()) {
+            log.debug("Processing multinode server list with {} endpoints", 
+                    connectionDetails.getServerEndpointsList().size());
+            
+            // Determine original max pool size from client properties or use default
+            int originalMaxPoolSize = CommonConstants.DEFAULT_MAXIMUM_POOL_SIZE;
+            if (connectionDetails.getProperties() != null && !connectionDetails.getProperties().isEmpty()) {
+                try {
+                    Properties clientProperties = deserialize(connectionDetails.getProperties().toByteArray(), Properties.class);
+                    String maxPoolSizeProp = clientProperties.getProperty("ojp.connection.pool.maximumPoolSize");
+                    if (maxPoolSizeProp != null) {
+                        originalMaxPoolSize = Integer.parseInt(maxPoolSizeProp);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to parse client properties for pool size, using default: {}", e.getMessage());
+                }
+            }
+            
+            poolConfig = multinodeServerManager.registerClientServers(
+                    connectionDetails.getClientUUID(),
+                    connectionDetails.getServerEndpointsList(),
+                    connHash,
+                    originalMaxPoolSize
+            );
+            
+            log.info("Multinode configuration for client {}: {} servers, adjusted pool size max={} min={}", 
+                    connectionDetails.getClientUUID(),
+                    poolConfig.getServerCount(),
+                    poolConfig.getMaxPoolSize(),
+                    poolConfig.getMinPoolSize());
+        }
+        
+        if (isNewDataSource) {
             HikariConfig config = new HikariConfig();
             config.setJdbcUrl(UrlParser.parseUrl(connectionDetails.getUrl()));
             config.setUsername(connectionDetails.getUser());
@@ -137,6 +176,14 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
             // Configure HikariCP using client properties or defaults
             ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails);
+            
+            // Apply multinode pool size adjustments if available
+            if (poolConfig != null) {
+                config.setMaximumPoolSize(poolConfig.getMaxPoolSize());
+                config.setMinimumIdle(poolConfig.getMinPoolSize());
+                log.info("Applied multinode pool configuration: max={}, min={} (adjusted for {} servers)", 
+                        poolConfig.getMaxPoolSize(), poolConfig.getMinPoolSize(), poolConfig.getServerCount());
+            }
 
             ds = new HikariDataSource(config);
             this.datasourceMap.put(connHash, ds);

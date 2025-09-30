@@ -1,3 +1,4 @@
+<img src="documents/images/ojp_logo.png" alt="OJP Banner" />
 
 # Open J Proxy
 
@@ -90,6 +91,7 @@ If Docker is not available in your environment, you can build and run OJP Server
 - [Get started: Spring Boot, Quarkus and Micronaut](documents/java-frameworks) - Framework-specific integration guides and examples.
 - [Connection Pool Configuration](documents/configuration/ojp-jdbc-configuration.md) - OJP JDBC driver setup and connection pool settings.
 - [OJP Server Configuration](documents/configuration/ojp-server-configuration.md) - Server startup options and runtime configuration.
+- [Multinode Configuration](documents/multinode/README.md) - High availability and load balancing with multiple OJP servers.
 - [Slow query segregation feature](documents/designs/SLOW_QUERY_SEGREGATION.md) - Feature that prevent connection starvation by slow queries (or statements).
 - [Telemetry and Observability](documents/telemetry/README.md) - OpenTelemetry integration and monitoring setup.
     

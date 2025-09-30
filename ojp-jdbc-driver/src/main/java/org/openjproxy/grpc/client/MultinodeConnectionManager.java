@@ -1,13 +1,13 @@
 package org.openjproxy.grpc.client;
 
-import com.openjdbcproxy.grpc.ConnectionDetails;
-import com.openjdbcproxy.grpc.SessionInfo;
-import com.openjdbcproxy.grpc.StatementServiceGrpc;
+import com.openjproxy.grpc.ConnectionDetails;
+import com.openjproxy.grpc.SessionInfo;
+import com.openjproxy.grpc.StatementServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 import lombok.extern.slf4j.Slf4j;
-import org.openjdbcproxy.constants.CommonConstants;
+import org.openjproxy.constants.CommonConstants;
 
 import java.sql.SQLException;
 import java.util.List;

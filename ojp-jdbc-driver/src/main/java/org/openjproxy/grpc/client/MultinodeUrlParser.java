@@ -1,10 +1,9 @@
 package org.openjproxy.grpc.client;
 
 import lombok.extern.slf4j.Slf4j;
-import org.openjdbcproxy.constants.CommonConstants;
+import org.openjproxy.constants.CommonConstants;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;

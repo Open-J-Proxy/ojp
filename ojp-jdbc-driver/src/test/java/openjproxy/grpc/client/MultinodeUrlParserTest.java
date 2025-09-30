@@ -1,8 +1,16 @@
-package org.openjdbcproxy.grpc.client;
+package openjproxy.grpc.client;
 
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.*;
+import org.openjproxy.grpc.client.MultinodeUrlParser;
+import org.openjproxy.grpc.client.ServerEndpoint;
+
 import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MultinodeUrlParserTest {
 
@@ -10,7 +18,7 @@ class MultinodeUrlParserTest {
     void testParseSingleServerEndpoint() {
         String url = "jdbc:ojp[localhost:1059]_postgresql://localhost:5432/test";
         List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url);
-        
+
         assertEquals(1, endpoints.size());
         ServerEndpoint endpoint = endpoints.get(0);
         assertEquals("localhost", endpoint.getHost());
@@ -22,15 +30,15 @@ class MultinodeUrlParserTest {
     void testParseMultipleServerEndpoints() {
         String url = "jdbc:ojp[192.168.1.10:1059,192.168.1.11:1059,192.168.1.12:1060]_postgresql://localhost:5432/test";
         List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url);
-        
+
         assertEquals(3, endpoints.size());
-        
+
         assertEquals("192.168.1.10", endpoints.get(0).getHost());
         assertEquals(1059, endpoints.get(0).getPort());
-        
+
         assertEquals("192.168.1.11", endpoints.get(1).getHost());
         assertEquals(1059, endpoints.get(1).getPort());
-        
+
         assertEquals("192.168.1.12", endpoints.get(2).getHost());
         assertEquals(1060, endpoints.get(2).getPort());
     }
@@ -39,7 +47,7 @@ class MultinodeUrlParserTest {
     void testParseWithSpaces() {
         String url = "jdbc:ojp[ host1:1059 , host2:1060 ]_postgresql://localhost:5432/test";
         List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url);
-        
+
         assertEquals(2, endpoints.size());
         assertEquals("host1", endpoints.get(0).getHost());
         assertEquals(1059, endpoints.get(0).getPort());
@@ -80,7 +88,7 @@ class MultinodeUrlParserTest {
         assertThrows(IllegalArgumentException.class, () -> {
             MultinodeUrlParser.parseServerEndpoints("jdbc:ojp[localhost:70000]_postgresql://localhost:5432/test");
         });
-        
+
         assertThrows(IllegalArgumentException.class, () -> {
             MultinodeUrlParser.parseServerEndpoints("jdbc:ojp[localhost:0]_postgresql://localhost:5432/test");
         });
@@ -97,7 +105,7 @@ class MultinodeUrlParserTest {
     void testParseWithEmptyServerInList() {
         String url = "jdbc:ojp[host1:1059,,host2:1060]_postgresql://localhost:5432/test";
         List<ServerEndpoint> endpoints = MultinodeUrlParser.parseServerEndpoints(url);
-        
+
         assertEquals(2, endpoints.size());
         assertEquals("host1", endpoints.get(0).getHost());
         assertEquals("host2", endpoints.get(1).getHost());
@@ -129,7 +137,7 @@ class MultinodeUrlParserTest {
             new ServerEndpoint("host2", 1060),
             new ServerEndpoint("host3", 1061)
         );
-        
+
         String formatted = MultinodeUrlParser.formatServerList(endpoints);
         assertEquals("host1:1059,host2:1060,host3:1061", formatted);
     }
@@ -152,10 +160,10 @@ class MultinodeUrlParserTest {
         ServerEndpoint endpoint = new ServerEndpoint("localhost", 1059);
         assertTrue(endpoint.isHealthy());
         assertEquals(0, endpoint.getLastFailureTime());
-        
+
         endpoint.setHealthy(false);
         endpoint.setLastFailureTime(System.currentTimeMillis());
-        
+
         assertFalse(endpoint.isHealthy());
         assertTrue(endpoint.getLastFailureTime() > 0);
     }

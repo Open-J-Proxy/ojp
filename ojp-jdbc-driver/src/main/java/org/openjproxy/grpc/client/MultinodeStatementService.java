@@ -2,14 +2,24 @@ package org.openjproxy.grpc.client;
 
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.protobuf.ByteString;
-import com.openjdbcproxy.grpc.*;
+import com.openjproxy.grpc.CallResourceRequest;
+import com.openjproxy.grpc.CallResourceResponse;
+import com.openjproxy.grpc.ConnectionDetails;
+import com.openjproxy.grpc.LobDataBlock;
+import com.openjproxy.grpc.LobReference;
+import com.openjproxy.grpc.OpResult;
+import com.openjproxy.grpc.ReadLobRequest;
+import com.openjproxy.grpc.ResultSetFetchRequest;
+import com.openjproxy.grpc.SessionInfo;
+import com.openjproxy.grpc.SessionTerminationStatus;
+import com.openjproxy.grpc.StatementRequest;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.openjdbcproxy.grpc.dto.Parameter;
-import org.openjdbcproxy.jdbc.Connection;
-import org.openjdbcproxy.jdbc.LobGrpcIterator;
+import org.openjproxy.grpc.dto.Parameter;
+import org.openjproxy.jdbc.Connection;
+import org.openjproxy.jdbc.LobGrpcIterator;
 
 import java.sql.SQLException;
 import java.util.Iterator;
@@ -17,7 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.openjdbcproxy.grpc.SerializationHandler.serialize;
+import static org.openjproxy.grpc.SerializationHandler.serialize;
 
 /**
  * Multinode-aware implementation of StatementService that routes requests

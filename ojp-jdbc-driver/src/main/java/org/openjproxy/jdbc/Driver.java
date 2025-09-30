@@ -6,6 +6,9 @@ import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.grpc.SerializationHandler;
+import org.openjproxy.grpc.client.MultinodeStatementService;
+import org.openjproxy.grpc.client.MultinodeUrlParser;
+import org.openjproxy.grpc.client.ServerEndpoint;
 import org.openjproxy.grpc.client.StatementService;
 import org.openjproxy.grpc.client.StatementServiceGrpcClient;
 

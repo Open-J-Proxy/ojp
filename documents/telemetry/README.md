@@ -16,7 +16,7 @@ OJP exposes operational metrics through a Prometheus-compatible endpoint, provid
 
 ### Prometheus Metrics
 Metrics are exposed via HTTP endpoint and can be scraped by Prometheus:
-- **Default endpoint**: `http://localhost:9090/metrics`
+- **Default endpoint**: `http://localhost:9159/metrics`
 - **Format**: Prometheus text-based exposition format
 - **Update frequency**: Real-time metrics updated on each operation
 
@@ -34,7 +34,7 @@ The telemetry system can be configured through JVM system properties or environm
 | Property | Environment Variable | Default | Description |
 |----------|---------------------|---------|-------------|
 | `ojp.opentelemetry.enabled` | `OJP_OPENTELEMETRY_ENABLED` | `true` | Enable/disable OpenTelemetry metrics collection |
-| `ojp.prometheus.port` | `OJP_PROMETHEUS_PORT` | `9090` | Port for Prometheus metrics HTTP server |
+| `ojp.prometheus.port` | `OJP_PROMETHEUS_PORT` | `9159` | Port for Prometheus metrics HTTP server |
 | `ojp.prometheus.allowedIps` | `OJP_PROMETHEUS_ALLOWED_IPS` | `0.0.0.0/0` | Comma-separated list of allowed IP addresses/CIDR blocks for metrics endpoint |
 
 ### Configuration Examples
@@ -43,14 +43,14 @@ The telemetry system can be configured through JVM system properties or environm
 ```bash
 java -jar ojp-server.jar \
   -Dojp.opentelemetry.enabled=true \
-  -Dojp.prometheus.port=9090 \
+  -Dojp.prometheus.port=9159 \
   -Dojp.prometheus.allowedIps=127.0.0.1,10.0.0.0/8
 ```
 
 **Using Environment Variables:**
 ```bash
 export OJP_OPENTELEMETRY_ENABLED=true
-export OJP_PROMETHEUS_PORT=9090
+export OJP_PROMETHEUS_PORT=9159
 export OJP_PROMETHEUS_ALLOWED_IPS=127.0.0.1,10.0.0.0/8
 java -jar ojp-server.jar
 ```
@@ -68,7 +68,7 @@ global:
 scrape_configs:
   - job_name: 'ojp-server'
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ['localhost:9159']
     metrics_path: '/metrics'
     scrape_interval: 5s
 ```

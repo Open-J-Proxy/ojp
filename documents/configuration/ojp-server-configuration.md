@@ -11,7 +11,7 @@ The server supports configuration through both JVM system properties and environ
 | Property                             | Environment Variable                 | Type    | Default   | Description                                            |
 |--------------------------------------|--------------------------------------|---------|-----------|--------------------------------------------------------|
 | `ojp.server.port`                    | `OJP_SERVER_PORT`                    | int     | 1059      | gRPC server port                                       |
-| `ojp.prometheus.port`                | `OJP_PROMETHEUS_PORT`                | int     | 9090      | Prometheus metrics HTTP server port                    |
+| `ojp.prometheus.port`                | `OJP_PROMETHEUS_PORT`                | int     | 9159      | Prometheus metrics HTTP server port                    |
 | `ojp.server.threadPoolSize`          | `OJP_SERVER_THREADPOOLSIZE`          | int     | 200       | gRPC server thread pool size                           |
 | `ojp.server.maxRequestSize`          | `OJP_SERVER_MAXREQUESTSIZE`          | int     | 4194304   | Maximum request size in bytes (4MB)                    |
 | `ojp.server.connectionIdleTimeout`   | `OJP_SERVER_CONNECTIONIDLETIMEOUT`   | long    | 30000     | Connection idle timeout in milliseconds                |
@@ -191,7 +191,7 @@ ojp.server.slowQuerySegregation.fastSlotTimeout=60000
 
 ```bash
 java -Dojp.server.port=1059 \
-     -Dojp.prometheus.port=9090 \
+     -Dojp.prometheus.port=9159 \
      -Dojp.server.logLevel=DEBUG \
      -Dojp.server.accessLogging=true \
      -Dojp.server.allowedIps="0.0.0.0/0" \
@@ -203,7 +203,7 @@ java -Dojp.server.port=1059 \
 
 ```bash
 java -Dojp.server.port=1059 \
-     -Dojp.prometheus.port=9090 \
+     -Dojp.prometheus.port=9159 \
      -Dojp.server.logLevel=INFO \
      -Dojp.server.accessLogging=false \
      -Dojp.server.threadPoolSize=300 \
@@ -239,7 +239,7 @@ metadata:
   name: ojp-server-config
 data:
   OJP_SERVER_PORT: "1059"
-  OJP_PROMETHEUS_PORT: "9090"
+  OJP_PROMETHEUS_PORT: "9159"
   OJP_SERVER_THREADPOOLSIZE: "200"
   OJP_SERVER_CIRCUITBREAKERTIMEOUT: "60000"
   OJP_SERVER_CIRCUITBREAKERTHRESHOLD: "3"
@@ -284,7 +284,7 @@ Configuration summary is logged at startup:
 ```
 INFO org.openjproxy.grpc.server.ServerConfiguration - OJP Server Configuration:
 INFO org.openjproxy.grpc.server.ServerConfiguration -   Server Port: 1059
-INFO org.openjproxy.grpc.server.ServerConfiguration -   Prometheus Port: 9090
+INFO org.openjproxy.grpc.server.ServerConfiguration -   Prometheus Port: 9159
 INFO org.openjproxy.grpc.server.ServerConfiguration -   OpenTelemetry Enabled: true
 INFO org.openjproxy.grpc.server.ServerConfiguration -   Slow Query Segregation Enabled: true
 INFO org.openjproxy.grpc.server.ServerConfiguration -   Slow Query Slot Percentage: 20%

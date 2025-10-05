@@ -18,7 +18,7 @@ class OjpServerTelemetryTest {
 	@BeforeAll
 	static void setUp() {
 		OjpServerTelemetry instrument = new OjpServerTelemetry();
-		grpcTelemetry = instrument.createGrpcTelemetry(9159);
+		grpcTelemetry = instrument.createGrpcTelemetry(9191);
 	}
 
 	@Test
@@ -30,7 +30,7 @@ class OjpServerTelemetryTest {
 
 	@Test
 	void shouldExposePrometheusMetricsEndpoint() throws IOException {
-		HttpURLConnection connection = (HttpURLConnection) URI.create("http://localhost:9159/metrics").toURL().openConnection();
+		HttpURLConnection connection = (HttpURLConnection) URI.create("http://localhost:9191/metrics").toURL().openConnection();
 		connection.setRequestMethod("GET");
 		connection.setConnectTimeout(5000);
 		connection.setReadTimeout(5000);

@@ -37,7 +37,7 @@ public class ServerConfiguration {
 
     // Default values
     public static final int DEFAULT_SERVER_PORT = CommonConstants.DEFAULT_PORT_NUMBER;
-    public static final int DEFAULT_PROMETHEUS_PORT = 9090;
+    public static final int DEFAULT_PROMETHEUS_PORT = 9159;
     public static final boolean DEFAULT_OPENTELEMETRY_ENABLED = true;
     public static final String DEFAULT_OPENTELEMETRY_ENDPOINT = "";
     public static final int DEFAULT_THREAD_POOL_SIZE = 200;

@@ -18,7 +18,7 @@ class OjpServerTelemetryTest {
 	@BeforeAll
 	static void setUp() {
 		OjpServerTelemetry instrument = new OjpServerTelemetry();
-		grpcTelemetry = instrument.createGrpcTelemetry(9191);//Change port for tests as per ojp-server might already running prometheus on the default port 9090
+		grpcTelemetry = instrument.createGrpcTelemetry(9159);
 	}
 
 	@Test

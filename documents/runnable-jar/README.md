@@ -75,7 +75,7 @@ When the server starts successfully, you should see output similar to:
 ```
 [main] INFO org.openjproxy.grpc.server.ServerConfiguration - OJP Server Configuration:
 [main] INFO org.openjproxy.grpc.server.ServerConfiguration -   Server Port: 1059
-[main] INFO org.openjproxy.grpc.server.ServerConfiguration -   Prometheus Port: 9090
+[main] INFO org.openjproxy.grpc.server.ServerConfiguration -   Prometheus Port: 9159
 [main] INFO org.openjproxy.grpc.server.ServerConfiguration -   OpenTelemetry Enabled: true
 [main] INFO org.openjproxy.grpc.server.GrpcServer - Starting OJP gRPC Server on port 1059
 [main] INFO org.openjproxy.grpc.server.GrpcServer - OJP gRPC Server started successfully and awaiting termination
@@ -117,7 +117,7 @@ The OJP Server can be configured using system properties. Common options include
 | Property | Default | Description |
 |----------|---------|-------------|
 | `ojp.server.port` | `1059` | gRPC server port |
-| `ojp.prometheus.port` | `9090` | Prometheus metrics port |
+| `ojp.prometheus.port` | `9159` | Prometheus metrics port |
 | `ojp.thread.pool.size` | `200` | Server thread pool size |
 | `ojp.max.request.size` | `4194304` | Maximum request size in bytes |
 | `ojp.connection.idle.timeout` | `30000` | Connection idle timeout in milliseconds |
@@ -153,7 +153,7 @@ ss -tlnp | grep 1059
 Access Prometheus metrics (if enabled):
 
 ```bash
-curl http://localhost:9090/metrics
+curl http://localhost:9159/metrics
 ```
 
 ### 3. Test with OJP JDBC Driver

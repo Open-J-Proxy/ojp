@@ -13,7 +13,7 @@ jobs:
   build-test:
     name: Build & Test
     runs-on: ubuntu-latest
-    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
+
     strategy:
       fail-fast: false
       matrix:

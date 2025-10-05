@@ -16,7 +16,7 @@ import java.util.List;
  */
 public class OjpServerTelemetry {
 	private static final Logger logger = LoggerFactory.getLogger(OjpServerTelemetry.class);
-	private static final int DEFAULT_PROMETHEUS_PORT = 9090;
+	private static final int DEFAULT_PROMETHEUS_PORT = 9159;
 
 	/**
 	 * Creates GrpcTelemetry with default configuration.

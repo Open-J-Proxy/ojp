@@ -66,7 +66,7 @@ That's it! Your application now uses intelligent connection pooling through OJP.
 
 If Docker is not available in your environment, you can build and run OJP Server as a standalone JAR file:
 
-📖 **[Executable JAR Setup Guide](documents/fat-jar/README.md)** - Complete instructions for building and running OJP Server as a standalone executable JAR with all dependencies included.
+📖 **[Executable JAR Setup Guide](documents/runnable-jar/README.md)** - Complete instructions for building and running OJP Server as a standalone executable JAR with all dependencies included.
 
 ---
 

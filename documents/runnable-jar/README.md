@@ -1,11 +1,11 @@
-# OJP Server Fat JAR Guide
+# OJP Server Runnable JAR Guide
 
-This guide explains how to build and run the OJP Server as a standalone fat JAR (executable JAR with all dependencies included) for environments where Docker or containers are not available.
+This guide explains how to build and run the OJP Server as a standalone runnable JAR (executable JAR with all dependencies included) for environments where Docker or containers are not available.
 
 ## Prerequisites
 
 - **Java 22 or higher** - Required for building and running OJP Server
-- **Maven 3.9+** - Required for building the fat JAR from source
+- **Maven 3.9+** - Required for building the runnable JAR from source
 - **Git** - Required for cloning the repository (if building from source)
 
 ### Java Version Check
@@ -23,7 +23,7 @@ OpenJDK Runtime Environment (build 22.0.1+8-16)
 OpenJDK 64-Bit Server VM (build 22.0.1+8-16, mixed mode, sharing)
 ```
 
-## Building the Fat JAR from Source
+## Building the Runnable JAR from Source
 
 ### 1. Clone the Repository
 
@@ -32,23 +32,23 @@ git clone https://github.com/Open-J-Proxy/ojp.git
 cd ojp
 ```
 
-### 2. Build the Fat JAR
+### 2. Build the Runnable JAR
 
-Build the entire project including the fat JAR:
+Build the entire project including the runnable JAR:
 
 ```bash
 mvn clean install -DskipTests
 ```
 
-**Alternative**: Build only the server fat JAR (after building dependencies once):
+**Alternative**: Build only the server runnable JAR (after building dependencies once):
 
 ```bash
 mvn clean package -pl ojp-server -DskipTests
 ```
 
-### 3. Locate the Fat JAR
+### 3. Locate the Runnable JAR
 
-After successful build, the fat JAR will be located at:
+After successful build, the runnable JAR will be located at:
 
 ```
 ojp-server/target/ojp-server-<version>-shaded.jar
@@ -56,9 +56,9 @@ ojp-server/target/ojp-server-<version>-shaded.jar
 
 For example: `ojp-server/target/ojp-server-0.1.1-beta-shaded.jar`
 
-The fat JAR size is approximately **27MB** and contains all required dependencies.
+The runnable JAR size is approximately **27MB** and contains all required dependencies.
 
-## Running the Fat JAR
+## Running the OJP Server JAR
 
 ### Basic Execution
 
@@ -212,7 +212,7 @@ java -Xmx2g -jar ojp-server/target/ojp-server-0.1.1-beta-shaded.jar
 
 **Problem**: Missing database drivers
 
-**Solution**: The fat JAR includes drivers for H2, PostgreSQL, MySQL, and MariaDB. For Oracle, DB2, SQL Server or other proprietary database, you need to add the respective JDBC drivers to the classpath:
+**Solution**: The runnable JAR includes drivers for H2, PostgreSQL, MySQL, and MariaDB. For Oracle, DB2, SQL Server or other proprietary database, you need to add the respective JDBC drivers to the classpath:
 
 ```bash
 java -cp "oracle-driver.jar:ojp-server-0.1.1-beta-shaded.jar" \

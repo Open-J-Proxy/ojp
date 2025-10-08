@@ -30,5 +30,9 @@ In your application.properties(or yaml) file, update your database connection UR
 >  spring.datasource.url=jdbc:ojp[localhost:1059]_h2:~/test
 > 
 > spring.datasource.driver-class-name=org.openjproxy.jdbc.Driver
+>
+> #Sets the datasource to not use hikari CP connection pool and open single connections instead
+> spring.datasource.type=org.springframework.jdbc.datasource.SimpleDriverDataSource
+> 
 
 The example above is for h2 but it is similar to any other database, you just need to add the "ojp[host:port]_" pattern immediately after "jdbc:". "[host:port]" indicates the host and port you have your OJP proxy server running.

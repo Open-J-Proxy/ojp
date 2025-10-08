@@ -125,7 +125,7 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- Add the Maven Shade Plugin for fat jar -->
+            <!-- Add the Maven Shade Plugin for runnable jar -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>

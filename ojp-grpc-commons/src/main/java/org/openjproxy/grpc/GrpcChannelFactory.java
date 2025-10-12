@@ -31,7 +31,6 @@ public class GrpcChannelFactory {
         return ManagedChannelBuilder.forAddress(host, port)
                 .usePlaintext()
                 .maxInboundMessageSize(maxInboundSize)
-                .maxOutboundMessageSize(maxOutboundSize)
                 .build();
     }
 
@@ -43,7 +42,6 @@ public class GrpcChannelFactory {
         return ManagedChannelBuilder.forTarget(target)
                 .usePlaintext()
                 .maxInboundMessageSize(maxInboundMessageSize)
-                .maxOutboundMessageSize(maxOutboundMessageSize)
                 .build();
     }
 }

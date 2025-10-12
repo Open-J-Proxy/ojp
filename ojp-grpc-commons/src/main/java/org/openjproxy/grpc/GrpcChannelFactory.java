@@ -6,7 +6,8 @@ import java.io.IOException;
 import java.util.Properties;
 
 public class GrpcChannelFactory {
-    private static int maxInboundMessageSize, maxOutboundMessageSize;
+    // Initialized with 4MB as default
+    private static int maxInboundMessageSize = 4194304, maxOutboundMessageSize = 4194304;
 
     static GrpcConfig grpcConfig;
 

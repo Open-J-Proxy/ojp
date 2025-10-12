@@ -8,8 +8,6 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 
-import java.io.IOException;
-import java.lang.module.Configuration;
 import java.sql.SQLException;
 import java.util.Properties;
 

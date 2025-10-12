@@ -1,6 +1,9 @@
 package org.openjproxy.grpc;
 
+import echo.EchoRequest;
+import echo.EchoResponse;
 import io.grpc.stub.StreamObserver;
+import org.openjproxy.grpc.EchoServiceGrpc;
 
 // Just echoing back the message
 public class DummyEchoService extends EchoServiceGrpc.EchoServiceImplBase {

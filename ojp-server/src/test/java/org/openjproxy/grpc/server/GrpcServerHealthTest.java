@@ -15,12 +15,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.openjproxy.grpc.GrpcChannelFactory;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.openjproxy.grpc.server.OjpHealthManager.*;
 
 /**
  * Integration test for the complete GrpcServer health status functionality.
- * This test verifies that the health endpoints work correctly with the actual server implementation.
+ * This test verifies that the health endpoints work correctly with the actual
+ * server implementation.
  */
 @Slf4j
 class GrpcServerHealthTest {
@@ -29,9 +32,9 @@ class GrpcServerHealthTest {
     private ManagedChannel channel;
     private HealthGrpc.HealthBlockingStub healthStub;
 
-	@BeforeEach
+    @BeforeEach
     void setUp() {
-		int testPort = findAvailablePort();
+        int testPort = findAvailablePort();
         int testPrometheusPort = testPort;
         while (testPrometheusPort == testPort) {
             testPrometheusPort = findAvailablePort();
@@ -41,9 +44,7 @@ class GrpcServerHealthTest {
         System.setProperty("ojp.prometheus.port", String.valueOf(testPrometheusPort));
 
         // Create client channel
-        channel = ManagedChannelBuilder.forAddress("localhost", testPort)
-                .usePlaintext()
-                .build();
+        channel = GrpcChannelFactory.createChannel("localhost", testPort);
 
         // Create health check stub
         healthStub = HealthGrpc.newBlockingStub(channel);
@@ -90,8 +91,8 @@ class GrpcServerHealthTest {
                 .setService(Services.OJP_SERVER.getServiceName())
                 .build();
 
-        assertThrows(io.grpc.StatusRuntimeException.class, () ->
-                healthStub.check(request), "Expected UNAVAILABLE status when server is not running");
+        assertThrows(io.grpc.StatusRuntimeException.class, () -> healthStub.check(request),
+                "Expected UNAVAILABLE status when server is not running");
     }
 
     // Helpers
@@ -108,7 +109,7 @@ class GrpcServerHealthTest {
     }
 
     private void startServer() {
-		virtualThreadExecutor = Executors.newFixedThreadPool(10);
+        virtualThreadExecutor = Executors.newFixedThreadPool(10);
         virtualThreadExecutor.submit(() -> {
             try {
                 String[] args = {};

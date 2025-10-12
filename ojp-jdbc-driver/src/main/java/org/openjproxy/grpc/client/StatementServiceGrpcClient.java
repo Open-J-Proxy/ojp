@@ -20,6 +20,7 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.GrpcChannelFactory;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.jdbc.Connection;
@@ -78,11 +79,13 @@ public class StatementServiceGrpcClient implements StatementService {
                 throw new RuntimeException("Invalid OJP host or port.");
             }
 
-            //Once channel is open it remains open and is shared among all requests.
+            // Once channel is open it remains open and is shared among all requests.
             String target = DNS_PREFIX + host + COLON + port;
-            ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
-                    .usePlaintext()
-                    .build();
+            // ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
+            // .usePlaintext()
+            // .build();
+
+            ManagedChannel channel = GrpcChannelFactory.createChannel(target);
 
             this.statemetServiceBlockingStub = StatementServiceGrpc.newBlockingStub(channel);
             this.statemetServiceStub = StatementServiceGrpc.newStub(channel);
@@ -91,13 +94,13 @@ public class StatementServiceGrpcClient implements StatementService {
 
     @Override
     public OpResult executeUpdate(SessionInfo sessionInfo, String sql, List<Parameter> params,
-                                  Map<String, Object> properties) throws SQLException {
+            Map<String, Object> properties) throws SQLException {
         return this.executeUpdate(sessionInfo, sql, params, "", properties);
     }
 
     @Override
     public OpResult executeUpdate(SessionInfo sessionInfo, String sql, List<Parameter> params, String statementUUID,
-                                  Map<String, Object> properties)
+            Map<String, Object> properties)
             throws SQLException {
         try {
             StatementRequest.Builder builder = StatementRequest.newBuilder();
@@ -117,13 +120,14 @@ public class StatementServiceGrpcClient implements StatementService {
 
     @Override
     public Iterator<OpResult> executeQuery(SessionInfo sessionInfo, String sql, List<Parameter> params,
-                                           Map<String, Object> properties) throws SQLException {
+            Map<String, Object> properties) throws SQLException {
         return this.executeQuery(sessionInfo, sql, params, "", properties);
     }
 
     @Override
-    public Iterator<OpResult> executeQuery(SessionInfo sessionInfo, String sql, List<Parameter> params, String statementUUID,
-                                           Map<String, Object> properties) throws SQLException {
+    public Iterator<OpResult> executeQuery(SessionInfo sessionInfo, String sql, List<Parameter> params,
+            String statementUUID,
+            Map<String, Object> properties) throws SQLException {
         try {
             StatementRequest.Builder builder = StatementRequest.newBuilder();
             if (properties != null) {
@@ -145,8 +149,7 @@ public class StatementServiceGrpcClient implements StatementService {
                             .setSession(sessionInfo)
                             .setResultSetUUID(resultSetUUID)
                             .setSize(size)
-                            .build()
-            );
+                            .build());
         } catch (StatusRuntimeException e) {
             throw handle(e);
         }
@@ -156,9 +159,10 @@ public class StatementServiceGrpcClient implements StatementService {
     public LobReference createLob(Connection connection, Iterator<LobDataBlock> lobDataBlock) throws SQLException {
         try {
             log.info("Creating new lob");
-            //Indicates that the server acquired a connection to the DB and wrote the first block successfully.
+            // Indicates that the server acquired a connection to the DB and wrote the first
+            // block successfully.
             SettableFuture<LobReference> sfFirstLobReference = SettableFuture.create();
-            //Indicates that the server has finished writing the last block successfully.
+            // Indicates that the server has finished writing the last block successfully.
             SettableFuture<LobReference> sfFinalLobReference = SettableFuture.create();
 
             StreamObserver<LobDataBlock> lobDataBlockStream = this.statemetServiceStub.createLob(
@@ -214,7 +218,8 @@ public class StatementServiceGrpcClient implements StatementService {
                                 log.debug("First lob reference trigger");
                             }
                             this.lobReference = lobReference;
-                            //Update connection session on first confirmation to get the session id if session is new.
+                            // Update connection session on first confirmation to get the session id if
+                            // session is new.
                             connection.setSession(lobReference.getSession());
                         }
 
@@ -223,9 +228,10 @@ public class StatementServiceGrpcClient implements StatementService {
                             if (throwable instanceof StatusRuntimeException) {
                                 try {
                                     StatusRuntimeException sre = (StatusRuntimeException) throwable;
-                                    handle(sre);//To convert to SQLException if possible
+                                    handle(sre);// To convert to SQLException if possible
                                     sfFirstLobReference.setException(sre);
-                                    sfFinalLobReference.setException(sre); //When conversion to SQLException not possible
+                                    sfFinalLobReference.setException(sre); // When conversion to SQLException not
+                                                                           // possible
                                 } catch (SQLException e) {
                                     sfFirstLobReference.setException(e);
                                     sfFinalLobReference.setException(e);
@@ -242,15 +248,16 @@ public class StatementServiceGrpcClient implements StatementService {
                             sfFinalLobReference.set(this.lobReference);
                             log.debug("Final lob reference notified");
                         }
-                    }
-            );
+                    });
 
-            //Send all data blocks one by one only after server finished consuming the previous block
+            // Send all data blocks one by one only after server finished consuming the
+            // previous block
             boolean firstBlockProcessedSuccessfully = false;
             while (lobDataBlock.hasNext()) {
                 lobDataBlockStream.onNext(lobDataBlock.next());
                 if (!firstBlockProcessedSuccessfully) {
-                    //Wait first block to be processed by the server to avoid sending more data before the server actually acquired a connection and wrote the first block.
+                    // Wait first block to be processed by the server to avoid sending more data
+                    // before the server actually acquired a connection and wrote the first block.
                     log.debug("Waiting first lob reference arrival");
                     sfFirstLobReference.get();
                     log.debug("First lob reference arrived");
@@ -282,7 +289,7 @@ public class StatementServiceGrpcClient implements StatementService {
                     .setLength(length)
                     .build();
 
-            final Throwable[] errorReceived = {null};
+            final Throwable[] errorReceived = { null };
 
             this.statemetServiceStub.readLob(readLobRequest, new ServerCallStreamObserver<LobDataBlock>() {
                 private final AtomicBoolean abFirstResponseReceived = new AtomicBoolean(true);
@@ -349,7 +356,7 @@ public class StatementServiceGrpcClient implements StatementService {
                 }
             });
 
-            //Wait to receive at least one successful block before returning.
+            // Wait to receive at least one successful block before returning.
             if (!sfFirstBlockReceived.get() && errorReceived[0] != null) {
                 if (errorReceived[0] instanceof Exception) {
                     throw (Exception) errorReceived[0];
@@ -368,7 +375,7 @@ public class StatementServiceGrpcClient implements StatementService {
 
     @Override
     public void terminateSession(SessionInfo session) {
-        //Fire and forget - done async intentionally to improve client performance.
+        // Fire and forget - done async intentionally to improve client performance.
         this.statemetServiceStub.terminateSession(session, new ServerCallStreamObserver<>() {
             @Override
             public boolean isCancelled() {

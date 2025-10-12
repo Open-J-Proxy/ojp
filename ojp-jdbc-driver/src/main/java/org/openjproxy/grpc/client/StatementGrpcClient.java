@@ -1,5 +1,6 @@
 package org.openjproxy.grpc.client;
 
+import org.openjproxy.grpc.GrpcChannelFactory;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.StatementServiceGrpc;
@@ -8,17 +9,15 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 
 import java.sql.SQLException;
+import java.util.Properties;
 
 import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 
 public class StatementGrpcClient {
     public static void main(String[] args) throws SQLException {
-        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", 8080)
-                .usePlaintext()
-                .build();
+        ManagedChannel channel = GrpcChannelFactory.createChannel("localhost", 8080);
 
-        StatementServiceGrpc.StatementServiceBlockingStub stub
-                = StatementServiceGrpc.newBlockingStub(channel);
+        StatementServiceGrpc.StatementServiceBlockingStub stub = StatementServiceGrpc.newBlockingStub(channel);
 
         try {
             SessionInfo sessionInfo = stub.connect(ConnectionDetails.newBuilder()

@@ -7,6 +7,10 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
+
+import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Configuration class for the OJP Server that loads settings from JVM arguments and environment variables.
@@ -55,6 +59,8 @@ public class ServerConfiguration {
     public static final long DEFAULT_SLOW_QUERY_SLOW_SLOT_TIMEOUT = 120000; // 120 seconds slow slot timeout
     public static final long DEFAULT_SLOW_QUERY_FAST_SLOT_TIMEOUT = 60000; // 60 seconds fast slot timeout
     public static final long DEFAULT_SLOW_QUERY_UPDATE_GLOBAL_AVG_INTERVAL = 300; // 300 seconds (5 minutes) global average update interval
+    public static final String DEFAULT_INBOUND_MESSAGE_SIZE = "104857600";
+    public static final String DEFAULT_OUTBOUND_MESSAGE_SIZE = "104857600";
 
     // Configuration values
     private final int serverPort;
@@ -75,8 +81,19 @@ public class ServerConfiguration {
     private final long slowQuerySlowSlotTimeout;
     private final long slowQueryFastSlotTimeout;
     private final long slowQueryUpdateGlobalAvgInterval;
+    private final long maxInboundMessageSize;
+    private final long maxOutboundMessageSize;
 
     public ServerConfiguration() {
+        Properties props = new Properties();
+        try (InputStream in = getClass().getClassLoader().getResourceAsStream("ojp.properties")) {
+            if (in != null) {
+                props.load(in);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
         this.serverPort = getIntProperty(SERVER_PORT_KEY, DEFAULT_SERVER_PORT);
         this.prometheusPort = getIntProperty(PROMETHEUS_PORT_KEY, DEFAULT_PROMETHEUS_PORT);
         this.openTelemetryEnabled = getBooleanProperty(OPENTELEMETRY_ENABLED_KEY, DEFAULT_OPENTELEMETRY_ENABLED);
@@ -95,6 +112,10 @@ public class ServerConfiguration {
         this.slowQuerySlowSlotTimeout = getLongProperty(SLOW_QUERY_SLOW_SLOT_TIMEOUT_KEY, DEFAULT_SLOW_QUERY_SLOW_SLOT_TIMEOUT);
         this.slowQueryFastSlotTimeout = getLongProperty(SLOW_QUERY_FAST_SLOT_TIMEOUT_KEY, DEFAULT_SLOW_QUERY_FAST_SLOT_TIMEOUT);
         this.slowQueryUpdateGlobalAvgInterval = getLongProperty(SLOW_QUERY_UPDATE_GLOBAL_AVG_INTERVAL_KEY, DEFAULT_SLOW_QUERY_UPDATE_GLOBAL_AVG_INTERVAL);
+        this.maxInboundMessageSize = Integer.parseInt(
+                props.getProperty("ojp.grpc.maxInboundMessageSize", DEFAULT_INBOUND_MESSAGE_SIZE));
+        this.maxOutboundMessageSize = Integer.parseInt(
+                props.getProperty("ojp.grpc.maxOutboundMessageSize", DEFAULT_OUTBOUND_MESSAGE_SIZE));
 
         logConfigurationSummary();
     }

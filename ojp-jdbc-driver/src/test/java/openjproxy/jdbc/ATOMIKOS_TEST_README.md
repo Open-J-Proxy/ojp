@@ -187,7 +187,13 @@ dataSource.setDriverClassName("org.openjproxy.jdbc.Driver");
 dataSource.setUrl("jdbc:ojp[localhost:1059]_h2:mem:orders_db;DB_CLOSE_DELAY=-1");
 dataSource.setUser("sa");
 dataSource.setPassword("");
+// Allow JDBC transactions outside of JTA context for test setup
+dataSource.setLocalTransactionMode(true);
 ```
+
+**Important**: `setLocalTransactionMode(true)` is required because this test doesn't run in a JTA container. 
+This setting allows regular JDBC transactions (for table setup) while still enabling JTA transactions 
+when explicitly started with `userTransaction.begin()`.
 
 ### Transaction Lifecycle through OJP
 1. **Begin**: `userTransaction.begin()` - Atomikos coordinates transaction start

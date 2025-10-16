@@ -46,6 +46,11 @@ public class AtomikosTransactionIntegrationTest {
      * Database 2 represents an "inventory" database accessed through OJP.
      * 
      * Note: This test requires the OJP server to be running on localhost:1059.
+     * 
+     * The datasources are configured with localTransactionMode=true to allow JDBC transactions
+     * outside of JTA context (for test setup). This is necessary because the test doesn't run
+     * in a container with JTA support, but we still want to use Atomikos for the actual
+     * distributed transaction tests.
      */
     @BeforeEach
     public void setUp() {
@@ -59,6 +64,8 @@ public class AtomikosTransactionIntegrationTest {
         dataSource1.setPoolSize(5);
         dataSource1.setMinPoolSize(1);
         dataSource1.setMaxPoolSize(10);
+        // Allow JDBC transactions outside of JTA context for test setup
+        dataSource1.setLocalTransactionMode(true);
 
         // Configure second datasource (Inventory database) through OJP proxy
         dataSource2 = new AtomikosNonXADataSourceBean();
@@ -70,6 +77,8 @@ public class AtomikosTransactionIntegrationTest {
         dataSource2.setPoolSize(5);
         dataSource2.setMinPoolSize(1);
         dataSource2.setMaxPoolSize(10);
+        // Allow JDBC transactions outside of JTA context for test setup
+        dataSource2.setLocalTransactionMode(true);
 
         // Initialize Atomikos UserTransaction
         userTransaction = new UserTransactionImp();

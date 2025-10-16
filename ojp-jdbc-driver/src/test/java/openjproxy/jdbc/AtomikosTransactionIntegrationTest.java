@@ -1,7 +1,7 @@
 package openjproxy.jdbc;
 
 import com.atomikos.icatch.jta.UserTransactionImp;
-import com.atomikos.jdbc.AtomikosDataSourceBean;
+import com.atomikos.jdbc.AtomikosNonXADataSourceBean;
 import javax.transaction.SystemException;
 import javax.transaction.UserTransaction;
 import org.junit.jupiter.api.AfterEach;
@@ -24,54 +24,49 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>This test demonstrates:
  * <ul>
  *   <li>OJP working with Atomikos as the transaction manager</li>
- *   <li>Distributed transactions across two H2 databases</li>
+ *   <li>Distributed transactions across two H2 databases through OJP proxy</li>
  *   <li>Successful commit across all resources</li>
  *   <li>Rollback triggered by failure in one resource</li>
  *   <li>Data consistency verification after commit and rollback</li>
  * </ul>
  * 
- * <p>Note: This test uses embedded H2 databases in XA mode for simplicity.
+ * <p>Note: This test uses OJP JDBC driver to connect to H2 databases through the OJP server.
+ * The OJP server must be running on localhost:1059 for this test to succeed.
  * The test can be executed with the standard Maven test suite (mvn test).
  */
 public class AtomikosTransactionIntegrationTest {
 
-    private AtomikosDataSourceBean dataSource1;
-    private AtomikosDataSourceBean dataSource2;
+    private AtomikosNonXADataSourceBean dataSource1;
+    private AtomikosNonXADataSourceBean dataSource2;
     private UserTransaction userTransaction;
 
     /**
-     * Sets up two XA-enabled H2 datasources managed by Atomikos.
-     * Database 1 represents an "orders" database.
-     * Database 2 represents an "inventory" database.
+     * Sets up two non-XA datasources managed by Atomikos that connect through OJP proxy.
+     * Database 1 represents an "orders" database accessed through OJP.
+     * Database 2 represents an "inventory" database accessed through OJP.
+     * 
+     * Note: This test requires the OJP server to be running on localhost:1059.
      */
     @BeforeEach
     public void setUp() {
-        // Configure first datasource (Orders database)
-        dataSource1 = new AtomikosDataSourceBean();
-        dataSource1.setUniqueResourceName("db1_orders");
-        dataSource1.setXaDataSourceClassName("org.h2.jdbcx.JdbcDataSource");
-        
-        Properties xaProps1 = new Properties();
-        xaProps1.setProperty("URL", "jdbc:h2:mem:orders_db;DB_CLOSE_DELAY=-1");
-        xaProps1.setProperty("user", "sa");
-        xaProps1.setProperty("password", "");
-        dataSource1.setXaProperties(xaProps1);
-        
+        // Configure first datasource (Orders database) through OJP proxy
+        dataSource1 = new AtomikosNonXADataSourceBean();
+        dataSource1.setUniqueResourceName("ojp_db1_orders");
+        dataSource1.setDriverClassName("org.openjproxy.jdbc.Driver");
+        dataSource1.setUrl("jdbc:ojp[localhost:1059]_h2:mem:orders_db;DB_CLOSE_DELAY=-1");
+        dataSource1.setUser("sa");
+        dataSource1.setPassword("");
         dataSource1.setPoolSize(5);
         dataSource1.setMinPoolSize(1);
         dataSource1.setMaxPoolSize(10);
 
-        // Configure second datasource (Inventory database)
-        dataSource2 = new AtomikosDataSourceBean();
-        dataSource2.setUniqueResourceName("db2_inventory");
-        dataSource2.setXaDataSourceClassName("org.h2.jdbcx.JdbcDataSource");
-        
-        Properties xaProps2 = new Properties();
-        xaProps2.setProperty("URL", "jdbc:h2:mem:inventory_db;DB_CLOSE_DELAY=-1");
-        xaProps2.setProperty("user", "sa");
-        xaProps2.setProperty("password", "");
-        dataSource2.setXaProperties(xaProps2);
-        
+        // Configure second datasource (Inventory database) through OJP proxy
+        dataSource2 = new AtomikosNonXADataSourceBean();
+        dataSource2.setUniqueResourceName("ojp_db2_inventory");
+        dataSource2.setDriverClassName("org.openjproxy.jdbc.Driver");
+        dataSource2.setUrl("jdbc:ojp[localhost:1059]_h2:mem:inventory_db;DB_CLOSE_DELAY=-1");
+        dataSource2.setUser("sa");
+        dataSource2.setPassword("");
         dataSource2.setPoolSize(5);
         dataSource2.setMinPoolSize(1);
         dataSource2.setMaxPoolSize(10);
@@ -88,11 +83,11 @@ public class AtomikosTransactionIntegrationTest {
     }
 
     /**
-     * Creates the test tables in both databases.
+     * Creates the test tables in both databases through OJP connections.
      * Orders table in database 1 and inventory table in database 2.
      */
     private void createTestTables() throws SQLException {
-        // Create orders table in database 1
+        // Create orders table in database 1 through OJP
         try (Connection conn = dataSource1.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute("DROP TABLE IF EXISTS orders");
@@ -100,7 +95,7 @@ public class AtomikosTransactionIntegrationTest {
             conn.commit();
         }
 
-        // Create inventory table in database 2
+        // Create inventory table in database 2 through OJP
         try (Connection conn = dataSource2.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute("DROP TABLE IF EXISTS inventory");
@@ -126,14 +121,15 @@ public class AtomikosTransactionIntegrationTest {
     }
 
     /**
-     * Test Scenario: Successful Distributed Transaction Commit
+     * Test Scenario: Successful Distributed Transaction Commit through OJP
      * 
      * <p>This test simulates an order placement that requires:
-     * 1. Creating an order record in the orders database
-     * 2. Reducing inventory in the inventory database
+     * 1. Creating an order record in the orders database (through OJP)
+     * 2. Reducing inventory in the inventory database (through OJP)
      * 
      * <p>Expected Outcome: Both operations commit successfully, demonstrating
-     * that OJP correctly supports distributed transactions with Atomikos.
+     * that OJP correctly supports distributed transactions with Atomikos and properly
+     * forwards transaction commands to the underlying databases.
      */
     @Test
     public void testSuccessfulDistributedTransactionCommit() throws Exception {
@@ -195,14 +191,14 @@ public class AtomikosTransactionIntegrationTest {
     }
 
     /**
-     * Test Scenario: Distributed Transaction Rollback on Failure
+     * Test Scenario: Distributed Transaction Rollback on Failure through OJP
      * 
      * <p>This test simulates an order placement that fails due to insufficient inventory:
-     * 1. Creating an order record in the orders database
-     * 2. Attempting to reduce inventory beyond available quantity (causing constraint violation)
+     * 1. Creating an order record in the orders database (through OJP)
+     * 2. Attempting to reduce inventory beyond available quantity (through OJP, causing failure)
      * 
-     * <p>Expected Outcome: The transaction rolls back, and no changes are persisted
-     * in either database, demonstrating proper rollback behavior in distributed transactions.
+     * <p>Expected Outcome: The transaction rolls back through OJP, and no changes are persisted
+     * in either database, demonstrating proper rollback behavior with OJP in distributed transactions.
      */
     @Test
     public void testDistributedTransactionRollbackOnFailure() throws Exception {
@@ -266,16 +262,16 @@ public class AtomikosTransactionIntegrationTest {
     }
 
     /**
-     * Test Scenario: Data Consistency Verification Across Multiple Transactions
+     * Test Scenario: Data Consistency Verification Across Multiple Transactions through OJP
      * 
      * <p>This test verifies data consistency by:
-     * 1. Executing a successful transaction
-     * 2. Executing a failed transaction
-     * 3. Executing another successful transaction
+     * 1. Executing a successful transaction (through OJP)
+     * 2. Executing a failed transaction (through OJP)
+     * 3. Executing another successful transaction (through OJP)
      * 4. Verifying final state is consistent
      * 
      * <p>Expected Outcome: Only successful transactions persist their changes,
-     * demonstrating proper isolation and consistency in distributed transactions.
+     * demonstrating proper isolation and consistency in distributed transactions with OJP.
      */
     @Test
     public void testDataConsistencyAcrossMultipleTransactions() throws Exception {

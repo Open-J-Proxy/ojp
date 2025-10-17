@@ -26,8 +26,39 @@ The test uses **two separate H2 databases** running in embedded mode, accessed t
 ### Transaction Manager
 - **Atomikos TransactionsEssentials** (version 5.0.9) manages the distributed transactions
 - Uses JTA 1.3 API (`javax.transaction`)
-- Configured with **AtomikosNonXADataSourceBean** to wrap OJP connections
+- Properly initialized with **UserTransactionService** and **UserTransactionManager** in @BeforeAll
+- Configured with **AtomikosNonXADataSourceBean** to wrap OJP connections (OJP doesn't support XA)
 - Uses "last resource commit optimization" for non-XA resources
+
+### Atomikos Initialization
+The test properly initializes Atomikos infrastructure before all tests:
+```java
+@BeforeAll
+static void bootstrap() throws Exception {
+    // Initialize UserTransactionService with configuration
+    Properties atomikosProperties = new Properties();
+    atomikosProperties.setProperty("com.atomikos.icatch.log_base_dir", "target/atomikos");
+    atomikosProperties.setProperty("com.atomikos.icatch.output_dir", "target/atomikos");
+    atomikosProperties.setProperty("com.atomikos.icatch.console_log_level", "WARN");
+    
+    userTransactionService = new UserTransactionServiceImp(atomikosProperties);
+    userTransactionService.init();
+    
+    // Initialize UserTransactionManager
+    userTransactionManager = new UserTransactionManager();
+    userTransactionManager.init();
+    
+    // Get UserTransaction instance
+    userTransaction = new UserTransactionImp();
+    
+    // Configure datasources...
+}
+```
+
+This approach ensures:
+- Atomikos is properly initialized once for all tests
+- JTA transactions work correctly without requiring a container
+- Resources are properly managed and cleaned up in @AfterAll
 
 ### OJP Integration
 - **OJP JDBC Driver** (`org.openjproxy.jdbc.Driver`) is used for all database connections
@@ -179,21 +210,32 @@ dataSource2.setUrl("jdbc:ojp[localhost:1059]_h2:mem:inventory_db;DB_CLOSE_DELAY=
 ```
 
 ### Atomikos Non-XA DataSource Configuration
-Since OJP doesn't directly support XA, we use AtomikosNonXADataSourceBean:
+Since OJP doesn't directly support XA, we use AtomikosNonXADataSourceBean.
+However, we **do NOT** use `localTransactionMode=true`. Instead, Atomikos is properly 
+initialized with UserTransactionService and UserTransactionManager:
+
 ```java
+// Proper Atomikos initialization in @BeforeAll
+userTransactionService = new UserTransactionServiceImp(atomikosProperties);
+userTransactionService.init();
+
+userTransactionManager = new UserTransactionManager();
+userTransactionManager.init();
+
+userTransaction = new UserTransactionImp();
+
+// Configure datasource (no localTransactionMode needed)
 AtomikosNonXADataSourceBean dataSource = new AtomikosNonXADataSourceBean();
 dataSource.setUniqueResourceName("ojp_db1_orders");
 dataSource.setDriverClassName("org.openjproxy.jdbc.Driver");
-dataSource.setUrl("jdbc:ojp[localhost:1059]_h2:mem:orders_db;DB_CLOSE_DELAY=-1");
+dataSource.setUrl("jdbc:ojp[localhost:1059]_h2:mem:orders_db;DB_CLOSE_DELAY=-1;MODE=PostgreSQL");
 dataSource.setUser("sa");
 dataSource.setPassword("");
-// Allow JDBC transactions outside of JTA context for test setup
-dataSource.setLocalTransactionMode(true);
 ```
 
-**Important**: `setLocalTransactionMode(true)` is required because this test doesn't run in a JTA container. 
-This setting allows regular JDBC transactions (for table setup) while still enabling JTA transactions 
-when explicitly started with `userTransaction.begin()`.
+**Important**: Proper Atomikos initialization with UserTransactionService and UserTransactionManager 
+ensures JTA transactions work correctly. Table setup is done with regular connections (no active JTA transaction), 
+and distributed transactions are coordinated when `userTransaction.begin()` is called.
 
 ### Transaction Lifecycle through OJP
 1. **Begin**: `userTransaction.begin()` - Atomikos coordinates transaction start

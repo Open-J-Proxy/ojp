@@ -1,17 +1,18 @@
 package openjproxy.jdbc;
 
+import com.atomikos.icatch.config.UserTransactionService;
+import com.atomikos.icatch.config.UserTransactionServiceImp;
 import com.atomikos.icatch.jta.UserTransactionImp;
+import com.atomikos.icatch.jta.UserTransactionManager;
 import com.atomikos.jdbc.AtomikosNonXADataSourceBean;
-import javax.transaction.SystemException;
-import javax.transaction.UserTransaction;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import javax.transaction.UserTransaction;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Properties;
 
@@ -33,99 +34,106 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>Note: This test uses OJP JDBC driver to connect to H2 databases through the OJP server.
  * The OJP server must be running on localhost:1059 for this test to succeed.
  * The test can be executed with the standard Maven test suite (mvn test).
+ * 
+ * <p>Atomikos is properly initialized with UserTransactionService and UserTransactionManager
+ * in @BeforeAll to ensure correct JTA transaction management throughout the test lifecycle.
  */
 public class AtomikosTransactionIntegrationTest {
 
-    private AtomikosNonXADataSourceBean dataSource1;
-    private AtomikosNonXADataSourceBean dataSource2;
-    private UserTransaction userTransaction;
+    private static UserTransactionService userTransactionService;
+    private static UserTransactionManager userTransactionManager;
+    private static UserTransaction userTransaction;
+    private static AtomikosNonXADataSourceBean dataSource1;
+    private static AtomikosNonXADataSourceBean dataSource2;
 
     /**
-     * Sets up two non-XA datasources managed by Atomikos that connect through OJP proxy.
-     * Database 1 represents an "orders" database accessed through OJP.
-     * Database 2 represents an "inventory" database accessed through OJP.
+     * Initializes Atomikos transaction management infrastructure.
+     * This must be done once before all tests to properly set up JTA support.
      * 
-     * Note: This test requires the OJP server to be running on localhost:1059.
+     * <p>Sets up:
+     * <ul>
+     *   <li>UserTransactionService - Core Atomikos transaction service</li>
+     *   <li>UserTransactionManager - JTA transaction manager</li>
+     *   <li>UserTransaction - JTA user transaction interface</li>
+     *   <li>Two datasources connected to H2 databases through OJP proxy</li>
+     * </ul>
      * 
-     * The datasources are configured with localTransactionMode=true to allow JDBC transactions
-     * outside of JTA context (for test setup). This is necessary because the test doesn't run
-     * in a container with JTA support, but we still want to use Atomikos for the actual
-     * distributed transaction tests.
+     * <p>Note: OJP doesn't support XA protocol, so we use AtomikosNonXADataSourceBean
+     * which still provides distributed transaction coordination via last resource commit optimization.
      */
-    @BeforeEach
-    public void setUp() {
+    @BeforeAll
+    static void bootstrap() throws Exception {
+        // Initialize Atomikos with minimal configuration
+        Properties atomikosProperties = new Properties();
+        atomikosProperties.setProperty("com.atomikos.icatch.log_base_dir", "target/atomikos");
+        atomikosProperties.setProperty("com.atomikos.icatch.output_dir", "target/atomikos");
+        atomikosProperties.setProperty("com.atomikos.icatch.console_log_level", "WARN");
+        
+        userTransactionService = new UserTransactionServiceImp(atomikosProperties);
+        userTransactionService.init();
+        
+        userTransactionManager = new UserTransactionManager();
+        userTransactionManager.init();
+        
+        userTransaction = new UserTransactionImp();
+        
         // Configure first datasource (Orders database) through OJP proxy
         dataSource1 = new AtomikosNonXADataSourceBean();
         dataSource1.setUniqueResourceName("ojp_db1_orders");
         dataSource1.setDriverClassName("org.openjproxy.jdbc.Driver");
-        dataSource1.setUrl("jdbc:ojp[localhost:1059]_h2:mem:orders_db;DB_CLOSE_DELAY=-1");
+        dataSource1.setUrl("jdbc:ojp[localhost:1059]_h2:mem:orders_db;DB_CLOSE_DELAY=-1;MODE=PostgreSQL");
         dataSource1.setUser("sa");
         dataSource1.setPassword("");
         dataSource1.setPoolSize(5);
         dataSource1.setMinPoolSize(1);
         dataSource1.setMaxPoolSize(10);
-        // Allow JDBC transactions outside of JTA context for test setup
-        dataSource1.setLocalTransactionMode(true);
-
+        
         // Configure second datasource (Inventory database) through OJP proxy
         dataSource2 = new AtomikosNonXADataSourceBean();
         dataSource2.setUniqueResourceName("ojp_db2_inventory");
         dataSource2.setDriverClassName("org.openjproxy.jdbc.Driver");
-        dataSource2.setUrl("jdbc:ojp[localhost:1059]_h2:mem:inventory_db;DB_CLOSE_DELAY=-1");
+        dataSource2.setUrl("jdbc:ojp[localhost:1059]_h2:mem:inventory_db;DB_CLOSE_DELAY=-1;MODE=PostgreSQL");
         dataSource2.setUser("sa");
         dataSource2.setPassword("");
         dataSource2.setPoolSize(5);
         dataSource2.setMinPoolSize(1);
         dataSource2.setMaxPoolSize(10);
-        // Allow JDBC transactions outside of JTA context for test setup
-        dataSource2.setLocalTransactionMode(true);
-
-        // Initialize Atomikos UserTransaction
-        userTransaction = new UserTransactionImp();
         
-        // Create test tables
-        try {
-            createTestTables();
-        } catch (Exception e) {
-            fail("Failed to create test tables: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Creates the test tables in both databases through OJP connections.
-     * Orders table in database 1 and inventory table in database 2.
-     */
-    private void createTestTables() throws SQLException {
-        // Create orders table in database 1 through OJP
-        try (Connection conn = dataSource1.getConnection();
-             Statement stmt = conn.createStatement()) {
-            stmt.execute("DROP TABLE IF EXISTS orders");
-            stmt.execute("CREATE TABLE orders (id INT PRIMARY KEY, product_id INT, quantity INT, status VARCHAR(50))");
-            conn.commit();
-        }
-
-        // Create inventory table in database 2 through OJP
-        try (Connection conn = dataSource2.getConnection();
-             Statement stmt = conn.createStatement()) {
-            stmt.execute("DROP TABLE IF EXISTS inventory");
-            stmt.execute("CREATE TABLE inventory (product_id INT PRIMARY KEY, available_quantity INT)");
+        // Create test tables using JTA transactions
+        try (Connection conn1 = dataSource1.getConnection();
+             Statement stmt1 = conn1.createStatement();
+             Connection conn2 = dataSource2.getConnection();
+             Statement stmt2 = conn2.createStatement()) {
+            stmt1.executeUpdate("DROP TABLE IF EXISTS orders");
+            stmt1.executeUpdate("CREATE TABLE orders (id INT PRIMARY KEY, product_id INT, quantity INT, status VARCHAR(50))");
+            stmt2.executeUpdate("DROP TABLE IF EXISTS inventory");
+            stmt2.executeUpdate("CREATE TABLE inventory (product_id INT PRIMARY KEY, available_quantity INT)");
             // Insert initial inventory
-            stmt.execute("INSERT INTO inventory (product_id, available_quantity) VALUES (100, 50)");
-            stmt.execute("INSERT INTO inventory (product_id, available_quantity) VALUES (200, 30)");
-            conn.commit();
+            stmt2.executeUpdate("INSERT INTO inventory (product_id, available_quantity) VALUES (100, 50)");
+            stmt2.executeUpdate("INSERT INTO inventory (product_id, available_quantity) VALUES (200, 30)");
         }
     }
 
     /**
-     * Cleans up Atomikos resources and closes datasources.
+     * Shuts down Atomikos transaction management infrastructure.
+     * Closes datasources and properly shuts down the transaction manager and service.
      */
-    @AfterEach
-    public void tearDown() {
+    @AfterAll
+    static void shutdown() {
         if (dataSource1 != null) {
             dataSource1.close();
         }
         if (dataSource2 != null) {
             dataSource2.close();
+        }
+        if (userTransactionManager != null) {
+            try {
+                userTransactionManager.close();
+            } catch (Exception ignored) {
+            }
+        }
+        if (userTransactionService != null) {
+            userTransactionService.shutdown(false);
         }
     }
 

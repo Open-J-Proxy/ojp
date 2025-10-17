@@ -99,7 +99,8 @@ public class AtomikosTransactionIntegrationTest {
         dataSource2.setMinPoolSize(1);
         dataSource2.setMaxPoolSize(10);
         
-        // Create test tables using JTA transactions
+        // Create test tables within a JTA transaction
+        userTransaction.begin();
         try (Connection conn1 = dataSource1.getConnection();
              Statement stmt1 = conn1.createStatement();
              Connection conn2 = dataSource2.getConnection();
@@ -111,6 +112,10 @@ public class AtomikosTransactionIntegrationTest {
             // Insert initial inventory
             stmt2.executeUpdate("INSERT INTO inventory (product_id, available_quantity) VALUES (100, 50)");
             stmt2.executeUpdate("INSERT INTO inventory (product_id, available_quantity) VALUES (200, 30)");
+            userTransaction.commit();
+        } catch (Exception e) {
+            userTransaction.rollback();
+            throw e;
         }
     }
 

@@ -476,4 +476,115 @@ public class StatementServiceGrpcClient implements StatementService {
             throw new SQLException("Unable to call resource: " + e.getMessage(), e);
         }
     }
+
+    // XA Transaction Operations
+    @Override
+    public com.openjproxy.grpc.XaResponse xaStart(com.openjproxy.grpc.XaStartRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaStart(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to start XA transaction: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaResponse xaEnd(com.openjproxy.grpc.XaEndRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaEnd(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to end XA transaction: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaPrepareResponse xaPrepare(com.openjproxy.grpc.XaPrepareRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaPrepare(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to prepare XA transaction: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaResponse xaCommit(com.openjproxy.grpc.XaCommitRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaCommit(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to commit XA transaction: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaResponse xaRollback(com.openjproxy.grpc.XaRollbackRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaRollback(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to rollback XA transaction: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaRecoverResponse xaRecover(com.openjproxy.grpc.XaRecoverRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaRecover(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to recover XA transactions: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaResponse xaForget(com.openjproxy.grpc.XaForgetRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaForget(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to forget XA transaction: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaSetTransactionTimeoutResponse xaSetTransactionTimeout(com.openjproxy.grpc.XaSetTransactionTimeoutRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaSetTransactionTimeout(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to set XA transaction timeout: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaGetTransactionTimeoutResponse xaGetTransactionTimeout(com.openjproxy.grpc.XaGetTransactionTimeoutRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaGetTransactionTimeout(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to get XA transaction timeout: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public com.openjproxy.grpc.XaIsSameRMResponse xaIsSameRM(com.openjproxy.grpc.XaIsSameRMRequest request) throws SQLException {
+        try {
+            return this.statemetServiceBlockingStub.xaIsSameRM(request);
+        } catch (StatusRuntimeException e) {
+            throw handle(e);
+        } catch (Exception e) {
+            throw new SQLException("Unable to check XA resource manager: " + e.getMessage(), e);
+        }
+    }
 }

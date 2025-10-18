@@ -55,4 +55,25 @@ public interface StatementService {
     SessionInfo rollbackTransaction(SessionInfo session) throws SQLException;
 
     CallResourceResponse callResource(CallResourceRequest request) throws SQLException;
+
+    // XA Transaction Operations
+    com.openjproxy.grpc.XaResponse xaStart(com.openjproxy.grpc.XaStartRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaResponse xaEnd(com.openjproxy.grpc.XaEndRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaPrepareResponse xaPrepare(com.openjproxy.grpc.XaPrepareRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaResponse xaCommit(com.openjproxy.grpc.XaCommitRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaResponse xaRollback(com.openjproxy.grpc.XaRollbackRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaRecoverResponse xaRecover(com.openjproxy.grpc.XaRecoverRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaResponse xaForget(com.openjproxy.grpc.XaForgetRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaSetTransactionTimeoutResponse xaSetTransactionTimeout(com.openjproxy.grpc.XaSetTransactionTimeoutRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaGetTransactionTimeoutResponse xaGetTransactionTimeout(com.openjproxy.grpc.XaGetTransactionTimeoutRequest request) throws SQLException;
+    
+    com.openjproxy.grpc.XaIsSameRMResponse xaIsSameRM(com.openjproxy.grpc.XaIsSameRMRequest request) throws SQLException;
 }

@@ -53,6 +53,8 @@ import org.openjproxy.grpc.server.resultset.ResultSetWrapper;
 import org.openjproxy.grpc.server.lob.LobProcessor;
 import org.openjproxy.grpc.server.utils.StatementRequestValidator;
 
+import javax.sql.XAConnection;
+import javax.sql.XADataSource;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.Reader;
@@ -127,7 +129,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
     @Override
     public void connect(ConnectionDetails connectionDetails, StreamObserver<SessionInfo> responseObserver) {
         String connHash = ConnectionHashGenerator.hashConnectionDetails(connectionDetails);
-        log.info("connect connHash = " + connHash);
+        log.info("connect connHash = {}, isXA = {}", connHash, connectionDetails.getIsXA());
 
         HikariDataSource ds = this.datasourceMap.get(connHash);
         if (ds == null) {
@@ -160,15 +162,109 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 
         this.sessionManager.registerClientUUID(connHash, connectionDetails.getClientUUID());
 
-        responseObserver.onNext(SessionInfo.newBuilder()
-                .setConnHash(connHash)
-                .setClientUUID(connectionDetails.getClientUUID())
-                .build()
-        );
+        SessionInfo sessionInfo;
+        if (connectionDetails.getIsXA()) {
+            // For XA connections, we need to get an XA connection directly from the underlying XADataSource
+            // HikariCP doesn't expose XADataSource interface, so we create XADataSource directly
+            try {
+                // For PostgreSQL/MySQL, we need to create an XADataSource and get XAConnection from it
+                // Determine database type from URL
+                String url = connectionDetails.getUrl();
+                javax.sql.XADataSource xaDataSource = createXADataSource(url, connectionDetails);
+                javax.sql.XAConnection xaConnection = xaDataSource.getXAConnection(
+                    connectionDetails.getUser(), 
+                    connectionDetails.getPassword()
+                );
+                Connection connection = xaConnection.getConnection();
+                
+                // Note: Do NOT call connection.setAutoCommit(false) here
+                // For PostgreSQL XA, the connection's auto-commit state is managed by the XAResource
+                // Calling setAutoCommit on a connection from XAConnection can interfere with XA transaction control
+                
+                sessionInfo = sessionManager.createXASession(connectionDetails.getClientUUID(), connection, xaConnection);
+                log.debug("Created XA session: {}", sessionInfo.getSessionUUID());
+            } catch (Exception e) {
+                log.error("Failed to create XA session: {}", e.getMessage(), e);
+                SQLException sqlException = new SQLException("Failed to create XA session: " + e.getMessage(), e);
+                sendSQLExceptionMetadata(sqlException, responseObserver);
+                return;
+            }
+        } else {
+            // For regular connections, just return session info without creating a session yet
+            sessionInfo = SessionInfo.newBuilder()
+                    .setConnHash(connHash)
+                    .setClientUUID(connectionDetails.getClientUUID())
+                    .setIsXA(false)
+                    .build();
+        }
+
+        responseObserver.onNext(sessionInfo);
 
         this.dbNameMap.put(connHash, DatabaseUtils.resolveDbName(connectionDetails.getUrl()));
 
         responseObserver.onCompleted();
+    }
+    
+    /**
+     * Creates an XADataSource for the specified database type.
+     */
+    private javax.sql.XADataSource createXADataSource(String url, ConnectionDetails connectionDetails) throws SQLException {
+        String lowerUrl = url.toLowerCase();
+        
+        try {
+            if (lowerUrl.contains("postgresql")) {
+                // PostgreSQL XADataSource
+                org.postgresql.xa.PGXADataSource xaDS = new org.postgresql.xa.PGXADataSource();
+                
+                // Parse connection URL to extract host, port, database
+                // Format: jdbc:postgresql://host:port/database or ojp[...]:host:port/database
+                String cleanUrl = url;
+                if (cleanUrl.toLowerCase().contains("_postgresql:")) {
+                    cleanUrl = cleanUrl.substring(cleanUrl.toLowerCase().indexOf("_postgresql:") + 1);
+                } else if (cleanUrl.toLowerCase().startsWith("jdbc:postgresql:")) {
+                    cleanUrl = cleanUrl.substring("jdbc:".length());
+                }
+                
+                // Parse postgresql://host:port/database
+                if (cleanUrl.startsWith("postgresql://")) {
+                    cleanUrl = cleanUrl.substring("postgresql://".length());
+                    String[] parts = cleanUrl.split("/");
+                    if (parts.length >= 2) {
+                        String hostPort = parts[0];
+                        String database = parts[1].split("\\?")[0]; // Remove query params
+                        
+                        String[] hostPortParts = hostPort.split(":");
+                        String host = hostPortParts[0];
+                        int port = hostPortParts.length > 1 ? Integer.parseInt(hostPortParts[1]) : 5432;
+                        
+                        xaDS.setServerNames(new String[]{host});
+                        xaDS.setPortNumbers(new int[]{port});
+                        xaDS.setDatabaseName(database);
+                    }
+                }
+                
+                xaDS.setUser(connectionDetails.getUser());
+                xaDS.setPassword(connectionDetails.getPassword());
+                
+                log.info("Created PostgreSQL XADataSource");
+                return xaDS;
+                
+            } else if (lowerUrl.contains("mysql")) {
+                // MySQL XADataSource
+                com.mysql.cj.jdbc.MysqlXADataSource xaDS = new com.mysql.cj.jdbc.MysqlXADataSource();
+                xaDS.setUrl(url);
+                xaDS.setUser(connectionDetails.getUser());
+                xaDS.setPassword(connectionDetails.getPassword());
+                log.info("Created MySQL XADataSource");
+                return xaDS;
+                
+            } else {
+                throw new SQLException("XA transactions not supported for database type in URL: " + url);
+            }
+        } catch (Exception e) {
+            log.error("Failed to create XADataSource: {}", e.getMessage(), e);
+            throw new SQLException("Failed to create XADataSource: " + e.getMessage(), e);
+        }
     }
     
     /**
@@ -1273,4 +1369,323 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         ConnectionPoolConfigurer.configureHikariPool(config, connectionDetails);
     }
 
+
+    // ===== XA Transaction Operations =====
+
+    @Override
+    public void xaStart(com.openjproxy.grpc.XaStartRequest request, StreamObserver<com.openjproxy.grpc.XaResponse> responseObserver) {
+        log.debug("xaStart: session={}, xid={}, flags={}", 
+                request.getSession().getSessionUUID(), request.getXid(), request.getFlags());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid xid = convertXid(request.getXid());
+            session.getXaResource().start(xid, request.getFlags());
+            
+            com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSuccess(true)
+                    .setMessage("XA start successful")
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaStart", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaEnd(com.openjproxy.grpc.XaEndRequest request, StreamObserver<com.openjproxy.grpc.XaResponse> responseObserver) {
+        log.debug("xaEnd: session={}, xid={}, flags={}", 
+                request.getSession().getSessionUUID(), request.getXid(), request.getFlags());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid xid = convertXid(request.getXid());
+            session.getXaResource().end(xid, request.getFlags());
+            
+            com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSuccess(true)
+                    .setMessage("XA end successful")
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaEnd", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaPrepare(com.openjproxy.grpc.XaPrepareRequest request, StreamObserver<com.openjproxy.grpc.XaPrepareResponse> responseObserver) {
+        log.debug("xaPrepare: session={}, xid={}", 
+                request.getSession().getSessionUUID(), request.getXid());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid xid = convertXid(request.getXid());
+            int result = session.getXaResource().prepare(xid);
+            
+            com.openjproxy.grpc.XaPrepareResponse response = com.openjproxy.grpc.XaPrepareResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setResult(result)
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaPrepare", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaCommit(com.openjproxy.grpc.XaCommitRequest request, StreamObserver<com.openjproxy.grpc.XaResponse> responseObserver) {
+        log.debug("xaCommit: session={}, xid={}, onePhase={}", 
+                request.getSession().getSessionUUID(), request.getXid(), request.getOnePhase());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid xid = convertXid(request.getXid());
+            session.getXaResource().commit(xid, request.getOnePhase());
+            
+            com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSuccess(true)
+                    .setMessage("XA commit successful")
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaCommit", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaRollback(com.openjproxy.grpc.XaRollbackRequest request, StreamObserver<com.openjproxy.grpc.XaResponse> responseObserver) {
+        log.debug("xaRollback: session={}, xid={}", 
+                request.getSession().getSessionUUID(), request.getXid());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid xid = convertXid(request.getXid());
+            session.getXaResource().rollback(xid);
+            
+            com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSuccess(true)
+                    .setMessage("XA rollback successful")
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaRollback", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaRecover(com.openjproxy.grpc.XaRecoverRequest request, StreamObserver<com.openjproxy.grpc.XaRecoverResponse> responseObserver) {
+        log.debug("xaRecover: session={}, flag={}", 
+                request.getSession().getSessionUUID(), request.getFlag());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid[] xids = session.getXaResource().recover(request.getFlag());
+            
+            com.openjproxy.grpc.XaRecoverResponse.Builder responseBuilder = com.openjproxy.grpc.XaRecoverResponse.newBuilder()
+                    .setSession(session.getSessionInfo());
+            
+            for (javax.transaction.xa.Xid xid : xids) {
+                responseBuilder.addXids(convertXidToProto(xid));
+            }
+            
+            responseObserver.onNext(responseBuilder.build());
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaRecover", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaForget(com.openjproxy.grpc.XaForgetRequest request, StreamObserver<com.openjproxy.grpc.XaResponse> responseObserver) {
+        log.debug("xaForget: session={}, xid={}", 
+                request.getSession().getSessionUUID(), request.getXid());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            javax.transaction.xa.Xid xid = convertXid(request.getXid());
+            session.getXaResource().forget(xid);
+            
+            com.openjproxy.grpc.XaResponse response = com.openjproxy.grpc.XaResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSuccess(true)
+                    .setMessage("XA forget successful")
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaForget", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaSetTransactionTimeout(com.openjproxy.grpc.XaSetTransactionTimeoutRequest request, 
+                                        StreamObserver<com.openjproxy.grpc.XaSetTransactionTimeoutResponse> responseObserver) {
+        log.debug("xaSetTransactionTimeout: session={}, seconds={}", 
+                request.getSession().getSessionUUID(), request.getSeconds());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            boolean success = session.getXaResource().setTransactionTimeout(request.getSeconds());
+            if (success) {
+                session.setTransactionTimeout(request.getSeconds());
+            }
+            
+            com.openjproxy.grpc.XaSetTransactionTimeoutResponse response = 
+                    com.openjproxy.grpc.XaSetTransactionTimeoutResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSuccess(success)
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaSetTransactionTimeout", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaGetTransactionTimeout(com.openjproxy.grpc.XaGetTransactionTimeoutRequest request, 
+                                        StreamObserver<com.openjproxy.grpc.XaGetTransactionTimeoutResponse> responseObserver) {
+        log.debug("xaGetTransactionTimeout: session={}", request.getSession().getSessionUUID());
+        
+        try {
+            Session session = sessionManager.getSession(request.getSession());
+            if (session == null || !session.isXA() || session.getXaResource() == null) {
+                throw new SQLException("Session is not an XA session");
+            }
+            
+            int timeout = session.getXaResource().getTransactionTimeout();
+            
+            com.openjproxy.grpc.XaGetTransactionTimeoutResponse response = 
+                    com.openjproxy.grpc.XaGetTransactionTimeoutResponse.newBuilder()
+                    .setSession(session.getSessionInfo())
+                    .setSeconds(timeout)
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaGetTransactionTimeout", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    @Override
+    public void xaIsSameRM(com.openjproxy.grpc.XaIsSameRMRequest request, 
+                           StreamObserver<com.openjproxy.grpc.XaIsSameRMResponse> responseObserver) {
+        log.debug("xaIsSameRM: session1={}, session2={}", 
+                request.getSession1().getSessionUUID(), request.getSession2().getSessionUUID());
+        
+        try {
+            Session session1 = sessionManager.getSession(request.getSession1());
+            Session session2 = sessionManager.getSession(request.getSession2());
+            
+            if (session1 == null || !session1.isXA() || session1.getXaResource() == null) {
+                throw new SQLException("Session1 is not an XA session");
+            }
+            if (session2 == null || !session2.isXA() || session2.getXaResource() == null) {
+                throw new SQLException("Session2 is not an XA session");
+            }
+            
+            boolean isSame = session1.getXaResource().isSameRM(session2.getXaResource());
+            
+            com.openjproxy.grpc.XaIsSameRMResponse response = com.openjproxy.grpc.XaIsSameRMResponse.newBuilder()
+                    .setIsSame(isSame)
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+
+        } catch (Exception e) {
+            log.error("Error in xaIsSameRM", e);
+            SQLException sqlException = (e instanceof SQLException) ? (SQLException) e : new SQLException(e);
+            sendSQLExceptionMetadata(sqlException, responseObserver);
+        }
+    }
+
+    /**
+     * Convert protobuf Xid to javax.transaction.xa.Xid.
+     */
+    private javax.transaction.xa.Xid convertXid(com.openjproxy.grpc.XidProto xidProto) {
+        return new XidImpl(
+                xidProto.getFormatId(),
+                xidProto.getGlobalTransactionId().toByteArray(),
+                xidProto.getBranchQualifier().toByteArray()
+        );
+    }
+
+    /**
+     * Convert javax.transaction.xa.Xid to protobuf Xid.
+     */
+    private com.openjproxy.grpc.XidProto convertXidToProto(javax.transaction.xa.Xid xid) {
+        return com.openjproxy.grpc.XidProto.newBuilder()
+                .setFormatId(xid.getFormatId())
+                .setGlobalTransactionId(com.google.protobuf.ByteString.copyFrom(xid.getGlobalTransactionId()))
+                .setBranchQualifier(com.google.protobuf.ByteString.copyFrom(xid.getBranchQualifier()))
+                .build();
+    }
 }

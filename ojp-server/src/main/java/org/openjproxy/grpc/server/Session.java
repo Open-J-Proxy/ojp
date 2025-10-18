@@ -4,6 +4,8 @@ import com.openjproxy.grpc.SessionInfo;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
+import javax.sql.XAConnection;
+import javax.transaction.xa.XAResource;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -28,6 +30,12 @@ public class Session {
     private final String clientUUID;
     @Getter
     private Connection connection;
+    @Getter
+    private final boolean isXA;
+    @Getter
+    private XAConnection xaConnection;
+    @Getter
+    private XAResource xaResource;
     private Map<String, ResultSet> resultSetMap;
     private Map<String, Statement> statementMap;
     private Map<String, PreparedStatement> preparedStatementMap;
@@ -35,11 +43,18 @@ public class Session {
     private Map<String, Object> lobMap;
     private Map<String, Object> attrMap;
     private boolean closed;
+    private int transactionTimeout = 0;
 
     public Session(Connection connection, String connectionHash, String clientUUID) {
+        this(connection, connectionHash, clientUUID, false, null);
+    }
+
+    public Session(Connection connection, String connectionHash, String clientUUID, boolean isXA, XAConnection xaConnection) {
         this.connection = connection;
         this.connectionHash = connectionHash;
         this.clientUUID = clientUUID;
+        this.isXA = isXA;
+        this.xaConnection = xaConnection;
         this.sessionUUID = UUID.randomUUID().toString();
         this.closed = false;
         this.resultSetMap = new ConcurrentHashMap<>();
@@ -48,6 +63,15 @@ public class Session {
         this.callableStatementMap = new ConcurrentHashMap<>();
         this.lobMap = new ConcurrentHashMap<>();
         this.attrMap = new ConcurrentHashMap<>();
+        
+        if (isXA && xaConnection != null) {
+            try {
+                this.xaResource = xaConnection.getXAResource();
+            } catch (SQLException e) {
+                log.error("Failed to get XAResource from XAConnection", e);
+                throw new RuntimeException("Failed to initialize XA session", e);
+            }
+        }
     }
 
     public SessionInfo getSessionInfo() {
@@ -56,6 +80,7 @@ public class Session {
                 .setConnHash(this.connectionHash)
                 .setClientUUID(this.clientUUID)
                 .setSessionUUID(this.sessionUUID)
+                .setIsXA(this.isXA)
                 .build();
     }
 
@@ -133,9 +158,18 @@ public class Session {
             return;
         }
 
-        //Closing the connection here means that the connection pool will close all resources associated with it and
-        // reset the connection state before returning it to the pool.
-        this.connection.close();
+        // For XA connections, close the XA connection (which also closes the logical connection)
+        // Do NOT close the regular connection as it would trigger auto-commit changes
+        if (isXA && xaConnection != null) {
+            try {
+                xaConnection.close();
+            } catch (SQLException e) {
+                log.error("Error closing XA connection", e);
+            }
+        } else if (connection != null) {
+            // For regular connections, close normally
+            this.connection.close();
+        }
 
         //Clear session internal objects to free memory
         this.closed = true;
@@ -144,7 +178,17 @@ public class Session {
         this.statementMap = null;
         this.preparedStatementMap = null;
         this.connection = null;
+        this.xaConnection = null;
+        this.xaResource = null;
         this.attrMap = null;
+    }
+
+    public void setTransactionTimeout(int seconds) {
+        this.transactionTimeout = seconds;
+    }
+
+    public int getTransactionTimeout() {
+        return this.transactionTimeout;
     }
 
     public Collection<Object> getAllLobs() {

@@ -46,13 +46,15 @@ public class GrpcServer {
         }
 
         // Build server with configuration
+        SessionManagerImpl sessionManager = new SessionManagerImpl();
+        
         ServerBuilder<?> serverBuilder = NettyServerBuilder
                 .forPort(config.getServerPort())
                 .executor(Executors.newFixedThreadPool(config.getThreadPoolSize()))
                 .maxInboundMessageSize(config.getMaxRequestSize())
                 .keepAliveTime(config.getConnectionIdleTimeout(), TimeUnit.MILLISECONDS)
                 .addService(new StatementServiceImpl(
-                        new SessionManagerImpl(),
+                        sessionManager,
                         new CircuitBreaker(config.getCircuitBreakerTimeout(), config.getCircuitBreakerThreshold()),
                         config
                 ))

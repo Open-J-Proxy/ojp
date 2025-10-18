@@ -2,6 +2,7 @@ package org.openjproxy.grpc.server;
 
 import com.openjproxy.grpc.SessionInfo;
 
+import javax.sql.XAConnection;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -16,6 +17,8 @@ import java.util.Collection;
 public interface SessionManager {
     void registerClientUUID(String connectionHash, String clientUUID);
     SessionInfo createSession(String clientUUID, Connection connection);
+    SessionInfo createXASession(String clientUUID, Connection connection, XAConnection xaConnection);
+    Session getSession(SessionInfo sessionInfo);
     Connection getConnection(SessionInfo sessionInfo);
     String registerResultSet(SessionInfo sessionInfo, ResultSet rs);
     ResultSet getResultSet(SessionInfo sessionInfo, String uuid);

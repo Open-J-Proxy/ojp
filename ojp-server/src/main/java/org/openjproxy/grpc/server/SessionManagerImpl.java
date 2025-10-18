@@ -5,6 +5,7 @@ import com.openjproxy.grpc.TransactionStatus;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
+import javax.sql.XAConnection;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -36,6 +37,20 @@ public class SessionManagerImpl implements SessionManager {
         log.info("Session " + session.getSessionUUID() + " created for client uuid " + clientUUID);
         this.sessionMap.put(session.getSessionUUID(), session);
         return session.getSessionInfo();
+    }
+
+    @Override
+    public SessionInfo createXASession(String clientUUID, Connection connection, XAConnection xaConnection) {
+        log.info("Create XA session for client uuid " + clientUUID);
+        Session session = new Session(connection, connectionHashMap.get(clientUUID), clientUUID, true, xaConnection);
+        log.info("XA Session " + session.getSessionUUID() + " created for client uuid " + clientUUID);
+        this.sessionMap.put(session.getSessionUUID(), session);
+        return session.getSessionInfo();
+    }
+
+    @Override
+    public Session getSession(SessionInfo sessionInfo) {
+        return this.sessionMap.get(sessionInfo.getSessionUUID());
     }
 
     @Override

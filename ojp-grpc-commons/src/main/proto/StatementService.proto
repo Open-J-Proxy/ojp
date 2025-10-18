@@ -8,6 +8,7 @@ message ConnectionDetails {
     string password = 3;
     string clientUUID = 4;
     bytes properties = 6;
+    bool isXA = 7;  // Flag to indicate XA connection
 }
 
 enum DbName {
@@ -45,6 +46,7 @@ message SessionInfo {
     string sessionUUID = 3;
     TransactionInfo transactionInfo = 4;
     SessionStatus sessionStatus = 5;
+    bool isXA = 6;  // Flag indicating this is an XA session
 }
 
 enum ResultType {
@@ -207,6 +209,112 @@ message ResultSetFetchRequest {
     int32 size = 3;
 }
 
+// Represents a distributed transaction identifier (Xid)
+message XidProto {
+    int32 formatId = 1;
+    bytes globalTransactionId = 2;
+    bytes branchQualifier = 3;
+}
+
+// Request to start an XA transaction
+message XaStartRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+    int32 flags = 3;
+}
+
+// Request to end an XA transaction
+message XaEndRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+    int32 flags = 3;
+}
+
+// Request to prepare an XA transaction
+message XaPrepareRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+}
+
+// Response for prepare operation
+message XaPrepareResponse {
+    SessionInfo session = 1;
+    int32 result = 2; // XA_OK or XA_RDONLY
+}
+
+// Request to commit an XA transaction
+message XaCommitRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+    bool onePhase = 3;
+}
+
+// Request to rollback an XA transaction
+message XaRollbackRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+}
+
+// Request to recover XIDs
+message XaRecoverRequest {
+    SessionInfo session = 1;
+    int32 flag = 2;
+}
+
+// Response for recover operation
+message XaRecoverResponse {
+    SessionInfo session = 1;
+    repeated XidProto xids = 2;
+}
+
+// Request to forget an XA transaction
+message XaForgetRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+}
+
+// Request to set transaction timeout
+message XaSetTransactionTimeoutRequest {
+    SessionInfo session = 1;
+    int32 seconds = 2;
+}
+
+// Response for set transaction timeout
+message XaSetTransactionTimeoutResponse {
+    SessionInfo session = 1;
+    bool success = 2;
+}
+
+// Request to get transaction timeout
+message XaGetTransactionTimeoutRequest {
+    SessionInfo session = 1;
+}
+
+// Response for get transaction timeout
+message XaGetTransactionTimeoutResponse {
+    SessionInfo session = 1;
+    int32 seconds = 2;
+}
+
+// Request to check if two sessions are from the same resource manager
+message XaIsSameRMRequest {
+    SessionInfo session1 = 1;
+    SessionInfo session2 = 2;
+}
+
+// Response for isSameRM check
+message XaIsSameRMResponse {
+    bool isSame = 1;
+}
+
+// Generic XA response for operations that don't return specific data
+message XaResponse {
+    SessionInfo session = 1;
+    bool success = 2;
+    string message = 3;
+}
+
+
 service StatementService {
     rpc connect(ConnectionDetails) returns (SessionInfo);
     rpc executeUpdate(StatementRequest) returns (OpResult);
@@ -219,4 +327,16 @@ service StatementService {
     rpc commitTransaction(SessionInfo) returns (SessionInfo);
     rpc rollbackTransaction(SessionInfo) returns (SessionInfo);
     rpc callResource(CallResourceRequest) returns (CallResourceResponse);
+    
+    // XA Transaction Operations
+    rpc xaStart(XaStartRequest) returns (XaResponse);
+    rpc xaEnd(XaEndRequest) returns (XaResponse);
+    rpc xaPrepare(XaPrepareRequest) returns (XaPrepareResponse);
+    rpc xaCommit(XaCommitRequest) returns (XaResponse);
+    rpc xaRollback(XaRollbackRequest) returns (XaResponse);
+    rpc xaRecover(XaRecoverRequest) returns (XaRecoverResponse);
+    rpc xaForget(XaForgetRequest) returns (XaResponse);
+    rpc xaSetTransactionTimeout(XaSetTransactionTimeoutRequest) returns (XaSetTransactionTimeoutResponse);
+    rpc xaGetTransactionTimeout(XaGetTransactionTimeoutRequest) returns (XaGetTransactionTimeoutResponse);
+    rpc xaIsSameRM(XaIsSameRMRequest) returns (XaIsSameRMResponse);
 }

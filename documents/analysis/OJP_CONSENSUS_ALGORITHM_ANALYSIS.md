@@ -349,10 +349,12 @@ not just for consensus.
 
 1. Is a multi-tenant, mutually-untrusting mesh a real target for OJP, or is
    every deployment single-operator? (Drives §3.)
-2. If the shared AEAD key (§5.1) is built for client-relay's consensus path
-   or cache-invalidation path, what's the exact config surface (property
-   name, env var name, JVM flag) and rotation procedure? This needs its
-   own design, not an add-on to this analysis.
+2. If the shared AEAD key (§5.1) is built for client-relay's consensus path,
+   what's the exact config surface (property name, env var name, JVM flag)?
+   Provisioning and rotating the key itself is the operator's
+   responsibility, using whatever secret manager they already run for other
+   OJP credentials — see the messaging protocol analysis §9 item 3 for
+   suggested practice (dual-accept grace period instead of a hard cutover).
 3. Should the driver expose a way for an application to observe "my relay
    attempt failed" instead of it being silent? Would help operators notice
    the shared-failure-point risk in §5.2 sooner, even without fully

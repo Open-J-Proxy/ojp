@@ -87,9 +87,9 @@ exactly the building block to reuse instead of duplicating it.
   messaging for everyone else.
 - Reuses whatever auth model the driver already has; server-to-server
   authentication for the direct mesh is a separate concern, with mTLS as
-  the recommended answer (§9, item 3) — still needs its certificate
-  provisioning/rotation process designed before the mesh carries anything
-  real.
+  the recommended answer (§9, item 3). Provisioning and rotating those
+  certificates (like the shared AEAD key for encrypted client-relay) is the
+  operator's responsibility — see §9, item 3 for OJP's suggested practice.
 
 ---
 
@@ -143,11 +143,13 @@ message Envelope {
                                   // false = local to this server's own
                                   // subscribers (e.g. server.lifecycle)
   int32    max_relay_hops  = 9;  // only used when cluster_scope=true and the
-                                  // mesh is off (client-relay, §5.3); bounds
-                                  // how many client hops a message may take.
-                                  // Default 1 — every client is already
-                                  // connected to every server (§5.3), so one
-                                  // hop already reaches everyone.
+                                  // mesh is off (client-relay, §5.3.1); caps
+                                  // how many times a client is allowed to
+                                  // re-publish this same envelope to a
+                                  // *different* server after receiving it
+                                  // from one server (see §5.3.1 for a
+                                  // worked example of what "hop" means
+                                  // here). Default 1.
   int32    relay_fanout    = 10; // only used when cluster_scope=true and the
                                   // mesh is off (client-relay, §5.3.1); caps
                                   // how many of the LOCALLY subscribed clients
@@ -221,6 +223,89 @@ publishing server retries pushing the envelope to it (backoff, bounded by
 sends `Ack(message_id)`. §5.3.1 spells out what the relaying client must do
 before it acks.
 
+### 5.1.1 Alternative considered: one bidirectional stream instead of three RPCs
+
+**The alternative:** instead of three RPCs (`Publish` unary, `Subscribe`
+server-streaming, `Ack` unary), open a single call —
+`rpc Communicate(stream Envelope) returns (stream Envelope)` — once per
+peer/subscriber, and let every message, in either direction, be a
+self-describing `Envelope` carrying its own `kind` (`PUBLISH` / `ACK`;
+`SUBSCRIBE` becomes the first message sent on the stream instead of a
+separate call) plus its own routing info (`topic`, `target_id`) already
+present in the envelope today. One open stream then carries everything that
+peer or client ever sends or receives.
+
+**Pros:**
+- **One long-lived connection instead of repeated short-lived calls.**
+  Today, every `Publish` is a brand-new unary RPC — a new HTTP/2 stream is
+  opened (stream ID allocated, `HEADERS` frame sent) for every single
+  message. A bidi stream opens once and reuses it for every subsequent
+  message, so high-frequency traffic (consensus heartbeats every 50–150ms)
+  skips that per-call setup after the first message.
+- **Fewer streams to track.** A mesh peer or relaying client today holds
+  one `Subscribe` stream (for reads) plus opens a new `Publish` call for
+  every write. With one bidi stream, both directions share the same
+  stream — half as many concurrent streams per peer to track and clean up.
+- **Free ordering.** Messages written to one stream arrive in that order
+  for free — convenient for the per-(producer, topic) FIFO guarantee
+  (§5.2), without extra bookkeeping.
+
+**Cons:**
+- **Head-of-line blocking.** HTTP/2 flow control applies per-stream. If one
+  side is momentarily slow to read, *everything* queued behind it on that
+  one stream stalls — including an `Ack` that's otherwise ready to go out
+  immediately. With three separate RPCs, a `Publish` and an `Ack` are
+  independent HTTP/2 streams (still sharing the same underlying TCP
+  connection via gRPC's own multiplexing — see below), so one being slow
+  doesn't block the other.
+- **Every message needs its own routing/validation logic.** Today, the gRPC
+  method name itself says what a message is (`Publish` vs `Ack` vs the
+  `Subscribe` handshake). With one generic stream, that has to move into
+  application code: a `kind` field to switch on, validation that a
+  `SUBSCRIBE`-kind message only ever appears first, guarding against a
+  peer sending a malformed or out-of-order kind. More custom protocol logic
+  to get right, where today gRPC's own method dispatch does it for free.
+- **Worse observability.** gRPC's per-method metrics/tracing (latency and
+  error rate broken down by `Publish` vs `Subscribe` vs `Ack`) is exactly
+  the kind of signal called out as still needed in §9 (backpressure, mesh
+  scaling). One `Communicate` RPC blends all three into a single measured
+  operation, losing that breakdown unless it's rebuilt by hand from the
+  `kind` field.
+- **More server-side state per connection.** The server must now track,
+  per open stream, whether the peer has "subscribed" yet and to what,
+  interleaved with inbound publishes and outbound pushes on that same
+  stream — one more state machine than "one stream is purely inbound
+  pushes, unary calls are independent and stateless."
+
+**On performance specifically:** the real gain from one bidi stream is
+avoiding the overhead of opening a new HTTP/2 stream per `Publish`/`Ack`
+call — a stream-ID allocation and a `HEADERS` frame, typically well under a
+millisecond, but paid on every call. Note that gRPC already multiplexes all
+of a channel's concurrent RPCs (unary and streaming) over one shared HTTP/2
+TCP connection per peer — the three-RPC design does **not** open a new TCP
+connection per `Publish`, only a new logical HTTP/2 stream on the
+already-shared connection. So the actual saving is smaller than "one
+connection vs many" suggests; it's "reuse a stream" vs "open a cheap new
+stream on a connection that's already open." At consensus's 50–150ms
+heartbeat cadence, that per-call overhead is a small fraction of the
+timing budget, not the dominant cost. Meanwhile, head-of-line blocking on
+a single shared stream can directly *hurt* the latency-sensitive path (a
+slow `Publish` payload delaying an `Ack` behind it) — a real risk in the
+other direction that the three-RPC design doesn't have.
+
+**Suggestion: keep the three-RPC design (`Publish`/`Subscribe`/`Ack`) as
+the primary approach.** The per-call overhead a bidi stream would save is
+small relative to consensus's own timing budget, and the three-RPC design
+keeps per-operation observability, simpler validation (method name instead
+of a hand-rolled `kind` discriminator), and avoids head-of-line blocking
+between unrelated message types — all of which matter more at OJP's
+expected traffic volumes than the marginal per-call savings. Worth
+revisiting narrowly for the direct mesh's server-to-server channel only
+(§5.3.2) — it's already a permanent, homogeneous, latency-sensitive
+peer-to-peer link, unlike the general client-facing path with a large,
+heterogeneous client population — if real profiling ever shows per-call
+overhead is a measurable cost there.
+
 ### 5.2 Delivery modes
 
 | | Fire-and-forget | Guaranteed |
@@ -245,6 +330,34 @@ the three example use cases, not a restriction: e.g. cache invalidation
 could run `GUARANTEED` over client-relay instead of fire-and-forget if an
 operator wants retry/ack on top of the default idempotent, self-healing
 behavior.
+
+**Why each use case was assigned the mode it has:**
+- **Consensus (`raft.<cluster-id>.election`) — fire-and-forget by default.**
+  RAFT already tolerates message loss by design (a dropped vote or
+  heartbeat just triggers a retry or a new election round on its own
+  timeout) — see the consensus analysis §5.2. Adding this protocol's
+  ack/retry on top would be redundant work paying for a guarantee the
+  consensus algorithm doesn't need, on a topic that fires every 50–150ms
+  and can't afford the extra round trip. The one exception is running
+  consensus over encrypted client-relay specifically, where `GUARANTEED`
+  mode's ack/retry is used instead — not for reliability RAFT lacks, but to
+  compensate for a relaying client being slow or briefly disconnected,
+  since that's the one topology without an always-available channel
+  (§5.3.3, and the consensus analysis §5.5).
+- **Cache invalidation (`cache.invalidate`) — fire-and-forget.** Idempotent
+  and self-healing: a missed invalidation just leaves one stale cache entry
+  until the next write or its own TTL expiry, not a correctness failure.
+  Paying for ack/retry buys nothing here that the cache's own TTL doesn't
+  already provide, and this topic can be high-frequency (§9, item 1), so
+  keeping it cheap matters more than keeping it reliable.
+- **Server restarting (`server.lifecycle`) — guaranteed, to
+  currently-connected clients only.** Unlike the other two, there's no
+  self-healing fallback: a client that misses this notice has no other way
+  to learn the server is about to go away, so the ack/retry that
+  `GUARANTEED` mode provides is worth the extra cost for a topic that's
+  rare (one per planned restart) by nature. Still bounded to
+  currently-connected clients — a disconnected client is handled by the
+  driver's normal failover, not by this mechanism (§7).
 
 ### 5.3 Server-to-server: two topologies
 
@@ -277,6 +390,35 @@ How it works:
   every server, one relay hop from the publishing server already reaches
   every other server directly. A second hop would only make already-covered
   servers relay it again — pure waste, not more reach.
+
+**What "hop" actually counts, with a simple example.** One "hop" is one
+client re-publishing the same envelope to one other server it's connected
+to — not a chain of clients passing a message to each other. In the
+standard topology (every client connected to every server), that first hop
+already reaches everyone, so `max_relay_hops` stays at its default of 1 and
+nothing more happens.
+
+`max_relay_hops` only matters when clients are *not* all connected to every
+server — a partial-connectivity topology. Example: client **X** is
+connected to servers **A** and **B** only; client **Y** is connected to
+servers **B** and **C** only; no client connects to all three.
+1. Server A publishes a `cluster_scope=true` envelope. Client X, subscribed
+   on A, receives it.
+2. **Hop 1:** client X re-publishes the envelope on its other session — to
+   server B. This is what "decrementing `max_relay_hops`" means: the copy
+   client X sends to B now carries `max_relay_hops = 0`.
+3. Server B's local fan-out delivers that envelope to client Y (subscribed
+   on B). Since the copy Y received already has `max_relay_hops = 0`, Y
+   does **not** re-publish it to server C — the hop budget ran out, and
+   server C never receives it.
+
+If server C also needs to receive this envelope in that partial topology,
+the deployment needs `max_relay_hops = 2` (or a client that bridges all
+three servers directly). This is exactly why the field is configurable
+instead of hardcoded to 1 — 1 is the right, low-cost default for the
+standard "every client sees every server" shape this document assumes, but
+a deployment with a partial client-connectivity graph needs more hops to
+reach every server, at the cost of more relay traffic.
 
 **A simple example of the cost:** publish one `cache.invalidate` message on
 server S with 200 connected clients and 5 servers total. Every one of those
@@ -374,7 +516,7 @@ the full discussion of that residual limitation.
 | Delivery guarantee (`GUARANTEED`) | Ack + retry at every hop (§5.3.1); no path exists if zero clients bridge two given servers at publish time | Ack + retry directly to every configured peer; the channel always exists once the mesh is enabled |
 | Cost per broadcast | `O(clients × servers)` | `O(servers)` |
 | New server config | None | Peer list + enable flag |
-| New trust surface | None beyond normal client auth | mTLS (§9, item 3) — certificate provisioning/rotation still to be designed |
+| New trust surface | None beyond normal client auth | mTLS (§9, item 3) |
 | Good for | All topics, including consensus, when the mesh is off (consensus needs `GUARANTEED` mode + encrypted envelopes, see below) | All topics, including consensus, when the mesh is on; required for any deployment where client presence can't be assumed (serverless) |
 
 **One setting governs every topic — mesh ON or mesh OFF, not a per-topic
@@ -561,17 +703,17 @@ correctness problem, which is exactly what the direct mesh exists to avoid.
 This assumes the OJP *server* processes themselves stay running even when
 application clients are idle (they own long-lived connection pools by
 design). If OJP servers themselves are expected to scale to zero between
-requests, neither topology in this document covers that case — **question
-for the team: is that a real deployment target?**
+requests, neither topology in this document covers that case.
 
 ---
 
 ## 9. Open questions and concerns
 
 1. **Cluster size.** A full mesh (N×(N-1) channels) is fine for the small
-   cluster sizes expected today. Hundreds of servers would need
-   gossip-based fan-out instead. What sizes are actually expected in
-   production?
+   cluster sizes expected today. Small clusters, scaled vertically rather
+   than by adding many nodes, are the expected production shape for OJP —
+   hundreds of servers is not a target deployment size, so gossip-based
+   fan-out is noted only as a future option, not a near-term need.
 2. **Module placement.** The mesh's client plumbing (`GrpcChannelFactory`,
    the new `MessagingServiceGrpcClient`) should live in `ojp-grpc-commons`
    (or a new thin shared module) so both the driver and `ojp-server` depend
@@ -607,9 +749,17 @@ for the team: is that a real deployment target?**
      analysis), since the two solve different problems (who's on the other
      end of this channel vs. did an OJP server produce this specific
      envelope).
-   This still needs its own design (certificate provisioning/rotation
-   process, whether to require client certs on `Subscribe` too) before the
-   mesh carries anything real.
+   - **Provisioning and rotation are the operator's responsibility, not
+     something OJP builds or ships.** Same model as a database password or
+     any other credential OJP already depends on. Suggested practice (not a
+     requirement): issue mesh certificates from whatever private CA or
+     cert-management tooling the operator already runs for other
+     gRPC/HTTPS endpoints, store the shared AEAD key (consensus analysis
+     §5.1) in the same secret manager already used for other OJP
+     credentials (Vault, a cloud KMS, Kubernetes Secrets, etc.), and rotate
+     either one with a dual-accept grace period (old and new credential
+     both valid for a transition window) rather than a hard cutover that
+     needs every server restarted in lockstep.
 4. **Guaranteed-delivery limitations — documented, not a future fix.**
    "Guaranteed" (at-least-once) only covers retries while the publisher
    process is alive; a publisher crash mid-retry loses any message still

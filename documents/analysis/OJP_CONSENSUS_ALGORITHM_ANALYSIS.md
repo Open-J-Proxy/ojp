@@ -52,6 +52,70 @@ using HotStuff specifically. That's the price of tolerating lying nodes,
 not just crashed ones — worth paying only where the trust assumption RAFT
 makes is actually false.
 
+### 2.1 Why not a Byzantine-fault-tolerant algorithm
+
+This document's overall recommendation is RAFT everywhere — mesh ON or
+OFF — not a BFT algorithm. Consolidated reasoning:
+
+1. **The trust gap is real but narrow, and encryption closes the part that
+   matters.** RAFT's crash-only assumption ("a message that arrives is
+   trusted at face value") is not fully true for client-relay: OJP clients
+   are application processes, not OJP servers. But they are not anonymous
+   internet hosts either — they are the operator's own application
+   instances, on the operator's own isolated network, secured the same way
+   as everything else in the deployment. That's a **narrow** trust gap
+   (trusted-for-queries vs. trusted-for-consensus), not a **wide** one
+   (trusted vs. an unknown adversary). A single shared AEAD key (§5.1)
+   closes exactly that narrow gap: it makes forging or altering a consensus
+   message cryptographically impossible for a client, which is the specific
+   thing BFT would otherwise be paying for. RAFT + encryption is a
+   reasonable, proportionate answer to "the transport isn't fully trusted,"
+   without paying for protection against a fully adversarial network that
+   OJP doesn't actually have.
+2. **BFT has a hard, non-negotiable minimum cluster size that RAFT doesn't.**
+   Tolerating even one faulty node needs `N = 3f+1`, so `f=1` requires
+   **4 nodes minimum** for any BFT algorithm in the table, vs. **3 nodes**
+   for RAFT (`N = 2f+1`). For a project whose stated target is "a handful
+   of servers," that's not a rounding error — it can be the difference
+   between a 3-node cluster being viable at all and requiring a 4th node
+   purely for the consensus algorithm's sake, with no other use for it.
+   That's a real cost increase for small deployments, for a trust problem
+   (§1 above) that mostly doesn't apply here.
+3. **Java ecosystem maturity is lopsided.** Apache Ratis (RAFT) is a mature,
+   production-grade, actively maintained Java library with real production
+   users. Of the four BFT candidates, three (PBFT, HotStuff, Tendermint)
+   have no mainstream Java implementation at all — their reference
+   implementations are Go/C++, meaning OJP would be building and
+   maintaining its own Java BFT implementation from a paper, not adopting
+   a library. Only BFT-SMaRt is Java-native, and even that has materially
+   less production track record than Ratis. Betting a core availability
+   feature (leader election) on a from-scratch or lightly-proven
+   implementation is a large, avoidable risk.
+4. **More message phases means more ways to get the implementation wrong.**
+   RAFT needs one round-trip per decision; BFT algorithms need multiple
+   message phases (PBFT's pre-prepare/prepare/commit, for example) with
+   more edge cases (view changes, equivocation detection) to implement
+   correctly. More protocol surface to build, test, and operate is itself
+   a cost — independent of raw message count — for a team that would be
+   building this in-house rather than adopting a finished product.
+5. **BFT doesn't actually fix client-relay's real remaining risk.** §5.2
+   shows the honest residual risk in client-relay is a compromised driver
+   build or a compromised shared network path — not a client validator
+   voting maliciously within the consensus protocol. BFT algorithms assume
+   Byzantine behavior *from a fixed, known set of validators*; an OJP
+   client was never a validator in the consensus sense, it's a relay. A
+   compromised driver build defeats a BFT protocol exactly as it would
+   defeat RAFT — it can suppress or alter what it forwards before the
+   protocol even sees it. So the extra cost of BFT would be paid without
+   closing the one gap that's actually still open.
+
+Put together: BFT would cost more nodes, more mature-library risk, and more
+implementation surface, to defend against a threat (fully adversarial,
+unknown participants) that isn't OJP's actual deployment shape, while
+leaving the one real residual risk (§5.2) exactly as open as RAFT does.
+That's why RAFT + a shared AEAD key, not a BFT algorithm, is the
+recommendation for both mesh ON and mesh OFF.
+
 ---
 
 ## 3. Mesh ON: recommendation

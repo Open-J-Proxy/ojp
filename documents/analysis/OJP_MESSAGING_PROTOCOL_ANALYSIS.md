@@ -288,6 +288,19 @@ consensus heartbeat firing every 50–150ms, the same math repeats every
 heartbeat — that's the concrete cost problem, not a hypothetical one (see
 §5.3.3).
 
+**Does this clog the network for cache invalidation?** Not by default, and
+`relay_fanout` (§5.1) is the knob if it ever does. Every subscribed client
+already receives the message once for its own use regardless of relay
+settings — `relay_fanout` only controls how many of those clients are also
+*asked to relay it onward*. Since one relay hop already reaches every other
+server (`max_relay_hops = 1` above), a small `relay_fanout` (say, 3–5) is
+enough to keep the "attacker needs every relaying client to fail"
+redundancy property from the consensus analysis (§5.3 there) while cutting
+the 200 × 4 = 800 relay calls down to 5 × 4 = 20 for the same broadcast.
+Consensus, which needs the strongest possible delivery odds, sets
+`relay_fanout = 0` (unlimited) instead — it accepts the higher constant
+traffic in exchange for maximum redundancy.
+
 **Good fit:** cache invalidation and similar idempotent, best-effort,
 low-frequency broadcasts — especially where opening a direct link between
 OJP servers is hard or not allowed.

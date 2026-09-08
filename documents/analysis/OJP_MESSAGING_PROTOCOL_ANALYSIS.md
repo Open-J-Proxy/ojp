@@ -86,7 +86,10 @@ exactly the building block to reuse instead of duplicating it.
 - No single-coordinator dependency — one server being down must not block
   messaging for everyone else.
 - Reuses whatever auth model the driver already has; server-to-server
-  authentication is a separate, currently-unsolved need (§9, item 3).
+  authentication for the direct mesh is a separate concern, with mTLS as
+  the recommended answer (§9, item 3) — still needs its certificate
+  provisioning/rotation process designed before the mesh carries anything
+  real.
 
 ---
 
@@ -371,7 +374,7 @@ the full discussion of that residual limitation.
 | Delivery guarantee (`GUARANTEED`) | Ack + retry at every hop (§5.3.1); no path exists if zero clients bridge two given servers at publish time | Ack + retry directly to every configured peer; the channel always exists once the mesh is enabled |
 | Cost per broadcast | `O(clients × servers)` | `O(servers)` |
 | New server config | None | Peer list + enable flag |
-| New trust surface | None beyond normal client auth | Needs its own inter-server credential story (§9, item 3) |
+| New trust surface | None beyond normal client auth | mTLS (§9, item 3) — certificate provisioning/rotation still to be designed |
 | Good for | All topics, including consensus, when the mesh is off (consensus needs `GUARANTEED` mode + encrypted envelopes, see below) | All topics, including consensus, when the mesh is on; required for any deployment where client presence can't be assumed (serverless) |
 
 **One setting governs every topic — mesh ON or mesh OFF, not a per-topic

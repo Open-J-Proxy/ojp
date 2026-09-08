@@ -2,7 +2,55 @@
 
 This directory contains technical analysis documents for various OJP features and decisions.
 
-## Latest Analysis (May 2026)
+## Latest Analysis (September 2026)
+
+### 🆕 Generic OJP Messaging Protocol (server-to-server and server-to-client)
+
+**Question:** How should OJP servers exchange messages with each other (e.g.
+RAFT leader election, cache-invalidation broadcasts) and notify connected
+JDBC clients (e.g. server restarting), reusing the existing
+`ojp-jdbc-driver` for transport wherever possible, and — by default — without
+any new connection between OJP servers?
+
+**Quick Answer:** Add a generic `MessagingService` gRPC contract (`Publish`,
+`Subscribe`, `Ack`; topic + opaque payload + delivery mode), consumed by
+every participant through the existing JDBC driver's connection/session/
+failover machinery. One topology setting governs every message type
+(consensus included) — a default, always-on **client-relay** mode that adds
+no new connections at all, or an opt-in **direct mesh** mode
+(`ojp.server.mesh.enabled`) for deployments that genuinely need a link
+independent of client presence (e.g. serverless), built by reusing the
+driver's client-side gRPC plumbing rather than a bespoke protocol.
+
+**Documents:**
+- **Executive Summary**: [OJP_MESSAGING_PROTOCOL_SUMMARY.md](./OJP_MESSAGING_PROTOCOL_SUMMARY.md)
+  - Recommended protocol shape and delivery modes
+  - Options considered with verdicts
+  - Biggest open concerns and questions
+- **Full Analysis**: [OJP_MESSAGING_PROTOCOL_ANALYSIS.md](./OJP_MESSAGING_PROTOCOL_ANALYSIS.md)
+  - Detailed envelope/proto sketch, delivery-mode comparison table
+  - Server-to-server and server-to-client topology
+  - Mapping to RAFT / cache invalidation / restart-notice use cases
+  - Concerns, open questions, and suggested phasing
+- **Related Analysis**: [OJP_CONSENSUS_ALGORITHM_ANALYSIS.md](./OJP_CONSENSUS_ALGORITHM_ANALYSIS.md)
+  - RAFT vs. Byzantine-fault-tolerant alternatives (PBFT, HotStuff, Tendermint,
+    BFT-SMaRt) for the leader-election use case
+  - How consensus runs over each topology: direct mesh when mesh is ON,
+    encrypted client-relay when mesh is OFF (the approach for that case,
+    not a fallback)
+  - Pros/cons, recommendation, and open questions — RAFT is a running example
+    in the messaging protocol documents above, not a committed decision
+
+**Key Takeaway:** OJP servers become driver-backed clients of each other
+(and of connected application clients, via a client-initiated subscribe
+stream) by default, with an opt-in direct mesh for deployments where client
+connectivity can't be relied upon — both built on the driver's existing
+resiliency features rather than a new bespoke transport. One switch decides
+the topology for every message type, consensus included.
+
+---
+
+## Previous Latest Analysis (May 2026)
 
 ### 🆕 Prepared Statement Cache Server Settings Design
 
@@ -123,5 +171,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-05-10  
+**Last Updated:** 2026-09-02  
 **Maintained By:** OJP Core Team

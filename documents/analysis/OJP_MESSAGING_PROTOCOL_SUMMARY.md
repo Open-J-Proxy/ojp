@@ -75,7 +75,7 @@ tolerate a threat model (malicious peers) that doesn't fit a
 single-operator mesh. Full comparison:
 [OJP_CONSENSUS_ALGORITHM_ANALYSIS.md](./OJP_CONSENSUS_ALGORITHM_ANALYSIS.md).
 
-## Biggest open items
+## Other notes/limitations
 
 1. Inter-server authentication for the direct mesh doesn't exist yet.
    Recommended: **mTLS** — gives each peer its own revocable identity and

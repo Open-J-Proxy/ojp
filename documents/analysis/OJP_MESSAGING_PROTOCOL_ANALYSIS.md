@@ -293,7 +293,7 @@ a single shared stream can directly *hurt* the latency-sensitive path (a
 slow `Publish` payload delaying an `Ack` behind it) — a real risk in the
 other direction that the three-RPC design doesn't have.
 
-**Suggestion: keep the three-RPC design (`Publish`/`Subscribe`/`Ack`) as
+**Decision: keep the three-RPC design (`Publish`/`Subscribe`/`Ack`) as
 the primary approach.** The per-call overhead a bidi stream would save is
 small relative to consensus's own timing budget, and the three-RPC design
 keeps per-operation observability, simpler validation (method name instead

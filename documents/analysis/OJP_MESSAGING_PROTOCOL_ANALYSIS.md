@@ -40,9 +40,7 @@ These are examples used to validate the design, not special cases baked
 into the protocol. The protocol is generic: topic + payload + delivery
 mode, so any future use case can reuse it without a protocol change.
 
-**"RAFT" is a placeholder name for "leader-election/consensus algorithm,"
-not a final decision.** Whether RAFT or a Byzantine-fault-tolerant
-alternative is the right choice is analyzed separately in
+**"RAFT" is the selected algorithm for leader-election/consensus algorithm.** The full analysis on why RAFT was chosen over a Byzantine-fault-tolerant alternative was analyzed separately in
 [OJP_CONSENSUS_ALGORITHM_ANALYSIS.md](./OJP_CONSENSUS_ALGORITHM_ANALYSIS.md).
 
 ---

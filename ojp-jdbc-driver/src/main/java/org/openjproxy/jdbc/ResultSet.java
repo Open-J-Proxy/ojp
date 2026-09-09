@@ -42,10 +42,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 
 @Slf4j
 public class ResultSet extends RemoteProxyResultSet {
+
+    private static final String UPDATE_ASCII_STREAM_LOG = "updateAsciiStream: {}, <InputStream>, {}";
+    private static final String UPDATE_ASCII_STREAM_NO_LENGTH_LOG = "updateAsciiStream: {}, <InputStream>";
+    private static final String UPDATE_BINARY_STREAM_LOG = "updateBinaryStream: {}, <InputStream>, {}";
+    private static final String UPDATE_BINARY_STREAM_NO_LENGTH_LOG = "updateBinaryStream: {}, <InputStream>";
+    private static final String UPDATE_CHARACTER_STREAM_LOG = "updateCharacterStream: {}, <Reader>, {}";
+    private static final String UPDATE_CHARACTER_STREAM_NO_LENGTH_LOG = "updateCharacterStream: {}, <Reader>";
 
     @Getter
     private final Map<String, Integer> labelsMap;
@@ -53,13 +61,13 @@ public class ResultSet extends RemoteProxyResultSet {
     private Iterator<OpResult> itResults;//Iterator of blocks of data
     private List<Object[]> currentDataBlock;//Current block of data being processed.
     private AtomicInteger blockIdx = new AtomicInteger(-1);//Current block index
-    private AtomicInteger blockCount = new AtomicInteger(1);//Current block count
+    private final AtomicInteger blockCount = new AtomicInteger(1);//Current block count
     private int completedBlocksRowCount; // running total of rows in all completed blocks
     private java.sql.ResultSetMetaData resultSetMetadata;
     private boolean inProxyMode;
     private boolean closed;
-    private AtomicInteger currentIdx = new AtomicInteger(0);
-    private boolean inRowByRowMode;
+    private final AtomicInteger currentIdx = new AtomicInteger(0);
+    private final boolean inRowByRowMode;
 
     private Object lastValueRead;
 
@@ -503,16 +511,16 @@ public class ResultSet extends RemoteProxyResultSet {
                 .setLobType(LobType.LT_BINARY_STREAM)
                 .setUuid(lobRefUUID)
                 .setColumnIndex(columnIndex);
-        if (this.statement != null) {
-            if (this.statement instanceof Statement) {
+        if (this.statement instanceof Statement) {
                 Statement stmt = (Statement) this.statement;
                 if (StringUtils.isNotBlank(stmt.getStatementUUID())) {
                     lobRefBuilder.setStmtUUID(stmt.getStatementUUID());
                 }
             }
-        }
-        BinaryStream binaryStream = new BinaryStream((Connection) this.statement.getConnection(),
-                new LobServiceImpl((Connection) this.statement.getConnection(), this.getStatementService()),
+
+        Connection connection = this.getConnection();
+        BinaryStream binaryStream = new BinaryStream(connection,
+                new LobServiceImpl(connection, this.getStatementService()),
                 this.getStatementService(), lobRefBuilder.build());
         return binaryStream.getBinaryStream();
     }
@@ -933,7 +941,7 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getType();
         }
-        return ResultSet.TYPE_FORWARD_ONLY;
+        return TYPE_FORWARD_ONLY;
     }
 
     @Override
@@ -942,7 +950,7 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getConcurrency();
         }
-        return ResultSet.CONCUR_READ_ONLY;
+        return CONCUR_READ_ONLY;
     }
 
     @Override
@@ -1110,7 +1118,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {
-        log.debug("updateAsciiStream: {}, <InputStream>, {}", columnIndex, length);
+        log.debug(UPDATE_ASCII_STREAM_LOG, columnIndex, length);
         if (this.inProxyMode) {
             super.updateAsciiStream(columnIndex, x, length);
             return;
@@ -1120,7 +1128,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {
-        log.debug("updateBinaryStream: {}, <InputStream>, {}", columnIndex, length);
+        log.debug(UPDATE_BINARY_STREAM_LOG, columnIndex, length);
         if (this.inProxyMode) {
             super.updateBinaryStream(columnIndex, x, length);
             return;
@@ -1130,7 +1138,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {
-        log.debug("updateCharacterStream: {}, <Reader>, {}", columnIndex, length);
+        log.debug(UPDATE_CHARACTER_STREAM_LOG, columnIndex, length);
         if (this.inProxyMode) {
             super.updateCharacterStream(columnIndex, x, length);
             return;
@@ -1300,7 +1308,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateAsciiStream(String columnLabel, InputStream x, int length) throws SQLException {
-        log.debug("updateAsciiStream: {}, <InputStream>, {}", columnLabel, length);
+        log.debug(UPDATE_ASCII_STREAM_LOG, columnLabel, length);
         if (this.inProxyMode) {
             super.updateAsciiStream(columnLabel, x, length);
             return;
@@ -1310,7 +1318,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateBinaryStream(String columnLabel, InputStream x, int length) throws SQLException {
-        log.debug("updateBinaryStream: {}, <InputStream>, {}", columnLabel, length);
+        log.debug(UPDATE_BINARY_STREAM_LOG, columnLabel, length);
         if (this.inProxyMode) {
             super.updateBinaryStream(columnLabel, x, length);
             return;
@@ -1320,7 +1328,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateCharacterStream(String columnLabel, Reader reader, int length) throws SQLException {
-        log.debug("updateCharacterStream: {}, <Reader>, {}", columnLabel, length);
+        log.debug(UPDATE_CHARACTER_STREAM_LOG, columnLabel, length);
         if (this.inProxyMode) {
             super.updateCharacterStream(columnLabel, reader, length);
             return;
@@ -1458,14 +1466,13 @@ public class ResultSet extends RemoteProxyResultSet {
         LobReference.Builder lobRefBuilder = LobReference.newBuilder()
                 .setSession(((Connection) this.statement.getConnection()).getSession())
                 .setUuid(blobRefUUID);
-        if (this.statement != null) {
-            if (this.statement instanceof Statement) {
-                Statement stmt = (Statement) this.statement;
-                if (stmt.getStatementUUID() != null) {
-                    lobRefBuilder.setStmtUUID(stmt.getStatementUUID());
-                }
+        if (this.statement instanceof Statement) {
+            Statement stmt = (Statement) this.statement;
+            if (stmt.getStatementUUID() != null) {
+                lobRefBuilder.setStmtUUID(stmt.getStatementUUID());
             }
         }
+
         return new org.openjproxy.jdbc.Blob((Connection) this.statement.getConnection(),
                 new LobServiceImpl((Connection) this.statement.getConnection(), this.getStatementService()),
                 this.getStatementService(), lobRefBuilder.build());
@@ -1482,8 +1489,8 @@ public class ResultSet extends RemoteProxyResultSet {
             return null;
         }
         String clobRefUUID = (String) lastValueRead;
-        if (clobRefUUID != null && clobRefUUID.startsWith(CommonConstants.OJP_CLOB_PREFIX)) {
-            clobRefUUID = clobRefUUID.replaceAll(CommonConstants.OJP_CLOB_PREFIX, "");
+        if (clobRefUUID.startsWith(CommonConstants.OJP_CLOB_PREFIX)) {
+            clobRefUUID = clobRefUUID.replace(CommonConstants.OJP_CLOB_PREFIX, "");
         }
         return new org.openjproxy.jdbc.Clob((Connection) this.statement.getConnection(),
                 new LobServiceImpl((Connection) this.statement.getConnection(), this.getStatementService()),
@@ -1978,7 +1985,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException {
-        log.debug("updateAsciiStream: {}, <InputStream>, {}", columnIndex, length);
+        log.debug(UPDATE_ASCII_STREAM_LOG, columnIndex, length);
         if (this.inProxyMode) {
             super.updateAsciiStream(columnIndex, x, length);
             return;
@@ -1988,7 +1995,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateBinaryStream(int columnIndex, InputStream x, long length) throws SQLException {
-        log.debug("updateBinaryStream: {}, <InputStream>, {}", columnIndex, length);
+        log.debug(UPDATE_BINARY_STREAM_LOG, columnIndex, length);
         if (this.inProxyMode) {
             super.updateBinaryStream(columnIndex, x, length);
             return;
@@ -1998,7 +2005,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateCharacterStream(int columnIndex, Reader x, long length) throws SQLException {
-        log.debug("updateCharacterStream: {}, <Reader>, {}", columnIndex, length);
+        log.debug(UPDATE_CHARACTER_STREAM_LOG, columnIndex, length);
         if (this.inProxyMode) {
             super.updateCharacterStream(columnIndex, x, length);
             return;
@@ -2008,7 +2015,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateAsciiStream(String columnLabel, InputStream x, long length) throws SQLException {
-        log.debug("updateAsciiStream: {}, <InputStream>, {}", columnLabel, length);
+        log.debug(UPDATE_ASCII_STREAM_LOG, columnLabel, length);
         if (this.inProxyMode) {
             super.updateAsciiStream(columnLabel, x, length);
             return;
@@ -2018,7 +2025,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateBinaryStream(String columnLabel, InputStream x, long length) throws SQLException {
-        log.debug("updateBinaryStream: {}, <InputStream>, {}", columnLabel, length);
+        log.debug(UPDATE_BINARY_STREAM_LOG, columnLabel, length);
         if (this.inProxyMode) {
             super.updateBinaryStream(columnLabel, x, length);
             return;
@@ -2028,7 +2035,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-        log.debug("updateCharacterStream: {}, <Reader>, {}", columnLabel, length);
+        log.debug(UPDATE_CHARACTER_STREAM_LOG, columnLabel, length);
         if (this.inProxyMode) {
             super.updateCharacterStream(columnLabel, reader, length);
             return;
@@ -2118,7 +2125,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateAsciiStream(int columnIndex, InputStream x) throws SQLException {
-        log.debug("updateAsciiStream: {}, <InputStream>", columnIndex);
+        log.debug(UPDATE_ASCII_STREAM_NO_LENGTH_LOG, columnIndex);
         if (this.inProxyMode) {
             super.updateAsciiStream(columnIndex, x);
             return;
@@ -2128,7 +2135,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateBinaryStream(int columnIndex, InputStream x) throws SQLException {
-        log.debug("updateBinaryStream: {}, <InputStream>", columnIndex);
+        log.debug(UPDATE_BINARY_STREAM_NO_LENGTH_LOG, columnIndex);
         if (this.inProxyMode) {
             super.updateBinaryStream(columnIndex, x);
             return;
@@ -2138,7 +2145,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateCharacterStream(int columnIndex, Reader x) throws SQLException {
-        log.debug("updateCharacterStream: {}, <Reader>", columnIndex);
+        log.debug(UPDATE_CHARACTER_STREAM_NO_LENGTH_LOG, columnIndex);
         if (this.inProxyMode) {
             super.updateCharacterStream(columnIndex, x);
             return;
@@ -2148,7 +2155,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateAsciiStream(String columnLabel, InputStream x) throws SQLException {
-        log.debug("updateAsciiStream: {}, <InputStream>", columnLabel);
+        log.debug(UPDATE_ASCII_STREAM_NO_LENGTH_LOG, columnLabel);
         if (this.inProxyMode) {
             super.updateAsciiStream(columnLabel, x);
             return;
@@ -2158,7 +2165,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateBinaryStream(String columnLabel, InputStream x) throws SQLException {
-        log.debug("updateBinaryStream: {}, <InputStream>", columnLabel);
+        log.debug(UPDATE_BINARY_STREAM_NO_LENGTH_LOG, columnLabel);
         if (this.inProxyMode) {
             super.updateBinaryStream(columnLabel, x);
             return;
@@ -2168,7 +2175,7 @@ public class ResultSet extends RemoteProxyResultSet {
 
     @Override
     public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
-        log.debug("updateCharacterStream: {}, <Reader>", columnLabel);
+        log.debug(UPDATE_CHARACTER_STREAM_NO_LENGTH_LOG, columnLabel);
         if (this.inProxyMode) {
             super.updateCharacterStream(columnLabel, reader);
             return;

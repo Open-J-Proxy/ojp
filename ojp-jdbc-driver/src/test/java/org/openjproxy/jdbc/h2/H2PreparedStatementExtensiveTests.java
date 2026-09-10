@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public class H2PreparedStatementExtensiveTests {
+class H2PreparedStatementExtensiveTests {
 
     private static boolean isH2TestEnabled;
     
@@ -109,7 +109,8 @@ public class H2PreparedStatementExtensiveTests {
         ps.setTimestamp(3, new java.sql.Timestamp(System.currentTimeMillis()), Calendar.getInstance());
 
         // URL, RowId
-        assertThrows(Exception.class, () -> ps.setURL(3, new URL("http://localhost")));
+        URL httpUrl = new URL("http://localhost");
+        assertThrows(Exception.class, () -> ps.setURL(3, httpUrl));
         assertThrows(Exception.class, () -> ps.setRowId(3, null));
 
         // Character and N-character streams
@@ -170,7 +171,7 @@ public class H2PreparedStatementExtensiveTests {
         ps = connection.prepareStatement("SELECT * FROM h2_prepared_stmt_test WHERE id = ?");
         ps.setInt(1, 10);
         try {
-            boolean executed = ps.execute();
+            ps.execute();
         } catch (SQLException e) {
             assertNotNull(e);
         }
@@ -426,7 +427,6 @@ public class H2PreparedStatementExtensiveTests {
      * - INSERT omits the id column — the database auto-generates it
      * - prepareStatement is called with RETURN_GENERATED_KEYS
      * - getGeneratedKeys() must return the auto-generated id
-     *
      * Also verifies the column-index and column-name variants of prepareStatement.
      */
     @ParameterizedTest

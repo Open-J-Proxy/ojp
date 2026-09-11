@@ -61,7 +61,7 @@ postgres_prod.ojp.cache.queries.2.invalidateOn=users
 
 **When distribution is enabled**, cached data is distributed by the JDBC driver when returning query results:
 - Data is already in driver memory (being returned to application)
-- Driver streams cached results to other OJP servers via virtual threads (Java 21+)
+- Driver streams cached results to other OJP servers via virtual threads (Java 25+)
 - Smart distribution policy: Only distribute results < 200KB, TTL > 60s, > 1 row
 
 **Why this approach:**
@@ -2182,7 +2182,7 @@ public class OjpStatement implements Statement {
     public OjpStatement(StatementService service) {
         this.statementService = service;
         
-        // Use virtual threads if Java 21+, otherwise use thread pool
+        // Use virtual threads if Java 25+, otherwise use thread pool
         if (Runtime.version().feature() >= 21) {
             this.cacheDistributionExecutor = 
                 Executors.newVirtualThreadPerTaskExecutor();
@@ -2471,7 +2471,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
 #### Advantages
 - ✅ **Real-time propagation**: No polling delays, immediate cache distribution
 - ✅ **Zero database overhead**: No notification table or queries needed
-- ✅ **Efficient with virtual threads**: Scales to thousands of connections (Java 21+)
+- ✅ **Efficient with virtual threads**: Scales to thousands of connections (Java 25+)
 - ✅ **Direct server-to-server**: Leverages existing gRPC connections
 - ✅ **Async and non-blocking**: Doesn't slow down query execution
 - ✅ **Push-based**: More efficient than polling
@@ -2544,7 +2544,7 @@ public class CacheDistributionPolicy {
 - Small to medium-sized result sets (< 100KB)
 - High cache hit rate scenarios
 - Clusters with < 10 servers
-- Applications using Java 21+ (virtual threads)
+- Applications using Java 25+ (virtual threads)
 - Real-time cache consistency requirements
 - Environments where database load is a bottleneck
 
@@ -2649,9 +2649,9 @@ public class HybridCacheService {
 | PostgreSQL-only | LISTEN/NOTIFY | Real-time, PostgreSQL-native |
 | Very large clusters (20+ servers) | Redis + JDBC backup | Reduces network amplification |
 | Multi-database support | JDBC Driver Relay or Polling | Works with any database |
-| Real-time requirements (<100ms) | JDBC Driver Relay (Java 21+) or LISTEN/NOTIFY | Immediate propagation |
+| Real-time requirements (<100ms) | JDBC Driver Relay (Java 25+) or LISTEN/NOTIFY | Immediate propagation |
 | High availability critical | Hybrid (Redis + JDBC) | Redundant notification paths |
-| Java 21+ environment | JDBC Driver Relay | Leverages virtual threads for efficiency |
+| Java 25+ environment | JDBC Driver Relay | Leverages virtual threads for efficiency |
 | Legacy Java (<21) | JDBC Polling or LISTEN/NOTIFY | Virtual threads make driver relay more efficient |
 | ORM-based applications (Hibernate, Spring Data) | Server-side config + Driver Relay | Works regardless of framework |
 | Development/testing | Client-side config + Driver Relay | Easy per-app customization |

@@ -66,7 +66,7 @@ docker run -d \
   -p 1059:1059 \
   -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
   --name ojp \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 **Adding Proprietary Drivers**:
@@ -83,7 +83,7 @@ docker run -d \
   -p 1059:1059 \
   -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
   --name ojp \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 ### Option 2: Runnable JAR (Local/VM Deployment)
@@ -131,10 +131,10 @@ cp ~/Downloads/ons.jar ./ojp-libs/
 
 ```bash
 # Default location (./ojp-libs)
-java -Duser.timezone=UTC -jar ojp-server-0.4.14-beta-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.0-RC1-shaded.jar
 
 # Custom location
-java -Duser.timezone=UTC -Dojp.libs.path=/path/to/ojp-libs -jar ojp-server-0.4.14-beta-shaded.jar
+java -Duser.timezone=UTC -Dojp.libs.path=/path/to/ojp-libs -jar ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 ### Option 3: Docker with Custom Drivers (Volume Mount)
@@ -162,7 +162,7 @@ cp ~/Downloads/ucp.jar ./ojp-libs/
 docker run -d \
   -p 1059:1059 \
   -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 The container is pre-configured to look for libraries in `/opt/ojp/ojp-libs`. All drivers placed in the mounted directory will be loaded automatically at startup.
@@ -173,7 +173,7 @@ The container is pre-configured to look for libraries in `/opt/ojp/ojp-libs`. Al
 version: '3.8'
 services:
   ojp:
-    image: rrobetti/ojp:0.4.14-beta
+    image: rrobetti/ojp:1.0.0-RC1
     ports:
       - "1059:1059"
     volumes:
@@ -264,7 +264,7 @@ spec:
     spec:
       containers:
       - name: ojp
-        image: rrobetti/ojp:0.4.14-beta
+        image: rrobetti/ojp:1.0.0-RC1
         volumeMounts:
         - name: drivers
           mountPath: /opt/ojp/ojp-libs
@@ -300,7 +300,7 @@ spec:
           mountPath: /ojp-libs
       containers:
       - name: ojp
-        image: rrobetti/ojp:0.4.14-beta
+        image: rrobetti/ojp:1.0.0-RC1
         volumeMounts:
         - name: drivers
           mountPath: /opt/ojp/ojp-libs

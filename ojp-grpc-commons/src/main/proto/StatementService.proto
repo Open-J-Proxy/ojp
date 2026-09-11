@@ -194,6 +194,9 @@ message SessionInfo {
     bool isXA = 6;  // Flag indicating this is an XA session
     string targetServer = 7;  // Server endpoint (host:port) for session stickiness binding
     string clusterHealth = 8;  // Cluster health status: "host1:port1(UP);host2:port2(DOWN);..."
+    int32 clientCount = 9;
+    int32 maxAdmission = 10;
+    int32 observedPeak = 11;
 }
 
 enum ResultType {
@@ -225,6 +228,7 @@ message StatementRequest {
 enum SqlErrorType {
     SQL_EXCEPTION = 0;
     SQL_DATA_EXCEPTION = 1;
+    SQL_TRANSIENT_CONNECTION_EXCEPTION = 2;
 }
 
 message SqlErrorResponse {

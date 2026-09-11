@@ -12,6 +12,7 @@ import org.openjproxy.jdbc.xa.OjpXADataSource;
 import javax.sql.XAConnection;
 import javax.transaction.xa.XAResource;
 import javax.transaction.xa.Xid;
+import java.io.File;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -24,6 +25,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -57,6 +59,12 @@ public class MultinodeXAIntegrationTest {
     // Non-connectivity failures should be zero - all failures should be connectivity-related
     // (including session invalidation, which is caused by server unavailability)
     private static final int MAX_NON_CONNECTIVITY_FAILURES = 0;
+
+    // After the SQL query phase the JVM stays alive for this long so the daemon health-check
+    // thread keeps running during the CI kill/restart verification cycle.
+    // The CI can cut this short by creating /tmp/multinode-xa-ci-done.
+    private static final long KEEPALIVE_MAX_MS = TimeUnit.MINUTES.toMillis(12);
+    private static final long KEEPALIVE_POLL_INTERVAL_MS = 5_000L;
 
     protected static boolean isTestDisabled;
     private static Queue<Long> queryDurations = new ConcurrentLinkedQueue<>();
@@ -211,6 +219,47 @@ public class MultinodeXAIntegrationTest {
             "Expected " + MAX_NON_CONNECTIVITY_FAILURES + " non-connectivity failures (session invalidation is connectivity-related), but got: " + numNonConnectivityFailures);
         assertTrue(totalTimeMs < 180000, "Total test time too high: " + totalTimeMs + " ms");
         assertTrue(avgQueryMs < 1000.0, "Average query time too high: " + avgQueryMs + " ms");
+
+        // 4. Keepalive phase
+        // After the SQL phase the test assertions are done, but the CI kill/restart verification
+        // cycle is still running.  Without this phase the Maven JVM would exit immediately,
+        // killing the daemon health-check thread.
+        //
+        // Each iteration creates a fresh XAConnection so that the current cluster-health
+        // (number of healthy servers) is included in the connect() RPC sent to the surviving
+        // server.  The server's MultinodePoolCoordinator uses this to recalculate minIdle:
+        //   - 2 healthy servers → minIdle = ceil(20/2) = 10 per server (total 20)
+        //   - 1 healthy server  → minIdle = ceil(20/1) = 20 on survivor (total 20)
+        // HikariCP then proactively creates connections to reach the new minIdle, keeping
+        // pg_stat_activity at or above the CI threshold of 20 throughout kill/restart cycles.
+        //
+        // Using DriverManager (non-XA) here would NOT work: the cluster-health push from
+        // pushClusterHealthToAllHealthyServers() only covers non-XA pools; XA pools are
+        // updated only when a new XA connect() RPC is sent with the updated health value.
+        //
+        // The CI signals us to stop by creating /tmp/multinode-xa-ci-done.
+        // We also enforce a hard cap (KEEPALIVE_MAX_MS) so we never block indefinitely.
+        System.out.println("\n=== KEEPALIVE PHASE: holding JVM open for CI kill/restart checks ===");
+        try {
+            new File("/tmp/multinode-xa-queries-done").createNewFile();
+        } catch (Exception ignored) {
+        }
+        File ciDoneFile = new File("/tmp/multinode-xa-ci-done");
+        long keepaliveEnd = System.currentTimeMillis() + KEEPALIVE_MAX_MS;
+        while (!ciDoneFile.exists() && System.currentTimeMillis() < keepaliveEnd) {
+            try {
+                XAConnection xaConn = xaDataSource.getXAConnection();
+                try {
+                    xaConn.getConnection(); // sends connect() RPC with current cluster health
+                } finally {
+                    xaConn.close();
+                }
+            } catch (Exception ignored) {
+                // Expected during server kills/restarts
+            }
+            Thread.sleep(KEEPALIVE_POLL_INTERVAL_MS);
+        }
+        System.out.println("=== KEEPALIVE PHASE complete ===");
     }
 
     @SneakyThrows

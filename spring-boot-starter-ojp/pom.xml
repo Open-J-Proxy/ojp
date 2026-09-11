@@ -6,13 +6,13 @@
 
     <name>OJP Spring Boot Starter</name>
     <artifactId>spring-boot-starter-ojp</artifactId>
-    <version>0.4.15-SNAPSHOT</version>
+    <version>1.0.0-RC1</version>
     <description>Spring Boot Auto-configuration for OJP (Open J Proxy)</description>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>0.4.15-SNAPSHOT</version>
+        <version>1.0.0-RC1</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -20,15 +20,45 @@
         <!-- Spring Boot 4.x requires Java 17+ -->
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
-        <spring-boot.version>4.0.6</spring-boot.version>
+        <spring-boot.version>4.1.1</spring-boot.version>
     </properties>
+
+    <!-- This forces any transitive Spring Framework references to use the patched version -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- Fixes CVE-2026-59282 (Data Binding DoS) -->
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-beans</artifactId>
+                <version>7.0.9</version>
+            </dependency>
+            <!-- Fixes CVE-2026-47886 (SpEL DoS) -->
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-expression</artifactId>
+                <version>7.0.9</version>
+            </dependency>
+            <!-- Aligns context module with the updated expression module -->
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-context</artifactId>
+                <version>7.0.9</version>
+            </dependency>
+            <!-- Aligns framework baseline to prevent runtime MethodNotFound issues -->
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-core</artifactId>
+                <version>7.0.9</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>     
 
     <dependencies>
         <!-- OJP JDBC Driver - brings in the driver to autoconfigure -->
         <dependency>
             <groupId>org.openjproxy</groupId>
             <artifactId>ojp-jdbc-driver</artifactId>
-            <version>0.4.15-SNAPSHOT</version>
+            <version>1.0.0-RC1</version>
         </dependency>
 
         <!-- Spring Boot JDBC Starter (pool excluded — OJP handles pooling server-side).

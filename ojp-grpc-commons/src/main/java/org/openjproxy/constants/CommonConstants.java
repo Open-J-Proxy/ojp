@@ -34,6 +34,7 @@ public class CommonConstants {
     public static final String MAX_LIFETIME_PROPERTY = "ojp.connection.pool.maxLifetime";
     public static final String CONNECTION_TIMEOUT_PROPERTY = "ojp.connection.pool.connectionTimeout";
     public static final String POOL_ENABLED_PROPERTY = "ojp.connection.pool.enabled";
+    public static final String LEAK_DETECTION_THRESHOLD_PROPERTY = "ojp.connection.pool.leakDetectionThreshold";
 
     // XA-specific pool configuration property keys
     public static final String XA_MAXIMUM_POOL_SIZE_PROPERTY = "ojp.xa.connection.pool.maximumPoolSize";
@@ -51,6 +52,9 @@ public class CommonConstants {
     // Multinode configuration property keys
     public static final String MULTINODE_RETRY_ATTEMPTS_PROPERTY = "ojp.multinode.retryAttempts";
     public static final String MULTINODE_RETRY_DELAY_PROPERTY = "ojp.multinode.retryDelayMs";
+    public static final String JDBC_CLOSE_SYNC_PROPERTY = "ojp.jdbc.connection.close.synchronous";
+    public static final String JDBC_CLIENT_THROTTLE_MODE_PROPERTY = "ojp.jdbc.clientThrottle.mode";
+    public static final String DEFAULT_JDBC_CLIENT_THROTTLE_MODE = "reactive";
 
     // Transaction isolation configuration property key
     public static final String DEFAULT_TRANSACTION_ISOLATION_PROPERTY = "ojp.connection.pool.defaultTransactionIsolation";
@@ -78,6 +82,13 @@ public class CommonConstants {
     public static final long DEFAULT_MAX_LIFETIME = 1800000; // 30 minutes
     public static final long DEFAULT_CONNECTION_TIMEOUT = 10000; // Reduced from 30s to 10s for faster failure
     public static final long FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS = 1L; // HikariCP clamps this to 250ms minimum; semaphore gatekeeper enforces the wait budget
+    // OJP intentionally holds one physical connection per client session for the session's whole
+    // lifetime (that is the point of the proxy), which can legitimately exceed HikariCP's typical
+    // leak-detection windows for long-lived client tools (e.g. SQL IDEs). Disabled by default to
+    // avoid false-positive "leak" warnings; OJP's own idle-session cleanup already reclaims
+    // abandoned sessions. Set ojp.connection.pool.leakDetectionThreshold to a positive value (ms)
+    // to opt back into HikariCP's diagnostic leak detection.
+    public static final long DEFAULT_LEAK_DETECTION_THRESHOLD = 0L; // 0 = disabled
 
     // Prepared statement cache defaults (global server-side)
     public static final boolean DEFAULT_STATEMENT_CACHE_ENABLED = true;
@@ -98,6 +109,7 @@ public class CommonConstants {
     // Multinode configuration defaults - addressing PR #39 review comment #1
     public static final int DEFAULT_MULTINODE_RETRY_ATTEMPTS = -1;  // -1 = retry indefinitely
     public static final long DEFAULT_MULTINODE_RETRY_DELAY_MS = 5000;  // 5 seconds between retries
+    public static final boolean DEFAULT_JDBC_CLOSE_SYNCHRONOUS = true;
 
     // XA pool evictor defaults (Apache Commons Pool 2)
     public static final long DEFAULT_XA_TIME_BETWEEN_EVICTION_RUNS_MS = 30000;  // 30 seconds

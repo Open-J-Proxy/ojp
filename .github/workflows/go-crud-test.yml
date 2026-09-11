@@ -1,0 +1,81 @@
+# =============================================================================
+# Go CRUD Test (H2)
+# =============================================================================
+#
+# This workflow builds the OJP server, starts it with the embedded H2 database,
+# and runs the Go CRUD client against it. It validates the Go gRPC client
+# implementation end-to-end against a real OJP server.
+#
+# This runs as a separate workflow so it is independently triggerable and does
+# not affect the Java-based H2 fail-fast job in main.yml.
+#
+# =============================================================================
+
+name: Go CRUD Test (H2)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  go-crud-test:
+    name: Go CRUD Test against H2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build (ojp-server)
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Start OJP server (background)
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" &>/tmp/ojp-server.log &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run Go CRUD test against H2
+        env:
+          OJP_JDBC_LINE: 'jdbc:ojp[localhost:1059]_h2:~/test,sa,'
+        run: go run ./cmd/ojp-grpc-client
+        working-directory: ojp-grpc-client-go
+
+      - name: Show ojp-server.log
+        if: always()
+        run: cat /tmp/ojp-server.log

@@ -3,6 +3,11 @@
 This document describes the automated one-click release process for all OJP modules and
 the manual steps still required when the automated workflow cannot be used.
 
+> **Releasing 1.0.0 GA?** Use the dedicated runbook:
+> [`RELEASE_1_0_0.md`](RELEASE_1_0_0.md). It covers the recommended Release Candidate
+> (RC) strategy, pre-release checklist, manual fallback steps, LTS branch setup, and
+> rollback guidance specific to the first GA release.
+
 ---
 
 ## Table of Contents
@@ -191,22 +196,32 @@ apply the appropriate label before merging it. A fixed **Artifacts** footer
 
 ### Version Scheme
 
-| Current (SNAPSHOT) | Released as | Next dev |
-|--------------------|-------------|----------|
-| `0.4.1-SNAPSHOT` | `0.4.2-beta` | `0.4.2-SNAPSHOT` |
-| `0.5.0-SNAPSHOT` | `0.5.0-beta` | `0.5.1-SNAPSHOT` |
-| `1.0.0-SNAPSHOT` | `1.0.0-GA` ¹ | `1.0.1-SNAPSHOT` |
+From `1.0.0` onwards, release versions are plain semver with no suffix:
 
-> ¹ After `1.0.0-GA` the `-beta` suffix will be removed. In `release.yml`,
-> in the `Compute versions` step, change:
-> ```bash
-> RELEASE="${BASE}-beta"
-> ```
-> to:
-> ```bash
-> RELEASE="${BASE}"
-> ```
-> See also [Remove the `-beta` suffix after `1.0.0-GA`](#1-remove-the--beta-suffix-after-100-ga) in the Suggestions section.
+| Branch | Current (SNAPSHOT) | `release_version` input | Released as | Next dev |
+|---|---|---|---|---|
+| `main` | `1.0.0-SNAPSHOT` | _(none)_ | `1.0.0` | `1.1.0-SNAPSHOT` ¹ |
+| `main` | `1.1.0-SNAPSHOT` | _(none)_ | `1.1.0` | `1.2.0-SNAPSHOT` ¹ |
+| `main` | `1.1.1-SNAPSHOT` | _(none)_ | `1.1.1` | `1.1.2-SNAPSHOT` |
+| `lts/1.0` | `1.0.1-SNAPSHOT` | _(none)_ | `1.0.1` | `1.0.2-SNAPSHOT` |
+| `lts/1.0` | `1.0.8-SNAPSHOT` | _(none)_ | `1.0.8` | `1.0.9-SNAPSHOT` |
+| `main` | `1.0.0-SNAPSHOT` | `1.0.0-RC1` | `1.0.0-RC1` ² | _(unchanged)_ |
+| `main` | `1.0.0-SNAPSHOT` | `1.0.0-RC2` | `1.0.0-RC2` ² | _(unchanged)_ |
+| `main` | `1.0.0-SNAPSHOT` | `1.0.0-SNAPSHOT1` | `1.0.0-SNAPSHOT1` ² | _(unchanged)_ |
+| `lts/1.0` | `1.0.1-SNAPSHOT` | `1.0.1-RC1` | `1.0.1-RC1` ² | _(unchanged)_ |
+
+> ¹ On `main`, after any `X.Y.0` release the next dev version advances to `X.(Y+1).0-SNAPSHOT`
+> because new backwards-compatible features belong in the next minor version.
+> The `lts/X.Y` branch owns `X.Y.z` patch maintenance.
+>
+> ² **Pre-release versions** (`X.Y.Z-<qualifier>` where qualifier starts with a letter, e.g. `RC1`,
+> `RC2`, `SNAPSHOT1`, `alpha1`): published as-is without version bump. The pom stays at the
+> current SNAPSHOT version. The Docker image is not tagged as `latest`.
+> The GitHub Release is created as a pre-release. After validation, trigger the workflow again
+> with no override to publish the final GA version.
+
+See [`documents/VERSIONING.md`](../VERSIONING.md) for full version attribution rules
+and [`documents/guides/LTS_BRANCHING.md`](guides/LTS_BRANCHING.md) for LTS branch creation.
 
 The version update is performed by Maven Versions Plugin:
 
@@ -297,11 +312,13 @@ Publish each staged bundle on <https://central.sonatype.com/publishing/deploymen
 bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
 # Build locally first to verify
-mvn compile jib:dockerBuild -pl ojp-server
+docker build -t rrobetti/ojp:<version> ojp-server/
 
 # Push to Docker Hub
 docker login
-mvn compile jib:build -pl ojp-server
+docker push rrobetti/ojp:<version>
+docker tag rrobetti/ojp:<version> rrobetti/ojp:latest
+docker push rrobetti/ojp:latest
 ```
 
 Verify at <https://hub.docker.com/r/rrobetti/ojp>.
@@ -410,7 +427,7 @@ that enables all three publishing requirements:
       <plugin>
         <groupId>org.sonatype.central</groupId>
         <artifactId>central-publishing-maven-plugin</artifactId>
-        <version>0.8.0</version>
+        <version>1.0.0-RC1</version>
         <extensions>true</extensions>
         <configuration>
           <publishingServerId>central</publishingServerId>
@@ -442,8 +459,9 @@ that enables all three publishing requirements:
   ```bash
   java -jar ojp-server-<version>-shaded.jar
   ```
-- **Docker image → Docker Hub** — produced by Jib (`jib:build`). The image bundles the
-  server together with open-source JDBC drivers pre-loaded in `/opt/ojp/ojp-libs`.
+- **Docker image → Docker Hub** — built via a multi-stage `Dockerfile` (jlink custom JRE on Alpine, ~127MB). Open-source JDBC drivers are downloaded into `ojp-libs/` before the build and copied into the image.
+
+  The image does not declare `EXPOSE` — port mapping is the operator's responsibility via `-p`. The server defaults to port `1059` (gRPC) and `9159` (Prometheus) as defined in `ServerConfiguration`; override at runtime with `-e OJP_SERVER_PORT=<port>` and `-e OJP_PROMETHEUS_PORT=<port>`, with a matching `-p` on the `docker run` command.
 
 Both are published as part of the same release workflow run.
 
@@ -510,14 +528,10 @@ not be baked into the public Docker image.
 
 ## Suggestions for Future Improvements
 
-### 1. Remove the `-beta` suffix after `1.0.0-GA`
+### 1. ~~Remove the `-beta` suffix after `1.0.0-GA`~~ ✅ Implemented
 
-Update the `Compute versions` step in `release.yml` to use `BASE` directly instead
-of appending `-beta`:
-
-```bash
-RELEASE="${BASE}"   # instead of: RELEASE="${BASE}-beta"
-```
+The release workflow now produces plain `X.Y.Z` versions (no suffix) for all GA releases
+from `1.0.0` onwards. The `-beta` path has been removed.
 
 ### 2. Semantic versioning automation
 

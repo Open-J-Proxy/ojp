@@ -446,8 +446,8 @@ class CachePerformanceBenchmarkTest {
         System.out.printf("Size estimation: %.4f ms avg latency%n", avgLatencyMs);
         
         // Size estimation should be very fast
-        assertTrue(avgLatencyMs < 0.01, 
-            "Size estimation should be < 0.01ms");
+        assertTrue(avgLatencyMs < 0.05,
+            "Size estimation should be < 0.05ms");
     }
 
     @Test

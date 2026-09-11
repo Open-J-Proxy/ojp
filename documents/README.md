@@ -59,6 +59,7 @@ Located in [connection-pool/](connection-pool/):
 
 Located in [analysis/](analysis/):
 - [Transaction Isolation Handling](analysis/TRANSACTION_ISOLATION_HANDLING.md) - Complete technical documentation on transaction isolation reset behavior
+- [Request Admission, Timeouts, and Backpressure](analysis/ADMISSION_CONTROL_BACKPRESSURE_SUMMARY.md) - Short explanation of the current admission gate and overload model
 
 ## Database Setup Guides
 

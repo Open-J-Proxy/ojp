@@ -5,9 +5,10 @@ import com.openjproxy.grpc.TransactionInfo;
 import com.openjproxy.grpc.TransactionStatus;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
+import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.action.streaming.SessionConnectionHelper;
 import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 import org.openjproxy.grpc.server.utils.SessionInfoUtils;
 
@@ -71,15 +72,18 @@ public class StartTransactionAction implements Action<SessionInfo, SessionInfo> 
 
         try {
             SessionInfo activeSessionInfo = sessionInfo;
+            Connection sessionConnection;
 
             // Start a session if none started yet.
-            if (StringUtils.isEmpty(sessionInfo.getSessionUUID())) {
-                Connection conn = context.getDatasourceMap().get(sessionInfo.getConnHash()).getConnection();
-                activeSessionInfo = sessionManager.createSession(sessionInfo.getClientUUID(), conn);
+            if (sessionInfo.getSessionUUID().isEmpty()) {
+                ConnectionSessionDTO dto = SessionConnectionHelper.sessionConnection(context, sessionInfo, true);
+                sessionConnection = dto.getConnection();
+                activeSessionInfo = dto.getSession();
                 // Preserve targetServer from incoming request
                 activeSessionInfo = SessionInfoUtils.withTargetServer(activeSessionInfo, getTargetServer(sessionInfo));
+            } else {
+                sessionConnection = sessionManager.getConnection(activeSessionInfo);
             }
-            Connection sessionConnection = sessionManager.getConnection(activeSessionInfo);
             // Start a transaction
             sessionConnection.setAutoCommit(Boolean.FALSE);
 
@@ -88,7 +92,7 @@ public class StartTransactionAction implements Action<SessionInfo, SessionInfo> 
                     .setTransactionUUID(UUID.randomUUID().toString())
                     .build();
 
-            SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(activeSessionInfo);
+            SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(activeSessionInfo, context);
             sessionInfoBuilder.setTransactionInfo(transactionInfo);
             // Server echoes back targetServer from incoming request (preserved by
             // newBuilderFrom)

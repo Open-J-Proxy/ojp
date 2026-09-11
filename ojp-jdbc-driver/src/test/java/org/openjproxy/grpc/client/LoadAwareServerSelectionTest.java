@@ -11,6 +11,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -173,6 +174,23 @@ class LoadAwareServerSelectionTest {
 
         assertNotNull(selected);
         assertEquals("server3:1059", selected.getAddress());
+    }
+
+    @Test
+    void shouldThrowSQLExceptionWhenAffinityServerFindsNoHealthyServers() {
+        MultinodeConnectionManager manager = new MultinodeConnectionManager(
+                endpoints, 3, 1000, loadAwareConfig, null
+        );
+
+        long now = System.nanoTime();
+        endpoints.forEach(endpoint -> {
+            endpoint.setHealthy(false);
+            endpoint.setLastFailureTime(now);
+        });
+
+        SQLException exception = assertThrows(SQLException.class, () -> manager.affinityServer(null));
+        assertTrue(exception.getMessage().contains("No healthy servers available"));
+        assertTrue(exception.getMessage().contains("checked " + endpoints.size() + " servers"));
     }
 
     @Test

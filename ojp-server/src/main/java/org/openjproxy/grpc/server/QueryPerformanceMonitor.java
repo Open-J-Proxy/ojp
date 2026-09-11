@@ -2,48 +2,52 @@ package org.openjproxy.grpc.server;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Monitors the performance of SQL operations and tracks their average execution times.
- *
- * This class tracks execution times for unique operations (identified by their SQL hash)
- * and maintains a rolling average using the formula:
- * new_average = ((stored_average * 4) + new_measurement) / 5
- *
- * This gives 20% weight to the newest measurement, smoothing out outliers.
- *
- * The global average update is configurable and can be controlled by an interval to improve performance.
- * Thread safety is intentionally not implemented for performance reasons - this class prioritizes
- * speed over perfect consistency in a concurrent environment.
+ * Monitors SQL operation performance and classifies operations as fast/slow.
  */
 @Slf4j
 public class QueryPerformanceMonitor {
+    public static final long DEFAULT_SLOW_QUERY_THRESHOLD_MS = 1000L;
+    public static final SlowQueryClassificationMode DEFAULT_CLASSIFICATION_MODE = SlowQueryClassificationMode.RELATIVE_FAST_BASELINE;
+    public static final long DEFAULT_MINIMUM_SLOW_QUERY_MS = 100L;
+    public static final double DEFAULT_SLOW_MULTIPLIER = 5.0;
+    public static final double DEFAULT_RECOVERY_MULTIPLIER = 3.0;
+    public static final int DEFAULT_MIN_SAMPLES = 20;
+    public static final int DEFAULT_BASELINE_PERCENTILE = 50;
+    public static final long DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS = 10L;
 
     /**
      * Record for tracking operation performance metrics.
      */
     private static class PerformanceRecord {
         private volatile double averageExecutionTime;
-        private final AtomicLong executionCount;
+        private final AtomicLong sampleCount;
+        private volatile long lastSeenTimeMillis;
+        private volatile boolean currentlyClassifiedAsSlow;
         private final ReentrantLock lock = new ReentrantLock();
 
-        public PerformanceRecord(double initialTime) {
+        PerformanceRecord(double initialTime, long nowMillis) {
             this.averageExecutionTime = initialTime;
-            this.executionCount = new AtomicLong(1);
+            this.sampleCount = new AtomicLong(1);
+            this.lastSeenTimeMillis = nowMillis;
+            this.currentlyClassifiedAsSlow = false;
         }
 
         /**
-         * Updates the average execution time using the weighted formula.
-         * new_average = ((stored_average * 4) + new_measurement) / 5
+         * Updates the average execution time using EWMA (α = 0.2).
+         * new_average = α × new_measurement + (1 - α) × stored_average
          */
-        public void updateAverage(double newMeasurement) {
+        public void updateAverage(double newMeasurement, long nowMillis) {
             lock.lock();
             try {
                 this.averageExecutionTime = ((this.averageExecutionTime * 4) + newMeasurement) / 5;
-                this.executionCount.incrementAndGet();
+                this.sampleCount.incrementAndGet();
+                this.lastSeenTimeMillis = nowMillis;
             } finally {
                 lock.unlock();
             }
@@ -53,8 +57,29 @@ public class QueryPerformanceMonitor {
             return averageExecutionTime;
         }
 
-        public long getExecutionCount() {
-            return executionCount.get();
+        public long getSampleCount() {
+            return sampleCount.get();
+        }
+
+        public long getLastSeenTimeMillis() {
+            return lastSeenTimeMillis;
+        }
+
+        public boolean isCurrentlyClassifiedAsSlow() {
+            return currentlyClassifiedAsSlow;
+        }
+
+        public boolean updateSlowClassification(boolean slow) {
+            lock.lock();
+            try {
+                if (this.currentlyClassifiedAsSlow == slow) {
+                    return false;
+                }
+                this.currentlyClassifiedAsSlow = slow;
+                return true;
+            } finally {
+                lock.unlock();
+            }
         }
     }
 
@@ -62,47 +87,116 @@ public class QueryPerformanceMonitor {
     private volatile double overallAverageExecutionTime = 0.0;
     private final AtomicLong totalOperations = new AtomicLong(0);
 
-    // Global average update interval configuration
     private final long updateGlobalAvgIntervalSeconds;
+    private final SlowQueryClassificationMode classificationMode;
+    private final long slowQueryThresholdMs;
+    private final long minimumSlowQueryMs;
+    private final double slowMultiplier;
+    private final double recoveryMultiplier;
+    private final int minSamples;
+    private final int baselinePercentile;
+    private final long baselineRefreshIntervalSeconds;
     private final TimeProvider timeProvider;
     private volatile long lastGlobalAvgUpdateTime = 0L;
-    private volatile int lastKnownUniqueQueryCount = 0;
+
+    private volatile double fastBaselineMs = 0.0;
+    private volatile long lastBaselineRefreshMillis = 0L;
 
     /**
-     * Creates a QueryPerformanceMonitor with default settings (always update global average).
+     * Creates a QueryPerformanceMonitor with default settings.
      */
     public QueryPerformanceMonitor() {
-        this(0L, TimeProvider.SYSTEM);
+        this(0L, TimeProvider.SYSTEM, DEFAULT_CLASSIFICATION_MODE, DEFAULT_SLOW_QUERY_THRESHOLD_MS,
+                DEFAULT_MINIMUM_SLOW_QUERY_MS, DEFAULT_SLOW_MULTIPLIER, DEFAULT_RECOVERY_MULTIPLIER,
+                DEFAULT_MIN_SAMPLES, DEFAULT_BASELINE_PERCENTILE, DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS);
     }
 
     /**
-     * Creates a QueryPerformanceMonitor with specified update interval.
-     *
-     * @param updateGlobalAvgIntervalSeconds interval in seconds between global average updates.
-     *                                      If 0, global average is updated on every query (default behavior).
+     * Creates a QueryPerformanceMonitor with specified global average update interval.
      */
     public QueryPerformanceMonitor(long updateGlobalAvgIntervalSeconds) {
-        this(updateGlobalAvgIntervalSeconds, TimeProvider.SYSTEM);
+        this(updateGlobalAvgIntervalSeconds, TimeProvider.SYSTEM, DEFAULT_CLASSIFICATION_MODE,
+                DEFAULT_SLOW_QUERY_THRESHOLD_MS, DEFAULT_MINIMUM_SLOW_QUERY_MS, DEFAULT_SLOW_MULTIPLIER,
+                DEFAULT_RECOVERY_MULTIPLIER, DEFAULT_MIN_SAMPLES, DEFAULT_BASELINE_PERCENTILE,
+                DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS);
     }
 
     /**
-     * Creates a QueryPerformanceMonitor with specified update interval and time provider (for testing).
-     *
-     * @param updateGlobalAvgIntervalSeconds interval in seconds between global average updates.
-     *                                      If 0, global average is updated on every query (default behavior).
-     * @param timeProvider provider for current time (allows mocking in tests)
+     * Creates a QueryPerformanceMonitor with update interval and classification settings.
+     */
+    public QueryPerformanceMonitor(long updateGlobalAvgIntervalSeconds,
+                                   SlowQueryClassificationMode classificationMode,
+                                   long slowQueryThresholdMs) {
+        this(updateGlobalAvgIntervalSeconds, TimeProvider.SYSTEM, classificationMode, slowQueryThresholdMs,
+                DEFAULT_MINIMUM_SLOW_QUERY_MS, DEFAULT_SLOW_MULTIPLIER, DEFAULT_RECOVERY_MULTIPLIER,
+                DEFAULT_MIN_SAMPLES, DEFAULT_BASELINE_PERCENTILE, DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS);
+    }
+
+    /**
+     * Creates a QueryPerformanceMonitor with specified update interval and time provider.
      */
     public QueryPerformanceMonitor(long updateGlobalAvgIntervalSeconds, TimeProvider timeProvider) {
-        this.updateGlobalAvgIntervalSeconds = updateGlobalAvgIntervalSeconds;
-        this.timeProvider = timeProvider;
-        this.lastGlobalAvgUpdateTime = timeProvider.currentTimeSeconds();
+        this(updateGlobalAvgIntervalSeconds, timeProvider, DEFAULT_CLASSIFICATION_MODE,
+                DEFAULT_SLOW_QUERY_THRESHOLD_MS, DEFAULT_MINIMUM_SLOW_QUERY_MS, DEFAULT_SLOW_MULTIPLIER,
+                DEFAULT_RECOVERY_MULTIPLIER, DEFAULT_MIN_SAMPLES, DEFAULT_BASELINE_PERCENTILE,
+                DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS);
     }
 
     /**
-     * Records the execution time for an operation.
-     *
-     * @param operationHash The hash of the SQL operation (from SqlStatementXXHash)
-     * @param executionTimeMs The execution time in milliseconds
+     * Creates a QueryPerformanceMonitor with specified settings and time provider.
+     */
+    public QueryPerformanceMonitor(long updateGlobalAvgIntervalSeconds, TimeProvider timeProvider,
+                                   SlowQueryClassificationMode classificationMode, long slowQueryThresholdMs) {
+        this(updateGlobalAvgIntervalSeconds, timeProvider, classificationMode, slowQueryThresholdMs,
+                DEFAULT_MINIMUM_SLOW_QUERY_MS, DEFAULT_SLOW_MULTIPLIER, DEFAULT_RECOVERY_MULTIPLIER,
+                DEFAULT_MIN_SAMPLES, DEFAULT_BASELINE_PERCENTILE, DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS);
+    }
+
+    /**
+     * Creates a QueryPerformanceMonitor with full SQS classification controls.
+     */
+    public QueryPerformanceMonitor(long updateGlobalAvgIntervalSeconds,
+                                   SlowQueryClassificationMode classificationMode,
+                                   long slowQueryThresholdMs,
+                                   long minimumSlowQueryMs,
+                                   double slowMultiplier,
+                                   double recoveryMultiplier,
+                                   int minSamples,
+                                   int baselinePercentile,
+                                   long baselineRefreshIntervalSeconds) { //NOSONAR
+        this(updateGlobalAvgIntervalSeconds, TimeProvider.SYSTEM, classificationMode, slowQueryThresholdMs,
+                minimumSlowQueryMs, slowMultiplier, recoveryMultiplier, minSamples,
+                baselinePercentile, baselineRefreshIntervalSeconds);
+    }
+
+    /**
+     * Creates a QueryPerformanceMonitor with full SQS classification controls and time provider.
+     */
+    public QueryPerformanceMonitor(long updateGlobalAvgIntervalSeconds, TimeProvider timeProvider,
+                                   SlowQueryClassificationMode classificationMode,
+                                   long slowQueryThresholdMs,
+                                   long minimumSlowQueryMs,
+                                   double slowMultiplier,
+                                   double recoveryMultiplier,
+                                   int minSamples,
+                                   int baselinePercentile,
+                                   long baselineRefreshIntervalSeconds) { //NOSONAR
+        this.updateGlobalAvgIntervalSeconds = updateGlobalAvgIntervalSeconds;
+        this.timeProvider = timeProvider;
+        this.classificationMode = classificationMode != null ? classificationMode : DEFAULT_CLASSIFICATION_MODE;
+        this.slowQueryThresholdMs = normalizeSlowQueryThresholdMs(slowQueryThresholdMs);
+        this.minimumSlowQueryMs = normalizeMinimumSlowQueryMs(minimumSlowQueryMs);
+        this.slowMultiplier = normalizeSlowMultiplier(slowMultiplier);
+        this.recoveryMultiplier = normalizeRecoveryMultiplier(recoveryMultiplier, this.slowMultiplier);
+        this.minSamples = normalizeMinSamples(minSamples);
+        this.baselinePercentile = normalizeBaselinePercentile(baselinePercentile);
+        this.baselineRefreshIntervalSeconds = normalizeBaselineRefreshIntervalSeconds(baselineRefreshIntervalSeconds);
+        this.lastGlobalAvgUpdateTime = timeProvider.currentTimeSeconds();
+        this.lastBaselineRefreshMillis = 0L;
+    }
+
+    /**
+     * Records execution time for an operation in milliseconds.
      */
     public void recordExecutionTime(String operationHash, double executionTimeMs) {
         if (operationHash == null || executionTimeMs < 0) {
@@ -110,55 +204,88 @@ public class QueryPerformanceMonitor {
             return;
         }
 
-        int previousSize = operationRecords.size();
-
-        PerformanceRecord record = operationRecords.compute(operationHash, (key, existing) -> {
-            if (existing == null) {
-                return new PerformanceRecord(executionTimeMs);
-            } else {
-                existing.updateAverage(executionTimeMs);
-                return existing;
-            }
-        });
-
-        boolean isNewOperation = operationRecords.size() > previousSize;
+        long nowMillis = currentTimeMillis();
+        PerformanceRecord newRecord = new PerformanceRecord(executionTimeMs, nowMillis);
+        PerformanceRecord existingRecord = operationRecords.putIfAbsent(operationHash, newRecord);
+        boolean isNewOperation = existingRecord == null;
+        PerformanceRecord operationPerformanceRecord = isNewOperation ? newRecord : existingRecord;
+        if (!isNewOperation) {
+            operationPerformanceRecord.updateAverage(executionTimeMs, nowMillis);
+        }
 
         totalOperations.incrementAndGet();
 
-        // Update global average based on interval and conditions
         if (shouldUpdateGlobalAverage(isNewOperation)) {
             updateOverallAverage();
         }
 
         log.debug("Updated operation {} with execution time {}ms, average now {}ms",
-                 operationHash, executionTimeMs, record.getAverageExecutionTime());
+                operationHash, executionTimeMs, operationPerformanceRecord.getAverageExecutionTime());
     }
 
     /**
-     * Determines if the global average should be updated based on interval and new unique queries.
-     *
-     * @param isNewOperation true if this is a new unique operation
-     * @return true if global average should be updated
+     * Gets average execution time for a specific operation.
      */
-    private boolean shouldUpdateGlobalAverage(boolean isNewOperation) {
-        // If interval is 0, always update (default behavior)
-        if (updateGlobalAvgIntervalSeconds == 0) {
+    public double getOperationAverageTime(String operationHash) {
+        PerformanceRecord operationPerformanceRecord = operationRecords.get(operationHash);
+        return operationPerformanceRecord != null ? operationPerformanceRecord.getAverageExecutionTime() : 0.0;
+    }
+
+    /**
+     * Gets overall average execution time across all tracked operations.
+     */
+    public double getOverallAverageExecutionTime() {
+        return overallAverageExecutionTime;
+    }
+
+    /**
+     * Determines if an operation is classified as slow.
+     */
+    public boolean isSlowOperation(String operationHash) {
+        PerformanceRecord operationPerformanceRecord = operationRecords.get(operationHash);
+        if (operationPerformanceRecord == null || operationPerformanceRecord.getSampleCount() < minSamples) {
+            return false;
+        }
+
+        double operationAverage = operationPerformanceRecord.getAverageExecutionTime();
+        if (classificationMode == SlowQueryClassificationMode.ABSOLUTE_THRESHOLD) {
+            boolean isSlow = operationAverage >= slowQueryThresholdMs;
+            log.debug("Operation {} classification: mode={}, average={}ms, threshold={}ms, slow={}",
+                    operationHash, classificationMode, operationAverage, slowQueryThresholdMs, isSlow);
+            return isSlow;
+        }
+
+        return classifyRelativeFastBaseline(operationHash, operationPerformanceRecord, operationAverage);
+    }
+
+    private boolean classifyRelativeFastBaseline(String operationHash, PerformanceRecord operationPerformanceRecord, double operationAverageMs) {
+        double baseline = getFastBaselineMs();
+        if (baseline <= 0) {
+            return false;
+        }
+
+        if (operationPerformanceRecord.isCurrentlyClassifiedAsSlow()) {
+            boolean shouldRecover = operationAverageMs < minimumSlowQueryMs
+                    || operationAverageMs <= baseline * recoveryMultiplier;
+            if (shouldRecover) {
+                boolean changed = operationPerformanceRecord.updateSlowClassification(false);
+                if (changed) {
+                    log.debug("Query recovered to fast: hash={}, avgMs={}, baselineMs={}, recoveryMultiplier={}",
+                            operationHash, operationAverageMs, baseline, recoveryMultiplier);
+                }
+                return false;
+            }
             return true;
         }
 
-        // If this is a new unique operation, always update immediately
-        if (isNewOperation) {
-            log.debug("Updating global average immediately due to new unique operation");
-            return true;
-        }
-
-        // Check if enough time has passed since last update
-        long currentTime = timeProvider.currentTimeSeconds();
-        boolean intervalElapsed = (currentTime - lastGlobalAvgUpdateTime) >= updateGlobalAvgIntervalSeconds;
-
-        if (intervalElapsed) {
-            log.debug("Updating global average due to interval elapsed: {} seconds since last update",
-                     currentTime - lastGlobalAvgUpdateTime);
+        boolean shouldEnterSlow = operationAverageMs >= minimumSlowQueryMs
+                && operationAverageMs >= baseline * slowMultiplier;
+        if (shouldEnterSlow) {
+            boolean changed = operationPerformanceRecord.updateSlowClassification(true);
+            if (changed) {
+                log.debug("Query classified as slow: hash={}, avgMs={}, baselineMs={}, multiplier={}",
+                        operationHash, operationAverageMs, baseline, slowMultiplier);
+            }
             return true;
         }
 
@@ -166,53 +293,58 @@ public class QueryPerformanceMonitor {
     }
 
     /**
-     * Gets the average execution time for a specific operation.
-     *
-     * @param operationHash The hash of the SQL operation
-     * @return The average execution time in milliseconds, or 0.0 if not found
+     * Gets the cached fast baseline in milliseconds, refreshing when needed.
      */
-    public double getOperationAverageTime(String operationHash) {
-        PerformanceRecord record = operationRecords.get(operationHash);
-        return record != null ? record.getAverageExecutionTime() : 0.0;
+    public double getFastBaselineMs() {
+        long nowMillis = currentTimeMillis();
+        if (shouldRefreshBaseline(nowMillis)) {
+            synchronized (this) {
+                if (shouldRefreshBaseline(nowMillis)) {
+                    refreshFastBaseline(nowMillis);
+                }
+            }
+        }
+        return fastBaselineMs;
     }
 
-    /**
-     * Gets the overall average execution time across all tracked operations.
-     * This is the average of all individual operation averages.
-     *
-     * @return The overall average execution time in milliseconds
-     */
-    public double getOverallAverageExecutionTime() {
-        return overallAverageExecutionTime;
+    private boolean shouldRefreshBaseline(long nowMillis) {
+        return baselineRefreshIntervalSeconds == 0
+                || (nowMillis - lastBaselineRefreshMillis) >= baselineRefreshIntervalSeconds * 1000L;
     }
 
-    /**
-     * Determines if an operation is classified as "slow".
-     * An operation is slow if its average execution time is 2x or greater than the overall average.
-     *
-     * @param operationHash The hash of the SQL operation
-     * @return true if the operation is classified as slow, false otherwise
-     */
-    public boolean isSlowOperation(String operationHash) {
-        double operationAverage = getOperationAverageTime(operationHash);
-        double overallAverage = getOverallAverageExecutionTime();
+    private void refreshFastBaseline(long nowMillis) {
+        double[] eligibleFastAverages = operationRecords.values().stream()
+                .filter(performanceRecord -> performanceRecord.getSampleCount() >= minSamples)
+                .filter(performanceRecord -> performanceRecord.getAverageExecutionTime() > 0)
+                .filter(performanceRecord -> !performanceRecord.isCurrentlyClassifiedAsSlow())
+                .mapToDouble(PerformanceRecord::getAverageExecutionTime)
+                .toArray();
 
-        // If overall average is 0 or very small, consider all operations as fast initially
-        if (overallAverage <= 1.0) {
-            return false;
+        if (eligibleFastAverages.length == 0) {
+            fastBaselineMs = 0.0;
+            lastBaselineRefreshMillis = nowMillis;
+            return;
         }
 
-        boolean isSlow = operationAverage >= (overallAverage * 2.0);
-        log.debug("Operation {} classification: average={}ms, overall={}ms, slow={}",
-                 operationHash, operationAverage, overallAverage, isSlow);
+        Arrays.sort(eligibleFastAverages);
+        fastBaselineMs = calculatePercentile(eligibleFastAverages, baselinePercentile);
+        lastBaselineRefreshMillis = nowMillis;
+    }
 
-        return isSlow;
+    private double calculatePercentile(double[] sortedValues, int percentile) {
+        if (sortedValues.length == 0) {
+            return 0.0;
+        }
+        // Nearest-rank percentile selection (1-based rank mapped to 0-based array index).
+        // Ceil() is used for rank so p=50 on 2 values picks rank 1 (index 0 after -1),
+        // keeping the baseline anchored to observed fast-shape values without interpolation.
+        int rank = (int) Math.ceil((percentile / 100.0) * sortedValues.length) - 1;
+        int index = Math.max(0, Math.min(rank, sortedValues.length - 1));
+        return sortedValues[index];
     }
 
     /**
-     * Updates the overall average execution time.
-     * This is calculated as the average of all current operation averages.
-     * This method is intentionally not synchronized for performance reasons.
+     * Updates overall average execution time.
      */
     private void updateOverallAverage() {
         if (operationRecords.isEmpty()) {
@@ -225,42 +357,143 @@ public class QueryPerformanceMonitor {
                 .sum();
 
         overallAverageExecutionTime = sum / operationRecords.size();
-
-        // Update the last update time and known unique query count
         lastGlobalAvgUpdateTime = timeProvider.currentTimeSeconds();
-        lastKnownUniqueQueryCount = operationRecords.size();
-
         log.trace("Updated overall average execution time to {}ms across {} operations",
-                 overallAverageExecutionTime, operationRecords.size());
+                overallAverageExecutionTime, operationRecords.size());
     }
 
-    /**
-     * Gets the number of unique operations being tracked.
-     *
-     * @return The number of unique operations
-     */
+    private boolean shouldUpdateGlobalAverage(boolean isNewOperation) {
+        if (updateGlobalAvgIntervalSeconds == 0) {
+            return true;
+        }
+
+        if (isNewOperation) {
+            return true;
+        }
+
+        long currentTime = timeProvider.currentTimeSeconds();
+        return (currentTime - lastGlobalAvgUpdateTime) >= updateGlobalAvgIntervalSeconds;
+    }
+
+    private long normalizeSlowQueryThresholdMs(long value) {
+        if (value < 0) {
+            log.warn("Invalid negative slowQueryThresholdMs={}, using default {}ms",
+                    value, DEFAULT_SLOW_QUERY_THRESHOLD_MS);
+            return DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+        }
+        return value;
+    }
+
+    private long normalizeMinimumSlowQueryMs(long value) {
+        if (value < 0) {
+            log.warn("Invalid minimumSlowQueryMs={}, using default {}ms",
+                    value, DEFAULT_MINIMUM_SLOW_QUERY_MS);
+            return DEFAULT_MINIMUM_SLOW_QUERY_MS;
+        }
+        return value;
+    }
+
+    private double normalizeSlowMultiplier(double value) {
+        if (value <= 1.0) {
+            log.warn("Invalid slowMultiplier={}, using default {}", value, DEFAULT_SLOW_MULTIPLIER);
+            return DEFAULT_SLOW_MULTIPLIER;
+        }
+        return value;
+    }
+
+    private double normalizeRecoveryMultiplier(double value, double validatedSlowMultiplier) {
+        if (value <= 1.0 || value >= validatedSlowMultiplier) {
+            log.warn("Invalid recoveryMultiplier={} (must be > 1.0 and < slowMultiplier={}), using default {}",
+                    value, validatedSlowMultiplier, DEFAULT_RECOVERY_MULTIPLIER);
+            return DEFAULT_RECOVERY_MULTIPLIER;
+        }
+        return value;
+    }
+
+    private int normalizeMinSamples(int value) {
+        if (value < 1) {
+            log.warn("Invalid minSamples={}, using default {}", value, DEFAULT_MIN_SAMPLES);
+            return DEFAULT_MIN_SAMPLES;
+        }
+        return value;
+    }
+
+    private int normalizeBaselinePercentile(int value) {
+        if (value < 1 || value > 99) {
+            log.warn("Invalid baselinePercentile={} (must be between 1 and 99), using default {}",
+                    value, DEFAULT_BASELINE_PERCENTILE);
+            return DEFAULT_BASELINE_PERCENTILE;
+        }
+        return value;
+    }
+
+    private long normalizeBaselineRefreshIntervalSeconds(long value) {
+        if (value < 0) {
+            log.warn("Invalid baselineRefreshIntervalSeconds={}, using default {}",
+                    value, DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS);
+            return DEFAULT_BASELINE_REFRESH_INTERVAL_SECONDS;
+        }
+        return value;
+    }
+
+    private long currentTimeMillis() {
+        return timeProvider.currentTimeSeconds() * 1000L;
+    }
+
     public int getTrackedOperationCount() {
         return operationRecords.size();
     }
 
-    /**
-     * Gets the total number of operation executions recorded.
-     *
-     * @return The total execution count across all operations
-     */
     public long getTotalExecutionCount() {
         return totalOperations.get();
     }
 
+    public long getClassifiedSlowOperationCount() {
+        return operationRecords.values().stream().filter(PerformanceRecord::isCurrentlyClassifiedAsSlow).count();
+    }
+
+    public SlowQueryClassificationMode getClassificationMode() {
+        return classificationMode;
+    }
+
+    public long getSlowQueryThresholdMs() {
+        return slowQueryThresholdMs;
+    }
+
+    public long getMinimumSlowQueryMs() {
+        return minimumSlowQueryMs;
+    }
+
+    public double getSlowMultiplier() {
+        return slowMultiplier;
+    }
+
+    public double getRecoveryMultiplier() {
+        return recoveryMultiplier;
+    }
+
+    public int getMinSamples() {
+        return minSamples;
+    }
+
+    public int getBaselinePercentile() {
+        return baselinePercentile;
+    }
+
+    public long getBaselineRefreshIntervalSeconds() {
+        return baselineRefreshIntervalSeconds;
+    }
+
     /**
-     * Clears all performance records. Used primarily for testing.
+     * Clears all performance records.
      */
     public void clear() {
         operationRecords.clear();
         overallAverageExecutionTime = 0.0;
         totalOperations.set(0);
         lastGlobalAvgUpdateTime = timeProvider.currentTimeSeconds();
-        lastKnownUniqueQueryCount = 0;
+        fastBaselineMs = 0.0;
+        lastBaselineRefreshMillis = 0L;
         log.info("Performance monitor cleared");
     }
 }

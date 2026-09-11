@@ -471,7 +471,7 @@ The e-book is designed to guide readers from understanding the core problem OJP 
 
 #### Chapter 16: Development Setup
 - **16.1 Prerequisites and Tools**
-  - Java 22+ requirement
+  - Java 25+ requirement
   - Maven setup
   - Docker for testing
 - **16.2 Building from Source**

@@ -3,7 +3,6 @@ package org.openjproxy.grpc.server;
 import io.grpc.health.v1.HealthCheckResponse;
 import io.grpc.protobuf.services.HealthStatusManager;
 import lombok.Getter;
-import org.apache.commons.lang3.StringUtils;
 
 /**
  * OJP Health Manager for managing the health status of services in the OJP server.
@@ -30,7 +29,7 @@ public class OjpHealthManager {
 	public static void initialize() {
 		if (healthStatusManager == null) {
 			healthStatusManager = new HealthStatusManager();
-			healthStatusManager.clearStatus(StringUtils.EMPTY); // Clear all statuses
+			healthStatusManager.clearStatus(""); // Clear all statuses
 		}
 
 		// Set initial statuses

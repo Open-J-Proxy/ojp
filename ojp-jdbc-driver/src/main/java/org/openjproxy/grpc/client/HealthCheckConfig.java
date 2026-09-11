@@ -1,7 +1,6 @@
 package org.openjproxy.grpc.client;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Properties;
 
@@ -9,9 +8,8 @@ import java.util.Properties;
  * Configuration for health check and connection redistribution in multinode deployments.
  * Loads settings from ojp.properties.
  */
+@Slf4j
 public class HealthCheckConfig {
-
-    private static final Logger log = LoggerFactory.getLogger(HealthCheckConfig.class);
 
     // Default values
     private static final long DEFAULT_HEALTH_CHECK_INTERVAL_MS = 5000L; // 5 seconds

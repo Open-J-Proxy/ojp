@@ -1,7 +1,6 @@
 package org.openjproxy.grpc.server.utils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -31,8 +30,8 @@ import java.util.regex.Pattern;
  * </pre>
  * </p>
  */
+@Slf4j
 public class PropertyPlaceholderResolver {
-    private static final Logger logger = LoggerFactory.getLogger(PropertyPlaceholderResolver.class);
 
     // Pattern to match ${property.name} placeholders
     private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\$\\{([^}]+)\\}");
@@ -90,7 +89,7 @@ public class PropertyPlaceholderResolver {
                     "The suffix after the prefix must be 1-200 characters.",
                     placeholder
                 );
-                logger.error(errorMsg);
+                log.error(errorMsg);
                 throw new SecurityException(errorMsg);
             }
 
@@ -102,11 +101,11 @@ public class PropertyPlaceholderResolver {
                     "Please set JVM property '-D%s=<value>' or environment variable '%s'",
                     placeholder, placeholder, propertyNameToEnvVar(placeholder)
                 );
-                logger.error(errorMsg);
+                log.error(errorMsg);
                 throw new IllegalArgumentException(errorMsg);
             }
 
-            logger.debug("Resolved placeholder ${{{}}}: {} characters", placeholder, value.length());
+            log.debug("Resolved placeholder ${{{}}}: {} characters", placeholder, value.length());
             // Escape backslashes and dollar signs in the replacement string for regex
             matcher.appendReplacement(result, Matcher.quoteReplacement(value));
         }
@@ -162,7 +161,7 @@ public class PropertyPlaceholderResolver {
         // First check JVM system properties
         String value = System.getProperty(propertyName);
         if (value != null) {
-            logger.debug("Resolved property '{}' from JVM system property", propertyName);
+            log.debug("Resolved property '{}' from JVM system property", propertyName);
             return value;
         }
 
@@ -170,11 +169,11 @@ public class PropertyPlaceholderResolver {
         String envKey = propertyNameToEnvVar(propertyName);
         value = System.getenv(envKey);
         if (value != null) {
-            logger.debug("Resolved property '{}' from environment variable '{}'", propertyName, envKey);
+            log.debug("Resolved property '{}' from environment variable '{}'", propertyName, envKey);
             return value;
         }
 
-        logger.debug("Property '{}' not found in system properties or environment variables", propertyName);
+        log.debug("Property '{}' not found in system properties or environment variables", propertyName);
         return null;
     }
 

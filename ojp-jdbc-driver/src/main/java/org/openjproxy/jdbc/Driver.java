@@ -3,6 +3,7 @@ package org.openjproxy.jdbc;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.MultinodeUrlParser;
@@ -75,7 +76,7 @@ public class Driver implements java.sql.Driver {
         }
 
         // Load ojp.properties file and extract datasource-specific configuration.
-        // Then merge any ojp.connection.pool.* / ojp.xa.* keys from the caller-supplied info
+        // Then merge any ojp.connection.pool.* / ojp.xa.* / ojp.jdbc.* keys from the caller-supplied info
         // on top (info properties take the highest priority).
         Properties ojpProperties = DatasourcePropertiesLoader.loadOjpPropertiesForDataSource(dataSourceName);
         ojpProperties = DatasourcePropertiesLoader.applyInfoProperties(ojpProperties, info, dataSourceName);
@@ -90,13 +91,26 @@ public class Driver implements java.sql.Driver {
         connBuilder.addAllServerEndpoints(serverEndpoints);
         log.info("Adding {} server endpoint(s) to ConnectionDetails", serverEndpoints.size());
 
+        // Build combined properties map: file (ojp.properties) takes lowest priority;
+        // inline ojp.* properties from info override the file so callers can supply
+        // read/write splitting and other configuration directly via
+        // DriverManager.getConnection(url, info) without a server-side properties file.
+        Map<String, Object> propertiesMap = new HashMap<>();
         if (ojpProperties != null && !ojpProperties.isEmpty()) {
-            // Convert Properties to Map<String, Object>
-            Map<String, Object> propertiesMap = new HashMap<>();
             for (String key : ojpProperties.stringPropertyNames()) {
                 propertiesMap.put(key, ojpProperties.getProperty(key));
             }
-
+        }
+        if (info != null) {
+            for (String key : info.stringPropertyNames()) {
+                // Forward any *.ojp.* properties (e.g. read/write splitting, replica config)
+                // and the top-level ojp.* properties (e.g. ojp.datasource.name).
+                if (key.contains(".ojp.") || key.startsWith("ojp.")) {
+                    propertiesMap.put(key, info.getProperty(key));
+                }
+            }
+        }
+        if (!propertiesMap.isEmpty()) {
             // Add cache configuration properties to the map
             try {
                 CacheConfigurationBuilder.addCachePropertiesToMap(propertiesMap, dataSourceName);
@@ -106,7 +120,7 @@ public class Driver implements java.sql.Driver {
             }
 
             connBuilder.addAllProperties(ProtoConverter.propertiesToProto(propertiesMap));
-            log.debug("Loaded ojp.properties with {} properties for dataSource: {}", propertiesMap.size(), dataSourceName);
+            log.debug("Loaded {} properties for dataSource: {}", propertiesMap.size(), dataSourceName);
         }
 
         log.info("Calling connect() on statement service with URL: {}", connectionUrl);
@@ -119,8 +133,20 @@ public class Driver implements java.sql.Driver {
             log.error("Failed to establish connection", e);
             throw e;
         }
+        boolean closeSynchronously = Boolean.parseBoolean(
+                ojpProperties != null
+                        ? ojpProperties.getProperty(
+                                CommonConstants.JDBC_CLOSE_SYNC_PROPERTY,
+                                String.valueOf(CommonConstants.DEFAULT_JDBC_CLOSE_SYNCHRONOUS))
+                        : String.valueOf(CommonConstants.DEFAULT_JDBC_CLOSE_SYNCHRONOUS));
+        ClientThrottleMode throttleMode = ClientThrottleMode.fromString(
+                ojpProperties != null
+                        ? ojpProperties.getProperty(CommonConstants.JDBC_CLIENT_THROTTLE_MODE_PROPERTY,
+                                CommonConstants.DEFAULT_JDBC_CLIENT_THROTTLE_MODE)
+                        : CommonConstants.DEFAULT_JDBC_CLIENT_THROTTLE_MODE);
         log.debug("Returning new Connection with sessionInfo: {}", sessionInfo);
-        return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(cleanUrl));
+        return new Connection(sessionInfo, statementService, DatabaseUtils.resolveDbName(cleanUrl),
+                closeSynchronously, throttleMode);
     }
 
 

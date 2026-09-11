@@ -7,7 +7,6 @@ import com.openjproxy.grpc.DbName;
 import com.openjproxy.grpc.ResourceType;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
@@ -26,7 +25,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLWarning;
 import java.sql.Savepoint;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -172,7 +174,7 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
                     throw new RuntimeException("Resource type invalid");
             }
 
-            if (responseBuilder.getSession() == null || StringUtils.isBlank(responseBuilder.getSession().getSessionUUID())) {
+            if (responseBuilder.getSession() == null || responseBuilder.getSession().getSessionUUID().isBlank()) {
                 responseBuilder.setSession(request.getSession());
             }
 
@@ -223,6 +225,13 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
                 String uuid = UUID.randomUUID().toString();
                 resultFirstLevel = uuid;
                 context.getSessionManager().registerAttr(responseBuilder.getSession(), uuid, sp);
+            }
+            if (resultFirstLevel instanceof SQLWarning warning) {
+                // SQLWarning (and vendor-specific subclasses such as SQLServerWarning) cannot be
+                // transported as-is because ProtoConverter only supports primitives/Map/List/Properties.
+                // Flatten the entire warning chain to a List<Map> so that message, sqlState,
+                // vendorCode, and all chained warnings are preserved across the gRPC boundary.
+                resultFirstLevel = sqlWarningToList(warning);
             }
             if (request.getTarget().hasNextCall()) {
                 //Second level calls, for cases like getMetadata().isAutoIncrement(int column)
@@ -305,5 +314,35 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
             }
         }
         return false;
+    }
+
+    /**
+     * Converts a {@link SQLWarning} chain to a {@code List<Map<String, Object>>} suitable for
+     * transport via {@link org.openjproxy.grpc.transport.ProtoSerialization}.
+     *
+     * <p>Each map in the list represents one warning node and contains:
+     * <ul>
+     *   <li>{@code "message"} – the warning message (may be null)</li>
+     *   <li>{@code "sqlState"} – the SQLSTATE code (may be null per JDBC spec)</li>
+     *   <li>{@code "vendorCode"} – the database-specific vendor error code (int)</li>
+     * </ul>
+     *
+     * <p>The list is ordered from head to tail following {@link SQLWarning#getNextWarning()}.
+     *
+     * @param head the first node of the warning chain; must not be null
+     * @return an ordered list of warning attribute maps
+     */
+    private List<Object> sqlWarningToList(SQLWarning head) {
+        List<Object> list = new ArrayList<>();
+        SQLWarning cursor = head;
+        while (cursor != null) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("message", cursor.getMessage());
+            entry.put("sqlState", cursor.getSQLState());
+            entry.put("vendorCode", cursor.getErrorCode());
+            list.add(entry);
+            cursor = cursor.getNextWarning();
+        }
+        return list;
     }
 }

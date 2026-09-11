@@ -7,7 +7,7 @@ This guide is intended for contributors and developers who need to modify, exten
 
 ## Prerequisites
 
-- **Java 21 or higher**
+- **Java 25 or higher**
 - **Maven 3.9+**
 - **Git**
 
@@ -50,7 +50,7 @@ After a successful build, the runnable JAR will be at:
 ojp-server/target/ojp-server-<version>-shaded.jar
 ```
 
-For example: `ojp-server/target/ojp-server-0.4.14-beta-shaded.jar`
+For example: `ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar`
 
 ### 4. Download JDBC Drivers
 
@@ -66,7 +66,7 @@ This downloads H2, PostgreSQL, MySQL, and MariaDB drivers to `./ojp-libs`.
 ### 5. Run the Server
 
 ```bash
-java -jar ojp-server/target/ojp-server-0.4.14-beta-shaded.jar
+java -jar ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 ## Troubleshooting
@@ -75,7 +75,7 @@ java -jar ojp-server/target/ojp-server-0.4.14-beta-shaded.jar
 
 **Problem**: `error: invalid target release: 21`
 
-**Solution**: Ensure you are using Java 21 or higher:
+**Solution**: Ensure you are using Java 25 or higher:
 ```bash
 java -version
 ```

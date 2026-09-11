@@ -84,7 +84,7 @@ public class LobProcessor {
         if (precision == 1 && !"[B".equalsIgnoreCase(colClassName) && !"byte[]".equalsIgnoreCase(colClassName)) {
             //it is a single byte and is not of class byte array([B)
             binaryValue = rs.getByte(columnIndex + 1);
-        } else if ((org.apache.commons.lang3.StringUtils.isNotEmpty(catalogName) ||
+        } else if (((catalogName != null && !catalogName.isEmpty()) ||
                    "[B".equalsIgnoreCase(colClassName) || "byte[]".equalsIgnoreCase(colClassName)) &&
                    !inputStreamTypes.contains(colTypeName.toUpperCase())) {
             binaryValue = rs.getBytes(columnIndex + 1);

@@ -12,6 +12,7 @@ import org.openjproxy.grpc.server.ServerConfiguration;
 import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.AdmissionControlManager;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry;
 import org.openjproxy.grpc.server.xa.XADataSourceFactory;
 import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 
@@ -47,6 +48,7 @@ class HandleUnpooledXAConnectionActionTest {
                 new ConcurrentHashMap<>(),
                 admissionControlManagers,
                 new ConcurrentHashMap<>(),
+                new ReadWriteDataSourceRegistry(),
                 mock(XAConnectionPoolProvider.class),
                 new MultinodeXaCoordinator(),
                 new ClusterHealthTracker(),

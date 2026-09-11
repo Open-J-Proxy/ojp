@@ -314,16 +314,18 @@ public class MultinodeConnectionManager {
                 return sessionInfo;
 
             } catch (StatusRuntimeException e) {
-                boolean isSqlError = false;
+                // isConnectionLevelError() is used instead of relying on GrpcExceptionHandler.handle()
+                // throwing/not-throwing, since handle() now also converts connection-level codes
+                // (UNAVAILABLE, DEADLINE_EXCEEDED) into a checked SQLTransientConnectionException.
+                boolean isConnectionLevel = GrpcExceptionHandler.isConnectionLevelError(e);
                 try {
                     GrpcExceptionHandler.handle(e);
                     lastException = new SQLException("gRPC call failed: " + e.getMessage(), e);
                 } catch (SQLException sqlEx) {
                     lastException = sqlEx;
-                    isSqlError = true;
                 }
 
-                if (!isSqlError) {
+                if (isConnectionLevel) {
                     // Connection-level failure: mark server unhealthy and try the next candidate.
                     handleServerFailure(server, e);
                     log.warn("XA connect failed on server {} with connection-level error, trying next: {}",
@@ -819,15 +821,17 @@ public class MultinodeConnectionManager {
                 }
 
             } catch (StatusRuntimeException e) {
-                boolean isSqlError = false;
+                // isConnectionLevelError() is used instead of relying on GrpcExceptionHandler.handle()
+                // throwing/not-throwing, since handle() now also converts connection-level codes
+                // (UNAVAILABLE, DEADLINE_EXCEEDED) into a checked SQLTransientConnectionException.
+                boolean isConnectionLevel = GrpcExceptionHandler.isConnectionLevelError(e);
                 try {
                     GrpcExceptionHandler.handle(e);
                     lastException = new SQLException("gRPC call failed: " + e.getMessage(), e);
                 } catch (SQLException sqlEx) {
-                    lastException = sqlEx;
-                    isSqlError = true; // SQL metadata present: upstream DB error, not OJP proxy failure
+                    lastException = sqlEx; // SQL metadata present: upstream DB error, not OJP proxy failure
                 }
-                if (!isSqlError) {
+                if (isConnectionLevel) {
                     // Only mark server unhealthy for genuine connectivity failures (no SQL metadata)
                     handleServerFailure(server, e);
                 } else {
@@ -905,7 +909,11 @@ public class MultinodeConnectionManager {
                     sessionKey,
                     sessionKey != null && sessionKey.isEmpty(),
                     sessionKey == null);
-            return selectHealthyServer();
+            ServerEndpoint selectedServer = selectHealthyServer();
+            if (selectedServer == null) {
+                throw new SQLException("No healthy servers available (checked " + serverEndpoints.size() + " servers)");
+            }
+            return selectedServer;
         }
 
         log.debug("Looking up server for session: {}", sessionKey);

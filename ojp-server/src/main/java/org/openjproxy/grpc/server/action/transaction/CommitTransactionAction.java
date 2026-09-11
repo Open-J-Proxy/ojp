@@ -54,7 +54,7 @@ public class CommitTransactionAction implements Action<SessionInfo, SessionInfo>
                     .setTransactionUUID(sessionInfo.getTransactionInfo().getTransactionUUID())
                     .build();
 
-            SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(sessionInfo);
+            SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(sessionInfo, context);
             sessionInfoBuilder.setTransactionInfo(transactionInfo);
 
             responseObserver.onNext(sessionInfoBuilder.build());

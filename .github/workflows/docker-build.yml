@@ -12,6 +12,7 @@ on:
         description: 'Repository name'
         required: true
         default: 'rrobetti'
+
 jobs:
   build-docker-image:
     name: Build Docker Image
@@ -23,24 +24,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 24
+      - name: Set up JDK 25
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
+      - name: Build fat JAR
+        run: mvn package -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USER }}" --password-stdin
+
       - name: Build and push Docker image
-        env:
-          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_REPO: ${{ github.event.inputs.repository }}
         run: |
-            mvn install -N -DskipTests
-            mvn install -pl ojp-grpc-commons -DskipTests
-            mvn compile jib:build -pl ojp-server \
-            -Djib.to.auth.username="${DOCKERHUB_USER}" \
-            -Djib.to.auth.password="${DOCKERHUB_TOKEN}" \
-            -Djib.to.image="${DOCKERHUB_REPO}/ojp:${{ github.event.inputs.tag }}" \
-            -Djib.container.mainClass="org.openjproxy.grpc.server.GrpcServer" \
-            -Djib.container.ports=1059
+          IMAGE="${{ github.event.inputs.repository }}/ojp:${{ github.event.inputs.tag }}"
+          docker build -t "$IMAGE" ojp-server/
+          docker push "$IMAGE"

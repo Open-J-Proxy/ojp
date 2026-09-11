@@ -31,6 +31,7 @@ public class DataSourceConfigurationManager {
         private final long connectionTimeout;
         private final boolean poolEnabled;
         private final Integer defaultTransactionIsolation;
+        private final long leakDetectionThreshold;
 
         public DataSourceConfiguration(String dataSourceName, Properties properties) {
             this.dataSourceName = dataSourceName;
@@ -41,6 +42,7 @@ public class DataSourceConfigurationManager {
             this.connectionTimeout = getLongProperty(properties, CommonConstants.CONNECTION_TIMEOUT_PROPERTY, CommonConstants.DEFAULT_CONNECTION_TIMEOUT);
             this.poolEnabled = getBooleanProperty(properties, CommonConstants.POOL_ENABLED_PROPERTY, true);
             this.defaultTransactionIsolation = getTransactionIsolationProperty(properties, CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY);
+            this.leakDetectionThreshold = getLongProperty(properties, CommonConstants.LEAK_DETECTION_THRESHOLD_PROPERTY, CommonConstants.DEFAULT_LEAK_DETECTION_THRESHOLD);
         }
 
         // Getters
@@ -52,12 +54,13 @@ public class DataSourceConfigurationManager {
         public long getConnectionTimeout() { return connectionTimeout; }
         public boolean isPoolEnabled() { return poolEnabled; }
         public Integer getDefaultTransactionIsolation() { return defaultTransactionIsolation; }
+        public long getLeakDetectionThreshold() { return leakDetectionThreshold; }
 
         @Override
         public String toString() {
-            return String.format("DataSourceConfiguration[%s: maxPool=%d, minIdle=%d, timeout=%d, poolEnabled=%b, txIsolation=%s]",
+            return String.format("DataSourceConfiguration[%s: maxPool=%d, minIdle=%d, timeout=%d, poolEnabled=%b, txIsolation=%s, leakDetectionThreshold=%d]",
                     dataSourceName, maximumPoolSize, minimumIdle, connectionTimeout, poolEnabled,
-                    defaultTransactionIsolation != null ? defaultTransactionIsolation : "auto-detect");
+                    defaultTransactionIsolation != null ? defaultTransactionIsolation : "auto-detect", leakDetectionThreshold);
         }
     }
 
@@ -205,7 +208,8 @@ public class DataSourceConfigurationManager {
                     CommonConstants.MAX_LIFETIME_PROPERTY,
                     CommonConstants.CONNECTION_TIMEOUT_PROPERTY,
                     CommonConstants.POOL_ENABLED_PROPERTY,
-                    CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY
+                    CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY,
+                    CommonConstants.LEAK_DETECTION_THRESHOLD_PROPERTY
             };
         }
 

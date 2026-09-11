@@ -71,7 +71,7 @@ public class RollbackTransactionAction implements Action<SessionInfo, SessionInf
                     .setTransactionUUID(sessionInfo.getTransactionInfo().getTransactionUUID())
                     .build();
 
-            SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(sessionInfo);
+            SessionInfo.Builder sessionInfoBuilder = SessionInfoUtils.newBuilderFrom(sessionInfo, context);
             sessionInfoBuilder.setTransactionInfo(transactionInfo);
             // Server echoes back targetServer from incoming request (preserved by newBuilderFrom)
 

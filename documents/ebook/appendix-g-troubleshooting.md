@@ -75,7 +75,7 @@ The JDBC driver must be accessible to your application's classloader. For Maven 
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -166,7 +166,7 @@ try (Connection conn = dataSource.getConnection();
 } // Connection automatically returned to pool
 ```
 
-Forgotten ResultSets are particularly problematic. Even if you close the Connection, an unclosed ResultSet keeps the actual database connection busy until garbage collection runs.
+Forgotten ResultSets are particularly problematic while the OJP `Connection` remains open. They keep server-side cursor and result-set resources busy until the `ResultSet`, `Statement`, or `Connection` is closed, or leak cleanup runs.
 
 Increase pool size if your application legitimately needs more concurrent connections. Edit `ojp.properties`:
 
@@ -812,7 +812,7 @@ When one pool exhausts its connections, it can trigger exhaustion in other pools
 **Prevention strategies**:
 - Configure appropriate maximum pool sizes: `hikariCP.maximumPoolSize`
 - Implement connection acquisition timeouts: `hikariCP.connectionTimeout=30000`
-- Use HikariCP's leak detection: `hikariCP.leakDetectionThreshold=300000`
+- Use HikariCP's leak detection: `ojp.connection.pool.leakDetectionThreshold=300000` (note: enabling this in OJP may produce false-positive warnings for normal long-lived client sessions, since OJP holds one connection per session by design)
 - Deploy sufficient OJP server capacity with headroom for traffic spikes
 - Implement application-level retry limits to prevent request amplification
 
@@ -1103,8 +1103,11 @@ Applications that don't close connections exhaust connection pools, causing new 
 
 **Detection**:
 ```properties
-# Enable HikariCP leak detection
-hikariCP.leakDetectionThreshold=60000  # 60 seconds
+# Enable HikariCP leak detection (default: 0 = disabled)
+# Note: enabling this in OJP may produce false-positive warnings for normal
+# long-lived sessions, since OJP intentionally holds one connection per
+# client session for the entire session lifetime by design.
+ojp.connection.pool.leakDetectionThreshold=60000  # 60 seconds
 ```
 
 Leaked connections appear in logs:

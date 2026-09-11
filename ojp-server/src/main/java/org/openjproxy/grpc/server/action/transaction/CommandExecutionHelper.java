@@ -6,10 +6,10 @@ import com.openjproxy.grpc.StatementRequest;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.grpc.server.CircuitBreaker;
 import org.openjproxy.grpc.server.PoolNotFoundException;
 import org.openjproxy.grpc.server.AdmissionControlManager;
+import org.openjproxy.grpc.server.ServerOverloadException;
 import org.openjproxy.grpc.server.SqlStatementXXHash;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
@@ -17,6 +17,7 @@ import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 
+import static org.openjproxy.grpc.server.GrpcExceptionHandler.sendServerOverload;
 import static org.openjproxy.grpc.server.GrpcExceptionHandler.sendSQLExceptionMetadata;
 import static org.openjproxy.grpc.server.action.session.ResultSetHelper.updateSessionActivity;
 
@@ -37,7 +38,7 @@ public class CommandExecutionHelper {
                                        StatementExecution executionLogic, SqlErrorType sqlDataExceptionType, String operationName) {
 
         // Ensure session isn't null
-        if (StringUtils.isBlank(request.getSession().getConnHash())) {
+        if (request.getSession().getConnHash().isBlank()) {
             sendSQLExceptionMetadata(new SQLException("Invalid request: Session or ConnHash is missing"), responseObserver);
             log.error("Invalid {} request: Session or ConnHash is missing", operationName);
             return;
@@ -56,15 +57,29 @@ public class CommandExecutionHelper {
 
         // Get the appropriate admission control manager for this datasource
         AdmissionControlManager manager = getAdmissionControlManagerForConnection(context, connHash);
+
+        // If the session already owns a session-scoped admission permit (acquired at
+        // session creation and released only on session termination), do not acquire
+        // another per-statement slot — that would double-count the same session and
+        // unnecessarily compete for capacity with brand new sessions.
+        final boolean sessionHoldsPermit = sessionHoldsPermit(context, request);
+
         long sqlStartNs = System.nanoTime();
         try {
             circuitBreaker.preCheck(stmtHash);
 
             // Execute with admission control, passing actual SQL for metric labelling
-            manager.executeWithSegregation(stmtHash, request.getSql(), () -> {
-                executionLogic.execute();
-                return null;
-            });
+            if (sessionHoldsPermit) {
+                manager.executeWithMonitoringOnly(stmtHash, request.getSql(), () -> {
+                    executionLogic.execute();
+                    return null;
+                });
+            } else {
+                manager.executeWithSegregation(stmtHash, request.getSql(), () -> {
+                    executionLogic.execute();
+                    return null;
+                });
+            }
 
             circuitBreaker.onSuccess(stmtHash);
 
@@ -83,6 +98,9 @@ public class CommandExecutionHelper {
             log.error("SQL failure during {} execution: {}",
                     operationName, e.getMessage(), e);
             sendSQLExceptionMetadata(e, responseObserver);
+        } catch (ServerOverloadException e) {
+            log.warn("Server overload during {} execution, request rejected: {}", operationName, e.getMessage());
+            sendServerOverload(e, responseObserver);
         } catch (PoolNotFoundException e) {
             // Pool was not found for this connection hash. The server may have restarted
             // and lost its in-memory pool state. Signal the client to reconnect via
@@ -150,5 +168,27 @@ public class CommandExecutionHelper {
          * Executes the statement logic.
          */
         void execute() throws Exception;
+    }
+
+    /**
+     * Returns true if the session referenced by {@code request} already owns a
+     * session-scoped admission permit. Returns false if the session does not yet
+     * exist (lazy creation during this very request), is XA/unpooled, or admission
+     * control is disabled — in all of those cases the normal per-statement
+     * acquisition path remains appropriate.
+     */
+    static boolean sessionHoldsPermit(ActionContext context, StatementRequest request) {
+        try {
+            if (request.getSession().getSessionUUID().isBlank()) {
+                return false;
+            }
+            org.openjproxy.grpc.server.Session session =
+                    context.getSessionManager().getSession(request.getSession());
+            return session != null && session.hasConnectionPermit();
+        } catch (Exception e) {
+            // Defensive: never block statement execution on a lookup error.
+            log.debug("Failed to check session permit ownership, falling back to per-statement slot", e);
+            return false;
+        }
     }
 }

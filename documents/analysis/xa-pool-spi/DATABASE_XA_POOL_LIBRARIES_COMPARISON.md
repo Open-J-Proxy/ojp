@@ -101,7 +101,7 @@ HikariCP is the most popular Java connection pool but **does NOT natively suppor
 <dependency>
     <groupId>com.zaxxer</groupId>
     <artifactId>HikariCP</artifactId>
-    <version>6.2.1</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -121,7 +121,7 @@ Apache DBCP2 provides `BasicDataSource` but **does NOT provide dedicated XADataS
 <dependency>
     <groupId>org.apache.commons</groupId>
     <artifactId>commons-dbcp2</artifactId>
-    <version>2.12.0</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -161,7 +161,7 @@ cpds.setDataSourceName("org.postgresql.xa.PGXADataSource");
 <dependency>
     <groupId>com.mchange</groupId>
     <artifactId>c3p0</artifactId>
-    <version>0.10.1</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -434,7 +434,7 @@ CockroachDB provides:
 <dependency>
     <groupId>org.postgresql</groupId>
     <artifactId>postgresql</artifactId>
-    <version>42.7.1</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 

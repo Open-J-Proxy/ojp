@@ -17,6 +17,12 @@ import java.util.Properties;
  * For example, properties prefixed with {@code mainApp.ojp.connection.pool.*} belong to
  * the datasource named {@code mainApp}. Unprefixed {@code ojp.connection.pool.*} properties
  * belong to the implicit {@code "default"} datasource.
+ *
+ * <p>All {@code *.ojp.*} properties (e.g. read/write splitting, replica connection URLs) are
+ * forwarded to the server with their full keys intact so that server-side parsers such as
+ * {@code ReadWriteConfigurationParser} can find them. Pool and XA properties for the primary
+ * datasource are additionally forwarded with the datasource prefix stripped for backward
+ * compatibility with existing server-side pool configuration readers.
  */
 @Slf4j
 public class DatasourcePropertiesLoader {
@@ -24,6 +30,7 @@ public class DatasourcePropertiesLoader {
     private static final String DEFAULT_DATASOURCE_NAME = "default";
     private static final String OJP_POOL_PREFIX = "ojp.connection.pool.";
     private static final String OJP_XA_PREFIX = "ojp.xa.";
+    private static final String OJP_JDBC_PREFIX = "ojp.jdbc.";
 
     /**
      * Apply OJP-relevant properties from the JDBC {@code info} {@link Properties} argument
@@ -31,8 +38,8 @@ public class DatasourcePropertiesLoader {
      *
      * <p>Properties from {@code info} have the <em>highest</em> precedence and override any value
      * already present in {@code base} (which was loaded from the properties file, system properties,
-     * or environment variables). Only keys matching the {@code ojp.connection.pool.*} or
-     * {@code ojp.xa.*} pattern are copied; JDBC-standard keys such as {@code user} and
+     * or environment variables). Only keys matching the {@code ojp.connection.pool.*},
+     * {@code ojp.xa.*}, or {@code ojp.jdbc.*} pattern are copied; JDBC-standard keys such as {@code user} and
      * {@code password} are intentionally ignored.
      *
      * <p>Full property precedence after merging (highest to lowest):
@@ -112,9 +119,16 @@ public class DatasourcePropertiesLoader {
                                              String prefixDot, boolean isDefault) {
         boolean found = false;
         for (String key : source.stringPropertyNames()) {
+            String value = source.getProperty(key);
             if (hasPrefixedOjpKey(key, prefixDot)) {
-                result.setProperty(key.substring(prefixDot.length()), source.getProperty(key));
+                // Pool and XA properties for this datasource: strip prefix for backward compat
+                // Example: "myapp.ojp.connection.pool.maxPoolSize=10" → "ojp.connection.pool.maxPoolSize=10"
+                result.setProperty(key.substring(prefixDot.length()), value);
                 found = true;
+            } else if (isPrefixedOjpKey(key)) {
+                // Keep full key for read/write splitting and replica configs so the server can find them
+                // Example: "replica1.ojp.readwrite.primary=myapp" stays as-is
+                result.setProperty(key, value);
             }
         }
         if (!found && isDefault) {
@@ -123,40 +137,57 @@ public class DatasourcePropertiesLoader {
     }
 
     private static void applySystemProperties(Properties result, String prefixDot, boolean isDefault) {
-        for (String key : System.getProperties().stringPropertyNames()) {
-            String value = System.getProperty(key);
-            if (hasPrefixedOjpKey(key, prefixDot)) {
-                String std = key.substring(prefixDot.length());
-                result.setProperty(std, value);
-                log.debug("Overriding property from system property: {} = {}", std, value);
-            } else if (isDefault && isUnprefixedOjpKey(key)) {
-                result.setProperty(key, value);
-                log.debug("Overriding property from system property: {} = {}", key, value);
-            }
-        }
+        applyNormalizedProperties(result, System.getProperties(), prefixDot, isDefault, "system property");
     }
 
     private static void applyEnvProperties(Properties result, String prefixDot, boolean isDefault) {
+        Properties normalized = new Properties();
         for (Map.Entry<String, String> entry : System.getenv().entrySet()) {
-            String key = entry.getKey().toLowerCase().replace('_', '.');
-            String value = entry.getValue();
+            normalized.setProperty(entry.getKey().toLowerCase().replace('_', '.'), entry.getValue());
+        }
+        applyNormalizedProperties(result, normalized, prefixDot, isDefault, "environment variable");
+    }
+
+    /**
+     * Applies properties from a source (system properties or environment variables) to the result.
+     */
+    private static void applyNormalizedProperties(Properties result, Properties source,
+                                                   String prefixDot, boolean isDefault, String sourceName) {
+        for (String key : source.stringPropertyNames()) {
+            String value = source.getProperty(key);
             if (hasPrefixedOjpKey(key, prefixDot)) {
                 String std = key.substring(prefixDot.length());
                 result.setProperty(std, value);
-                log.debug("Overriding property from environment variable: {} = {}", std, value);
+                log.debug("Overriding property from {}: {} = {}", sourceName, std, value);
+            } else if (isPrefixedOjpKey(key)) {
+                result.setProperty(key, value);
+                log.debug("Setting property from {} (full key): {} = {}", sourceName, key, value);
             } else if (isDefault && isUnprefixedOjpKey(key)) {
                 result.setProperty(key, value);
-                log.debug("Overriding property from environment variable: {} = {}", key, value);
+                log.debug("Overriding property from {}: {} = {}", sourceName, key, value);
             }
         }
     }
 
     private static boolean hasPrefixedOjpKey(String key, String prefixDot) {
-        return key.startsWith(prefixDot + OJP_POOL_PREFIX) || key.startsWith(prefixDot + OJP_XA_PREFIX);
+        return key.startsWith(prefixDot + OJP_POOL_PREFIX)
+                || key.startsWith(prefixDot + OJP_XA_PREFIX)
+                || key.startsWith(prefixDot + OJP_JDBC_PREFIX);
+    }
+
+    /**
+     * Returns true for any property that contains {@code .ojp.} in its key, i.e. any prefixed
+     * OJP property regardless of the datasource name prefix. These are forwarded with their
+     * full key so that server-side parsers (e.g. read/write splitting) can find them.
+     */
+    private static boolean isPrefixedOjpKey(String key) {
+        return key.contains(".ojp.");
     }
 
     private static boolean isUnprefixedOjpKey(String key) {
-        return key.startsWith(OJP_POOL_PREFIX) || key.startsWith(OJP_XA_PREFIX);
+        return key.startsWith(OJP_POOL_PREFIX)
+                || key.startsWith(OJP_XA_PREFIX)
+                || key.startsWith(OJP_JDBC_PREFIX);
     }
 
     private static void copyUnprefixedOjpProperties(Properties target, Properties source) {

@@ -28,13 +28,17 @@ Let's start with the foundational settings that control how your OJP server oper
 
 The server also exposes a separate Prometheus metrics endpoint on port 9159 by default. This separation is intentional—it allows you to apply different network policies and access controls to your operational metrics versus your database traffic. In production, you might expose the gRPC port only to your application network while making the Prometheus endpoint available to your monitoring infrastructure on a separate network segment.
 
-By default, OJP uses Java virtual threads for gRPC request handling. This gives high concurrency without tuning a large platform thread pool. If you need conventional platform threads, set `ojp.server.virtualThreads.enabled=false`; in that mode, `ojp.server.threadPoolSize` (default 200) controls concurrency.
+By default, OJP uses a fixed platform thread pool for gRPC request handling, with `ojp.server.threadPoolSize` (default 200) controlling concurrency. If you want to use Java virtual threads instead — which can give high concurrency without tuning a large platform thread pool — set `ojp.server.virtualThreads.enabled=true`.
+
+> **Why virtual threads are off by default:** During heavy-concurrency testing with the current OJP code, virtual threads proved less efficient than platform threads, so they are disabled by default. This may change as the OJP code evolves — further investigation is needed to determine whether future upgrades could make virtual threads beneficial.
 
 **[IMAGE PROMPT: Create a technical server architecture diagram showing OJP Server as a central component with two network interfaces: one labeled "gRPC Port :1059" (shown with database connection icons) and another labeled "Prometheus Port :9159" (shown with metrics/monitoring icons). Include a thread pool visualization showing multiple worker threads (default: 200) handling concurrent requests. Use professional blue and gray color scheme with clear labels and connection lines. Style: Modern technical architecture diagram.]**
 
 The maximum request size setting provides protection against oversized requests that could impact server stability. The default of 4MB is generous for typical JDBC operations, but you might increase it if you're working with very large result sets or binary data. Just remember that larger request sizes consume more memory, so balance this against your available resources.
 
 Connection idle timeout controls how long the server waits before closing inactive **gRPC connections** from clients. The default of 30 seconds strikes a balance between resource conservation and connection overhead. When a gRPC connection times out due to inactivity, the client automatically reconnects on demand when the next JDBC operation is requested, so there's no need for manual reconnection handling.
+
+OJP also enforces a global hard cap on concurrent in-flight gRPC calls via `ojp.server.maxConcurrentRequests` (default `200`, `0` disables). When tripped, over-limit calls are rejected with `RESOURCE_EXHAUSTED`. This cap is **shared across all datasources and all clients on the JVM**, so it is intended as JVM self-protection (gRPC threads, heap, file descriptors), not as a workload-shaping tool. Per-datasource backpressure should come from HikariCP pool sizing, `ojp.server.admissionControl.maxQueueDepth`, and SQS fast/slow lanes. As a rule of thumb, size the global cap to roughly the sum of per-datasource `(poolSize + maxQueueDepth)` × 1.5 so that the per-datasource limits reject first under expected load.
 
 **Important**: These are gRPC connection timeouts, not database connection timeouts. Each gRPC connection uses HTTP/2 multiplexing, allowing many virtual JDBC connections to share a single gRPC connection. This multiplexed architecture means one gRPC connection can handle hundreds of `getConnection()` calls from the client side.
 
@@ -51,6 +55,7 @@ java -Duser.timezone=UTC \
      -Dojp.server.threadPoolSize=100 \
      -Dojp.server.maxRequestSize=8388608 \
      -Dojp.server.connectionIdleTimeout=60000 \
+     -Dojp.server.maxConcurrentRequests=200 \
      -jar ojp-server.jar
 ```
 
@@ -187,7 +192,7 @@ Modern observability goes beyond logs. OJP integrates with OpenTelemetry to prov
 **Note**: OJP exports metrics via Prometheus and also supports distributed tracing via OpenTelemetry. Metrics are enabled by default; distributed tracing must be explicitly enabled via configuration (see Chapter 13 for full tracing configuration details). The OpenTelemetry integration provides operational metrics such as request rates, error rates, and latency through the Prometheus endpoint, as well as distributed traces to Zipkin or OTLP-compatible backends such as Jaeger and Grafana Tempo.
 
 
-OpenTelemetry support is enabled by default, making the Prometheus metrics endpoint available at the configured port (default 9159). The server provides separate control over different metric categories, allowing you to enable or disable gRPC and pool metrics independently.
+OpenTelemetry support is enabled by default, making the Prometheus metrics endpoint available at the configured port (default 9159). The server provides separate control over different metric categories, allowing you to enable or disable gRPC, pool, and circuit breaker metrics independently.
 
 **[IMAGE PROMPT: Create a metrics dashboard visualization showing Prometheus metrics from OJP Server. Display panels for: "Request Rate" (line graph), "Connection Pool Usage" (gauge showing active/idle/max), "Pool Utilization %" (multi-pool comparison), "Query Latency p95/p99" (histogram), "Error Rate" (area chart), "Pool Health" (stat panel showing exhaustion/leaks). Use modern Grafana-style UI with dark theme, multiple time series, and clear metric labels. Style: Modern observability dashboard with color-coded metrics and real-time graphs.]**
 
@@ -200,12 +205,13 @@ The configuration provides three levels of control:
 # Granular control over metric categories (both default to true when telemetry is enabled)
 -Dojp.telemetry.grpc.metrics.enabled=true      # gRPC server metrics
 -Dojp.telemetry.pool.metrics.enabled=true      # Connection pool metrics (XA, HikariCP, DBCP)
+-Dojp.telemetry.circuitbreaker.enabled=true    # Circuit breaker metrics
 
 # Disable telemetry completely for performance-critical scenarios
 -Dojp.telemetry.enabled=false
 ```
 
-This three-tier approach lets you optimize your observability setup. The master switch (`ojp.telemetry.enabled`) controls whether the OpenTelemetry SDK and Prometheus server initialize at all. When disabled, the system uses no-op telemetry with zero overhead. The granular flags (`ojp.telemetry.grpc.metrics.enabled`, `ojp.telemetry.pool.metrics.enabled`) control which metrics are collected within an already-initialized OpenTelemetry system, allowing you to focus on the metrics that matter most for your deployment.
+This three-tier approach lets you optimize your observability setup. The master switch (`ojp.telemetry.enabled`) controls whether the OpenTelemetry SDK and Prometheus server initialize at all. When disabled, the system uses no-op telemetry with zero overhead. The granular flags (`ojp.telemetry.grpc.metrics.enabled`, `ojp.telemetry.pool.metrics.enabled`, `ojp.telemetry.circuitbreaker.enabled`) control which metrics are collected within an already-initialized OpenTelemetry system, allowing you to focus on the metrics that matter most for your deployment.
 
 ### Available Metrics
 
@@ -324,7 +330,20 @@ For **pure OLTP** (mostly short queries) or **pure OLAP** (mostly long-running q
 
 The idle timeout setting controls when slots can borrow from the other pool. If the fast pool is empty but slow slots sit idle, fast operations can temporarily borrow those slots. This prevents resource waste while maintaining the segregation benefits when both pools are active. The default 10-second timeout means slots must be idle briefly before lending—preventing constant oscillation.
 
-Timeout settings for acquiring slots provide backpressure when pools are exhausted. Fast operations wait up to 60 seconds by default, while slow operations get more generous 120-second timeouts. These asymmetric timeouts reflect the different expectations: fast operations should complete quickly or fail, while slow operations naturally take longer and deserve more patience.
+Timeout settings for acquiring slots provide backpressure when pools are exhausted. With slow query segregation enabled, fast/slow lane timeout settings control admission waits per lane. Backend pool borrow remains fail-fast after admission.
+
+For pooled lazy session allocation, OJP uses admission semaphores as the timeout owner and backend pool borrow is forced to fail fast. This avoids additive waits (admission wait + pool borrow wait) under saturation and keeps behavior consistent across XA and non-XA paths.
+When slow query segregation is enabled, `ojp.server.slowQuerySegregation.fastSlotTimeout` and `ojp.server.slowQuerySegregation.slowSlotTimeout` take precedence for fast/slow lane admission waits.
+
+Admission queue depth is also bounded to prevent unbounded waiter buildup under heavy surge traffic. Configure this with `ojp.server.admissionControl.maxQueueDepth` (default `0`, which auto-calculates as `totalSlots × 2` per semaphore, where `totalSlots` is the pool slot count used by admission control). This limit applies to **all** admission-control modes.
+
+```bash
+# Keep auto queue depth (recommended starting point)
+-Dojp.server.admissionControl.maxQueueDepth=0
+
+# Or set an explicit queue cap
+-Dojp.server.admissionControl.maxQueueDepth=128
+```
 
 **[IMAGE PROMPT: Create a dynamic allocation diagram showing how idle slots can be borrowed between pools. Show two pools: "Fast Slots" (4 boxes, 3 active, 1 idle) and "Slow Slots" (2 boxes, 1 active, 1 idle). Draw a curved arrow labeled "Temporary Borrow (if idle >10s)" from the idle slow slot to fast pool. Include a timer icon and "Returns when fast demand drops" annotation. Use green for active, gray for idle, and dotted lines for temporary borrowing. Style: Technical system diagram with clear state visualization.]**
 
@@ -354,7 +373,40 @@ graph TD
     Q --> R[Adjust Classification]
 ```
 
-## 6.8 Configuration Best Practices
+## 6.8 Client Throttling Signals
+
+While client-side throttling is configured on the **driver side** (see
+[Chapter 8a: Client-Side Throttling](../ebook/part3-chapter8a-client-throttling.md)),
+the server plays an important role: it provides the signals that clients use to compute
+their per-instance limit.
+
+On every `connect()` response, the server populates three fields in `SessionInfo`:
+
+| Field | What it carries | Source |
+|---|---|---|
+| `maxAdmission` | The configured pool size on this node | `SlotManager.totalSlots` |
+| `clientCount` | Number of distinct application instances (JVMs) connected for this datasource/credential pair | `SessionManagerImpl` ref-count map |
+| `observedPeak` | Real peak in-flight count before the last admission timeout; `0` = no timeout yet | `SlotManager` AIMD tracking |
+
+The server updates `observedPeak` automatically whenever an admission timeout occurs —
+no configuration needed. By default, `observedPeak` recovers toward `maxAdmission` at a
+rate of +1 every `totalSlots × 2` successful releases. If you need to tune recovery speed,
+set `ojp.server.admissionControl.observedPeakRecoveryFactor` to a different multiplier:
+
+```bash
+# Default: recover observedPeak by +1 every (totalSlots × 2) successful releases
+-Dojp.server.admissionControl.observedPeakRecoveryFactor=2
+
+# Faster recovery (useful for bursty workloads that return to normal quickly)
+-Dojp.server.admissionControl.observedPeakRecoveryFactor=1
+
+# Slower recovery (more conservative — useful for systems that stay degraded)
+-Dojp.server.admissionControl.observedPeakRecoveryFactor=4
+```
+
+No other server-side configuration is needed to support client throttling.
+
+## 6.9 Configuration Best Practices
 
 With all these configuration options available, how do you choose the right settings? Start with the defaults—they're designed for typical workloads and provide good performance out of the box. Then adjust based on monitoring data and observed behavior. Don't preemptively tune settings based on assumptions; let your actual workload guide your configuration.
 
@@ -369,7 +421,7 @@ export OJP_SERVER_VIRTUALTHREADS_ENABLED=true
 export OJP_SERVER_THREADPOOLSIZE=50
 export OJP_SERVER_CIRCUITBREAKERTHRESHOLD=5
 export OJP_SERVER_ALLOWEDIPS="0.0.0.0/0"
-export OJP_OPENTELEMETRY_ENABLED=true
+export OJP_TELEMETRY_ENABLED=true
 ```
 
 Production environments require different trade-offs. Use ERROR or INFO logging (ERROR recommended for maximum performance; INFO for operational visibility). Implement proper IP restrictions for security. Enable OpenTelemetry for distributed tracing. Configure appropriate timeouts for your SLAs. Be very careful with DEBUG and TRACE in production—they are extremely verbose and can impact performance significantly.
@@ -385,7 +437,7 @@ export OJP_SERVER_CIRCUITBREAKERTHRESHOLD=3
 export OJP_SERVER_CIRCUITBREAKERTIMEOUT=60000
 export OJP_SERVER_ALLOWEDIPS="10.0.0.0/8"
 export OJP_PROMETHEUS_ALLOWEDIPS="192.168.100.0/24"
-export OJP_OPENTELEMETRY_ENABLED=true
+export OJP_TELEMETRY_ENABLED=true
 export OJP_OPENTELEMETRY_ENDPOINT=http://jaeger:4317
 export OJP_SERVER_SLOWQUERYSEGREGATION_ENABLED=true
 ```
@@ -408,7 +460,7 @@ graph LR
     E --> C
 ```
 
-## 6.9 Configuration Validation and Troubleshooting
+## 6.10 Configuration Validation and Troubleshooting
 
 When things don't work as expected, configuration issues are often the culprit. OJP provides clear error messages when configuration values are invalid or inconsistent. The server validates configuration at startup and fails fast if critical settings are problematic.
 
@@ -436,12 +488,91 @@ export ojp.server.port=9059
 
 The server logs its active configuration at INFO level during startup. Review this output to confirm your settings were applied correctly. If you see unexpected defaults, it means your configuration wasn't recognized—check for typos, case sensitivity, and format issues.
 
+## 6.8 Read/Write Splitting
+
+OJP can automatically route read and write traffic to separate database instances. Write operations (INSERT, UPDATE, DELETE, DDL) always go to the primary. Stateless auto-commit reads (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE) are routed to a replica chosen according to a configurable selection strategy. All operations inside an explicit transaction stay on the primary.
+
+Read/write splitting is configured entirely through the client's `ojp.properties` file — no server-side configuration changes are required. The OJP server reads the `*.ojp.readwrite.*` properties forwarded by the driver on first connection and creates isolated replica connection pools automatically.
+
+### 6.8.1 Enabling Read/Write Splitting
+
+Mark the primary datasource and each replica in `ojp.properties`:
+
+```properties
+# Primary datasource
+mydb.ojp.readwrite.role=primary
+mydb.ojp.readwrite.enabled=true
+mydb.ojp.readwrite.replicaSelectionStrategy=ROUND_ROBIN
+
+# Replica 1
+replica1.ojp.readwrite.role=replica
+replica1.ojp.readwrite.primary=mydb
+replica1.ojp.connection.url=jdbc:postgresql://replica1:5432/mydb
+replica1.ojp.connection.user=app_ro
+replica1.ojp.connection.password=secret
+
+# Replica 2
+replica2.ojp.readwrite.role=replica
+replica2.ojp.readwrite.primary=mydb
+replica2.ojp.connection.url=jdbc:postgresql://replica2:5432/mydb
+replica2.ojp.connection.user=app_ro
+replica2.ojp.connection.password=secret
+```
+
+Three replica selection strategies are available:
+
+- **`ROUND_ROBIN`** (default) — distributes reads evenly across all replicas in order
+- **`RANDOM`** — picks a replica at random for each request
+- **`LEAST_CONNECTIONS`** — selects the replica with fewest active connections (Phase 3)
+
+### 6.8.2 Sticky Sessions (Read-Your-Writes)
+
+Sticky sessions keep reads on the primary for a short window after every write, giving replicas time to catch up. This is **opt-in**: the default `stickySessionSeconds` is `0` (disabled).
+
+```properties
+# Keep reads on primary for 3 seconds after every write
+mydb.ojp.readwrite.stickySessionSeconds=3
+```
+
+> **Important:** Only enable sticky sessions when the application must see its own writes immediately outside of a transaction. If all reads following a write are in the same transaction, the transaction itself already guarantees read-your-writes via the primary, and sticky sessions add unnecessary overhead.
+
+### 6.8.3 Routing Rules
+
+| Operation | Inside Transaction | Sticky Window Active | Routes To |
+|---|---|---|---|
+| SELECT / WITH / EXPLAIN / SHOW / DESCRIBE | — | — | Replica |
+| SELECT / WITH / EXPLAIN / SHOW / DESCRIBE | ✓ | — | Primary |
+| SELECT / WITH / EXPLAIN / SHOW / DESCRIBE | — | ✓ | Primary |
+| INSERT / UPDATE / DELETE / DDL | any | any | Primary |
+
+### 6.8.4 Replica Pool Configuration
+
+Each replica has its own connection pool. Size it to handle peak read traffic independently of the primary pool.
+
+| Property | Default | Description |
+|---|---|---|
+| `{replica}.ojp.pool.maxPoolSize` | `10` | Maximum replica pool size |
+| `{replica}.ojp.pool.minIdle` | `2` | Minimum idle connections |
+| `{replica}.ojp.pool.connectionTimeout` | `30000` | Acquire timeout (ms) |
+| `{replica}.ojp.pool.idleTimeout` | `600000` | Idle connection timeout (ms) |
+| `{replica}.ojp.pool.maxLifetime` | `1800000` | Maximum connection lifetime (ms) |
+
+For the complete property reference see [OJP JDBC Configuration — Read/Write Splitting](../../documents/configuration/ojp-jdbc-configuration.md#readwrite-splitting-configuration).
+
+### 6.8.5 Connection Pool Leak Detection
+
+| Property | Default | Description |
+|---|---|---|
+| `ojp.connection.pool.leakDetectionThreshold` | `0` | HikariCP leak detection threshold (ms). `0` = disabled. |
+
+The default is `0` (disabled) because OJP intentionally holds one physical connection per client session for the entire lifetime of that session — that's the whole point of the proxy. HikariCP's leak detector, however, is designed around the assumption that connections are borrowed and returned quickly, so enabling it produces false-positive "leak" warnings for tools with long-lived sessions (e.g. SQL IDEs). Only set this to a non-zero value temporarily, when you need to diagnose genuinely abandoned sessions, and turn it back off afterward.
+
 ## Summary
 
 OJP server configuration gives you precise control over server behavior, security, performance, and observability. The hierarchical configuration system with JVM properties and environment variables provides flexibility for different deployment scenarios. Default settings work well for most use cases, but understanding the available options lets you optimize for your specific workload.
 
-Key configuration areas include core server settings for network and threading, security controls through IP whitelisting, logging levels for operational visibility, OpenTelemetry integration for observability, circuit breakers for resilience, and slow query segregation for performance under mixed workloads. Each area offers sensible defaults that you can refine based on monitoring data.
+Key configuration areas include core server settings for network and threading, security controls through IP whitelisting, logging levels for operational visibility, OpenTelemetry integration for observability, circuit breakers for resilience, slow query segregation for performance under mixed workloads, and read/write splitting for scaling read traffic across replicas. Each area offers sensible defaults that you can refine based on monitoring data.
 
 Start simple, monitor closely, and adjust based on observed behavior. Good configuration emerges from understanding your workload and using OJP's flexibility to match it, not from cargo-culting settings from other environments.
 
-**[IMAGE PROMPT: Create a summary mind map with "OJP Server Configuration" at the center. Six main branches radiating outward: "Core Settings" (server icon), "Security" (lock icon), "Logging" (document icon), "Telemetry" (graph icon), "Circuit Breaker" (shield icon), and "Slow Query Segregation" (speedometer icon). Each branch has 2-3 sub-branches with key points. Use colors to group related concepts and make it visually hierarchical. Style: Modern mind map with icons and color coding.]**
+**[IMAGE PROMPT: Create a summary mind map with "OJP Server Configuration" at the center. Seven main branches radiating outward: "Core Settings" (server icon), "Security" (lock icon), "Logging" (document icon), "Telemetry" (graph icon), "Circuit Breaker" (shield icon), "Slow Query Segregation" (speedometer icon), and "Read/Write Splitting" (fork/branch icon). Each branch has 2-3 sub-branches with key points. Use colors to group related concepts and make it visually hierarchical. Style: Modern mind map with icons and color coding.]**

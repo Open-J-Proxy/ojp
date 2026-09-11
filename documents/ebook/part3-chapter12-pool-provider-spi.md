@@ -746,7 +746,7 @@ Use Maven's shade plugin or Gradle's shadow plugin to relocate transitive depend
 <plugin>
     <groupId>org.apache.maven.plugins</groupId>
     <artifactId>maven-shade-plugin</artifactId>
-    <version>3.5.0</version>
+    <version>1.0.0-RC1</version>
     <executions>
         <execution>
             <phase>package</phase>

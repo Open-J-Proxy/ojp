@@ -10,29 +10,54 @@
 #   2. Validates Docker Hub credentials (fast-fail before any version changes)
 #   3. Checks out the repository
 #   4. Sets up JDK and Maven settings
-#   5. Computes the release version (e.g. 0.4.1-SNAPSHOT → 0.4.1-beta)
-#      and the next development version (e.g. 0.4.1-beta → 0.4.2-SNAPSHOT)
+#   5. Computes the release version and the next development version
+#      (see VERSION SCHEME below for details)
 #   6. Bumps all pom.xml versions to the release version
 #   7. Builds all Maven modules (no tests)
 #   8. Deploys all library modules to Maven Central via Sonatype Central
 #   9. Builds and pushes the OJP Server Docker image to Docker Hub
 #  10. Updates all documentation to reference the new release version
-#      and updates the docker image version in .github/workflows/main.yml
 #  11. Creates a signed Git tag on the release commit
 #  12. Bumps all pom.xml versions to the next development version
-#  13. Commits and pushes all changes back to main
+#  13. Commits and pushes all changes back to the current branch
 #  14. Creates a GitHub Release with auto-generated release notes
 #      (based on merged PRs since the previous tag, categorised by label
 #       as defined in .github/release.yml)
 #
 # VERSION SCHEME
 # --------------
-# While the project is pre-1.0.0-GA, release versions carry a "-beta" suffix:
-#   0.4.1-SNAPSHOT  →  released as  0.4.1-beta  →  next dev  0.4.2-SNAPSHOT
-# After 1.0.0-GA the "-beta" suffix will be dropped.
+# From 1.0.0 onwards, release versions are plain semver with no suffix:
+#   1.0.0-SNAPSHOT  →  released as  1.0.0  →  next dev  (see below)
 #
-# When a custom release version is provided (e.g. for a major bump):
-#   0.4.x-SNAPSHOT  +  release_version=0.5.0-beta  →  0.5.0-beta  →  next dev  0.5.1-SNAPSHOT
+# BRANCH-AWARE NEXT-VERSION LOGIC:
+#   main branch after a X.Y.0 release:
+#     1.0.0-SNAPSHOT → release 1.0.0 → next dev 1.1.0-SNAPSHOT
+#     2.0.0-SNAPSHOT → release 2.0.0 → next dev 2.1.0-SNAPSHOT
+#   main branch after a X.Y.Z release (Z > 0):
+#     1.1.1-SNAPSHOT → release 1.1.1 → next dev 1.1.2-SNAPSHOT
+#   lts/X.Y branch always increments PATCH only:
+#     1.0.1-SNAPSHOT → release 1.0.1 → next dev 1.0.2-SNAPSHOT
+#     1.0.8-SNAPSHOT → release 1.0.8 → next dev 1.0.9-SNAPSHOT
+#
+# PRE-RELEASE VERSIONS (RC / SNAPSHOT-numbered):
+#   Release candidates and numbered snapshots are supported via release_version:
+#     release_version=1.0.0-RC1     → publish 1.0.0-RC1, no version bump, no 'latest' Docker tag
+#     release_version=1.0.0-RC2     → publish 1.0.0-RC2, no version bump, no 'latest' Docker tag
+#     release_version=1.0.0-SNAPSHOT1 → publish 1.0.0-SNAPSHOT1, no version bump
+#   After the pre-release validates, trigger the workflow again with no override to
+#   publish the final GA version and perform the normal SNAPSHOT → next-dev bump.
+#   Pre-releases are marked as GitHub pre-releases automatically.
+#
+# LTS BRANCH VALIDATION:
+#   On lts/X.Y, only X.Y.z (and X.Y.z-qualifier) versions are allowed.
+#   Attempting to release 1.1.0 from lts/1.0 is rejected with a clear error.
+#
+# EXPLICIT RELEASE VERSION:
+#   Supply release_version to override the computed version.
+#   On main: any valid semver (plain or with qualifier) is accepted.
+#   On lts/X.Y: only X.Y.z or X.Y.z-qualifier is accepted.
+#   For plain GA versions the next development version is derived automatically.
+#   For pre-release versions no version bump is performed.
 #
 # REQUIRED GITHUB SECRETS
 # -----------------------
@@ -42,13 +67,14 @@
 #   GPG_PASSPHRASE      Passphrase for the GPG key
 #   DOCKERHUB_USER      Docker Hub username (currently: rrobetti)
 #   DOCKERHUB_TOKEN     Docker Hub access token (Settings → Security → Access Tokens)
+#   RELEASE_TOKEN       PAT with repo+workflow scope (required to push workflow file changes)
 #
 # HOW TO TRIGGER
 # --------------
 #   GitHub UI → Actions → "Release to Maven Central & Docker Hub" → Run workflow
 #   Check "Dry run" to validate the version calculation and build without publishing.
 #   Optionally provide "Release version" to override the computed release version,
-#   e.g. "0.5.0-beta" for a major version bump regardless of the current pom version.
+#   e.g. "2.0.0" for a major version bump regardless of the current pom version.
 #
 # =============================================================================
 
@@ -63,7 +89,7 @@ on:
         default: 'false'
         type: boolean
       release_version:
-        description: 'Optional release version override (e.g. 0.5.0-beta). Leave blank to auto-derive from the current pom SNAPSHOT version.'
+        description: 'Optional release version override (e.g. 1.2.0, 2.0.0). Leave blank to auto-derive from the current pom SNAPSHOT version.'
         required: false
         default: ''
         type: string
@@ -137,10 +163,10 @@ jobs:
       # -----------------------------------------------------------------------
       # 4. Java + Maven settings (server credentials + GPG key import)
       # -----------------------------------------------------------------------
-      - name: Set up JDK 24
+      - name: Set up JDK 25
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
           # Maven settings.xml will be generated with a <server> entry whose
@@ -162,48 +188,109 @@ jobs:
       - name: Compute versions
         id: versions
         run: |
-          # Read current version from root pom, e.g. "0.4.1-SNAPSHOT"
+          # ── Determine current branch ────────────────────────────────────────
+          BRANCH="${GITHUB_REF_NAME}"
+          echo "Branch: ${BRANCH}"
+
+          # ── Detect if this is an LTS branch (lts/X.Y) ─────────────────────
+          LTS_BRANCH=false
+          LTS_MAJOR=""
+          LTS_MINOR=""
+          if echo "${BRANCH}" | grep -qE '^lts/[0-9]+\.[0-9]+$'; then
+            LTS_BRANCH=true
+            LTS_MAJOR=$(echo "${BRANCH}" | cut -d/ -f2 | cut -d. -f1)
+            LTS_MINOR=$(echo "${BRANCH}" | cut -d/ -f2 | cut -d. -f2)
+            echo "LTS branch detected: ${BRANCH} (allowed line: ${LTS_MAJOR}.${LTS_MINOR}.x)"
+          fi
+
+          # ── Read current pom version ────────────────────────────────────────
           CURRENT=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "Current version: ${CURRENT}"
 
+          # ── Determine release version ───────────────────────────────────────
+          IS_PRERELEASE=false
           if [[ -n "${{ inputs.release_version }}" ]]; then
-            # Use the caller-supplied release version (e.g. for a major version bump)
             RELEASE="${{ inputs.release_version }}"
             echo "Using provided release version: ${RELEASE}"
 
-            # Validate format: must be X.Y.Z followed by a hyphen and an alphanumeric suffix
-            if ! echo "${RELEASE}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-[a-zA-Z0-9-]+$'; then
-              echo "ERROR: release_version '${RELEASE}' is not in the expected format X.Y.Z-<suffix> (e.g. 0.5.0-beta)." >&2
+            # Validate format: plain X.Y.Z  OR  X.Y.Z-<qualifier>
+            # Qualifier must start with a letter (e.g. RC1, RC2, SNAPSHOT1, alpha1)
+            if ! echo "${RELEASE}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z][A-Za-z0-9]*)?$'; then
+              echo "ERROR: release_version '${RELEASE}' must be X.Y.Z or X.Y.Z-<qualifier> (e.g. 1.2.0, 1.0.0-RC1)." >&2
               exit 1
             fi
 
-            # Extract the numeric base (X.Y.Z) by stripping the first '-' and everything after it
-            BASE="${RELEASE%%-*}"
+            # Detect pre-release (qualifier present)
+            if echo "${RELEASE}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-'; then
+              IS_PRERELEASE=true
+              echo "Pre-release version detected: ${RELEASE} (no version bump will be performed)"
+            fi
           else
-            # Auto-derive release version from the current SNAPSHOT pom version
+            # Auto-derive from SNAPSHOT: only plain X.Y.Z-SNAPSHOT is allowed here
             if [[ "${CURRENT}" != *"-SNAPSHOT" ]]; then
               echo "ERROR: Current version '${CURRENT}' does not end in -SNAPSHOT." >&2
-              echo "Only SNAPSHOT versions can be released, or provide a custom release version via the release_version parameter." >&2
+              echo "Only SNAPSHOT versions can be released automatically, or provide a custom release version." >&2
               exit 1
             fi
-            BASE="${CURRENT%-SNAPSHOT}"
-            RELEASE="${BASE}-beta"
+            RELEASE="${CURRENT%-SNAPSHOT}"
+
+            # Validate that the auto-derived release is a plain X.Y.Z
+            if ! echo "${RELEASE}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "ERROR: Auto-derived release version '${RELEASE}' is not a valid semver X.Y.Z." >&2
+              exit 1
+            fi
           fi
 
-          # Derive next development version by incrementing the patch segment
-          # e.g. "0.4.1" -> "0.4.2-SNAPSHOT"  or  "0.5.0" -> "0.5.1-SNAPSHOT"
-          MAJOR=$(echo "${BASE}" | cut -d. -f1)
-          MINOR=$(echo "${BASE}" | cut -d. -f2)
-          PATCH=$(echo "${BASE}" | cut -d. -f3)
-          NEXT_PATCH=$((PATCH + 1))
-          NEXT="${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT"
+          # ── Extract numeric base (X.Y.Z) from release version ──────────────
+          # For pre-releases like 1.0.0-RC1, we need 1.0.0 for LTS validation
+          # and next-version logic (not used for pre-releases but extracted anyway)
+          BASE_RELEASE="${RELEASE%%-*}"
+          REL_MAJOR=$(echo "${BASE_RELEASE}" | cut -d. -f1)
+          REL_MINOR=$(echo "${BASE_RELEASE}" | cut -d. -f2)
+          REL_PATCH=$(echo "${BASE_RELEASE}" | cut -d. -f3)
+
+          # ── Validate release version against LTS branch constraint ──────────
+          if [[ "${LTS_BRANCH}" == "true" ]]; then
+            if [[ "${REL_MAJOR}" != "${LTS_MAJOR}" || "${REL_MINOR}" != "${LTS_MINOR}" ]]; then
+              echo "ERROR: Branch '${BRANCH}' only allows ${LTS_MAJOR}.${LTS_MINOR}.x releases." >&2
+              echo "       Attempted release version: ${RELEASE}" >&2
+              exit 1
+            fi
+          fi
+
+          # ── Check that the release tag does not already exist ───────────────
+          if git ls-remote --tags origin "refs/tags/v${RELEASE}" | grep -q "refs/tags/v${RELEASE}"; then
+            echo "ERROR: Tag v${RELEASE} already exists. Did you forget to bump the version?" >&2
+            exit 1
+          fi
+
+          # ── Compute next development version ────────────────────────────────
+          # Pre-releases: no version bump — NEXT equals CURRENT (pom is reverted after publish)
+          # LTS branch: always increment patch only
+          # main branch after X.Y.0 release: bump minor (new feature cycle)
+          # main branch after X.Y.Z (Z > 0): increment patch
+          if [[ "${IS_PRERELEASE}" == "true" ]]; then
+            NEXT="${CURRENT}"
+          elif [[ "${LTS_BRANCH}" == "true" ]]; then
+            NEXT_PATCH=$((REL_PATCH + 1))
+            NEXT="${REL_MAJOR}.${REL_MINOR}.${NEXT_PATCH}-SNAPSHOT"
+          elif [[ "${BRANCH}" == "main" && "${REL_PATCH}" == "0" ]]; then
+            NEXT_MINOR=$((REL_MINOR + 1))
+            NEXT="${REL_MAJOR}.${NEXT_MINOR}.0-SNAPSHOT"
+          else
+            NEXT_PATCH=$((REL_PATCH + 1))
+            NEXT="${REL_MAJOR}.${REL_MINOR}.${NEXT_PATCH}-SNAPSHOT"
+          fi
 
           echo "Release version : ${RELEASE}"
           echo "Next dev version: ${NEXT}"
+          echo "Is pre-release  : ${IS_PRERELEASE}"
 
-          echo "current=${CURRENT}"  >> "$GITHUB_OUTPUT"
-          echo "release=${RELEASE}"  >> "$GITHUB_OUTPUT"
-          echo "next=${NEXT}"        >> "$GITHUB_OUTPUT"
+          echo "current=${CURRENT}"            >> "$GITHUB_OUTPUT"
+          echo "release=${RELEASE}"            >> "$GITHUB_OUTPUT"
+          echo "next=${NEXT}"                  >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}"              >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
       # 6. Set release version in all pom.xml files
@@ -243,49 +330,48 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 9. Build and push Docker image for ojp-server
-      #    Image tag is ${project.version} (e.g. rrobetti/ojp:0.4.1-beta)
+      #    Image tag is the release version (e.g. rrobetti/ojp:0.4.1-beta)
+      #    Also tagged as latest.
+      #    Fat JAR is already built by step 7 (mvn clean package).
       # -----------------------------------------------------------------------
-      - name: Create ojp-libs directory for Jib
+      - name: Download open source JDBC drivers
         if: ${{ inputs.dry_run == false }}
-        run: mkdir -p ojp-server/ojp-libs
+        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+
+      - name: Log in to Docker Hub
+        if: ${{ inputs.dry_run == false }}
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USER }}" --password-stdin
 
       - name: Build and push Docker image (${{ steps.versions.outputs.release }})
         if: ${{ inputs.dry_run == false }}
         run: |
-          mvn --batch-mode compile jib:build \
-              -pl ojp-server \
-              -Djib.to.auth.username="${{ secrets.DOCKERHUB_USER }}" \
-              -Djib.to.auth.password="${{ secrets.DOCKERHUB_TOKEN }}" \
-              -Djib.to.tags=latest \
-              -DskipTests \
-              --no-transfer-progress
+          IMAGE="rrobetti/ojp:${{ steps.versions.outputs.release }}"
+          docker build -t "$IMAGE" ojp-server/
+          docker push "$IMAGE"
+          # Only tag as 'latest' for GA releases, not pre-releases (RC, SNAPSHOT-numbered, etc.)
+          if [[ "${{ steps.versions.outputs.is_prerelease }}" != "true" ]]; then
+            docker tag "$IMAGE" rrobetti/ojp:latest
+            docker push rrobetti/ojp:latest
+          fi
 
       # -----------------------------------------------------------------------
       # 10. Update version references in all documentation (*.md files)
-      #     and the docker image version in the main CI workflow (main.yml).
-      #    Replaces:  rrobetti/ojp:<old>   →  rrobetti/ojp:<new>
-      #               ojp-server-<old>     →  ojp-server-<new>  (filenames + URLs)
-      #               /ojp-server/<old>/   →  /ojp-server/<new>/  (Maven Central URL path)
-      #               <version><old></version>  →  <version><new></version>
+      #     Replaces:  rrobetti/ojp:<old>   →  rrobetti/ojp:<new>
+      #                ojp-server-<old>     →  ojp-server-<new>  (filenames + URLs)
+      #                /ojp-server/<old>/   →  /ojp-server/<new>/  (Maven Central URL path)
+      #                <version><old></version>  →  <version><new></version>
       # -----------------------------------------------------------------------
       - name: Update documentation to ${{ steps.versions.outputs.release }}
         run: |
           NEW="${{ steps.versions.outputs.release }}"
           echo "Updating documentation references to ${NEW}"
 
-          # Use sed with version-agnostic regex so any previous X.Y.Z-beta is replaced
+          # Replace any prior X.Y.Z (with optional -beta suffix) with the new GA version
           find . -name "*.md" -not -path './.git/*' -print0 | xargs -0 sed -i \
-            -e "s|rrobetti/ojp:[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-beta|rrobetti/ojp:${NEW}|g" \
-            -e "s|ojp-server-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-beta|ojp-server-${NEW}|g" \
-            -e "s|/ojp-server/[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-beta/|/ojp-server/${NEW}/|g" \
-            -e "s|<version>[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-beta</version>|<version>${NEW}</version>|g"
-
-          # Update the docker image version in the main CI workflow:
-          # replace both SNAPSHOT and previous beta references with the release version
-          sed -i \
-            -e "s|rrobetti/ojp:[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-SNAPSHOT|rrobetti/ojp:${NEW}|g" \
-            -e "s|rrobetti/ojp:[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-beta|rrobetti/ojp:${NEW}|g" \
-            .github/workflows/main.yml
+            -e "s|rrobetti/ojp:[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-beta\)\?|rrobetti/ojp:${NEW}|g" \
+            -e "s|ojp-server-[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-beta\)\?|ojp-server-${NEW}|g" \
+            -e "s|/ojp-server/[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-beta\)\?/|/ojp-server/${NEW}/|g" \
+            -e "s|<version>[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-beta\)\?</version>|<version>${NEW}</version>|g"
 
           echo "Files updated:"
           git diff --name-only
@@ -303,8 +389,12 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 12. Set next development (SNAPSHOT) version
+      #     Skipped for pre-releases (RC, SNAPSHOT-numbered, etc.) — the pom
+      #     stays at the current SNAPSHOT version so the repository state is
+      #     unchanged after a pre-release publication.
       # -----------------------------------------------------------------------
       - name: Set next development version (${{ steps.versions.outputs.next }})
+        if: ${{ steps.versions.outputs.is_prerelease == 'false' }}
         run: |
           mvn --batch-mode versions:set \
               -DnewVersion=${{ steps.versions.outputs.next }} \
@@ -312,32 +402,19 @@ jobs:
               -DgenerateBackupPoms=false \
               --no-transfer-progress
 
-      # -----------------------------------------------------------------------
-      # 12b. Update main.yml docker image to the next development version
-      # -----------------------------------------------------------------------
-      - name: Update main.yml docker image to next development version (${{ steps.versions.outputs.next }})
-        run: |
-          NEXT="${{ steps.versions.outputs.next }}"
-          echo "Updating main.yml docker image references to ${NEXT}"
-          sed -i \
-            -e "s|rrobetti/ojp:[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-beta|rrobetti/ojp:${NEXT}|g" \
-            .github/workflows/main.yml
-          echo "Files updated:"
-          git diff --name-only
-
       - name: Commit next development version
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ inputs.dry_run == false && steps.versions.outputs.is_prerelease == 'false' }}
         run: |
           git add -A -- ':!**/target/**'
           git commit -m "chore(release): prepare next development iteration ${{ steps.versions.outputs.next }}"
 
       # -----------------------------------------------------------------------
-      # 13. Push commits and release tag to main
+      # 13. Push commits and release tag to the current branch
       # -----------------------------------------------------------------------
       - name: Push commits and tag
         if: ${{ inputs.dry_run == false }}
         run: |
-          git push origin main
+          git push origin HEAD:${{ steps.versions.outputs.branch }}
           git push origin "v${{ steps.versions.outputs.release }}"
 
       # -----------------------------------------------------------------------
@@ -361,7 +438,7 @@ jobs:
               owner,
               repo,
               tag_name:         tag,
-              target_commitish: 'main',
+              target_commitish: '${{ steps.versions.outputs.branch }}',
             });
 
             // Append a fixed artifacts footer to the auto-generated body.
@@ -381,8 +458,8 @@ jobs:
               name:        generated.name,
               body:        generated.body + artifactsFooter,
               draft:       false,
-              prerelease:  false,
-              make_latest: 'true',
+              prerelease:  ${{ steps.versions.outputs.is_prerelease }},
+              make_latest: String(${{ steps.versions.outputs.is_prerelease }}) === 'true' ? 'false' : 'true',
             });
 
       # -----------------------------------------------------------------------

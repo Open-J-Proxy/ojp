@@ -12,14 +12,14 @@ All SQL Server integration tests have been migrated to use TestContainers. This 
 ### TestContainer Setup
 
 1. **SQLServerTestContainer** - Singleton class that manages a shared SQL Server container
-   - Located: `ojp-jdbc-driver/src/test/java/openjproxy/jdbc/testutil/SQLServerTestContainer.java`
+   - Located: `ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/testutil/SQLServerTestContainer.java`
    - Uses `mcr.microsoft.com/mssql/server:2022-latest` Docker image
    - Automatically starts on first test execution
    - Shared across all SQL Server tests for efficiency
    - Automatically stops when tests complete
 
 2. **SQLServerConnectionProvider** - Custom JUnit ArgumentsProvider
-   - Located: `ojp-jdbc-driver/src/test/java/openjproxy/jdbc/testutil/SQLServerConnectionProvider.java`
+   - Located: `ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/testutil/SQLServerConnectionProvider.java`
    - Provides dynamic connection details from the TestContainer
    - Replaces CSV-based connection configuration
 
@@ -37,8 +37,8 @@ All SQL Server test classes have been updated:
 
 #### Local Execution
 ```bash
-# Start OJP server first (requires Java 21+)
-java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-0.4.14-beta-shaded.jar &
+# Start OJP server first (requires Java 25+)
+java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar &
 
 # Run SQL Server tests
 mvn test -pl ojp-jdbc-driver -DenableSqlServerTests=true -Dtest="SQLServer*"
@@ -50,7 +50,7 @@ The `.github/workflows/sqlserver-testing.yml` workflow:
 - Starts the server in background
 - Runs all SQL Server integration tests
 - Uses TestContainers for SQL Server instance
-- Matrix tests against Java 11, 17, 21, 22
+- Matrix tests against Java 11, 17, 21, 25
 
 ### Dependencies
 
@@ -81,7 +81,7 @@ See [Database Drivers Configuration Guide](configuration/DRIVERS_AND_LIBS.md) fo
 <dependency>
     <groupId>org.testcontainers</groupId>
     <artifactId>mssqlserver</artifactId>
-    <version>1.20.4</version>
+    <version>1.0.0-RC1</version>
     <scope>test</scope>
 </dependency>
 ```

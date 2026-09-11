@@ -37,3 +37,27 @@ The example above is for `h2` but it is similar to any other database, you just 
 >
 > See [OJP JDBC Configuration](../../configuration/ojp-jdbc-configuration.md) for the full list of
 > `ojp.properties` settings.
+
+---
+
+## Runtime Dependencies
+
+The OJP JDBC driver marks two dependencies as `provided`, meaning they are **not** bundled
+inside the JAR and must be present on the classpath at runtime.
+
+| Provided dependency | Supplied automatically by Quarkus? |
+|---|---|
+| `org.slf4j:slf4j-api` | ✅ Yes — Quarkus includes a JBoss Logging → SLF4J bridge |
+| `jakarta.transaction:jakarta.transaction-api` | ✅ Yes — provided by `quarkus-narayana-jta` (pulled in by `quarkus-jdbc` and `quarkus-hibernate-orm`) |
+
+No extra Maven dependencies are needed for standard Quarkus applications that include
+the Quarkus JDBC or ORM extensions.
+
+> **Note (XA transactions):** If you want to use OJP XA connections (`OjpXADataSource`)
+> and are **not** using Quarkus's built-in JTA support, add
+> `jakarta.transaction:jakarta.transaction-api` with `provided` scope to your POM.
+
+> **Classpath isolation:** Since OJP 0.5.x all third-party libraries bundled inside
+> `ojp-jdbc-driver` (gRPC, Netty, Protobuf, Guava, Commons Lang) are relocated to the
+> `org.openjproxy.shaded.*` namespace. Quarkus ships its own gRPC/Netty/Protobuf stack; the
+> OJP driver's internal copies are completely isolated and will not conflict with them.

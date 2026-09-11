@@ -3,8 +3,9 @@
 ##############################################################################
 # OJP Docker Build Helper
 #
-# This script automates the Docker image build process with open source
-# JDBC drivers included ("batteries included" image).
+# Builds the OJP Docker image using the multi-stage Dockerfile with a
+# jlink-trimmed JRE. Drivers are not bundled — populate ojp-libs/ first
+# with download-drivers.sh if needed.
 #
 # Usage:
 #   ./docker-build.sh [build|push]
@@ -31,92 +32,41 @@ NC='\033[0m' # No Color
 
 # Default command
 COMMAND="${1:-build}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo -e "${BLUE}==========================================${NC}"
 echo -e "${BLUE}   OJP Docker Build Helper${NC}"
 echo -e "${BLUE}==========================================${NC}"
 echo ""
 
-# Check if we're in the ojp-server directory
-if [ ! -f "pom.xml" ]; then
-    echo -e "${RED}Error: This script must be run from the ojp-server directory${NC}"
-    echo -e "${YELLOW}Usage: cd ojp-server && ./docker-build.sh${NC}"
-    exit 1
-fi
-
-# Check if download-drivers.sh exists
-if [ ! -f "download-drivers.sh" ]; then
-    echo -e "${RED}Error: download-drivers.sh not found${NC}"
-    echo -e "${YELLOW}This script should be in the ojp-server directory${NC}"
-    exit 1
-fi
-
-# Step 1: Download open source JDBC drivers
-echo -e "${GREEN}Step 1: Downloading open source JDBC drivers...${NC}"
+# Step 1: Build fat JAR
+echo -e "${GREEN}Step 1: Building fat JAR...${NC}"
+cd "$SCRIPT_DIR/.."
+mvn package -pl ojp-server -am -DskipTests -q
+echo -e "${GREEN}✓ JAR built${NC}"
 echo ""
 
-bash download-drivers.sh ./ojp-libs
+# Step 2: Resolve image tag from project version
+VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
+IMAGE="rrobetti/ojp:${VERSION}"
 
-if [ $? -ne 0 ]; then
-    echo ""
-    echo -e "${RED}Failed to download drivers!${NC}"
-    exit 1
-fi
+# Step 3: Build Docker image
+echo -e "${GREEN}Step 3: Building Docker image ${IMAGE}...${NC}"
+docker build -t "$IMAGE" "$SCRIPT_DIR"
 
+echo -e "${GREEN}✓ Docker image built: ${IMAGE}${NC}"
 echo ""
-echo -e "${GREEN}✓ Drivers downloaded successfully${NC}"
-echo ""
-
-# Step 2: Build Docker image with Jib
-echo -e "${GREEN}Step 2: Building Docker image with Jib...${NC}"
-echo ""
-
-# Move to parent directory for Maven build
-cd ..
 
 if [ "$COMMAND" = "push" ]; then
-    echo -e "${YELLOW}Building and pushing to registry...${NC}"
-    echo -e "${YELLOW}Note: You must be logged in with 'docker login'${NC}"
-    echo ""
-    mvn compile jib:build -pl ojp-server
-    
-    if [ $? -eq 0 ]; then
-        echo ""
-        echo -e "${GREEN}✓ Docker image built and pushed successfully!${NC}"
-        echo ""
-        echo -e "${BLUE}Image: rrobetti/ojp:0.4.2-beta${NC}"
-        echo -e "${BLUE}Includes: H2, PostgreSQL, MySQL, MariaDB drivers${NC}"
-    else
-        echo ""
-        echo -e "${RED}Failed to build/push Docker image!${NC}"
-        exit 1
-    fi
-elif [ "$COMMAND" = "build" ]; then
-    echo -e "${YELLOW}Building Docker image locally...${NC}"
-    echo ""
-    mvn compile jib:dockerBuild -pl ojp-server
-    
-    if [ $? -eq 0 ]; then
-        echo ""
-        echo -e "${GREEN}✓ Docker image built successfully!${NC}"
-        echo ""
-        echo -e "${BLUE}Image: rrobetti/ojp:0.4.2-beta${NC}"
-        echo -e "${BLUE}Includes: H2, PostgreSQL, MySQL, MariaDB drivers${NC}"
-        echo ""
-        echo -e "${GREEN}You can now run the image:${NC}"
-        echo -e "  ${YELLOW}docker run -d -p 1059:1059 --name ojp rrobetti/ojp:0.4.2-beta${NC}"
-    else
-        echo ""
-        echo -e "${RED}Failed to build Docker image!${NC}"
-        exit 1
-    fi
-else
-    echo -e "${RED}Unknown command: $COMMAND${NC}"
-    echo -e "${YELLOW}Usage: ./docker-build.sh [build|push]${NC}"
-    exit 1
+    echo -e "${YELLOW}Pushing to registry (requires docker login)...${NC}"
+    docker push "$IMAGE"
+    echo -e "${GREEN}✓ Pushed: ${IMAGE}${NC}"
 fi
 
 echo ""
 echo -e "${BLUE}==========================================${NC}"
-echo -e "${GREEN}Build complete!${NC}"
+echo -e "${GREEN}Done!${NC}"
+if [ "$COMMAND" = "build" ]; then
+    echo -e "Run: ${YELLOW}docker run -d -p 1059:1059 --name ojp ${IMAGE}${NC}"
+fi
 echo -e "${BLUE}==========================================${NC}"

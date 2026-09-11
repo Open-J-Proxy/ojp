@@ -10,7 +10,6 @@ import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.TargetCall;
 import com.openjproxy.grpc.TransactionStatus;
 import lombok.Getter;
-import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.constants.CommonConstants;
@@ -28,13 +27,32 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class Connection implements java.sql.Connection {
 
+    private static final int COMPUTED_ASYNC_CLOSE_EXECUTOR_SIZE = Math.max(2, Math.min(8,
+            Runtime.getRuntime().availableProcessors()));
+    private static final AtomicInteger ASYNC_CLOSE_THREAD_COUNTER = new AtomicInteger();
+    // Daemon executor intentionally lives for JVM lifetime; close tasks are lightweight and infrequent.
+    private static final ExecutorService ASYNC_CLOSE_EXECUTOR = Executors.newFixedThreadPool(
+            COMPUTED_ASYNC_CLOSE_EXECUTOR_SIZE,
+            runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setName("ojp-jdbc-close-" + ASYNC_CLOSE_THREAD_COUNTER.incrementAndGet());
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    private static final ConcurrentHashMap<String, ClientThrottleManager> THROTTLE_MANAGERS = new ConcurrentHashMap<>();
+
     @Getter
-    @Setter
     private SessionInfo session;
     private final StatementService statementService;
     @Getter
@@ -42,15 +60,52 @@ public class Connection implements java.sql.Connection {
     private boolean autoCommit = true;
     private boolean readOnly = false;
     private boolean closed;
+    private final boolean closeSynchronously;
+    private final ClientThrottleMode throttleMode;
 
     // For server recovery and connection redistribution
     private volatile boolean forceInvalid = false;
 
     public Connection(SessionInfo session, StatementService statementService, DbName dbName) {
+        this(session, statementService, dbName, CommonConstants.DEFAULT_JDBC_CLOSE_SYNCHRONOUS);
+    }
+
+    public Connection(SessionInfo session, StatementService statementService, DbName dbName, boolean closeSynchronously) {
+        this(session, statementService, dbName, closeSynchronously, ClientThrottleMode.REACTIVE);
+    }
+
+    public Connection(SessionInfo session, StatementService statementService, DbName dbName,
+                      boolean closeSynchronously, ClientThrottleMode throttleMode) {
         this.session = session;
         this.statementService = statementService;
         this.closed = false;
         this.dbName = dbName;
+        this.closeSynchronously = closeSynchronously;
+        this.throttleMode = throttleMode;
+        updateThrottleLimits(session);
+    }
+
+    public void setSession(SessionInfo session) {
+        this.session = session;
+        updateThrottleLimits(session);
+    }
+
+    private void updateThrottleLimits(SessionInfo info) {
+        if (info != null && !info.getConnHash().isEmpty()) {
+            THROTTLE_MANAGERS.computeIfAbsent(info.getConnHash(), k -> new ClientThrottleManager())
+                    .updateFromSessionInfo(info);
+        }
+    }
+
+    ClientThrottleManager getThrottleManager() {
+        if (session != null && !session.getConnHash().isEmpty()) {
+            return THROTTLE_MANAGERS.computeIfAbsent(session.getConnHash(), k -> new ClientThrottleManager());
+        }
+        return null;
+    }
+
+    ClientThrottleMode getThrottleMode() {
+        return throttleMode;
     }
 
     /**
@@ -181,7 +236,19 @@ public class Connection implements java.sql.Connection {
         // Always call terminateSession to ensure server-side resources are released
         // This is critical for multinode scenarios where connect() may have been called on multiple servers
         if (this.session != null) {
-            this.statementService.terminateSession(this.session);
+            // Capture before nulling to ensure async termination uses the original session reference.
+            SessionInfo sessionToTerminate = this.session;
+            if (this.closeSynchronously) {
+                this.statementService.terminateSession(sessionToTerminate);
+            } else {
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        this.statementService.terminateSession(sessionToTerminate);
+                    } catch (SQLException e) {
+                        log.warn("Async terminateSession failed for session {}", sessionToTerminate.getSessionUUID(), e);
+                    }
+                }, ASYNC_CLOSE_EXECUTOR);
+            }
             this.session = null;
         }
         this.closed = true;
@@ -248,7 +315,10 @@ public class Connection implements java.sql.Connection {
     public SQLWarning getWarnings() throws SQLException {
         log.debug("getWarnings called");
         checkValid();
-        return this.callProxy(CallType.CALL_GET, "Warnings", SQLWarning.class);
+        // The server serializes a SQLWarning chain as List<Map<String,Object>> (see CallResourceAction),
+        // because arbitrary Throwable subclasses cannot be transported via ProtoConverter.
+        List<?> entries = this.callProxy(CallType.CALL_GET, "Warnings", List.class);
+        return SqlWarningUtils.buildWarningChain(entries);
     }
 
     @Override

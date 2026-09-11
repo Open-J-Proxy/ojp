@@ -3,6 +3,9 @@ package org.openjproxy.grpc.server;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -45,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
         // Test invalid timeout
         assertThrows(IllegalArgumentException.class, () -> new SlotManager(10, 20, -1));
+        assertThrows(IllegalArgumentException.class, () -> new SlotManager(10, 20, 100, -1));
     }
 
     @Test
@@ -188,6 +192,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         assertTrue(status.contains("slow=0/2"));
         assertTrue(status.contains("fast=0/8"));
         assertTrue(status.contains("enabled=true"));
+    }
+
+    @Test
+    void testQueueDepthLimitFailsFastForWaitingRequests() throws InterruptedException {
+        SlotManager singleSlotManager = new SlotManager(1, 0, 100, 1);
+        assertEquals(1, singleSlotManager.getMaxWaitQueueDepth());
+        assertTrue(singleSlotManager.acquireFastSlot(1000));
+
+        CountDownLatch waiterStarted = new CountDownLatch(1);
+        Thread waitingThread = new Thread(() -> {
+            waiterStarted.countDown();
+            try {
+                singleSlotManager.acquireFastSlot(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        waitingThread.start();
+
+        assertTrue(waiterStarted.await(1, TimeUnit.SECONDS));
+        long waitStart = System.nanoTime();
+        while (waitingThread.getState() != Thread.State.TIMED_WAITING
+                && TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStart) < 1000) {
+            Thread.yield(); //NOSONAR - test-only spin wait to observe waiter state before fail-fast assertion
+        }
+
+        assertFalse(singleSlotManager.acquireFastSlot(1000));
+
+        singleSlotManager.releaseFastSlot();
+        waitingThread.join();
     }
 
     @Test

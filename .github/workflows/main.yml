@@ -7,16 +7,16 @@
 #
 # WORKFLOW STRUCTURE:
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
-# 2. postgres-test: PostgreSQL database tests (needs: build-test)
-# 3. mysql-test: MySQL database tests (needs: build-test)
-# 4. mariadb-test: MariaDB database tests (needs: build-test)
-# 5. cockroachdb-test: CockroachDB database tests (needs: build-test)
-# 6. db2-test: IBM DB2 database tests (needs: build-test)
-# 7. multinode-test: Multinode failover/recovery tests (needs: build-test)
-# 8. multinode-xa-test: Multinode XA integration tests (needs: build-test)
-# 9. oracle-test: Oracle database tests (needs: build-test)
-# 10. sqlserver-tests: SQL Server tests (needs: build-test)
-# 11. notify-integration: Triggers integration repo workflow
+# 2. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
+# 3. mysql-test: MySQL database tests (needs: build-test, resolve-version)
+# 4. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
+# 5. cockroachdb-test: CockroachDB database tests (needs: build-test, resolve-version)
+# 6. db2-test: IBM DB2 database tests (needs: build-test, resolve-version)
+# 7. multinode-test: Multinode failover/recovery tests (needs: build-test, resolve-version)
+# 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
+# 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
+# 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
+# 11. notify-integration: Triggers integration repo workflow (needs: build-test)
 #
 # SEQUENTIAL EXECUTION:
 # All specialized test jobs depend on build-test completing successfully.
@@ -35,11 +35,42 @@ name: Main CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
 
 jobs:
+  # ===========================================================================
+  # JOB 0: Resolve OJP image tag
+  # ===========================================================================
+  #
+  # Computes the Docker image tag once from the Maven project version and
+  # exposes it as a job output so every downstream job can reference it
+  # without re-running `mvn help:evaluate`.
+  #
+  # ===========================================================================
+  resolve-version:
+    name: Resolve OJP image tag
+    runs-on: ubuntu-latest
+    outputs:
+      ojp_image: ${{ steps.version.outputs.ojp_image }}
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Resolve version
+        id: version
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
+          echo "ojp_image=rrobetti/ojp:${VERSION}" >> $GITHUB_OUTPUT
+
   # ===========================================================================
   # JOB 1: Build & Test with H2 (Fast Fail-Fast Gate)
   # ===========================================================================
@@ -49,17 +80,18 @@ jobs:
   # for catching basic issues before running expensive database-specific tests.
   #
   # Test execution: Runs with -DenableH2Tests=true flag
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   #
   # ===========================================================================
   build-test:
     name: Build & Test (H2 - Fast Fail-Fast)
     runs-on: ubuntu-latest
+    needs: [resolve-version]
 
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     steps:
 
@@ -68,38 +100,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Verify all modules with JDK 24
+      - name: Verify all modules with JDK 25
         run: mvn clean verify -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -132,7 +166,7 @@ jobs:
   # and XA transaction capabilities.
   #
   # Database: PostgreSQL 17
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # SQL Enhancer Testing:
@@ -146,12 +180,12 @@ jobs:
     name: PostgreSQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test]
+    needs: [build-test, resolve-version]
 
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     steps:
       - name: Git checkout
@@ -176,28 +210,30 @@ jobs:
           # Verify setting
           PGPASSWORD=testpassword psql -h 127.0.0.1 -U testuser -d defaultdb -c "SHOW max_prepared_transactions;"
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       # Start first OJP server without SQL enhancer (default configuration)
       # Tests will run against this server via postgres_connection.csv (port 1059)
@@ -206,7 +242,7 @@ jobs:
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       # Start second OJP server WITH SQL enhancer enabled in OPTIMIZE mode
       # Tests will run against this server via postgres_connection.csv (port 10593)
@@ -218,7 +254,7 @@ jobs:
           docker run -d --name ojp-server-enhancer \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10593 -Dojp.prometheus.port=9163 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.sql.enhancer.enabled=true -Dojp.sql.enhancer.mode=OPTIMIZE -Dojp.sql.enhancer.dialect=POSTGRESQL" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -276,7 +312,7 @@ jobs:
   # MySQL is one of the most widely used open-source databases.
   #
   # Database: MySQL 8.0
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # ===========================================================================
@@ -284,12 +320,12 @@ jobs:
     name: MySQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test]
+    needs: [build-test, resolve-version]
 
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     services:
       # MySQL database service container
@@ -314,35 +350,37 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -372,7 +410,7 @@ jobs:
   # MariaDB is a MySQL-compatible database with enhanced features.
   #
   # Database: MariaDB 10.11
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # ===========================================================================
@@ -380,12 +418,12 @@ jobs:
     name: MariaDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test]
+    needs: [build-test, resolve-version]
 
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     services:
       # MariaDB database service container
@@ -410,35 +448,37 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -469,7 +509,7 @@ jobs:
   # CockroachDB is a distributed SQL database compatible with PostgreSQL.
   #
   # Database: CockroachDB v24.3.4
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # ===========================================================================
@@ -477,12 +517,12 @@ jobs:
     name: CockroachDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test]
+    needs: [build-test, resolve-version]
 
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     steps:
       - name: Git checkout
@@ -497,35 +537,37 @@ jobs:
           # Wait for CockroachDB to be ready
           timeout 60 bash -c 'until curl -f http://localhost:8080/health?ready=1 2>/dev/null; do sleep 2; done'
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -556,7 +598,7 @@ jobs:
   # DB2 is an enterprise-grade database system from IBM.
   #
   # Database: IBM DB2 11.5.8.0
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # Note: DB2 container is large and takes longer to start up.
@@ -566,12 +608,12 @@ jobs:
     name: DB2 Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test]
+    needs: [build-test, resolve-version]
 
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     steps:
       - name: Git checkout
@@ -647,11 +689,11 @@ jobs:
           
           echo "DB2 initialization complete"
 
-      # Download DB2 JDBC driver and place in ojp-server/ojp-libs directory so Jib can bake it into the Docker image
-      # Similar to Oracle, we handle it via the Jib extra directories mechanism
+      # Download DB2 JDBC driver and place in ojp-server/ojp-libs directory for inclusion in the Docker image
+      # Similar to Oracle, we handle it via the ojp-libs directory copied into the Docker image
       - name: Download DB2 JDBC Driver to ojp-server/ojp-libs
         run: |
-          # Create ojp-server/ojp-libs directory for Jib to pick up during Docker image build
+          # Create ojp-server/ojp-libs directory for inclusion in the Docker image
           mkdir -p ojp-server/ojp-libs
           
           # Download DB2 JDBC driver from Maven Central
@@ -665,35 +707,37 @@ jobs:
           echo "=== DB2 JDBC driver downloaded to ojp-server/ojp-libs ==="
           ls -lh ojp-server/ojp-libs/
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container with DB2 driver from ojp-server/ojp-libs
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -736,7 +780,7 @@ jobs:
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
     # This ensures we don't waste resources on multinode tests if H2 tests fail
-    needs: [build-test]
+    needs: [build-test, resolve-version]
     strategy:
       max-parallel: 1
       matrix:
@@ -766,28 +810,30 @@ jobs:
           # Verify setting
           PGPASSWORD=testpassword psql -h 127.0.0.1 -U testuser -d defaultdb -c "SHOW max_prepared_transactions;"
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       # Start first OJP server instance on port 10591
       - name: Start OJP Server 1 on port 10591
@@ -795,7 +841,7 @@ jobs:
           docker run -d --name ojp-server-1 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9159 -Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 1 container on gRPC port 10591, Prometheus port 9159"
 
       # Start second OJP server instance on port 10592
@@ -804,17 +850,18 @@ jobs:
           docker run -d --name ojp-server-2 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9160 -Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 2 container on gRPC port 10592, Prometheus port 9160"
 
       - name: Wait for OJP servers to start
         run: |
-          echo "Waiting for servers to start..."
-          sleep 15
-          echo "Checking if servers are listening..."
-          netstat -tuln | grep -E ':(10591|10592)' || echo "Warning: Servers might not be listening yet"
+          echo "Waiting for OJP servers to open gRPC ports 10591 and 10592..."
+          timeout 120 bash -c 'until nc -z localhost 10591; do sleep 1; done'
+          echo "✓ Port 10591 is open"
+          timeout 120 bash -c 'until nc -z localhost 10592; do sleep 1; done'
+          echo "✓ Port 10592 is open"
 
-      - name: Build (ojp-jdbc-driver) with JDK 24
+      - name: Build (ojp-jdbc-driver) with JDK 25
         run: mvn clean install -pl ojp-jdbc-driver -am -DskipTests -Dgpg.skip=true
 
       - name: Create temp directory for test logs
@@ -828,8 +875,12 @@ jobs:
           nohup mvn test -pl ojp-jdbc-driver -Dtest=MultinodeIntegrationTest -DmultinodeTestsEnabled=true -Dgpg.skip=true > temp/MultinodeIntegrationTest.log 2>&1 &
           echo $! > temp/multinode-test.pid
           echo "MultinodeIntegrationTest started with PID $(cat temp/multinode-test.pid)"
-          # Give test time to start
-          sleep 20
+          # Wait until the test's SQL phase completes and the keepalive phase begins,
+          # indicated by the sentinel file /tmp/multinode-queries-done.
+          # This avoids a fixed sleep that may be too short on a slow runner.
+          echo "Waiting for MultinodeIntegrationTest to enter keepalive phase..."
+          timeout 600 bash -c 'until [ -f /tmp/multinode-queries-done ]; do sleep 5; done'
+          echo "✓ MultinodeIntegrationTest is in keepalive phase — connections are established"
 
       # Verify connection pooling is working correctly
       # Expected: 20-24 connections (10-12 per server)
@@ -913,7 +964,7 @@ jobs:
           docker run -d --name ojp-server-1 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9159 -Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "OJP Server 1 container restarted"
           sleep 10
 
@@ -998,7 +1049,7 @@ jobs:
           docker run -d --name ojp-server-2 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9160 -Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "OJP Server 2 container restarted"
           sleep 10
 
@@ -1077,7 +1128,9 @@ jobs:
             echo "✗ Test failed"
             exit 1
           else
-            echo "⚠ Could not determine test status"
+            echo "✗ Could not determine test status — BUILD SUCCESS not found in log"
+            cat temp/MultinodeIntegrationTest.log || true
+            exit 1
           fi
 
       # Show logs for debugging (runs even if test fails)
@@ -1139,7 +1192,7 @@ jobs:
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
     # This ensures we don't waste resources on multinode XA tests if H2 tests fail
-    needs: [build-test]
+    needs: [build-test, resolve-version]
     strategy:
       max-parallel: 1
       matrix:
@@ -1169,28 +1222,30 @@ jobs:
           # Verify setting
           PGPASSWORD=testpassword psql -h 127.0.0.1 -U testuser -d defaultdb -c "SHOW max_prepared_transactions;"
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       # Start first OJP server instance on port 10591 with DEBUG logging
       - name: Start OJP Server 1 on port 10591
@@ -1199,7 +1254,7 @@ jobs:
           docker run -d --name ojp-server-xa-1 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9161 -Dojp.server.slowQuerySegregation.enabled=true -Dorg.slf4j.simpleLogger.log.org.openjproxy.xa.pool=DEBUG" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 1 container on gRPC port 10591, Prometheus port 9161 with DEBUG logging"
 
       # Start second OJP server instance on port 10592 with DEBUG logging
@@ -1209,17 +1264,18 @@ jobs:
           docker run -d --name ojp-server-xa-2 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9162 -Dojp.server.slowQuerySegregation.enabled=true -Dorg.slf4j.simpleLogger.log.org.openjproxy.xa.pool=DEBUG" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 2 container on gRPC port 10592, Prometheus port 9162 with DEBUG logging"
 
       - name: Wait for OJP servers to start
         run: |
-          echo "Waiting for servers to start..."
-          sleep 15
-          echo "Checking if servers are listening..."
-          netstat -tuln | grep -E ':(10591|10592)' || echo "Warning: Servers might not be listening yet"
+          echo "Waiting for OJP servers to open gRPC ports 10591 and 10592..."
+          timeout 120 bash -c 'until nc -z localhost 10591; do sleep 1; done'
+          echo "✓ Port 10591 is open"
+          timeout 120 bash -c 'until nc -z localhost 10592; do sleep 1; done'
+          echo "✓ Port 10592 is open"
 
-      - name: Build (ojp-jdbc-driver) with JDK 24
+      - name: Build (ojp-jdbc-driver) with JDK 25
         run: mvn clean install -pl ojp-jdbc-driver -am -DskipTests -Dgpg.skip=true
 
       - name: Create temp directory for test logs
@@ -1234,8 +1290,12 @@ jobs:
           nohup mvn test -pl ojp-jdbc-driver -Dtest=MultinodeXAIntegrationTest -DmultinodeXATestsEnabled=true -Dgpg.skip=true -Dorg.slf4j.simpleLogger.log.org.openjproxy=DEBUG -Dorg.slf4j.simpleLogger.log.org.openjproxy.jdbc.ResultSet=INFO -Dmultinode.ojp.connection.pool.enabled=false > temp/MultinodeXAIntegrationTest.log 2>&1 &
           echo $! > temp/multinode-xa-test.pid
           echo "MultinodeXAIntegrationTest started with DEBUG logging, PID $(cat temp/multinode-xa-test.pid)"
-          # Give test time to start
-          sleep 20
+          # Wait until the test's SQL phase completes and the keepalive phase begins,
+          # indicated by the sentinel file /tmp/multinode-xa-queries-done.
+          # This avoids a fixed sleep that may be too short on a slow runner.
+          echo "Waiting for MultinodeXAIntegrationTest to enter keepalive phase..."
+          timeout 600 bash -c 'until [ -f /tmp/multinode-xa-queries-done ]; do sleep 5; done'
+          echo "✓ MultinodeXAIntegrationTest is in keepalive phase — connections are established"
 
       # Verify XA connection pooling is working
       # Expected range: 20-27 connections (XA pool only, non-XA pool disabled)
@@ -1329,15 +1389,13 @@ jobs:
           docker run -d --name ojp-server-xa-1 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9161 -Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "OJP Server 1 container restarted"
           
           # Wait for server to fully start
-          sleep 15
-          
-          # Verify server is listening
-          echo "Verifying server is listening on port 10591..."
-          netstat -tuln | grep ':10591' || echo "Warning: Server might not be listening yet"
+          echo "Waiting for OJP Server 1 to reopen port 10591..."
+          timeout 120 bash -c 'until nc -z localhost 10591; do sleep 1; done'
+          echo "✓ Port 10591 is open"
 
       # Verify XA recovery: Connections should be distributed across both servers again
       # Expected range: 20-27 connections (XA pool only, non-XA pool disabled)
@@ -1432,15 +1490,13 @@ jobs:
           docker run -d --name ojp-server-xa-2 \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9162 -Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
           echo "OJP Server 2 container restarted"
           
           # Wait for server to fully start
-          sleep 15
-          
-          # Verify server is listening
-          echo "Verifying server is listening on port 10592..."
-          netstat -tuln | grep ':10592' || echo "Warning: Server might not be listening yet"
+          echo "Waiting for OJP Server 2 to reopen port 10592..."
+          timeout 120 bash -c 'until nc -z localhost 10592; do sleep 1; done'
+          echo "✓ Port 10592 is open"
 
       # Final XA verification: Both servers should be active
       # Expected range: 20-27 connections (XA pool only, non-XA pool disabled)
@@ -1480,6 +1536,16 @@ jobs:
             exit 1
           fi
 
+      # Signal the keepalive phase in MultinodeXAIntegrationTest to exit.
+      # This runs even on failure so the background test process does not linger
+      # for its full 12-minute cap after a CI step has already failed.
+      - name: Signal MultinodeXAIntegrationTest keepalive to stop
+        if: always()
+        run: |
+          echo "Creating /tmp/multinode-xa-ci-done to stop the keepalive loop..."
+          touch /tmp/multinode-xa-ci-done
+          echo "Signal sent"
+
       # Wait for the XA test process to complete
       - name: Wait for MultinodeXAIntegrationTest to complete
         run: |
@@ -1513,7 +1579,9 @@ jobs:
             echo "✗ Test failed"
             exit 1
           else
-            echo "⚠ Could not determine test status"
+            echo "✗ Could not determine test status — BUILD SUCCESS not found in log"
+            cat temp/MultinodeXAIntegrationTest.log || true
+            exit 1
           fi
 
       # Show logs for debugging (runs even if test fails)
@@ -1561,7 +1629,7 @@ jobs:
   # to licensing). The test uses Oracle XE container with full configuration.
   #
   # Database: Oracle XE 21c
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # ===========================================================================
@@ -1570,7 +1638,7 @@ jobs:
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
     # This ensures we don't waste resources on Oracle tests if H2 tests fail
-    needs: [build-test]
+    needs: [build-test, resolve-version]
     
     permissions:
       contents: read
@@ -1578,7 +1646,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     services:
       # Oracle XE database service container
@@ -1652,12 +1720,12 @@ jobs:
           
           echo "=== XA permissions granted successfully ==="
 
-      # Download Oracle JDBC driver and place in ojp-server/ojp-libs directory so Jib can bake it into the Docker image
+      # Download Oracle JDBC driver and place in ojp-server/ojp-libs directory for inclusion in the Docker image
       # We don't include it in the repository due to Oracle licensing
-      # The driver will be loaded at runtime via the Jib extra directories mechanism
+      # The driver will be loaded at runtime via the ojp-libs directory copied into the Docker image
       - name: Download Oracle JDBC Driver to ojp-server/ojp-libs
         run: |
-          # Create ojp-server/ojp-libs directory for Jib to pick up during Docker image build
+          # Create ojp-server/ojp-libs directory for inclusion in the Docker image
           mkdir -p ojp-server/ojp-libs
           
           # Download Oracle JDBC driver from Maven Central
@@ -1671,35 +1739,37 @@ jobs:
           echo "=== Oracle JDBC driver downloaded to ojp-server/ojp-libs ==="
           ls -lh ojp-server/ojp-libs/
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container with Oracle driver from ojp-server/ojp-libs
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10
@@ -1731,7 +1801,7 @@ jobs:
   # so no manual container setup is needed.
   #
   # Database: SQL Server (via TestContainers)
-  # Matrix strategy: Tests against Java 11, 17, 21, 22, 24
+  # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
   #
   # ===========================================================================
@@ -1740,7 +1810,7 @@ jobs:
     runs-on: ubuntu-latest
     # DEPENDENCY: This job only runs if build-test succeeds
     # This ensures we don't waste resources on SQL Server tests if H2 tests fail
-    needs: [build-test]
+    needs: [build-test, resolve-version]
     
     permissions:
       contents: read
@@ -1748,7 +1818,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ 11, 17, 21, 22, 24 ]
+        java-version: [ 11, 17, 21, 25 ]
 
     steps:
       - name: Git checkout
@@ -1756,11 +1826,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Download SQL Server JDBC driver and place in ojp-server/ojp-libs directory so Jib can bake it into the Docker image
-      # Similar to Oracle and DB2, we handle it via the Jib extra directories mechanism
+      # Download SQL Server JDBC driver and place in ojp-server/ojp-libs directory for inclusion in the Docker image
+      # Similar to Oracle and DB2, we handle it via the ojp-libs directory copied into the Docker image
       - name: Download SQL Server JDBC Driver to ojp-server/ojp-libs
         run: |
-          # Create ojp-server/ojp-libs directory for Jib to pick up during Docker image build
+          # Create ojp-server/ojp-libs directory for inclusion in the Docker image
           mkdir -p ojp-server/ojp-libs
           
           # Download SQL Server JDBC driver from Maven Central
@@ -1774,35 +1844,37 @@ jobs:
           echo "=== SQL Server JDBC driver downloaded to ojp-server/ojp-libs ==="
           ls -lh ojp-server/ojp-libs/
 
-      - name: Set up JDK 24 for build
+      - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
-          java-version: 24
+          java-version: 25
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 24
+      - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Test (ojp-grpc-commons) with JDK 24
+      - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers to ojp-server/ojp-libs so Jib can bake them into the Docker image
+      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
         run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
-      - name: Build (ojp-server) with JDK 24
+      - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Build OJP Server Docker image
-        run: mvn jib:dockerBuild -pl ojp-server -Dgpg.skip=true
+        run: |
+          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container with SQL Server driver from ojp-server/ojp-libs
         run: |
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
-            rrobetti/ojp:0.4.15-SNAPSHOT
+            ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
         run: sleep 10

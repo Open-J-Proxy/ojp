@@ -225,4 +225,15 @@ class DatasourcePropertiesLoaderInfoPropertiesTest {
         assertEquals("myApp", result.getProperty(CommonConstants.DATASOURCE_NAME_PROPERTY),
                 "Datasource name from base should be preserved");
     }
+
+    @Test
+    void shouldApplyJdbcClosePropertyFromInfo() {
+        Properties info = new Properties();
+        info.setProperty(CommonConstants.JDBC_CLOSE_SYNC_PROPERTY, "true");
+
+        Properties result = DatasourcePropertiesLoader.applyInfoProperties(null, info, "default");
+
+        assertNotNull(result);
+        assertEquals("true", result.getProperty(CommonConstants.JDBC_CLOSE_SYNC_PROPERTY));
+    }
 }

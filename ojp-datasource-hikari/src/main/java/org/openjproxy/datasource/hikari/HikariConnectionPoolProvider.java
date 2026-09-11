@@ -121,7 +121,7 @@ public class HikariConnectionPoolProvider implements ConnectionPoolProvider {
         hikariConfig.setPoolName(poolName);
 
         // Additional HikariCP-specific settings for production use
-        hikariConfig.setLeakDetectionThreshold(60000); // 60 seconds
+        hikariConfig.setLeakDetectionThreshold(config.getLeakDetectionThresholdMs()); // 0 = disabled (default)
         hikariConfig.setValidationTimeout(5000);       // 5 seconds
         hikariConfig.setInitializationFailTimeout(10000); // 10 seconds
         hikariConfig.setRegisterMbeans(true);

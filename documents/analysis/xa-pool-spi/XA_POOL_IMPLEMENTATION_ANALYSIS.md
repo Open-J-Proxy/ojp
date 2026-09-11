@@ -834,7 +834,7 @@ ojp.xa.pool.maxWait=5000
 <dependency>
     <groupId>org.apache.commons</groupId>
     <artifactId>commons-pool2</artifactId>
-    <version>2.12.0</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 
 <!-- For testing: Narayana -->

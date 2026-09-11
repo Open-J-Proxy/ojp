@@ -1,8 +1,8 @@
 
 ### Prerequisites
 - **For OJP JDBC Driver**: Java 11 or higher
-- **For OJP Server**: Java 21 or higher
-- **For Development/Testing**: Java 22 or higher (recommended)
+- **For OJP Server**: Java 25 or higher
+- **For Development/Testing**: Java 25 or higher (recommended)
 - Maven 3.9+
 - Docker (for running databases and OJP server)
 
@@ -160,18 +160,18 @@ The CI workflows are organized in a hierarchical order to save CI cycles:
    - Only enables H2 tests with `-DenableH2Tests=true`
 
 2. **Specialized Test Jobs** - Run only after Main CI succeeds (using `needs: [build-test]`)
-   - PostgreSQL Integration Tests (JDK 11, 17, 21, 22)
+   - PostgreSQL Integration Tests (JDK 11, 17, 21, 25)
      - **Note**: All PostgreSQL integration tests run twice per matrix configuration:
        1. Against a standard OJP server without SQL enhancer
        2. Against an OJP server with SQL enhancer enabled (`-Dojp.sql.enhancer.enabled=true`)
      - This ensures compatibility and correctness with both configurations
-   - MySQL Integration Tests (JDK 11, 17, 21, 22)
-   - MariaDB Integration Tests (JDK 11, 17, 21, 22)
-   - CockroachDB Integration Tests (JDK 11, 17, 21, 22)
-   - DB2 Integration Tests (JDK 11, 17, 21, 22)
+   - MySQL Integration Tests (JDK 11, 17, 21, 25)
+   - MariaDB Integration Tests (JDK 11, 17, 21, 25)
+   - CockroachDB Integration Tests (JDK 11, 17, 21, 25)
+   - DB2 Integration Tests (JDK 11, 17, 21, 25)
    - Multinode Integration Tests (PostgreSQL-based failover testing)
-   - Oracle Database Testing (JDK 11, 17, 21, 22)
-   - SQL Server Integration Tests (JDK 11, 17, 21, 22)
+   - Oracle Database Testing (JDK 11, 17, 21, 25)
+   - SQL Server Integration Tests (JDK 11, 17, 21, 25)
 
 **Implementation**: All jobs are consolidated into a single workflow file (`.github/workflows/main.yml`) with job dependencies using the `needs` keyword. This ensures sequential execution works on **all branches** (PRs, main, feature branches) without relying on GitHub Actions `workflow_run` triggers.
    

@@ -45,10 +45,14 @@ public class CreateSlowQuerySegregationManagerAction {
      * @param connHash The connection hash
      * @param actualPoolSize The actual pool size (max XA transactions for XA, max pool size for non-XA)
      * @param isXA Whether this is an XA connection
-     * @param admissionTimeoutMillis The timeout budget for admission-control semaphores in milliseconds
+     * @param admissionTimeoutMillis The fallback timeout budget for admission-control semaphores in milliseconds.
+     *                              When slow query segregation is enabled, configured fast/slow slot timeouts
+     *                              take precedence.
      */
     public void execute(ActionContext context, String connHash, int actualPoolSize, boolean isXA, long admissionTimeoutMillis) {
         boolean slowQueryEnabled = context.getServerConfiguration().isSlowQuerySegregationEnabled();
+        long configuredSlowSlotTimeoutMillis = context.getServerConfiguration().getSlowQuerySlowSlotTimeout();
+        long configuredFastSlotTimeoutMillis = context.getServerConfiguration().getSlowQueryFastSlotTimeout();
 
         if (isXA) {
             // XA-specific handling
@@ -58,14 +62,31 @@ public class CreateSlowQuerySegregationManagerAction {
                     actualPoolSize,
                     context.getServerConfiguration().getSlowQuerySlotPercentage(),
                     context.getServerConfiguration().getSlowQueryIdleTimeout(),
-                    admissionTimeoutMillis,
-                    admissionTimeoutMillis,
+                    configuredSlowSlotTimeoutMillis,
+                    configuredFastSlotTimeoutMillis,
                     context.getServerConfiguration().getSlowQueryUpdateGlobalAvgInterval(),
+                    context.getServerConfiguration().getSlowQueryClassificationMode(),
+                    context.getServerConfiguration().getSlowQueryThresholdMs(),
+                    context.getServerConfiguration().getSlowQueryMinimumSlowQueryMs(),
+                    context.getServerConfiguration().getSlowQuerySlowMultiplier(),
+                    context.getServerConfiguration().getSlowQueryRecoveryMultiplier(),
+                    context.getServerConfiguration().getSlowQueryMinSamples(),
+                    context.getServerConfiguration().getSlowQueryBaselinePercentile(),
+                    context.getServerConfiguration().getSlowQueryBaselineRefreshIntervalSeconds(),
+                    context.getServerConfiguration().getAdmissionControlMaxQueueDepth(),
                     true
                 );
                 context.getAdmissionControlManagers().put(connHash, manager);
-                log.info("Created AdmissionControlManager for XA datasource {} with pool size {} and semaphore timeout {}ms (slow query segregation enabled)",
-                        connHash, actualPoolSize, admissionTimeoutMillis);
+                log.info("Created AdmissionControlManager for XA datasource {} with pool size {}, fastSlotTimeout={}ms, slowSlotTimeout={}ms, classificationMode={}, minimumSlowQueryMs={}, slowMultiplier={}, recoveryMultiplier={}, minSamples={}, baselinePercentile={}, baselineRefreshIntervalSeconds={}, slowQueryThreshold={}ms (slow query segregation enabled)",
+                        connHash, actualPoolSize, configuredFastSlotTimeoutMillis, configuredSlowSlotTimeoutMillis,
+                        context.getServerConfiguration().getSlowQueryClassificationMode(),
+                        context.getServerConfiguration().getSlowQueryMinimumSlowQueryMs(),
+                        context.getServerConfiguration().getSlowQuerySlowMultiplier(),
+                        context.getServerConfiguration().getSlowQueryRecoveryMultiplier(),
+                        context.getServerConfiguration().getSlowQueryMinSamples(),
+                        context.getServerConfiguration().getSlowQueryBaselinePercentile(),
+                        context.getServerConfiguration().getSlowQueryBaselineRefreshIntervalSeconds(),
+                        context.getServerConfiguration().getSlowQueryThresholdMs());
             } else {
                 // XA with slow query segregation disabled: use SlotManager only (no QueryPerformanceMonitor)
                 // Set totalSlots=actualPoolSize, fastSlots=actualPoolSize, slowSlots=0
@@ -77,6 +98,7 @@ public class CreateSlowQuerySegregationManagerAction {
                     0, // slowSlotTimeout not relevant
                     admissionTimeoutMillis, // Use configured admission timeout for fast slot timeout
                     0, // updateGlobalAvgInterval = 0 means no performance monitoring
+                    context.getServerConfiguration().getAdmissionControlMaxQueueDepth(),
                     true // enabled = true to use SlotManager
                 );
                 context.getAdmissionControlManagers().put(connHash, manager);
@@ -90,14 +112,31 @@ public class CreateSlowQuerySegregationManagerAction {
                     actualPoolSize,
                     context.getServerConfiguration().getSlowQuerySlotPercentage(),
                     context.getServerConfiguration().getSlowQueryIdleTimeout(),
-                    admissionTimeoutMillis,
-                    admissionTimeoutMillis,
+                    configuredSlowSlotTimeoutMillis,
+                    configuredFastSlotTimeoutMillis,
                     context.getServerConfiguration().getSlowQueryUpdateGlobalAvgInterval(),
+                    context.getServerConfiguration().getSlowQueryClassificationMode(),
+                    context.getServerConfiguration().getSlowQueryThresholdMs(),
+                    context.getServerConfiguration().getSlowQueryMinimumSlowQueryMs(),
+                    context.getServerConfiguration().getSlowQuerySlowMultiplier(),
+                    context.getServerConfiguration().getSlowQueryRecoveryMultiplier(),
+                    context.getServerConfiguration().getSlowQueryMinSamples(),
+                    context.getServerConfiguration().getSlowQueryBaselinePercentile(),
+                    context.getServerConfiguration().getSlowQueryBaselineRefreshIntervalSeconds(),
+                    context.getServerConfiguration().getAdmissionControlMaxQueueDepth(),
                     true
                 );
                 context.getAdmissionControlManagers().put(connHash, manager);
-                log.info("Created AdmissionControlManager for datasource {} with pool size {} and semaphore timeout {}ms",
-                        connHash, actualPoolSize, admissionTimeoutMillis);
+                log.info("Created AdmissionControlManager for datasource {} with pool size {}, fastSlotTimeout={}ms, slowSlotTimeout={}ms, classificationMode={}, minimumSlowQueryMs={}, slowMultiplier={}, recoveryMultiplier={}, minSamples={}, baselinePercentile={}, baselineRefreshIntervalSeconds={}, slowQueryThreshold={}ms",
+                        connHash, actualPoolSize, configuredFastSlotTimeoutMillis, configuredSlowSlotTimeoutMillis,
+                        context.getServerConfiguration().getSlowQueryClassificationMode(),
+                        context.getServerConfiguration().getSlowQueryMinimumSlowQueryMs(),
+                        context.getServerConfiguration().getSlowQuerySlowMultiplier(),
+                        context.getServerConfiguration().getSlowQueryRecoveryMultiplier(),
+                        context.getServerConfiguration().getSlowQueryMinSamples(),
+                        context.getServerConfiguration().getSlowQueryBaselinePercentile(),
+                        context.getServerConfiguration().getSlowQueryBaselineRefreshIntervalSeconds(),
+                        context.getServerConfiguration().getSlowQueryThresholdMs());
             } else {
                 // Create admission-control-only manager (always-on semaphore)
                 AdmissionControlManager manager = new AdmissionControlManager(
@@ -107,6 +146,7 @@ public class CreateSlowQuerySegregationManagerAction {
                     0,
                     admissionTimeoutMillis,
                     0,
+                    context.getServerConfiguration().getAdmissionControlMaxQueueDepth(),
                     true
                 );
                 context.getAdmissionControlManagers().put(connHash, manager);

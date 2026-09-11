@@ -16,9 +16,9 @@ The most common way to start the OJP server is using the standalone JAR download
 **Download the JAR from Maven Central** (recommended):
 
 ```bash
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/0.4.14-beta/ojp-server-0.4.14-beta-shaded.jar
-chmod +x ojp-server-0.4.14-beta-shaded.jar
-java -Duser.timezone=UTC -jar ojp-server-0.3.0.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.0-RC1-shaded.jar
+chmod +x ojp-server-1.0.0-RC1-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.0-RC1.jar
 ```
 
 For development with custom configuration, you can specify properties:
@@ -27,7 +27,7 @@ For development with custom configuration, you can specify properties:
 java -Dojp.server.port=9059 \
      -Dojp.telemetry.enabled=true \
      -Dojp.telemetry.prometheus.enabled=true \
-     -jar ojp-server-0.4.14-beta-shaded.jar
+     -jar ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 When running from source during development (see [Building from Source](../runnable-jar/BUILDING_FROM_SOURCE.md)):
@@ -212,7 +212,7 @@ connectionTestQuery=SELECT 1
 <dependency>
     <groupId>com.github.open-j-proxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.3.0</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -222,13 +222,13 @@ connectionTestQuery=SELECT 1
 <dependency>
     <groupId>com.github.open-j-proxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.3.0</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 <!-- Include transaction manager like Atomikos -->
 <dependency>
     <groupId>com.atomikos</groupId>
     <artifactId>transactions-jdbc</artifactId>
-    <version>5.0.9</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -244,7 +244,7 @@ Maven dependency:
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>spring-boot-starter-ojp</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -282,7 +282,7 @@ Maven dependency (no starter):
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>

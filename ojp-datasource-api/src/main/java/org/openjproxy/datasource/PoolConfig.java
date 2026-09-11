@@ -42,6 +42,7 @@ public final class PoolConfig {
     private final long connectionTimeoutMs;
     private final long idleTimeoutMs;
     private final long maxLifetimeMs;
+    private final long leakDetectionThresholdMs;
 
     // Validation and behavior settings
     private final String validationQuery;
@@ -61,6 +62,10 @@ public final class PoolConfig {
     public static final long DEFAULT_IDLE_TIMEOUT_MS = 600000L;
     public static final long DEFAULT_MAX_LIFETIME_MS = 1800000L;
     public static final boolean DEFAULT_AUTO_COMMIT = true;
+    // 0 disables HikariCP's leak detection. OJP intentionally holds one physical connection
+    // per client session for the session's full lifetime, so a non-zero default would produce
+    // false-positive "leak" warnings for long-lived client sessions (e.g. SQL IDEs).
+    public static final long DEFAULT_LEAK_DETECTION_THRESHOLD_MS = 0L;
 
     private PoolConfig(Builder builder) {
         this.url = builder.url;
@@ -73,6 +78,7 @@ public final class PoolConfig {
         this.connectionTimeoutMs = builder.connectionTimeoutMs;
         this.idleTimeoutMs = builder.idleTimeoutMs;
         this.maxLifetimeMs = builder.maxLifetimeMs;
+        this.leakDetectionThresholdMs = builder.leakDetectionThresholdMs;
         this.validationQuery = builder.validationQuery;
         this.autoCommit = builder.autoCommit;
         this.defaultTransactionIsolation = builder.defaultTransactionIsolation;
@@ -198,6 +204,23 @@ public final class PoolConfig {
     }
 
     /**
+     * Gets the leak detection threshold in milliseconds.
+     * When a connection is held (checked out from the pool) longer than this
+     * threshold, HikariCP logs a warning with a stack trace of where it was acquired.
+     *
+     * <p>A value of {@code 0} disables leak detection. This is the default because
+     * OJP intentionally holds one physical connection per client session for the
+     * session's full lifetime, which can legitimately exceed typical leak-detection
+     * windows for long-lived client tools (e.g. SQL IDEs). Enabling this is mainly
+     * useful for diagnosing genuinely abandoned sessions.</p>
+     *
+     * @return the leak detection threshold in milliseconds, or 0 if disabled
+     */
+    public long getLeakDetectionThresholdMs() {
+        return leakDetectionThresholdMs;
+    }
+
+    /**
      * Gets the SQL query used to validate connections.
      *
      * @return the validation query, may be null if not configured
@@ -266,6 +289,7 @@ public final class PoolConfig {
                 ", connectionTimeoutMs=" + connectionTimeoutMs +
                 ", idleTimeoutMs=" + idleTimeoutMs +
                 ", maxLifetimeMs=" + maxLifetimeMs +
+                ", leakDetectionThresholdMs=" + leakDetectionThresholdMs +
                 ", validationQuery='" + validationQuery + '\'' +
                 ", autoCommit=" + autoCommit +
                 ", defaultTransactionIsolation=" + defaultTransactionIsolation +
@@ -288,6 +312,7 @@ public final class PoolConfig {
         private long connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS;
         private long idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS;
         private long maxLifetimeMs = DEFAULT_MAX_LIFETIME_MS;
+        private long leakDetectionThresholdMs = DEFAULT_LEAK_DETECTION_THRESHOLD_MS;
         private String validationQuery;
         private boolean autoCommit = DEFAULT_AUTO_COMMIT;
         private Integer defaultTransactionIsolation;
@@ -443,6 +468,21 @@ public final class PoolConfig {
                 throw new IllegalArgumentException("maxLifetimeMs cannot be negative");
             }
             this.maxLifetimeMs = maxLifetimeMs;
+            return this;
+        }
+
+        /**
+         * Sets the leak detection threshold in milliseconds.
+         *
+         * @param leakDetectionThresholdMs the threshold in milliseconds, or 0 to disable leak detection
+         * @return this builder
+         * @throws IllegalArgumentException if leakDetectionThresholdMs is negative
+         */
+        public Builder leakDetectionThresholdMs(long leakDetectionThresholdMs) {
+            if (leakDetectionThresholdMs < 0) {
+                throw new IllegalArgumentException("leakDetectionThresholdMs cannot be negative");
+            }
+            this.leakDetectionThresholdMs = leakDetectionThresholdMs;
             return this;
         }
 

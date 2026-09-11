@@ -612,7 +612,7 @@ public class CommonsPool2XADataSource implements XADataSource, AutoCloseable {
     /**
      * Creates a ThreadFactory that uses virtual threads.
      * <p>
-     * This module runs only on ojp-server which is guaranteed to be running on Java 21+,
+     * This module runs only on ojp-server which is guaranteed to be running on Java 25+,
      * so we can directly use virtual threads without reflection.
      * </p>
      *
@@ -626,7 +626,7 @@ public class CommonsPool2XADataSource implements XADataSource, AutoCloseable {
         boolean needsExecutor = housekeepingConfig.isLeakDetectionEnabled() || housekeepingConfig.isDiagnosticsEnabled();
 
         if (needsExecutor) {
-            // Create executor for housekeeping tasks using virtual threads (Java 21+)
+            // Create executor for housekeeping tasks using virtual threads (Java 25+)
             housekeepingExecutor = Executors.newSingleThreadScheduledExecutor(createThreadFactory());
         }
 

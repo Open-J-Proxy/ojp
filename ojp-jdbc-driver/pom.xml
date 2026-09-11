@@ -6,18 +6,18 @@
 
     <name>OJP JDBC Driver</name>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.15-SNAPSHOT</version>
+    <version>1.0.0-RC1</version>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>0.4.15-SNAPSHOT</version>
+        <version>1.0.0-RC1</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <properties>
-        <atomikos.version>6.0.0</atomikos.version>
-        <slf4j.version>2.0.17</slf4j.version>
+        <atomikos.version>6.0.1</atomikos.version>
+        <slf4j.version>2.0.18</slf4j.version>
     </properties>
 
     <dependencies>
@@ -25,7 +25,7 @@
         <dependency>
             <groupId>org.openjproxy</groupId>
             <artifactId>ojp-grpc-commons</artifactId>
-            <version>0.4.15-SNAPSHOT</version>
+            <version>1.0.0-RC1</version>
         </dependency>
 
 
@@ -52,6 +52,13 @@
             <groupId>jakarta.transaction</groupId>
             <artifactId>jakarta.transaction-api</artifactId>
             <version>2.0.1</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Used for StringUtils throughout the driver; version managed by parent BOM -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/junit/junit -->
@@ -66,7 +73,7 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.14.3</version>
+            <version>5.14.4</version>
             <scope>test</scope>
         </dependency>
 
@@ -74,7 +81,7 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-params</artifactId>
-            <version>5.14.3</version>
+            <version>5.14.4</version>
             <scope>test</scope>
         </dependency>
 
@@ -107,7 +114,7 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.10</version>
+            <version>42.7.13</version>
             <scope>test</scope>
         </dependency>
 
@@ -133,7 +140,15 @@
         <dependency>
             <groupId>org.openjproxy</groupId>
             <artifactId>ojp-testcontainers</artifactId>
-            <version>0.4.15-SNAPSHOT</version>
+            <version>1.0.0-RC1</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- plexus-utils was previously available as a transitive dep via ojp-grpc-commons;
+             declared explicitly here for test code that uses ExceptionUtils; version managed by parent BOM -->
+        <dependency>
+            <groupId>org.codehaus.plexus</groupId>
+            <artifactId>plexus-utils</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -207,6 +222,63 @@
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"/>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
+                            <!-- Exclude JAR signature files to prevent SecurityException at runtime -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <!--
+                                Exclude annotation-only artifacts; they contain no runtime logic and
+                                their javax.annotation / android.annotation packages must not be
+                                bundled or relocated to avoid conflicts with the JDK and consumer code.
+                            -->
+                            <artifactSet>
+                                <excludes>
+                                    <exclude>com.google.code.findbugs:jsr305</exclude>
+                                    <exclude>com.google.android:annotations</exclude>
+                                    <exclude>com.google.errorprone:error_prone_annotations</exclude>
+                                    <exclude>com.google.j2objc:j2objc-annotations</exclude>
+                                    <exclude>org.codehaus.mojo:animal-sniffer-annotations</exclude>
+                                    <exclude>org.jspecify:jspecify</exclude>
+                                    <exclude>com.google.guava:listenablefuture</exclude>
+                                </excludes>
+                            </artifactSet>
+                            <!--
+                                Relocate all bundled third-party packages to the org.openjproxy.shaded.*
+                                namespace so they do not conflict with versions already present on the
+                                consumer's classpath (e.g. their own gRPC/Netty/Protobuf/Guava stack).
+                                org.openjproxy.* is the driver's own namespace and is intentionally left
+                                unrelocated so that public JDBC/JTA API types remain at their expected paths.
+                            -->
+                            <relocations>
+                                <relocation>
+                                    <pattern>io.grpc</pattern>
+                                    <shadedPattern>org.openjproxy.shaded.io.grpc</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty</pattern>
+                                    <shadedPattern>org.openjproxy.shaded.io.netty</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.perfmark</pattern>
+                                    <shadedPattern>org.openjproxy.shaded.io.perfmark</shadedPattern>
+                                </relocation>
+                                <!-- Single broad pattern covers protobuf, guava, gson, api-protos, etc. -->
+                                <relocation>
+                                    <pattern>com.google</pattern>
+                                    <shadedPattern>org.openjproxy.shaded.com.google</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons</pattern>
+                                    <shadedPattern>org.openjproxy.shaded.org.apache.commons</shadedPattern>
+                                </relocation>
+                            </relocations>
                         </configuration>
                     </execution>
                 </executions>

@@ -10,10 +10,10 @@ Before diving into OJP development, you'll need to have the right tools installe
 
 OJP has different Java requirements for different components:
 
-- **OJP Server**: Requires Java 21 or newer
+- **OJP Server**: Requires Java 25 or newer
 - **OJP JDBC Driver**: Requires Java 11 or newer
 
-The OJP server uses modern Java features introduced in Java 21, while the JDBC driver maintains compatibility with Java 11 to support a wider range of client applications. You can download the latest JDK from [Oracle](https://www.oracle.com/java/technologies/downloads/), [Adoptium](https://adoptium.net/), or use a version manager like [SDKMAN!](https://sdkman.io/).
+The OJP server uses modern Java features introduced in Java 25, while the JDBC driver maintains compatibility with Java 11 to support a wider range of client applications. You can download the latest JDK from [Oracle](https://www.oracle.com/java/technologies/downloads/), [Adoptium](https://adoptium.net/), or use a version manager like [SDKMAN!](https://sdkman.io/).
 
 Once installed, verify your Java version:
 
@@ -21,11 +21,11 @@ Once installed, verify your Java version:
 java -version
 ```
 
-You should see output indicating Java 21 or higher for server development. If you have multiple Java versions installed, make sure your `JAVA_HOME` environment variable points to the correct one. Note that for JDBC driver-only development, Java 11+ is sufficient, but server development requires Java 21+.
+You should see output indicating Java 25 or higher for server development. If you have multiple Java versions installed, make sure your `JAVA_HOME` environment variable points to the correct one. Note that for JDBC driver-only development, Java 11+ is sufficient, but server development requires Java 25+.
 
 ### Maven 3.9 or Higher
 
-OJP uses Maven for builds, dependency management, and testing. Maven 3.9+ is required to ensure compatibility with Java 21 and modern dependency resolution. Most Linux distributions and macOS (via Homebrew) provide recent versions:
+OJP uses Maven for builds, dependency management, and testing. Maven 3.9+ is required to ensure compatibility with Java 25 and modern dependency resolution. Most Linux distributions and macOS (via Homebrew) provide recent versions:
 
 ```bash
 # macOS
@@ -70,7 +70,7 @@ sudo apt install git
 # Windows: Download from git-scm.com
 ```
 
-**[IMAGE_PROMPT_1]**: Create a technical diagram showing the development environment stack for OJP. Show four layers vertically: at the bottom "Operating System (Linux/macOS/Windows)", then "Java 21+ JDK (Server) / Java 11+ (Driver) & Maven 3.9+", then "Docker Engine with database containers (PostgreSQL, MySQL, H2)", and at the top "OJP Source Code (ojp-server, ojp-jdbc-driver, ojp-grpc-commons)". Use clean lines connecting the layers with arrows showing dependencies flowing upward. Include small icons for Java, Maven, Docker, and Git. Professional developer-focused style with muted blue and gray tones.
+**[IMAGE_PROMPT_1]**: Create a technical diagram showing the development environment stack for OJP. Show four layers vertically: at the bottom "Operating System (Linux/macOS/Windows)", then "Java 25+ JDK (Server) / Java 11+ (Driver) & Maven 3.9+", then "Docker Engine with database containers (PostgreSQL, MySQL, H2)", and at the top "OJP Source Code (ojp-server, ojp-jdbc-driver, ojp-grpc-commons)". Use clean lines connecting the layers with arrows showing dependencies flowing upward. Include small icons for Java, Maven, Docker, and Git. Professional developer-focused style with muted blue and gray tones.
 
 ## 15.2 Forking and Cloning the Repository
 
@@ -205,7 +205,7 @@ The server JAR is executable and includes all dependencies except database drive
 
 If the build fails, check these common issues:
 
-**Java version mismatch**: Ensure `JAVA_HOME` points to Java 21+ for server development or Java 11+ for driver-only development. Some systems have multiple JDKs, and Maven might pick up an older one.
+**Java version mismatch**: Ensure `JAVA_HOME` points to Java 25+ for server development or Java 11+ for driver-only development. Some systems have multiple JDKs, and Maven might pick up an older one.
 
 **Maven settings**: Corporate firewalls or proxies might block Maven Central. Check your `~/.m2/settings.xml` if downloads fail.
 
@@ -469,7 +469,7 @@ public class MyIntegrationTest {
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-testcontainers</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
     <scope>test</scope>
 </dependency>
 ```
@@ -697,7 +697,7 @@ mvn test -DenableH2Tests=true
 
 Setting up OJP for development is straightforward once you understand the components:
 
-1. Install Java 21+ (for server) or Java 11+ (for driver only), Maven 3.9+, Docker, and Git
+1. Install Java 25+ (for server) or Java 11+ (for driver only), Maven 3.9+, Docker, and Git
 2. Fork and clone the repository, adding upstream as a remote
 3. Download JDBC drivers using the provided script
 4. Build the project with `mvn clean install -DskipTests`

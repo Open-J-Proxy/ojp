@@ -27,7 +27,6 @@ public class GrpcServer {
         // Load configuration
         ServerConfiguration config = new ServerConfiguration();
 
-        CircuitBreakerRegistry circuitBreakerRegistry = new CircuitBreakerRegistry(config.getCircuitBreakerTimeout(), config.getCircuitBreakerThreshold());
         // Load external JDBC drivers from configured directory
         logger.info("Loading external JDBC drivers...");
         boolean driversLoaded = DriverLoader.loadDriversFromPath(config.getDriversPath());
@@ -48,6 +47,7 @@ public class GrpcServer {
         // Initialize telemetry based on configuration
         OjpServerTelemetry ojpServerTelemetry = new OjpServerTelemetry();
         GrpcTelemetry grpcTelemetry;
+        CircuitBreakerMetrics circuitBreakerMetrics;
 
         if (config.isOpenTelemetryEnabled()) {
             grpcTelemetry = ojpServerTelemetry.createGrpcTelemetry(
@@ -61,6 +61,12 @@ public class GrpcServer {
                 config.isTelemetryGrpcMetricsEnabled(),
                 config.isTelemetryPoolMetricsEnabled()
             );
+            if (config.isTelemetryCircuitBreakerMetricsEnabled()) {
+                circuitBreakerMetrics = ojpServerTelemetry.createCircuitBreakerMetrics();
+            } else {
+                circuitBreakerMetrics = CircuitBreakerMetrics.noop();
+                logger.info("Circuit breaker metrics disabled");
+            }
 
             OjpHealthManager.setServiceStatus(OjpHealthManager.Services.OPENTELEMETRY_SERVICE,
                     HealthCheckResponse.ServingStatus.SERVING);
@@ -75,7 +81,14 @@ public class GrpcServer {
             }
         } else {
             grpcTelemetry = ojpServerTelemetry.createNoOpGrpcTelemetry();
+            circuitBreakerMetrics = CircuitBreakerMetrics.noop();
         }
+
+        CircuitBreakerRegistry circuitBreakerRegistry = new CircuitBreakerRegistry(
+                config.getCircuitBreakerTimeout(),
+                config.getCircuitBreakerThreshold(),
+                circuitBreakerMetrics
+        );
 
         // Build server with configuration
         // Create shared cache configuration map for session-level caching
@@ -100,6 +113,7 @@ public class GrpcServer {
                 .addService(statementService)
                 .addService(OjpHealthManager.getHealthStatusManager().getHealthService())
                 .intercept(new IpWhitelistingInterceptor(config.getAllowedIps()))
+                .intercept(new ConcurrencyThrottleInterceptor(config.getMaxConcurrentRequests()))
                 .intercept(grpcTelemetry.newServerInterceptor());
 
         // Configure TLS if enabled

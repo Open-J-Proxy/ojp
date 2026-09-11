@@ -65,7 +65,7 @@ For more details on recognition for these contributions, see our [Contributor Re
 
 ### Prerequisites
 
-- **Java 22 or higher**
+- **Java 25 or higher**
 - **Maven 3.9+**
 - **Docker** (for running databases and OJP server)
 - **Git** (for version control)

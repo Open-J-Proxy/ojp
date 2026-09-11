@@ -58,10 +58,10 @@ Documentation lives under `documents/`. ADRs are in `documents/ADRs/`. The `ROAD
 | Context | Minimum Java |
 |---|---|
 | ojp-jdbc-driver (runtime) | Java 11 |
-| ojp-server (runtime) | Java 21 |
-| Development / CI build | Java 24 (recommended) |
+| ojp-server (runtime) | Java 25 |
+| Development / CI build | Java 25 (recommended) |
 
-The root `pom.xml` compiles with `source/target = 11` but the server module overrides this to 21. **Do not lower these targets.** CI tests against Java 11, 17, 21, and 22 for the driver.
+The root `pom.xml` compiles with `source/target = 11` but the server module overrides this to 25. **Do not lower these targets.** CI tests against Java 11, 17, 21, and 25 for the driver.
 
 ---
 

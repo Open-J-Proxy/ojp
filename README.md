@@ -13,30 +13,23 @@ Follow us on LinkedIn 👉 [Open J Proxy](https://www.linkedin.com/company/open-
 
 ---
 
-A type 3 JDBC Driver and Layer 7 Proxy Server to decouple applications from relational database connection management.
+**A smart, open-source database control plane** — delivered as a Type 3 JDBC driver and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover — all behind a standard JDBC API and with a roadmap for non-Java clients.
 
 _"The only open-source JDBC Type 3 driver globally, this project introduces a transparent Quality-of-Service layer that decouples application performance from database bottlenecks. It's a must-try for any team struggling with data access contention, offering easy-to-implement back-pressure and pooling management." (Bruno Bossola - Java Champion and CTO @ Meterian.io)_  
 
 ---
 
-## Star History
-
-<a href="https://star-history.com/#Open-J-Proxy/ojp&Timeline">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Open-J-Proxy/ojp&type=Timeline&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Open-J-Proxy/ojp&type=Timeline" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Open-J-Proxy/ojp&type=Timeline" />
-  </picture>
-</a>
-
-
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/wqoejbve8z)
-
----
-
 ## Value Proposition
 
-OJP protects your databases from overwhelming connection storms by acting as a smart backpressure mechanism. Instead of every application instance opening and holding connections, OJP orchestrates and optimizes database access through intelligent pooling, query flow control, and multi-database support. With minimal configuration changes, you replace native JDBC drivers gaining connection resilience, and safer scalability. Elastic scaling becomes simpler without putting your database at risk.
+OJP is a **smart database control plane** for relational databases — more than a connection-pool proxy, it is a programmable layer between your applications and your databases that delivers:
+
+- **Backpressure & connection-storm protection** — a global, OJP-managed pool fronts the database so elastic fleets cannot exhaust connections.
+- **Client-side reactive throttling** — when the server is under pressure, clients back off automatically and recover on their own.
+- **Slow vs fast query segregation (SQS)** — keeps long analytical queries from starving short OLTP traffic. See [Mixed OLTP + OLAP workloads](#mixed-oltp--olap-workloads-enable-slow-query-segregation) below.
+- **Rich observability** — OpenTelemetry traces and Prometheus metrics for pools, admission, classification and throttling. See [Telemetry and Observability](documents/telemetry/README.md).
+- **Load balancing & failover in the driver** — multinode URLs (`jdbc:ojp[host1:port1,host2:port2]_...`) with load-aware routing and session stickiness. See [Multinode Configuration](documents/multinode/README.md).
+- **Seamless Java integration** — standard JDBC 4.2, Spring Boot starter, Quarkus and Micronaut guides; no application rewrite.
+- **Path to a universal database control plane** — the gRPC protocol is language-neutral, so non-Java clients (Python, Node, Go, …) can join the same plane. See the [multi-language client spec](documents/multi-language-client-spec/).
 
 Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2**. Also compatible in principle with any database that provides a JDBC driver.
 
@@ -44,7 +37,7 @@ Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, 
 ## Requirements
 
 - **OJP JDBC Driver**: Java 11 or higher
-- **OJP Server**: Java 21 or higher
+- **OJP Server**: Java 25 or higher
 
 ---
 ## Quick Start
@@ -66,20 +59,20 @@ cd ..
 docker run --rm -d \
   --network host \
   -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 **Alternative: Runnable JAR (No Docker)**
 
 ```bash
 # Download OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/0.4.14-beta/ojp-server-0.4.14-beta-shaded.jar
-chmod +x ojp-server-0.4.14-beta-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.0-RC1-shaded.jar
+chmod +x ojp-server-1.0.0-RC1-shaded.jar
 
 # Download open source JDBC drivers
 curl -LO https://raw.githubusercontent.com/Open-J-Proxy/ojp/main/ojp-server/download-drivers.sh
 bash download-drivers.sh  # Downloads H2, PostgreSQL, MySQL, MariaDB to ojp-libs/
-java -Duser.timezone=UTC -jar ojp-server-0.4.14-beta-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 📖 See [Executable JAR Setup Guide](documents/runnable-jar/README.md) for details.
@@ -89,7 +82,7 @@ java -Duser.timezone=UTC -jar ojp-server-0.4.14-beta-shaded.jar
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -115,6 +108,22 @@ That's it! Your application now uses intelligent connection pooling through OJP.
 
 **Note**: For detailed driver setup including proprietary databases (Oracle, SQL Server, DB2), see [Chapter 4: Database Drivers](documents/ebook/part2-chapter4-database-drivers.md).
 
+---
+
+## Mixed OLTP + OLAP workloads — Enable Slow Query Segregation
+
+If the same database serves **both** short OLTP queries **and** long reporting/OLAP queries, enable **Slow Query Segregation (SQS)** on the OJP server:
+
+```bash
+-Dojp.server.slowQuerySegregation.enabled=true
+```
+
+Or via environment variable: `OJP_SERVER_SLOWQUERYSEGREGATION_ENABLED=true`.
+
+That single flag is enough — defaults are tuned for typical mixed workloads. For tuning options (slow-slot percentage, classification mode, thresholds), see [Slow Query Segregation](documents/designs/SLOW_QUERY_SEGREGATION.md) and the [server configuration reference](documents/configuration/ojp-server-configuration.md#slow-query-segregation-settings). For pure OLTP-only or pure OLAP-only deployments, leave SQS disabled (the default).
+
+---
+
 ## Alternative Setup: Executable JAR (No Docker)
 
 If Docker is not available in your environment, you can run OJP Server as a standalone JAR file downloaded directly from Maven Central — no source code or build tools required:
@@ -126,19 +135,22 @@ If Docker is not available in your environment, you can run OJP Server as a stan
 ---
 
 ## Documentation
-### High Level Solution
+### Overview
 
-<img src="documents/designs/ojp_high_level_design.gif" alt="OJP High Level Design" />
+<img src="documents/images/open_j_proxy_overview.png" alt="Open J Proxy Overview" />
 
 * The OJP JDBC driver is used as a replacement for the native JDBC driver(s) previously used with minimal change, the only change required being prefixing the connection URL with `ojp_`. 
 * **Open Source**: OJP is an open-source project that is free to use, modify, and distribute.
-* The OJP server is deployed as an independent service that serves as a smart proxy between the application(s) and their respective relational database(s), controlling the number of connections open against each database.
-* **Smart Connection Management**: The proxy ensures that database connections are allocated only when needed, improving scalability and resource utilization.
-* **Elastic Scalability**: OJP allows client applications to scale elastically without increasing the pressure on the database.
-* **gRPC Protocol** is used to facilitate the connection between the OJP JDBC Driver and the OJP Server, allowing for efficient data transmission over a multiplexed channel.
-* OJP Server uses **HikariCP** connection pools to efficiently manage connections.
-* OJP supports **multiple relational databases** - in theory it can support any relational database that provides a JDBC driver implementation.
-* OJP simple setup just requires the OJP library in the classpath and the OJP prefix added to the connection URL (e.g., `jdbc:ojp[host:port]_h2:~/test` where `host:port` represents the location of the OJP server).
+* **Smart database control plane**: The OJP server is deployed as an independent service that sits between application(s) and their relational database(s), centrally enforcing connection limits, admission control, throttling and quality-of-service policy.
+* **Backpressure & connection-storm protection**: real database connections are allocated only when needed and capped globally, so elastic application fleets cannot overwhelm the database.
+* **Client-side reactive throttling**: when the server is under pressure, clients are signaled to throttle themselves and recover automatically — preventing thread pile-ups in the application.
+* **Slow vs fast query segregation**: optional lane-based segregation of OLTP and OLAP traffic on the same database — see [Mixed OLTP + OLAP workloads](#mixed-oltp--olap-workloads-enable-slow-query-segregation).
+* **Rich observability**: built-in OpenTelemetry tracing and Prometheus metrics expose pool, admission, classification and throttling behaviour. See [Telemetry and Observability](documents/telemetry/README.md).
+* **Load balancing & failover in the driver**: the OJP JDBC driver supports multinode URLs (`jdbc:ojp[host1:port1,host2:port2]_...`) with load-aware routing, session stickiness, and automatic failover. See [Multinode Configuration](documents/multinode/README.md).
+* **Elastic scalability**: client applications can scale elastically without increasing the pressure on the database.
+* **gRPC protocol** between driver and server provides multiplexed, low-latency communication — and is language-neutral, opening the door to non-Java clients (see [multi-language client spec](documents/multi-language-client-spec/)).
+* **Multiple relational databases**: in theory any relational database that provides a JDBC driver implementation.
+* **Simple setup**: just add the OJP library to the classpath and prefix the connection URL (e.g. `jdbc:ojp[host:port]_h2:~/test`).
 * **Drop-In External Libraries**: Add proprietary JDBC drivers (Oracle, SQL Server, DB2) and additional libraries (e.g., Oracle UCP) without recompiling - see [Drop-In Driver Documentation](documents/configuration/DRIVERS_AND_LIBS.md). Simply place JARs in the `ojp-libs` directory.
 * **SQL Query Enhancement**: ⚠️ **EXPERIMENTAL (NOT RECOMMENDED)** - Optional SQL enhancer with Apache Calcite for query optimization. **Disabled by default.** Has known limitations with traditional JDBC databases (PostgreSQL, MySQL, Oracle, SQL Server). See [configuration documentation](documents/configuration/ojp-server-configuration.md#sql-enhancer-and-schema-loader-settings) for details.
 
@@ -161,7 +173,8 @@ If Docker is not available in your environment, you can run OJP Server as a stan
 ---
 
 ## Vision
-Provide a free and open-source solution for a relational database-agnostic proxy connection pool. The project is designed to help efficiently manage database connections in microservices, event-driven architectures, or serverless environments while maintaining high scalability and performance.
+
+Provide a free and open-source **universal database control plane** for relational databases — a single, programmable layer where teams can enforce connection limits, backpressure, throttling, slow/fast segregation, and observability across many databases and (in time) many client languages. The project is designed to help microservices, event-driven, and serverless architectures scale elastically without sacrificing database stability, while giving operators a clear view into what the data tier is doing.
 
 ---
 

@@ -1,7 +1,6 @@
 package org.openjproxy.grpc.server.statement;
 
 import com.openjproxy.grpc.StatementRequest;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.Parameter;
@@ -35,7 +34,7 @@ public class StatementFactory {
     public static Statement createStatement(SessionManager sessionManager, Connection connection,
                                           StatementRequest request) throws SQLException {
         try {
-            if (StringUtils.isNotEmpty(request.getStatementUUID())) {
+            if (!request.getStatementUUID().isEmpty()) {
                 return sessionManager.getStatement(request.getSession(), request.getStatementUUID());
             }
             if (request.getPropertiesList().isEmpty()) {

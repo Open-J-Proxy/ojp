@@ -6,6 +6,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.server.cache.CacheConfiguration;
 
+import javax.sql.DataSource;
 import javax.sql.XAConnection;
 import java.sql.CallableStatement;
 import java.sql.Connection;
@@ -18,12 +19,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class SessionManagerImpl implements SessionManager {
 
     private Map<String, String> connectionHashMap = new ConcurrentHashMap<>();
     private Map<String, Session> sessionMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, AtomicInteger>> clientRefCounts = new ConcurrentHashMap<>();
     private final Map<String, CacheConfiguration> cacheConfigurationMap;
 
     /**
@@ -47,6 +50,38 @@ public class SessionManagerImpl implements SessionManager {
     public void registerClientUUID(String connectionHash, String clientUUID) {
         log.debug("Registering client uuid {}", clientUUID);
         this.connectionHashMap.put(clientUUID, connectionHash);
+        clientRefCounts.computeIfAbsent(connectionHash, k -> new ConcurrentHashMap<>())
+            .compute(clientUUID, (k, v) -> {
+                if (v == null) {
+                    return new AtomicInteger(1);
+                }
+                v.incrementAndGet();
+                return v;
+            });
+    }
+
+    @Override
+    public void deregisterClientUUID(String connectionHash, String clientUUID) {
+        ConcurrentHashMap<String, AtomicInteger> perConnHash = clientRefCounts.get(connectionHash);
+        if (perConnHash == null) {
+            return;
+        }
+        perConnHash.compute(clientUUID, (k, v) -> {
+            if (v == null) {
+                return null;
+            }
+            return v.decrementAndGet() <= 0 ? null : v;
+        });
+        if (perConnHash.isEmpty()) {
+            clientRefCounts.remove(connectionHash, perConnHash);
+        }
+    }
+
+    @Override
+    public int getClientCount(String connectionHash) {
+        ConcurrentHashMap<String, AtomicInteger> perConnHash = clientRefCounts.get(connectionHash);
+        // Return 1 as default: assume at least one client for fair-share calculation
+        return (perConnHash == null || perConnHash.isEmpty()) ? 1 : perConnHash.size();
     }
 
     @Override
@@ -56,6 +91,37 @@ public class SessionManagerImpl implements SessionManager {
         CacheConfiguration cacheConfig = getCacheConfiguration(connectionHash);
         Session session = new Session(connection, connectionHash, clientUUID, false, null, cacheConfig);
         log.debug("Session {} created for client uuid {}", session.getSessionUUID(), clientUUID);
+        this.sessionMap.put(session.getSessionUUID(), session);
+        return session.getSessionInfo();
+    }
+
+    @Override
+    public SessionInfo createSession(String clientUUID, String connHash, Connection connection) {
+        log.info("Create session for client uuid {} with connHash {}", clientUUID, connHash);
+        CacheConfiguration cacheConfig = getCacheConfiguration(connHash);
+        Session session = new Session(connection, connHash, clientUUID, false, null, cacheConfig);
+        log.info("Session {} created for client uuid {}", session.getSessionUUID(), clientUUID);
+        this.sessionMap.put(session.getSessionUUID(), session);
+        return session.getSessionInfo();
+    }
+
+    @Override
+    public SessionInfo createSession(String clientUUID, DataSource primaryDataSource, DataSource replicaDataSource) {
+        log.info("Create lazy dual-datasource session for client uuid {}", clientUUID);
+        String connectionHash = connectionHashMap.get(clientUUID);
+        CacheConfiguration cacheConfig = getCacheConfiguration(connectionHash);
+        Session session = new Session(primaryDataSource, replicaDataSource, connectionHash, clientUUID, cacheConfig);
+        log.info("Lazy session {} created for client uuid {}", session.getSessionUUID(), clientUUID);
+        this.sessionMap.put(session.getSessionUUID(), session);
+        return session.getSessionInfo();
+    }
+
+    @Override
+    public SessionInfo createSession(String clientUUID, String connHash, DataSource primaryDataSource, DataSource replicaDataSource) {
+        log.info("Create lazy dual-datasource session for client uuid {} with connHash {}", clientUUID, connHash);
+        CacheConfiguration cacheConfig = getCacheConfiguration(connHash);
+        Session session = new Session(primaryDataSource, replicaDataSource, connHash, clientUUID, cacheConfig);
+        log.info("Lazy session {} created for client uuid {}", session.getSessionUUID(), clientUUID);
         this.sessionMap.put(session.getSessionUUID(), session);
         return session.getSessionInfo();
     }
@@ -196,6 +262,10 @@ public class SessionManagerImpl implements SessionManager {
             log.warn("Session {} not found on this server - may have been created on another server or already terminated",
                     sessionInfo.getSessionUUID());
             return;
+        }
+
+        if (!sessionInfo.getClientUUID().isEmpty()) {
+            deregisterClientUUID(sessionInfo.getConnHash(), sessionInfo.getClientUUID());
         }
 
         if (TransactionStatus.TRX_ACTIVE.equals(sessionInfo.getTransactionInfo().getTransactionStatus())) {

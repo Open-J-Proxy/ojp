@@ -17,11 +17,12 @@ class OjpServerTelemetryTest {
 	private static final int TIMEOUT = 5000;
 	private static final int RESPONSE_CODE_OK = 200;
 
+	private static OjpServerTelemetry instrument;
 	private static GrpcTelemetry grpcTelemetry;
 
 	@BeforeAll
 	static void setUp() {
-		OjpServerTelemetry instrument = new OjpServerTelemetry();
+		instrument = new OjpServerTelemetry();
 		grpcTelemetry = instrument.createGrpcTelemetry(PROMETHEUS_PORT);
 	}
 
@@ -30,6 +31,11 @@ class OjpServerTelemetryTest {
 		assertNotNull(grpcTelemetry);
 		assertNotNull(grpcTelemetry.newServerInterceptor());
 		assertNotNull(grpcTelemetry.newClientInterceptor());
+	}
+
+	@Test
+	void shouldCreateCircuitBreakerMetricsWithServerTelemetry() {
+		assertNotNull(instrument.createCircuitBreakerMetrics());
 	}
 
 	@Test
@@ -45,8 +51,8 @@ class OjpServerTelemetryTest {
 
 	@Test
 	void shouldCreateNoOpGrpcTelemetryWhenDisabled() {
-		OjpServerTelemetry instrument = new OjpServerTelemetry();
-		GrpcTelemetry noOp = instrument.createNoOpGrpcTelemetry();
+		OjpServerTelemetry noOpTelemetry = new OjpServerTelemetry();
+		GrpcTelemetry noOp = noOpTelemetry.createNoOpGrpcTelemetry();
 
 		assertNotNull(noOp);
 		assertNotNull(noOp.newServerInterceptor());
@@ -55,9 +61,9 @@ class OjpServerTelemetryTest {
 
 	@Test
 	void shouldCreateGrpcTelemetryWithTracingDisabledByDefault() {
-		OjpServerTelemetry instrument = new OjpServerTelemetry();
-		// tracing disabled — no exporter is configured; must not throw
-		GrpcTelemetry telemetry = instrument.createGrpcTelemetry(
+		OjpServerTelemetry telemetryFactory = new OjpServerTelemetry();
+		// tracing disabled - no exporter is configured; must not throw
+		GrpcTelemetry telemetry = telemetryFactory.createGrpcTelemetry(
 				9192,
 				List.of(IpWhitelistValidator.ALLOW_ALL_IPS),
 				false, "zipkin", "http://localhost:9411/api/v2/spans", "ojp-server", 1.0,

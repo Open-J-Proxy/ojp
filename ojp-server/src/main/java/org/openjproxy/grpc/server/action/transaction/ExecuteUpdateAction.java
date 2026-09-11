@@ -10,7 +10,6 @@ import io.grpc.stub.StreamObserver;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.Parameter;
@@ -133,13 +132,13 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                             || requiresSessionAffinity);
 
             List<Parameter> params = ProtoConverter.fromProtoList(request.getParametersList());
-            PreparedStatement ps = dto.getSession() != null && StringUtils.isNotBlank(dto.getSession().getSessionUUID())
-                    && StringUtils.isNoneBlank(request.getStatementUUID())
+            PreparedStatement ps = dto.getSession() != null && !dto.getSession().getSessionUUID().isBlank()
+                    && !request.getStatementUUID().isBlank()
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
                     : null;
 
             if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys) {
-                if (StringUtils.isNotEmpty(request.getStatementUUID()) && ps != null) {
+                if (!request.getStatementUUID().isEmpty() && ps != null) {
                     bindLobsAndParameters(sessionManager, dto, ps, params);
                 } else {
                     ps = StatementFactory.createPreparedStatement(sessionManager, dto, request.getSql(), params,
@@ -157,10 +156,14 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                 updated = stmt.executeUpdate(request.getSql());
             }
 
-            OpResult result = buildOpResult(request, dto.getSession(), psUUID, updated, generatedKeysUuid);
+            OpResult result = buildOpResult(request, dto.getSession(), psUUID, updated, generatedKeysUuid, actionContext);
 
             // Phase 9: Cache Invalidation (after successful update)
             org.openjproxy.grpc.server.cache.QueryCacheHelper.invalidateCacheIfEnabled(actionContext, dto.getSession(), request.getSql());
+
+            // Read/write splitting: mark write for sticky session (routes subsequent reads to primary)
+            markStickySessionAfterWrite(actionContext, dto);
+
 
             return result;
         } finally {
@@ -253,8 +256,11 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
      * @return the built {@link OpResult}
      */
     private OpResult buildOpResult(StatementRequest request, SessionInfo sessionInfo,
-                                   String psUUID, int updated, String generatedKeysUuid) {
-        OpResult.Builder builder = OpResult.newBuilder().setSession(sessionInfo);
+                                   String psUUID, int updated, String generatedKeysUuid,
+                                   ActionContext context) {
+        SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
+                .enrichWithThrottle(sessionInfo, context);
+        OpResult.Builder builder = OpResult.newBuilder().setSession(enrichedSession);
         if (!generatedKeysUuid.isEmpty()) {
             builder.setUuid(generatedKeysUuid);
         }
@@ -323,7 +329,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
      * @param stmt the statement to close (may be null)
      */
     private void closeStatementAndConnectionIfNoSession(ConnectionSessionDTO dto, Statement stmt) {
-        if ((dto == null || dto.getSession() == null || StringUtils.isEmpty(dto.getSession().getSessionUUID())) && stmt != null) {
+        if ((dto == null || dto.getSession() == null || dto.getSession().getSessionUUID().isEmpty()) && stmt != null) {
             try {
                 stmt.close();
             } catch (SQLException e) {
@@ -334,6 +340,27 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             } catch (SQLException e) {
                 log.error("Failure closing connection: {}", e.getMessage(), e);
             }
+        }
+    }
+
+    /**
+     * Marks a write on the sticky-session tracker so that subsequent reads within the
+     * configured window are routed to the primary (read-your-writes guarantee).
+     * This is a no-op when read/write splitting is not configured.
+     *
+     * @param actionContext the action context
+     * @param dto           the connection and session DTO used for the write
+     */
+    private void markStickySessionAfterWrite(ActionContext actionContext, ConnectionSessionDTO dto) {
+        var registry = actionContext.getReadWriteDataSourceRegistry();
+        if (registry == null || dto.getSession() == null) {
+            return;
+        }
+        String connHash = dto.getSession().getConnHash();
+        String primaryName = registry.getPrimaryName(connHash);
+        if (primaryName != null) {
+            registry.markWrite(primaryName);
+            log.debug("Read/write splitting: sticky session marked for primary '{}' after write", primaryName);
         }
     }
 }

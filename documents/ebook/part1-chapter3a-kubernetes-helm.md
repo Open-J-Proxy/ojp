@@ -295,7 +295,7 @@ helm list -n ojp
 
 # Expected output:
 # NAME        NAMESPACE  REVISION  STATUS    CHART              APP VERSION
-# ojp-server  ojp        1         deployed  ojp-server-0.1.2   0.1.0-beta
+# ojp-server  ojp        1         deployed  ojp-server-1.0.0-RC1   0.1.0-beta
 ```
 
 **Check Kubernetes resources**:

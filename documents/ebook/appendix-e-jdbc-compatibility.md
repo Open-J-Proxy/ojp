@@ -230,7 +230,7 @@ ResultSet rs = stmt.executeQuery("SELECT * FROM large_table");
 **Server-Side Cursors**:
 - OJP maintains server-side cursors for all ResultSets
 - Cursor state tracked on OJP Server (not in database)
-- Database connection held until ResultSet is closed or fully consumed
+- Once acquired, the database connection remains associated with the OJP session until `Connection.close()` terminates the session
 - **Critical**: Always close ResultSets to release server resources
 - Unclosed ResultSets trigger leak detection after 5 minutes (see Chapter 10.8)
 
@@ -290,7 +290,7 @@ while (rs.next()) {
 ResultSet rs = stmt.executeQuery("SELECT * FROM large_table");
 rs.next();  // Read first row
 rs.close(); // Explicitly close
-// Server immediately releases cursor and database connection
+// Server immediately releases the cursor and ResultSet-related server resources
 ```
 
 **Scenario 2: Statement closed (implicit ResultSet close)**:

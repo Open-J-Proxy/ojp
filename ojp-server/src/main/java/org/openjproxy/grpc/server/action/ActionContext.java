@@ -84,6 +84,15 @@ public class ActionContext {
      */
     private final Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheConfigurationMap;
 
+    // ========== Read/Write Splitting ==========
+
+    /**
+     * Registry for managing primary and replica datasources for read/write splitting.
+     * Thread-safe, shared across all actions.
+     */
+    private final org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry readWriteDataSourceRegistry;
+
+
     // ========== XA Pool Provider ==========
 
     /**
@@ -148,6 +157,7 @@ public class ActionContext {
             Map<String, DbName> dbNameMap,
             Map<String, AdmissionControlManager> admissionControlManagers,
             Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheConfigurationMap,
+            org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry readWriteDataSourceRegistry,
             XAConnectionPoolProvider xaPoolProvider,
             MultinodeXaCoordinator xaCoordinator,
             ClusterHealthTracker clusterHealthTracker,
@@ -163,6 +173,7 @@ public class ActionContext {
         this.dbNameMap = dbNameMap;
         this.admissionControlManagers = admissionControlManagers;
         this.cacheConfigurationMap = cacheConfigurationMap;
+        this.readWriteDataSourceRegistry = readWriteDataSourceRegistry;
         this.xaPoolProvider = xaPoolProvider;
         this.xaCoordinator = xaCoordinator;
         this.clusterHealthTracker = clusterHealthTracker;
@@ -202,6 +213,10 @@ public class ActionContext {
     public Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> getCacheConfigurationMap() {
         return cacheConfigurationMap;
     }
+    public org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry getReadWriteDataSourceRegistry() {
+        return readWriteDataSourceRegistry;
+    }
+
 
     public XAConnectionPoolProvider getXaPoolProvider() {
         return xaPoolProvider;

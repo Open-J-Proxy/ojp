@@ -28,8 +28,8 @@ public class OjpServerTelemetry {
 	private static final Logger logger = LoggerFactory.getLogger(OjpServerTelemetry.class);
 	private static final int DEFAULT_PROMETHEUS_PORT = 9159;
 
-	// Store the OpenTelemetry instance for cache metrics initialization
-	private OpenTelemetry openTelemetry;
+	// Store the OpenTelemetry instance for cache and circuit breaker metrics initialization.
+	private OpenTelemetry openTelemetry = OpenTelemetry.noop();
 
 	/**
 	 * Get the OpenTelemetry instance (for cache metrics initialization).
@@ -86,19 +86,16 @@ public class OjpServerTelemetry {
 				.setPort(prometheusPort)
 				.build();
 
-		OpenTelemetry openTelemetry = OpenTelemetrySdk.builder()
+		this.openTelemetry = OpenTelemetrySdk.builder()
 				.setMeterProvider(
 						SdkMeterProvider.builder()
 								.registerMetricReader(prometheusServer)
 								.build())
 				.build();
 
-		// Store the OpenTelemetry instance for cache metrics
-		this.openTelemetry = openTelemetry;
-
 		// Register OpenTelemetry instance for pool metrics if enabled
 		if (poolMetricsEnabled) {
-			org.openjproxy.xa.pool.commons.metrics.OpenTelemetryHolder.setInstance(openTelemetry);
+			org.openjproxy.xa.pool.commons.metrics.OpenTelemetryHolder.setInstance(this.openTelemetry);
 			logger.info("OpenTelemetry instance registered for pool metrics");
 		}
 
@@ -108,7 +105,7 @@ public class OjpServerTelemetry {
 		// for pool metrics and tracing if enabled.
 		if (grpcMetricsEnabled) {
 			logger.info("gRPC metrics enabled, creating instrumented GrpcTelemetry");
-			return GrpcTelemetry.create(openTelemetry);
+			return GrpcTelemetry.create(this.openTelemetry);
 		} else {
 			logger.info("gRPC metrics disabled, creating no-op GrpcTelemetry");
 			return GrpcTelemetry.create(OpenTelemetry.noop());
@@ -155,14 +152,11 @@ public class OjpServerTelemetry {
 			sdkBuilder.setTracerProvider(tracerProvider);
 		}
 
-		OpenTelemetry openTelemetry = sdkBuilder.build();
-
-		// Store the OpenTelemetry instance for cache metrics
-		this.openTelemetry = openTelemetry;
+		this.openTelemetry = sdkBuilder.build();
 
 		// Register OpenTelemetry instance for pool metrics if enabled
 		if (poolMetricsEnabled) {
-			org.openjproxy.xa.pool.commons.metrics.OpenTelemetryHolder.setInstance(openTelemetry);
+			org.openjproxy.xa.pool.commons.metrics.OpenTelemetryHolder.setInstance(this.openTelemetry);
 			logger.info("OpenTelemetry instance registered for pool metrics");
 		}
 
@@ -172,7 +166,7 @@ public class OjpServerTelemetry {
 		// for pool metrics and tracing if enabled.
 		if (grpcMetricsEnabled) {
 			logger.info("gRPC metrics enabled, creating instrumented GrpcTelemetry");
-			return GrpcTelemetry.create(openTelemetry);
+			return GrpcTelemetry.create(this.openTelemetry);
 		} else {
 			logger.info("gRPC metrics disabled, creating no-op GrpcTelemetry");
 			return GrpcTelemetry.create(OpenTelemetry.noop());
@@ -218,10 +212,18 @@ public class OjpServerTelemetry {
 	}
 
 	/**
+	 * Creates circuit breaker metrics using the same OpenTelemetry instance as the server metrics endpoint.
+	 */
+	public CircuitBreakerMetrics createCircuitBreakerMetrics() {
+		return new CircuitBreakerMetrics(openTelemetry);
+	}
+
+	/**
 	 * Creates a no-op GrpcTelemetry when OpenTelemetry is disabled.
 	 */
 	public GrpcTelemetry createNoOpGrpcTelemetry() {
 		logger.info("OpenTelemetry disabled, using no-op implementation");
-		return GrpcTelemetry.create(OpenTelemetry.noop());
+		openTelemetry = OpenTelemetry.noop();
+		return GrpcTelemetry.create(openTelemetry);
 	}
 }

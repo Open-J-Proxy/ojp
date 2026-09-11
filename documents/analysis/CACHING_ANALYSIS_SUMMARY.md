@@ -32,7 +32,7 @@ postgres_prod.ojp.cache.queries.2.invalidateOn=users
 - `distribute=false` - Cache only maintained locally (default)
 
 **When distribution is enabled**, driver distributes cache when returning results (data already in memory):
-- Uses virtual threads (Java 21+) to stream to other servers
+- Uses virtual threads (Java 25+) to stream to other servers
 - Smart policy: Only distribute < 200KB, TTL > 60s, > 1 row
 - Real-time, zero database overhead
 

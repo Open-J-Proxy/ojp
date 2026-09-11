@@ -9,24 +9,52 @@ import io.grpc.protobuf.ProtoUtils;
 
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
 
 public class GrpcExceptionHandler {
+    private static final String SQLSTATE_CONNECTION_FAILURE = "08001";
+
     /**
      * Handler for StatusRuntimeException, converting it to a SQLException when SQL metadata returned.
      *
+     * <p>Connection-level failures (server unreachable, network closed mid-request, deadline exceeded,
+     * pool exhaustion) never carry {@link SqlErrorResponse} metadata, since they are not SQL errors emitted
+     * by the server-side application logic - they represent the transport itself failing. These MUST always
+     * be translated into a checked {@link SQLTransientConnectionException} here, otherwise the raw unchecked
+     * {@link StatusRuntimeException} escapes every JDBC method (which only declares {@code throws SQLException})
+     * and can crash callers that only catch {@code SQLException}, as required by the JDBC contract.
+     *
      * @param sre StatusRuntimeException
-     * @return StatusRuntimeException if SQL metadata not found just return the exception received.
-     * @throws SQLException If conversion possible.
+     * @return StatusRuntimeException if SQL metadata not found and the failure is not connection-level,
+     *         just return the exception received (caller is expected to build its own fallback SQLException).
+     * @throws SQLException If conversion possible, or if this is a connection-level error.
      */
     public static StatusRuntimeException handle(StatusRuntimeException sre) throws SQLException {
         Metadata metadata = Status.trailersFromThrowable(sre);
-        SqlErrorResponse errorResponse = metadata.get(ProtoUtils.keyForProto(SqlErrorResponse.getDefaultInstance()));
+        SqlErrorResponse errorResponse = null;
+        if (metadata != null) {
+            errorResponse = metadata.get(ProtoUtils.keyForProto(SqlErrorResponse.getDefaultInstance()));
+        }
         if (errorResponse == null) {
+            Status.Code code = sre.getStatus().getCode();
+            if (code == Status.Code.RESOURCE_EXHAUSTED
+                    || code == Status.Code.UNAVAILABLE
+                    || code == Status.Code.DEADLINE_EXCEEDED) {
+                String message = sre.getStatus().getDescription() != null
+                        ? sre.getStatus().getDescription()
+                        : sre.getMessage();
+                throw new SQLTransientConnectionException(
+                        message,
+                        SQLSTATE_CONNECTION_FAILURE, 0, sre);
+            }
             return sre;
         }
         if (SqlErrorType.SQL_DATA_EXCEPTION.equals(errorResponse.getSqlErrorType())) {
             throw new SQLDataException(errorResponse.getReason(), errorResponse.getSqlState(),
                     errorResponse.getVendorCode());
+        } else if (SqlErrorType.SQL_TRANSIENT_CONNECTION_EXCEPTION.equals(errorResponse.getSqlErrorType())) {
+            throw new SQLTransientConnectionException(errorResponse.getReason(), errorResponse.getSqlState(),
+                    errorResponse.getVendorCode(), sre);
         } else {
             throw new SQLException(errorResponse.getReason(), errorResponse.getSqlState(),
                     errorResponse.getVendorCode());

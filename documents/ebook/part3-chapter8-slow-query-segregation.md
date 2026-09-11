@@ -29,13 +29,13 @@ OJP's Slow Query Segregation feature solves this problem through intelligent mon
 
 Every SQL operation that flows through OJP Server is monitored automatically. When a query executes, the system tracks two key pieces of information: the SQL statement itself (as a hash to save memory) and how long it took to complete. This isn't just a one-time measurement—OJP builds a historical profile of each unique SQL statement over time.
 
-The tracking uses a weighted average formula that balances historical data with recent measurements. Each time an operation executes, the new measurement gets 20% weight while the historical average retains 80% weight. This approach smooths out outliers (like a query that happens to run slow once due to a temporary lock) while still adapting to changes in query patterns. The formula looks like this:
+The tracking uses an Exponentially Weighted Moving Average (EWMA) to balance historical data with recent measurements. Each new measurement contributes a small fraction (the smoothing factor α) while the stored average retains most of its weight. This smooths out outliers (like a query that happens to run slow once due to a temporary lock) while still adapting to changes in query patterns. The formula is:
 
 ```
-new_average = ((stored_average × 4) + new_measurement) / 5
+new_average = α × new_measurement + (1 - α) × stored_average
 ```
 
-This weighted approach means that if a query normally takes 10ms but occasionally takes 50ms due to contention, it won't suddenly be misclassified as slow. The system learns the typical behavior of each query and uses that knowledge for classification.
+OJP uses α = 0.2, meaning each new measurement contributes 20% and the historical average retains 80% of its weight. If a query normally takes 10ms but occasionally takes 50ms due to contention, it won't suddenly be misclassified as slow. The system learns the typical behavior of each query and uses that knowledge for classification.
 
 > **AI Image Prompt**: Create a flowchart diagram showing the query monitoring lifecycle. Show a SQL query entering the system, passing through a "Hash Generator" box, then into a "Performance Tracker" that records timing. Below, show a graph with multiple data points illustrating the weighted average calculation, with older points fading and newer points brighter. Use database and stopwatch icons.
 
@@ -62,30 +62,47 @@ sequenceDiagram
 
 ### Classification: Slow vs Fast
 
-Once the system has enough data about each operation, it performs classification. The classification logic is beautifully simple yet effective: any operation whose average execution time is double (2x) or more than the overall average is classified as "slow." Everything else is "fast."
+Once the system has collected enough data about each operation (by default, 20 samples), it classifies each query shape as fast or slow. The default mode is `RELATIVE_FAST_BASELINE`: a *fast-query baseline* is computed as the median (50th percentile, configurable) of the EWMA averages of currently-fast query shapes, refreshed every 10 seconds. Each query shape's average is compared against that baseline. Already-classified slow operations are excluded from the baseline computation, so one very slow query shape cannot inflate the baseline and hide itself from classification.
 
-Let's walk through a concrete example to see how this works. Imagine your application has three types of queries:
+An operation is classified as **slow** when **both** of the following hold:
+- Its average execution time is at least `minimumSlowQueryMs` (default: 100ms), **and**
+- Its average execution time is at least `slowMultiplier × fastBaselineMs` (default: 5×).
+
+An operation recovers to **fast** when **either** of the following holds:
+- Its average drops below `minimumSlowQueryMs`, **or**
+- Its average drops to or below `recoveryMultiplier × fastBaselineMs` (default: 3×).
+
+The intentional gap between `slowMultiplier` (5×) and `recoveryMultiplier` (3×) provides hysteresis: it prevents operations from rapidly flipping between fast and slow classification due to transient latency spikes.
+
+Let's walk through a concrete example. Imagine your application has three query shapes:
 
 - User lookup queries average 10ms
 - Order queries average 20ms  
 - Report queries average 500ms
 
-The system calculates the overall average across all operation types: (10 + 20 + 500) / 3 = 177ms. The slow threshold becomes 2 × 177 = 354ms. In this scenario, only the report queries exceed this threshold and get classified as slow. The user and order queries remain classified as fast, even though there's some variation between them.
+The fast-query baseline is the median of the currently-fast shapes: median(10ms, 20ms) = 15ms. The slow entry threshold is the higher of `minimumSlowQueryMs` (100ms) and `5 × 15ms = 75ms`, so the effective threshold is 100ms. Since 500ms ≥ 100ms, only the report queries are classified as slow. User and order queries stay fast.
 
-This dynamic thresholding means the system adapts to your workload automatically. If you add more complex queries or if your data grows and slows down operations, the threshold adjusts accordingly. You don't need to manually configure query timeouts or maintain lists of which queries are slow.
+If the report query later improves to 40ms, the recovery condition checks 40ms ≤ 3 × 15ms = 45ms, which is satisfied, so the operation recovers to fast.
 
-> **AI Image Prompt**: Create a bar chart visualization showing query classification. Display multiple SQL queries as vertical bars with their average execution times. Draw a horizontal line representing the "overall average" and another dashed line at 2x that level labeled "Slow Threshold". Color bars below the threshold green (fast) and above it red (slow). Add labels with actual times like "10ms", "20ms", "500ms".
+An alternative `ABSOLUTE_THRESHOLD` mode applies a simple fixed boundary: any operation averaging at or above `slowQueryThresholdMs` (default: 1000ms) is slow. This suits controlled benchmarks where you already know what "slow" means for your workload. See the Configuration section for how to switch modes.
+
+> **AI Image Prompt**: Create a bar chart visualization showing query classification. Display multiple SQL queries as vertical bars with their average execution times. Draw a horizontal line representing the "fast baseline" and a dashed line at 5× that level labeled "Slow Threshold (5× baseline)". Color bars below the slow threshold green (fast) and above it red (slow). Add a second dashed line at 3× baseline labeled "Recovery Threshold". Add labels with actual times like "10ms", "20ms", "500ms".
 
 ```mermaid
 graph TD
     A[New Query Execution] --> B{Tracked Before?}
     B -->|No| C[Record as new operation]
-    B -->|Yes| D[Calculate weighted average]
-    D --> E[Update overall average]
-    E --> F{Avg time >= 2x overall?}
-    F -->|Yes| G[Classify as SLOW]
-    F -->|No| H[Classify as FAST]
-    C --> I[Use default classification]
+    B -->|Yes| D[Update EWMA per-operation average]
+    D --> E{Enough samples?}
+    E -->|No| I[Keep current classification]
+    E -->|Yes| F{ABSOLUTE_THRESHOLD mode?}
+    F -->|Yes| FA{Avg >= slowQueryThresholdMs?}
+    FA -->|Yes| G[Classify as SLOW]
+    FA -->|No| H[Classify as FAST]
+    F -->|No - RELATIVE_FAST_BASELINE| FB{Both slow conditions met?}
+    FB -->|Yes - Avg >= minSlowMs AND Avg >= baseline × slowMultiplier| G
+    FB -->|No| H
+    C --> I
 ```
 
 ### Execution Slot Management
@@ -175,7 +192,9 @@ If your application has many legitimate slow operations (like scheduled reports)
 
 ### Timeout Configuration
 
-Two timeout settings control how long operations will wait to acquire slots. These timeouts are important for preventing requests from hanging indefinitely when the system is under heavy load.
+Two timeout settings tune fast and slow lane waits separately.
+With slow query segregation enabled, these settings take precedence for lane admission waits.
+Backend pool borrow still remains fail-fast after admission.
 
 ```properties
 # Timeout for acquiring a slow operation slot (milliseconds)
@@ -185,9 +204,9 @@ ojp.server.slowQuerySegregation.slowSlotTimeout=120000
 ojp.server.slowQuerySegregation.fastSlotTimeout=60000
 ```
 
-The default slow slot timeout is 120 seconds (2 minutes), reflecting the expectation that slow operations might take a while. The fast slot timeout defaults to 60 seconds (1 minute), which is generous for operations that should complete quickly. If a timeout occurs, the client receives an exception indicating that no slot was available within the timeout period.
+If an admission timeout occurs, the client receives an exception indicating that no slot was available within the configured admission timeout window.
 
-You might adjust these based on your SLAs and expected query durations. Consider your actual performance characteristics when setting timeouts—the goal is to catch genuine problems without false positives.
+Use `ojp.connection.pool.connectionTimeout` and `ojp.xa.connection.pool.connectionTimeout` as the admission timeout baseline for non-segregated paths.
 
 ### Idle Timeout for Borrowing
 
@@ -199,6 +218,32 @@ ojp.server.slowQuerySegregation.idleTimeout=10000
 ```
 
 A longer idle timeout (like 30 seconds) makes borrowing less aggressive, which might be appropriate if your workload has short bursts of slow queries separated by idle periods. A shorter timeout (like 5 seconds) makes the system more responsive to load changes but could cause more slot shuffling.
+
+### Classification Mode
+
+Slow-query classification supports two modes:
+
+- `RELATIVE_FAST_BASELINE` (default): adaptive mode that compares each query-shape average against a fast-query baseline (median by default) built only from currently-fast query-shapes.
+- `ABSOLUTE_THRESHOLD`: deterministic mode based on a fixed latency boundary, with an inclusive check (`operationAverageMs >= slowQueryThresholdMs`).
+
+```properties
+# Adaptive default mode
+ojp.server.slowQuerySegregation.classificationMode=RELATIVE_FAST_BASELINE
+ojp.server.slowQuerySegregation.minimumSlowQueryMs=100
+ojp.server.slowQuerySegregation.slowMultiplier=5.0
+ojp.server.slowQuerySegregation.recoveryMultiplier=3.0
+ojp.server.slowQuerySegregation.minSamples=20
+ojp.server.slowQuerySegregation.baselinePercentile=50
+ojp.server.slowQuerySegregation.baselineRefreshIntervalSeconds=10
+
+# Deterministic benchmark-friendly mode
+ojp.server.slowQuerySegregation.classificationMode=ABSOLUTE_THRESHOLD
+ojp.server.slowQuerySegregation.slowQueryThresholdMs=1000
+```
+
+Use `ABSOLUTE_THRESHOLD` when you already know what “slow” means for your workload (for example, controlled benchmarks with a fixed latency SLO).
+
+In `RELATIVE_FAST_BASELINE`, already-classified slow query-shapes are excluded from baseline computation. This avoids the classic self-pollution problem where one very slow query-shape inflates the baseline and hides itself.
 
 ### Complete Configuration Example
 
@@ -224,6 +269,10 @@ ojp.server.slowQuerySegregation.fastSlotTimeout=30000
 # Pools must be idle 15 seconds before borrowing (default: 10000)
 # Increased to prevent aggressive slot movement
 ojp.server.slowQuerySegregation.idleTimeout=15000
+
+# Deterministic classification with a fixed 1-second boundary
+ojp.server.slowQuerySegregation.classificationMode=ABSOLUTE_THRESHOLD
+ojp.server.slowQuerySegregation.slowQueryThresholdMs=1000
 ```
 
 This configuration reflects an application that runs regular reports (higher slow percentage) but wants fast queries to fail quickly if something is wrong (lower fast timeout), with conservative borrowing behavior (higher idle timeout).
@@ -361,4 +410,9 @@ Slow Query Segregation helps maintain application responsiveness when you have m
 
 The feature requires minimal configuration and adapts automatically. For applications that serve both interactive users and analytical workloads, it is strongly recommended. For pure OLTP or pure OLAP systems, keep it disabled unless your monitoring data shows that separation improves behavior.
 
-In the next chapter, we'll explore another feature that enhances availability and scalability: Multinode Deployment. While Slow Query Segregation ensures efficient use of resources on a single server, multinode deployment lets you spread load across multiple servers for even greater capacity and resilience.
+In the next chapter, we'll look at Client-Side Throttling — a complementary feature that prevents application instances from overloading the OJP server in the first place. While Slow Query Segregation protects fast queries from slow ones on the server side, client-side throttling prevents the admission queue from building up on the client side. The two features work well together.
+
+---
+
+**Previous Chapter**: [← Chapter 7: Framework Integration](part2-chapter7-framework-integration.md)
+**Next Chapter**: [Chapter 8a: Client-Side Throttling →](part3-chapter8a-client-throttling.md)

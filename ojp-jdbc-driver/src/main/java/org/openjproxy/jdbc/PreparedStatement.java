@@ -9,6 +9,7 @@ import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.ResultType;
 import com.openjproxy.grpc.TargetCall;
+import io.grpc.StatusRuntimeException;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -46,6 +47,7 @@ import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
+import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 import static org.openjproxy.grpc.dto.ParameterType.ARRAY;
 import static org.openjproxy.grpc.dto.ParameterType.ASCII_STREAM;
 import static org.openjproxy.grpc.dto.ParameterType.BIG_DECIMAL;
@@ -109,24 +111,51 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public ResultSet executeQuery() throws SQLException {
         log.debug("executeQuery called");
         this.checkClosed();
+        this.lastUpdateCount = -1;
+        this.resetMoreResultsState();
         log.info("Executing query for -> {}", this.sql);
-        Iterator<OpResult> itOpResult = this.statementService
-                .executeQuery(this.connection.getSession(), this.sql, new ArrayList<>(this.paramsMap.values()), this.properties);
-        return new ResultSet(itOpResult, this.statementService, this);
+        ClientThrottleManager throttle = this.connection.getThrottleManager();
+        ClientThrottleMode mode = this.connection.getThrottleMode();
+        boolean inTransaction = !this.connection.getAutoCommit();
+        boolean acquired = acquireThrottle(throttle, mode, inTransaction);
+        try {
+            Iterator<OpResult> itOpResult = this.statementService
+                    .executeQuery(this.connection.getSession(), this.sql, new ArrayList<>(this.paramsMap.values()), this.properties);
+            return new ResultSet(itOpResult, this.statementService, this);
+        } catch (StatusRuntimeException sre) {
+            throw handle(onServerOverload(throttle, mode, sre));
+        } finally {
+            if (acquired) {
+                throttle.release(mode, inTransaction);
+            }
+        }
     }
 
     @Override
     public int executeUpdate() throws SQLException {
         log.debug("executeUpdate called");
         this.checkClosed();
+        this.resetMoreResultsState();
         log.info("Executing update for -> {}", this.sql);
-        OpResult result = this.statementService.executeUpdate(this.connection.getSession(), this.sql,
-                new ArrayList<>(this.paramsMap.values()), this.getStatementUUID(), this.properties);
-        this.connection.setSession(result.getSession());
-        if (StringUtils.isNotBlank(result.getUuid())) {
-            this.setStatementUUID(result.getUuid());
+        ClientThrottleManager throttle = this.connection.getThrottleManager();
+        ClientThrottleMode mode = this.connection.getThrottleMode();
+        boolean inTransaction = !this.connection.getAutoCommit();
+        boolean acquired = acquireThrottle(throttle, mode, inTransaction);
+        try {
+            OpResult result = this.statementService.executeUpdate(this.connection.getSession(), this.sql,
+                    new ArrayList<>(this.paramsMap.values()), this.getStatementUUID(), this.properties);
+            this.connection.setSession(result.getSession());
+            if (StringUtils.isNotBlank(result.getUuid())) {
+                this.setStatementUUID(result.getUuid());
+            }
+            return result.getIntValue();
+        } catch (StatusRuntimeException sre) {
+            throw handle(onServerOverload(throttle, mode, sre));
+        } finally {
+            if (acquired) {
+                throttle.release(mode, inTransaction);
+            }
         }
-        return result.getIntValue();
     }
 
     @Override
@@ -384,8 +413,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public boolean execute() throws SQLException {
         log.debug("execute called");
         this.checkClosed();
-        String trimmedSql = this.sql.trim().toUpperCase();
-        if (trimmedSql.startsWith("SELECT")) {
+        if (SqlStatementClassifier.looksLikeQuery(this.sql)) {
             // Delegate to executeQuery
             ResultSet resultSet = this.executeQuery();
             // Store the ResultSet for later retrieval if needed
@@ -889,7 +917,8 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
         this.callProxy(CallType.CALL_SET, "QueryTimeout", Void.class, Arrays.asList(seconds));
     }
 
-    private CallResourceRequest.Builder newCallBuilder() throws SQLException {
+    @Override
+    protected CallResourceRequest.Builder newCallBuilder() {
         log.debug("newCallBuilder called");
         this.propertiesHaveSqlStatement();
         CallResourceRequest.Builder builder = CallResourceRequest.newBuilder()
@@ -904,12 +933,14 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
         return builder;
     }
 
-    private <T> T callProxy(CallType callType, String targetName, Class<?> returnType) throws SQLException {
+    @Override
+    protected <T> T callProxy(CallType callType, String targetName, Class<?> returnType) throws SQLException {
         log.debug("callProxy: {}, {}, {}", callType, targetName, returnType);
         return this.callProxy(callType, targetName, returnType, Constants.EMPTY_OBJECT_LIST);
     }
 
-    private <T> T callProxy(CallType callType, String targetName, Class<?> returnType, List<Object> params) throws SQLException {
+    @Override
+    protected <T> T callProxy(CallType callType, String targetName, Class<?> returnType, List<Object> params) throws SQLException {
         log.debug("callProxy: {}, {}, {}, params.size={}", callType, targetName, returnType, params != null ? params.size() : 0);
         CallResourceRequest.Builder reqBuilder = this.newCallBuilder();
         reqBuilder.setTarget(

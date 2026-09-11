@@ -1,12 +1,17 @@
 package org.openjproxy.grpc.server;
 
+import io.opentelemetry.api.OpenTelemetry;
 import org.junit.jupiter.api.Test;
 
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CircuitBreakerTest {
     private static final int THOUSAND = 1000;
@@ -15,7 +20,7 @@ class CircuitBreakerTest {
     private static final int FOUR_HUNDRED = 400;
     private static final int FIVE_HUNDRED = 500;
     private static final String DATA_SOURCE = "Test-DS";
-    
+
 
     @Test
     void testAllowsWhenNoFailures() {
@@ -38,8 +43,15 @@ class CircuitBreakerTest {
     }
 
     @Test
-    void testAllowsAgainAfterOpenTimeoutAndSuccessResets() throws InterruptedException, SQLException {
-        CircuitBreaker breaker = new CircuitBreaker(THREE_HUNDRED, FAILURE_THRESHOLD, DATA_SOURCE);
+    void testAllowsAgainAfterOpenTimeoutAndSuccessResets() {
+        TestTicker ticker = new TestTicker();
+        CircuitBreaker breaker = new CircuitBreaker(
+                THREE_HUNDRED,
+                FAILURE_THRESHOLD,
+                DATA_SOURCE,
+                CircuitBreakerMetrics.noop(),
+                ticker::nanoTime
+        );
         String sql = "UPDATE X SET Y=1";
         SQLException ex = new SQLException("fail");
 
@@ -49,8 +61,7 @@ class CircuitBreakerTest {
         breaker.onFailure(sql, ex);
         assertThrows(SQLException.class, () -> breaker.preCheck(sql));
 
-        // Wait for open period to pass
-        Thread.sleep(FOUR_HUNDRED);
+        ticker.advanceMillis(FOUR_HUNDRED);
         // Should allow one through (half-open)
         assertDoesNotThrow(() -> breaker.preCheck(sql));
         // Success should reset
@@ -59,7 +70,7 @@ class CircuitBreakerTest {
     }
 
     @Test
-    void testResetsOnSuccess() throws SQLException {
+    void testResetsOnSuccess() {
         CircuitBreaker breaker = new CircuitBreaker(THOUSAND, FAILURE_THRESHOLD, DATA_SOURCE);
         String sql = "INSERT X";
         SQLException ex = new SQLException("fail2");
@@ -87,5 +98,112 @@ class CircuitBreakerTest {
 
         SQLException thrown = assertThrows(SQLException.class, () -> breaker.preCheck(sql));
         assertEquals("fail1", thrown.getMessage());
+    }
+
+    @Test
+    void testRecordsCircuitBreakerMetricsLifecycle() {
+        TestTicker ticker = new TestTicker();
+        RecordingCircuitBreakerMetrics metrics = new RecordingCircuitBreakerMetrics();
+        CircuitBreaker breaker = new CircuitBreaker(
+                THREE_HUNDRED,
+                FAILURE_THRESHOLD,
+                DATA_SOURCE,
+                metrics,
+                ticker::nanoTime
+        );
+        String sql = "SELECT metrics";
+        SQLException ex = new SQLException("fail");
+
+        breaker.onFailure(sql, ex);
+        breaker.onFailure(sql, ex);
+        breaker.onFailure(sql, ex);
+
+        assertEquals(2, metrics.countState(CircuitBreakerMetrics.State.CLOSED));
+        assertTrue(metrics.hasStateUpdate(
+                DATA_SOURCE,
+                sql,
+                CircuitBreakerMetrics.State.OPEN,
+                CircuitBreakerMetrics.TripReason.FAILURE_THRESHOLD
+        ));
+
+        assertThrows(SQLException.class, () -> breaker.preCheck(sql));
+        assertEquals(List.of(metricKey(DATA_SOURCE, sql)), metrics.blockedCalls);
+
+        ticker.advanceMillis(FOUR_HUNDRED);
+        assertDoesNotThrow(() -> breaker.preCheck(sql));
+        assertTrue(metrics.hasStateUpdate(DATA_SOURCE, sql, CircuitBreakerMetrics.State.HALF_OPEN, null));
+
+        breaker.onSuccess(sql);
+        assertEquals(3, metrics.countState(CircuitBreakerMetrics.State.CLOSED));
+    }
+
+    private static String metricKey(String datasource, String queryHash) {
+        return datasource + "|" + queryHash;
+    }
+
+    private static String stateMetricKey(
+            String datasource,
+            String queryHash,
+            CircuitBreakerMetrics.State state,
+            CircuitBreakerMetrics.TripReason reason
+    ) {
+        return String.join(
+                "|",
+                datasource,
+                queryHash,
+                state.name(),
+                reason == null ? "NONE" : reason.name()
+        );
+    }
+
+    private static final class RecordingCircuitBreakerMetrics extends CircuitBreakerMetrics {
+        private final List<String> stateUpdates = new ArrayList<>();
+        private final List<String> blockedCalls = new ArrayList<>();
+
+        private RecordingCircuitBreakerMetrics() {
+            super(OpenTelemetry.noop());
+        }
+
+        @Override
+        public void updateState(String datasource, String queryHash, State newState) {
+            stateUpdates.add(stateMetricKey(datasource, queryHash, newState, null));
+        }
+
+        @Override
+        public void updateState(String datasource, String queryHash, State newState, TripReason tripReason) {
+            stateUpdates.add(stateMetricKey(datasource, queryHash, newState, tripReason));
+        }
+
+        @Override
+        public void recordBlockedCall(String datasource, String queryHash) {
+            blockedCalls.add(metricKey(datasource, queryHash));
+        }
+
+        private long countState(CircuitBreakerMetrics.State state) {
+            return stateUpdates.stream()
+                    .filter(update -> update.contains("|" + state.name() + "|"))
+                    .count();
+        }
+
+        private boolean hasStateUpdate(
+                String datasource,
+                String queryHash,
+                CircuitBreakerMetrics.State state,
+                CircuitBreakerMetrics.TripReason reason
+        ) {
+            return stateUpdates.contains(stateMetricKey(datasource, queryHash, state, reason));
+        }
+    }
+
+    private static final class TestTicker {
+        private long currentNanos;
+
+        private long nanoTime() {
+            return currentNanos;
+        }
+
+        private void advanceMillis(long millis) {
+            currentNanos += TimeUnit.MILLISECONDS.toNanos(millis);
+        }
     }
 }

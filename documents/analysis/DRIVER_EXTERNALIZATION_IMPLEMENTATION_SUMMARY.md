@@ -118,8 +118,8 @@ The implementation was completed in 5 testable phases:
 **Changes:**
 
 **Docker Configuration:**
-- Updated Jib plugin in `pom.xml` to include `ojp-libs` directory in Docker images
-- Docker images now have "batteries included" with H2, PostgreSQL, MySQL, MariaDB pre-installed at `/opt/ojp/ojp-libs`
+- Replaced Jib plugin with a multi-stage `Dockerfile` (jlink custom JRE on Alpine, ~127MB)
+- `ojp-libs/` is copied into the image at build time — drivers are not bundled by default; populate `ojp-libs/` via `download-drivers.sh` before building
 
 **Helper Scripts:**
 - Created `ojp-server/docker-build.sh` - Automates driver download + Docker build process
@@ -399,7 +399,7 @@ Drivers are downloaded to `./ojp-libs/` at repository root, matching the default
 ## Files Changed
 
 ### Code Changes
-- `ojp-server/pom.xml` - Removed 4 driver dependencies, updated Jib config
+- `ojp-server/pom.xml` - Removed 4 driver dependencies, replaced Jib with multi-stage Dockerfile build
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/utils/DriverUtils.java` - Consistent error handling, enhanced detection
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/utils/DriverLoader.java` - Enhanced DriverShim
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/xa/XADataSourceFactory.java` - Reflection-based XA datasource creation

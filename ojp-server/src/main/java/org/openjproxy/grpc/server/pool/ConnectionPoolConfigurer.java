@@ -3,6 +3,7 @@ package org.openjproxy.grpc.server.pool;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.zaxxer.hikari.HikariConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 
@@ -64,7 +65,7 @@ public class ConnectionPoolConfigurer {
         config.setMinimumIdle(minIdle);
         config.setIdleTimeout(dsConfig.getIdleTimeout());
         config.setMaxLifetime(dsConfig.getMaxLifetime());
-        config.setConnectionTimeout(dsConfig.getConnectionTimeout());
+        config.setConnectionTimeout(CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS);
 
         // Additional settings for high concurrency scenarios
         config.setLeakDetectionThreshold(60000); // 60 seconds - detect connection leaks

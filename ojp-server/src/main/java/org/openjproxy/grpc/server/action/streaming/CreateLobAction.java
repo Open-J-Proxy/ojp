@@ -6,7 +6,6 @@ import com.openjproxy.grpc.LobType;
 import com.openjproxy.grpc.SessionInfo;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
@@ -128,7 +127,7 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
          * Initializes a new LOB if one doesn't exist yet.
          */
         private void initializeLobIfNeeded(ConnectionSessionDTO dto, LobDataBlock lobDataBlock) throws SQLException {
-            if (StringUtils.isEmpty(lobDataBlock.getSession().getSessionUUID()) || this.lobUUID == null) {
+            if (lobDataBlock.getSession().getSessionUUID().isEmpty() || this.lobUUID == null) {
                 Connection conn = dto.getConnection();
                 if (LobType.LT_BLOB.equals(this.lobType)) {
                     Blob newBlob = conn.createBlob();
@@ -213,7 +212,7 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
             String sql = (String) metadata.get(CommonConstants.PREPARED_STATEMENT_BINARY_STREAM_SQL);
             String preparedStatementUUID = (String) metadata.get(CommonConstants.PREPARED_STATEMENT_UUID_BINARY_STREAM);
 
-            if (StringUtils.isNotEmpty(preparedStatementUUID)) {
+            if (preparedStatementUUID != null && !preparedStatementUUID.isEmpty()) {
                 stmtUUID = preparedStatementUUID;
             } else {
                 PreparedStatement ps = dto.getConnection().prepareStatement(sql);

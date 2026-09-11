@@ -3,6 +3,7 @@ package org.openjproxy.jdbc;
 import com.openjproxy.grpc.LobReference;
 import com.openjproxy.grpc.LobType;
 import com.openjproxy.grpc.OpResult;
+import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import lombok.Getter;
 import lombok.SneakyThrows;
@@ -62,6 +63,19 @@ public class ResultSet extends RemoteProxyResultSet {
 
     private Object lastValueRead;
 
+    // Local cache for setFetchDirection()/getFetchDirection() when not in proxy mode.
+    // FETCH_FORWARD is the only direction compatible with this ResultSet's forward-only,
+    // block-streaming model (see getType()), so it must not force proxy mode: doing so would
+    // turn every subsequent next()/getXxx() call into an individual round trip to the server,
+    // even though FETCH_FORWARD is the default hint set by virtually every JDBC client/tool.
+    private int fetchDirectionHint = java.sql.ResultSet.FETCH_FORWARD;
+
+    // Local cache for setFetchSize()/getFetchSize() when not in proxy mode. Per the JDBC spec,
+    // fetch size is only a hint that a driver is free to ignore, so it must not throw for a
+    // well-formed value even though this streaming block-based ResultSet does not actually vary
+    // its block size based on it.
+    private int fetchSizeHint;
+
     public ResultSet(Iterator<OpResult> itOpResult, StatementService statementService, java.sql.Statement statement) throws SQLException {
         this.itResults = itOpResult;
         this.inProxyMode = false;
@@ -80,7 +94,7 @@ public class ResultSet extends RemoteProxyResultSet {
                 labelsMap.put(labels.get(i).toUpperCase(), i);
             }
         } catch (StatusRuntimeException e) {
-            throw handle(e);
+            throw handle(onServerOverload(e));
         }
     }
 
@@ -102,17 +116,53 @@ public class ResultSet extends RemoteProxyResultSet {
                         this.getResultSetUUID(), 1));
                 this.setNextOpResult(result);
             } catch (StatusRuntimeException e) {
-                throw handle(e);
+                throw handle(onServerOverload(e));
             }
         }
         if (!this.inRowByRowMode && blockIdx.get() >= currentDataBlock.size() && itResults.hasNext()) {
             try {
                 this.setNextOpResult(this.nextWithSessionUpdate(itResults.next()));
             } catch (StatusRuntimeException e) {
-                throw handle(e);
+                throw handle(onServerOverload(e));
             }
         }
         return blockIdx.get() < currentDataBlock.size();
+    }
+
+    private StatusRuntimeException onServerOverload(StatusRuntimeException statusRuntimeException) {
+        if (statusRuntimeException.getStatus().getCode() != Status.Code.RESOURCE_EXHAUSTED) {
+            return statusRuntimeException;
+        }
+
+        try {
+            if (this.statement == null) {
+                return statusRuntimeException;
+            }
+            java.sql.Connection sqlConnection = this.statement.getConnection();
+            if (!(sqlConnection instanceof Connection)) {
+                return statusRuntimeException;
+            }
+            Connection connection = (Connection) sqlConnection;
+            ClientThrottleMode mode = connection.getThrottleMode();
+            if (mode == ClientThrottleMode.OFF) {
+                return statusRuntimeException;
+            }
+
+            ClientThrottleManager throttle = connection.getThrottleManager();
+            if (throttle != null) {
+                io.grpc.Metadata trailers = statusRuntimeException.getTrailers();
+                ClientThrottleManager.OverloadLane lane = ClientThrottleManager.OverloadLane.UNKNOWN;
+                if (trailers != null) {
+                    io.grpc.Metadata.Key<String> key = io.grpc.Metadata.Key.of(ClientThrottleManager.OVERLOAD_LANE_HEADER,
+                            io.grpc.Metadata.ASCII_STRING_MARSHALLER);
+                    lane = ClientThrottleManager.OverloadLane.parse(trailers.get(key));
+                }
+                throttle.notifyServerOverload(lane);
+            }
+        } catch (SQLException sqlException) {
+            log.debug("Unable to apply client overload backoff from ResultSet path", sqlException);
+        }
+        return statusRuntimeException;
     }
 
     private void setNextOpResult(OpResult result) {
@@ -830,23 +880,42 @@ public class ResultSet extends RemoteProxyResultSet {
     @Override
     public void setFetchDirection(int direction) throws SQLException {
         log.debug("setFetchDirection: {}", direction);
-        super.setFetchDirection(direction);
-        this.inProxyMode = true;
+        if (this.inProxyMode) {
+            super.setFetchDirection(direction);
+            return;
+        }
+        if (direction != java.sql.ResultSet.FETCH_FORWARD) {
+            // This ResultSet only implements forward, block-streaming iteration; any other
+            // direction is delegated to the remote proxy so JDBC scrollable semantics stay correct.
+            super.setFetchDirection(direction);
+            this.inProxyMode = true;
+            return;
+        }
+        this.fetchDirectionHint = direction;
     }
 
     @Override
     public int getFetchDirection() throws SQLException {
         log.debug("getFetchDirection called");
-        return super.getFetchDirection();
+        if (this.inProxyMode) {
+            return super.getFetchDirection();
+        }
+        return this.fetchDirectionHint;
     }
 
     @Override
     public void setFetchSize(int rows) throws SQLException {
         log.debug("setFetchSize: {}", rows);
+        if (rows < 0) {
+            throw new SQLException("Fetch size cannot be negative: " + rows);
+        }
         if (this.inProxyMode) {
             super.setFetchSize(rows);
+            return;
         }
-        throw new RuntimeException("Not implemented");
+        // Fetch size is only a hint (JDBC spec); this ResultSet streams fixed-size blocks
+        // from the server, so the hint is stored but does not change the streaming behavior.
+        this.fetchSizeHint = rows;
     }
 
     @Override
@@ -855,7 +924,7 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getFetchSize();
         }
-        throw new RuntimeException("Not implemented");
+        return this.fetchSizeHint;
     }
 
     @Override

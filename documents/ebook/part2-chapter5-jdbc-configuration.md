@@ -177,9 +177,15 @@ String orOpts = "jdbc:ojp[localhost:1059]_oracle:thin:@localhost:1521/XEPDB1?" +
 
 ### Connection Close Semantics
 
-When your application calls `Connection.close()`, the OJP JDBC driver terminates the server-side session **synchronously**. In practical terms, the close call waits for the termination RPC to complete instead of sending it as fire-and-forget traffic.
+When your application calls `Connection.close()`, the OJP JDBC driver terminates the server-side session **synchronously by default**. In practical terms, `close()` blocks until the server-side session has been terminated.
 
-This behavior is intentionally conservative because session termination is what releases the server-side session state that OJP uses to track transactional and result-set resources.
+This default behavior is correctness-oriented because it guarantees that the session is fully released before the application proceeds.
+
+If you need non-blocking behavior, set:
+
+```properties
+ojp.jdbc.connection.close.synchronous=false
+```
 
 #### Retry Behavior During Close
 
@@ -195,7 +201,10 @@ The driver does **not** retry when the failure indicates that retrying will not 
 - server-side `SQLException`
 - other non-connectivity failures
 
-So the operational rule is simple: **`close()` now includes a bounded retry for transient connection failures, but not for logical or database errors.**
+So the operational rule is simple:
+
+- default (`ojp.jdbc.connection.close.synchronous=true`): synchronous close, failures are surfaced to the caller
+- configured asynchronous (`false`): async close, failures are logged
 
 ---
 
@@ -825,6 +834,74 @@ connection.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
 
 ---
 
+## 5.5 Client-Side Throttling
+
+When multiple application instances share the same OJP server, each instance should limit
+its own concurrent request count to its fair share of the server's connection pool. Without
+this, a burst of requests from one instance can overwhelm the server's admission queue and
+cause timeouts for all instances.
+
+OJP's **Client-Side Throttling** handles this automatically. The server sends three numbers
+to every connecting client (via `SessionInfo`):
+
+- **`maxAdmission`** — the configured pool size on this node.
+- **`clientCount`** — how many distinct application instances are currently connected for
+  this database and credential pair.
+- **`observedPeak`** — the real in-flight count just before the last admission timeout
+  (0 if no timeout has occurred).
+
+The driver uses these to compute a per-instance limit and enforces it with a fail-fast
+counter (no blocking). Requests that exceed the limit receive an immediate `SQLException`
+rather than queuing and making the server's situation worse.
+
+### Configuration
+
+The throttle mode is controlled by a single driver property:
+
+```properties
+# Default: reactive (most adaptive performance for most workloads)
+ojp.jdbc.clientThrottle.mode=reactive
+```
+
+| Value | Description |
+|---|---|
+| `reactive` | Adaptive limit only, based on `observedPeak`. **Default.** Delivers the most adaptive performance for most workloads; no fairness guarantee between clients. |
+| `combined` | Uses both `maxAdmission` (static fairness) and `observedPeak` (adaptive capacity). Takes the stricter of the two limits. Use for workloads that cannot tolerate any bursts. |
+| `proactive` | Static fair-share limit only, based on `maxAdmission` and `clientCount`. Use for workloads that cannot tolerate any bursts and where `observedPeak` cannot be trusted. |
+| `off` | Disable throttling entirely (legacy compatibility only). |
+
+For most workloads, `reactive` is correct and no change is needed. Switch to
+`combined` or `proactive` only when bursts must be strictly avoided.
+
+### Reactive back-off tuning
+
+Reactive mode uses an AIMD multiplicative decrease factor:
+
+```properties
+# Default: gentler back-off
+ojp.jdbc.clientThrottle.reactiveDecreaseFactor=0.75
+```
+
+- `0.75` (default) reduces concurrency more gradually after overload.
+- Use `0.5` (half) or lower when you need more aggressive back-off.
+- Valid range is `0 < factor < 1`.
+
+### Disabling per datasource
+
+```properties
+# Default datasource: reactive throttling (no change needed)
+ojp.jdbc.clientThrottle.mode=reactive
+
+# Disable for a specific datasource (e.g., batch analytics)
+analytics.ojp.jdbc.clientThrottle.mode=off
+```
+
+> **For a full explanation** of how client throttling works, the formula used, AIMD
+> adaptation, in-transaction bypass, and multinode behaviour, see
+> **[Chapter 8a: Client-Side Throttling](../ebook/part3-chapter8a-client-throttling.md)**.
+
+---
+
 ## Summary
 
 You now have comprehensive knowledge of OJP JDBC driver configuration:
@@ -833,6 +910,7 @@ You now have comprehensive knowledge of OJP JDBC driver configuration:
 ✅ **Pool Settings**: Configure HikariCP properties via `ojp.properties`  
 ✅ **Client Configuration**: Set up environment-specific and programmatic configs  
 ✅ **Framework Integration**: Properly integrate with Spring Boot, Quarkus, Micronaut  
+✅ **Client Throttling**: Limit per-instance concurrent requests with `ojp.jdbc.clientThrottle.mode`  
 
 **Key Takeaways**:
 - OJP URL wraps your existing database JDBC URL
@@ -840,6 +918,7 @@ You now have comprehensive knowledge of OJP JDBC driver configuration:
 - **Always disable application-level connection pooling**
 - Standard JDBC transactions work seamlessly with OJP
 - Framework-specific configuration differs but principle remains: no double pooling
+- Client throttling is on by default — each instance self-limits to its fair share of the server's pool
 
 In the next chapter, we'll explore OJP Server configuration, covering advanced settings for security, performance, and resilience.
 

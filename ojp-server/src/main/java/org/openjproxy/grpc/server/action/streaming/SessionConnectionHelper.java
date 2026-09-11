@@ -2,11 +2,12 @@ package org.openjproxy.grpc.server.action.streaming;
 
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.database.DatabaseUtils;
+import org.openjproxy.grpc.server.AdmissionControlManager;
 import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.PoolNotFoundException;
+import org.openjproxy.grpc.server.Session;
 import org.openjproxy.grpc.server.UnpooledConnectionDetails;
 import org.openjproxy.grpc.server.action.ActionContext;
 
@@ -91,20 +92,50 @@ public class SessionConnectionHelper {
     public static ConnectionSessionDTO sessionConnection(ActionContext context, SessionInfo sessionInfo,
                                                          boolean startSessionIfNone)
             throws SQLException {
+        return sessionConnection(context, sessionInfo, startSessionIfNone, null);
+    }
+
+    /**
+     * Same as {@link #sessionConnection(ActionContext, SessionInfo, boolean)} but
+     * allows the caller to supply a {@code replicaDataSource} that overrides the
+     * pooled-mode datasource lookup.  When {@code replicaDataSource} is non-{@code null}
+     * and the session has no existing UUID (i.e. stateless / auto-commit mode), the
+     * connection is acquired from {@code replicaDataSource} instead of the primary pool.
+     * XA, unpooled, and existing-session paths are not affected by this parameter.
+     *
+     * @param context            the action context containing the session manager
+     * @param sessionInfo        current sessionInfo object
+     * @param startSessionIfNone if {@code true} a new session will be started when none exists
+     * @param replicaDataSource  optional datasource to use in place of the primary pool;
+     *                           {@code null} means "use the primary pool as normal"
+     * @return ConnectionSessionDTO
+     * @throws SQLException if a connection cannot be obtained
+     */
+    public static ConnectionSessionDTO sessionConnection(ActionContext context, SessionInfo sessionInfo,
+                                                         boolean startSessionIfNone,
+                                                         javax.sql.DataSource replicaDataSource)
+            throws SQLException {
         ConnectionSessionDTO.ConnectionSessionDTOBuilder dtoBuilder = ConnectionSessionDTO.builder();
         dtoBuilder.session(sessionInfo);
-        Connection conn;
+        Connection conn = null;
         var sessionManager = context.getSessionManager();
 
-        if (StringUtils.isNotEmpty(sessionInfo.getSessionUUID())) {
-            // Session already exists, reuse its connection
-            conn = sessionManager.getConnection(sessionInfo);
-            if (conn == null) {
-                throw new SQLException("Connection not found for this sessionInfo");
-            }
-            dtoBuilder.dbName(DatabaseUtils.resolveDbName(conn.getMetaData().getURL()));
-            if (conn.isClosed()) {
-                throw new SQLException("Connection is closed");
+        if (!sessionInfo.getSessionUUID().isEmpty()) {
+            if (replicaDataSource != null) {
+                // Replica-routed request on an existing session: do not trigger lazy primary
+                // acquisition here.  ExecuteQueryAction will call
+                // session.getOrCreateReplicaConnection() to get the replica connection.
+                // conn remains null — caller is responsible for obtaining the right connection.
+            } else {
+                // Primary path: get the connection from the existing session (may lazily acquire)
+                conn = sessionManager.getConnection(sessionInfo);
+                if (conn == null) {
+                    throw new SQLException("Connection not found for this sessionInfo");
+                }
+                dtoBuilder.dbName(DatabaseUtils.resolveDbName(conn.getMetaData().getURL()));
+                if (conn.isClosed()) {
+                    throw new SQLException("Connection is closed");
+                }
             }
         } else {
             // Lazy allocation: check if this is an XA or regular connection
@@ -144,6 +175,7 @@ public class SessionConnectionHelper {
             } else {
                 // Regular connection - check if pooled or unpooled mode
                 UnpooledConnectionDetails unpooledDetails = context.getUnpooledConnectionDetailsMap().get(connHash);
+                boolean sessionCreated = false;
 
                 if (unpooledDetails != null) {
                     // Unpooled mode: create direct connection without pooling
@@ -160,29 +192,78 @@ public class SessionConnectionHelper {
                         throw e;
                     }
                 } else {
-                    // Pooled mode: acquire from datasource (HikariCP by default)
-                    DataSource dataSource = context.getDatasourceMap().get(connHash);
-                    if (dataSource == null) {
+                    // Pooled mode: create a lazy dual-datasource session when a replica is
+                    // provided so that the primary connection is only acquired if actually
+                    // needed (e.g. for a subsequent write on the same session).
+                    DataSource primaryDataSource = context.getDatasourceMap().get(connHash);
+
+                    if (primaryDataSource == null) {
                         // Signal the client to reconnect. NOT_FOUND is caught by
                         // CommandExecutionHelper and translated to Status.NOT_FOUND so that the
                         // driver can transparently reconnect and retry the SQL call.
                         throw new PoolNotFoundException(connHash);
                     }
 
-                    try {
-                        // Use enhanced connection acquisition with timeout protection
-                        conn = ConnectionAcquisitionManager.acquireConnection(dataSource, connHash);
-                        log.debug("Successfully acquired connection from pool for hash: {}", connHash);
-                    } catch (SQLException e) {
-                        log.error("Failed to acquire connection from pool for hash: {}. Error: {}",
-                                connHash, e.getMessage());
+                    if (replicaDataSource != null) {
+                        // Replica path: create a lazy session with both datasources.
+                        // No connection is acquired here; the caller (ExecuteQueryAction) will
+                        // obtain the replica connection via session.getOrCreateReplicaConnection().
+                        if (startSessionIfNone) {
+                            SessionInfo updatedSession = sessionManager.createSession(
+                                    sessionInfo.getClientUUID(), sessionInfo.getConnHash(),
+                                    primaryDataSource, replicaDataSource);
+                            dtoBuilder.session(updatedSession);
+                            sessionCreated = true;
+                        }
+                        // conn remains null — caller must resolve the connection from the session
+                    } else {
+                        // Primary path: eager acquisition with admission control
+                        AdmissionControlManager.SessionPermit sessionPermit = null;
+                        try {
+                            AdmissionControlManager admissionControlManager =
+                                    context.getAdmissionControlManagers().get(connHash);
+                            if (startSessionIfNone && admissionControlManager != null) {
+                                sessionPermit = admissionControlManager.claimCurrentThreadPermitForSession();
+                                if (sessionPermit == null) {
+                                    sessionPermit = admissionControlManager.acquireSessionPermit(connHash);
+                                }
+                            }
 
-                        // Re-throw the enhanced exception from ConnectionAcquisitionManager
-                        throw e;
+                            // Use enhanced connection acquisition with timeout protection
+                            conn = ConnectionAcquisitionManager.acquireConnection(primaryDataSource, connHash);
+                            log.debug("Successfully acquired connection from pool for hash: {}", connHash);
+
+                            if (startSessionIfNone) {
+                                SessionInfo updatedSession = sessionManager.createSession(
+                                        sessionInfo.getClientUUID(), sessionInfo.getConnHash(), conn);
+                                if (sessionPermit != null) {
+                                    Session createdSession = sessionManager.getSession(updatedSession);
+                                    if (createdSession != null) {
+                                        AdmissionControlManager.SessionPermit permitForHook = sessionPermit;
+                                        createdSession.setConnectionPermitReleaseHook(permitForHook::release);
+                                        sessionPermit = null;
+                                    } else {
+                                        sessionPermit.release();
+                                        sessionPermit = null;
+                                    }
+                                }
+                                dtoBuilder.session(updatedSession);
+                                sessionCreated = true;
+                            }
+                        } catch (SQLException e) {
+                            if (sessionPermit != null) {
+                                sessionPermit.release();
+                            }
+                            log.error("Failed to acquire connection from pool for hash: {}. Error: {}",
+                                    connHash, e.getMessage());
+
+                            // Re-throw the enhanced exception from ConnectionAcquisitionManager
+                            throw e;
+                        }
                     }
                 }
 
-                if (startSessionIfNone) {
+                if (startSessionIfNone && !sessionCreated) {
                     SessionInfo updatedSession = sessionManager.createSession(sessionInfo.getClientUUID(), conn);
                     dtoBuilder.session(updatedSession);
                 }

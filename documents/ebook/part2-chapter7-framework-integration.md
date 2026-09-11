@@ -32,6 +32,92 @@ graph TD
 
 Let's see how this pattern applies to each framework.
 
+## 7.1.1 Runtime Dependencies and Classpath Isolation
+
+Starting with OJP 0.5.x the `ojp-jdbc-driver` shaded JAR no longer exposes its internal
+dependencies (gRPC, Netty, Protobuf, Guava, Apache Commons Lang) at their original package
+coordinates. All bundled third-party classes are **relocated** under the
+`org.openjproxy.shaded.*` namespace. This eliminates version conflicts when your application
+already uses any of those libraries independently.
+
+Two dependencies are marked **`provided`** in the driver POM, meaning they are intentionally
+**not** bundled in the JAR and must be present at runtime in the consuming environment:
+
+| Provided dependency | Why provided | Notes |
+|---|---|---|
+| `org.slf4j:slf4j-api` | Logging abstraction — the implementation is chosen by the consuming application or container | Required at runtime by all OJP deployments |
+| `jakarta.transaction:jakarta.transaction-api` | JTA is a container-managed API — each platform supplies its own version | Required at runtime only when using OJP XA connections (`OjpXADataSource`) |
+
+> **Note:** The `javax.transaction.xa.*` classes (used by OJP's XA support) are also available
+> from the JDK's own `java.transaction.xa` module on Java 11+, so strictly speaking
+> `jakarta.transaction-api` is only required on Java 8 or when your application code imports
+> the `jakarta.transaction.*` JTA interfaces directly.
+
+### Availability by deployment environment
+
+Different environments vary in how many of these `provided` dependencies they already supply.
+Use the table below to determine whether you need to add anything to your project.
+
+| Environment | `slf4j-api` | `jakarta.transaction-api` | Action required |
+|---|---|---|---|
+| **Spring Boot** (via starter or manually) | ✅ `spring-boot-starter-logging` | ✅ `spring-tx` | No action needed |
+| **Quarkus** (with JTA extension) | ✅ JBoss Logging / SLF4J bridge | ✅ `quarkus-narayana-jta` | No action needed |
+| **Micronaut** (with `micronaut-transaction`) | ✅ `micronaut-logging` | ✅ `micronaut-transaction` | No action needed |
+| **Jakarta EE application servers** (GlassFish, Payara, WildFly, Open Liberty, TomEE) | ⚠️ Varies — see note below | ✅ Part of the EE platform | SLF4J may need to be added; see per-server note |
+| **Apache Tomcat** (servlet container only) | ❌ Not provided | ❌ Not provided | Add both explicitly (see below) |
+| **Jetty / Undertow** (standalone, no EE) | ❌ Not provided | ❌ Not provided | Add both explicitly |
+
+> **GlassFish / Payara note:** These servers do not ship `slf4j-api` on the default server
+> classpath. Add `slf4j-api` and an SLF4J implementation (e.g., `slf4j-simple`) to
+> `WEB-INF/lib` of your deployment archive, or place them in the server's domain `lib/`
+> directory. WildFly and Open Liberty both include SLF4J as part of their module system and
+> typically satisfy the requirement automatically.
+
+#### Adding the missing dependencies for Tomcat or bare servlet containers
+
+When deploying to Apache Tomcat or any other runtime that does not supply these APIs, add
+the following to your `pom.xml`:
+
+```xml
+<!-- Required at runtime: OJP driver uses SLF4J for logging -->
+<dependency>
+    <groupId>org.slf4j</groupId>
+    <artifactId>slf4j-api</artifactId>
+    <version>1.0.0-RC1</version>
+</dependency>
+<!-- Choose an SLF4J implementation — Logback is the most common choice -->
+<dependency>
+    <groupId>ch.qos.logback</groupId>
+    <artifactId>logback-classic</artifactId>
+    <version>1.0.0-RC1</version>
+</dependency>
+
+<!-- Required at runtime only when using OJP XA connections (OjpXADataSource) -->
+<!-- Omit if you are not using XA / distributed transactions -->
+<dependency>
+    <groupId>jakarta.transaction</groupId>
+    <artifactId>jakarta.transaction-api</artifactId>
+    <version>1.0.0-RC1</version>
+</dependency>
+```
+
+### Classpath isolation: no more version conflicts
+
+Because all third-party libraries bundled inside `ojp-jdbc-driver` are relocated to
+`org.openjproxy.shaded.*`, you can safely use any version of gRPC, Netty, Protobuf, or
+Guava in your own application without conflict. The driver's internal copies are completely
+invisible to the JVM class loader from the application's perspective.
+
+```
+Your app: io.grpc:grpc-core:1.68.0     ← your version, untouched
+OJP JAR:  org.openjproxy.shaded.io.grpc ← driver's internal copy, isolated
+```
+
+This is particularly relevant when:
+- Your application already uses gRPC or Protobuf directly
+- You use Quarkus or Micronaut, which ship their own gRPC/Netty stacks
+- You deploy to an application server that bundles its own copy of these libraries
+
 ## 7.2 Spring Boot Integration
 
 Spring Boot is the most widely used Java framework, and integrating OJP with it showcases the typical challenges and solutions. Spring Boot applications by default include HikariCP as their connection pool implementation. This tight integration makes Spring Boot applications fast and efficient out of the box, but it also means you need to prevent the local pool from interfering with OJP's server-side connection management.
@@ -47,7 +133,7 @@ The `spring-boot-starter-ojp` artifact provides zero-configuration Spring Boot i
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>spring-boot-starter-ojp</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -167,7 +253,7 @@ If you cannot use the starter (for example, in Java 11 projects where the starte
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 
 <!-- Spring JDBC Starter WITHOUT HikariCP -->
@@ -260,7 +346,7 @@ Start with the Maven dependency for OJP's JDBC driver:
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -353,7 +439,7 @@ The first step remains familiar—add the OJP JDBC driver dependency:
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -465,7 +551,7 @@ Jakarta EE applications typically run inside an **application server** (such as 
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 

@@ -5,13 +5,13 @@ import com.openjproxy.grpc.SessionInfo;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.datasource.ConnectionPoolProviderRegistry;
 import org.openjproxy.datasource.PoolConfig;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.MultinodeXaCoordinator;
+import org.openjproxy.grpc.server.AdmissionControlManager;
 import org.openjproxy.grpc.server.UnpooledConnectionDetails;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
@@ -19,6 +19,8 @@ import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
 import org.openjproxy.grpc.server.pool.DataSourceConfigurationManager;
 import org.openjproxy.grpc.server.pool.PreparedStatementCachePropertyTranslator;
+import org.openjproxy.grpc.server.readwrite.ReadWriteConfiguration;
+import org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceManager;
 import org.openjproxy.grpc.server.utils.ConnectionHashGenerator;
 import org.openjproxy.grpc.server.utils.UrlParser;
 
@@ -70,9 +72,9 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
     @Override
     public void execute(ActionContext context, ConnectionDetails connectionDetails, StreamObserver<SessionInfo> responseObserver) {
         // Handle empty connection details (health check)
-        if (StringUtils.isBlank(connectionDetails.getUrl()) &&
-            StringUtils.isBlank(connectionDetails.getUser()) &&
-            StringUtils.isBlank(connectionDetails.getPassword())) {
+        if (connectionDetails.getUrl().isBlank() &&
+            connectionDetails.getUser().isBlank() &&
+            connectionDetails.getPassword().isBlank()) {
             // Empty connection details - return empty session info - used for initial health checks only
             responseObserver.onNext(SessionInfo.newBuilder().build());
             responseObserver.onCompleted();
@@ -217,10 +219,14 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 .connectionTimeoutMs(CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS)
                                 .idleTimeoutMs(dsConfig.getIdleTimeout())
                                 .maxLifetimeMs(dsConfig.getMaxLifetime())
+                                .leakDetectionThresholdMs(dsConfig.getLeakDetectionThreshold())
                                 .defaultTransactionIsolation(defaultTransactionIsolation)
                                 .properties(statementCacheProperties)
                                 .metricsPrefix("OJP-Pool-" + dsConfig.getDataSourceName())
                                 .build();
+
+                        log.info("Connection timeout model for {}: admissionTimeout={}ms, backendPoolTimeout={}ms (fail-fast, provider clamped if needed)",
+                                connHash, dsConfig.getConnectionTimeout(), CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS);
 
                         // Create DataSource with properly configured transaction isolation
                         ds = ConnectionPoolProviderRegistry.createDataSource(poolConfig);
@@ -236,6 +242,9 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 dsConfig.getDataSourceName(), connHash,
                                 ConnectionPoolProviderRegistry.getDefaultProvider().map(p -> p.id()).orElse("unknown"),
                                 maxPoolSize, minIdle);
+
+                        // Setup read/write splitting if configured
+                        setupReadWriteSplitting(context, connectionDetails, connHash, ds, dsConfig.getDataSourceName());
                     }
 
                 } catch (Exception e) {
@@ -247,6 +256,30 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
             }
         } finally {
             lock.unlock();
+        }
+
+        // If the pool already existed and read/write splitting was not yet registered for this
+        // connHash, attempt setup now. The setupReadWriteSplitting implementation is idempotent:
+        // it skips silently when the primary is already mapped and replicas are registered.
+        org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry readWriteRegistry =
+                context.getReadWriteDataSourceRegistry();
+        if (readWriteRegistry != null
+                && readWriteRegistry.getPrimaryName(connHash) == null
+                && connectionDetails.getPropertiesCount() > 0) {
+            DataSource existingDs = context.getDatasourceMap().get(connHash);
+            if (existingDs != null) {
+                try {
+                    Properties clientProps = ConnectionPoolConfigurer.extractClientProperties(connectionDetails);
+                    DataSourceConfigurationManager.DataSourceConfiguration dsConf =
+                            DataSourceConfigurationManager.getConfiguration(clientProps);
+                    setupReadWriteSplitting(context, connectionDetails, connHash, existingDs,
+                            dsConf.getDataSourceName());
+                } catch (Exception e) {
+                    log.error("Failed to setup read/write splitting for connHash {} (pool already existed): {}",
+                            connHash, e.getMessage(), e);
+                    // Non-fatal: continue without read/write splitting
+                }
+            }
         }
 
         // Process cluster health from ConnectionDetails if provided.
@@ -315,10 +348,22 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
         // For regular connections, just return session info without creating a session yet (lazy allocation)
         // Server does not populate targetServer - client will set it on future requests
+        int clientCount = context.getSessionManager().getClientCount(connHash);
+        int maxAdmission = 0;
+        int observedPeakValue = 0;
+        AdmissionControlManager acm = context.getAdmissionControlManagers().get(connHash);
+        if (acm != null && acm.isEnabled() && acm.getSlotManager() != null) {
+            maxAdmission = acm.getSlotManager().getEffectiveMaxAdmission();
+            observedPeakValue = acm.getSlotManager().getObservedPeak();
+        }
+
         SessionInfo sessionInfo = SessionInfo.newBuilder()
                 .setConnHash(connHash)
                 .setClientUUID(connectionDetails.getClientUUID())
                 .setIsXA(false)
+                .setClientCount(clientCount)
+                .setMaxAdmission(maxAdmission)
+                .setObservedPeak(observedPeakValue)
                 .build();
 
         responseObserver.onNext(sessionInfo);
@@ -326,5 +371,39 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
         context.getDbNameMap().put(connHash, DatabaseUtils.resolveDbName(connectionDetails.getUrl()));
 
         responseObserver.onCompleted();
+    }
+
+    /**
+     * Sets up read/write splitting for the given datasource if configured.
+     * Creates and registers replica datasources in the ReadWriteDataSourceRegistry.
+     *
+     * @param context           action context
+     * @param connectionDetails connection details with properties
+     * @param connHash          connection hash for the primary
+     * @param ds                primary datasource (already created)
+     * @param datasourceName    name of the datasource
+     */
+    private void setupReadWriteSplitting(ActionContext context, ConnectionDetails connectionDetails,
+                                         String connHash, DataSource ds, String datasourceName) {
+        if (context.getReadWriteDataSourceRegistry() == null) {
+            log.debug("ReadWriteDataSourceRegistry not available, skipping read/write splitting setup");
+            return;
+        }
+
+        try {
+            ReadWriteDataSourceManager rwManager = new ReadWriteDataSourceManager(
+                    context.getReadWriteDataSourceRegistry());
+
+            ReadWriteConfiguration config = rwManager.setupReadWriteSplitting(
+                    connectionDetails, connHash, ds, datasourceName);
+
+            if (config != null) {
+                log.info("Read/write splitting successfully configured for datasource '{}'", datasourceName);
+            }
+        } catch (Exception e) {
+            log.error("Failed to setup read/write splitting for datasource '{}': {}",
+                    datasourceName, e.getMessage(), e);
+            // Non-fatal: continue without read/write splitting
+        }
     }
 }

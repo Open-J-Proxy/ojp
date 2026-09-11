@@ -47,15 +47,62 @@ graph TB
 
 ### ojp-server: The gRPC Server
 
-**[IMAGE PROMPT 1]**: Create a detailed component diagram of ojp-server showing:
-- gRPC Server endpoint (port 1059)
-- HikariCP Connection Pool Manager
-- Multiple database pools (PostgreSQL, MySQL, Oracle)
-- Request Handler threads
-- Metrics/Telemetry collector (Prometheus on port 9159)
-- Configuration manager
-Use a layered architecture style with clear component boundaries
-Professional enterprise architecture diagram with icons and labels
+```mermaid
+graph TD
+    subgraph "ojp-server Component View"
+    subgraph "Network Endpoints"
+    GRPC_ENDPOINT[gRPC Server Endpoint<br/>Port 1059]
+    PROM_ENDPOINT[Prometheus Metrics Endpoint<br/>Port 9159]
+    end
+    subgraph "Request Processing"
+    HANDLERS[Request Handler Threads<br/>or Virtual Threads]
+    STMT_SERVICE[StatementServiceImpl<br/>SQL Execution API]
+    SESSION_TRACKER[Session and Transaction Tracker]
+    end
+    subgraph "Pool Management"
+    POOL_MANAGER[HikariCP Connection Pool Manager]
+    PG_POOL[PostgreSQL Pool]
+    MYSQL_POOL[MySQL Pool]
+    ORACLE_POOL[Oracle Pool]
+    end
+    subgraph "Infrastructure"
+    CONFIG_MANAGER[Configuration Manager<br/>Env Vars and JVM Properties]
+    TELEMETRY[Metrics and Telemetry Collector<br/>OpenTelemetry]
+    end
+    subgraph "Database Backends"
+    PG_DB[(PostgreSQL)]
+    MYSQL_DB[(MySQL)]
+    ORACLE_DB[(Oracle)]
+    end
+    GRPC_ENDPOINT --> HANDLERS
+    HANDLERS --> STMT_SERVICE
+    STMT_SERVICE --> SESSION_TRACKER
+    STMT_SERVICE --> POOL_MANAGER
+    POOL_MANAGER --> PG_POOL
+    POOL_MANAGER --> MYSQL_POOL
+    POOL_MANAGER --> ORACLE_POOL
+    PG_POOL --> PG_DB
+    MYSQL_POOL --> MYSQL_DB
+    ORACLE_POOL --> ORACLE_DB
+    CONFIG_MANAGER --> GRPC_ENDPOINT
+    CONFIG_MANAGER --> POOL_MANAGER
+    CONFIG_MANAGER --> PROM_ENDPOINT
+    STMT_SERVICE --> TELEMETRY
+    POOL_MANAGER --> TELEMETRY
+    TELEMETRY --> PROM_ENDPOINT
+    end
+    style GRPC_ENDPOINT fill:#90caf9
+    style PROM_ENDPOINT fill:#90caf9
+    style HANDLERS fill:#81c784
+    style STMT_SERVICE fill:#81c784
+    style SESSION_TRACKER fill:#81c784
+    style POOL_MANAGER fill:#ff8a65
+    style PG_POOL fill:#ffcc80
+    style MYSQL_POOL fill:#ffcc80
+    style ORACLE_POOL fill:#ffcc80
+    style CONFIG_MANAGER fill:#b0bec5
+    style TELEMETRY fill:#b0bec5
+```
 
 The **ojp-server** is the heart of the OJP system. It's a standalone gRPC server that manages database connections and executes SQL operations on behalf of client applications.
 
@@ -132,14 +179,6 @@ ojp.server.circuitBreakerTimeout=60000
 
 ### ojp-jdbc-driver: The JDBC Implementation
 
-**[IMAGE PROMPT 2]**: Create a layered diagram showing:
-TOP: Standard JDBC interfaces (Connection, Statement, ResultSet, PreparedStatement)
-MIDDLE: OJP implementations (OjpConnection, OjpStatement, OjpResultSet)
-BOTTOM: gRPC Client communicating with OJP Server
-Show how JDBC methods map to gRPC calls
-Use UML-style class diagram with interfaces and implementations
-Professional technical diagram style
-
 The **ojp-jdbc-driver** is a complete JDBC 4.2 specification implementation that applications use as a drop-in replacement for traditional JDBC drivers.
 
 The driver implements the JDBC API interfaces to ensure compliance with the standard. Rather than maintaining actual database connections, it provides lightweight virtual connection objects that delegate to the server. Under the hood, it acts as a gRPC client, communicating with ojp-server to execute all database operations. The driver handles result set streaming efficiently to minimize memory overhead, and manages transaction state across the network boundary. For high availability scenarios, it supports connecting to multiple OJP servers simultaneously, automatically failing over when needed.
@@ -210,7 +249,7 @@ classDiagram
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -241,12 +280,37 @@ conn.close();
 
 ### ojp-grpc-commons: Shared Contracts
 
-**[IMAGE PROMPT 3]**: Create a diagram showing Protocol Buffers (.proto files) in the center, with arrows pointing to:
-LEFT: Java generated classes for ojp-jdbc-driver
-RIGHT: Java generated classes for ojp-server
-Show the contract acting as a bridge/shared language
-Include sample proto message definitions (StatementRequest, ResultSetResponse)
-Use professional technical documentation style
+```mermaid
+graph LR
+    subgraph "ojp-jdbc-driver"
+    DRIVER_CODE[Driver Code<br/>Connection, Statement]
+    DRIVER_GEN[Generated Java Classes<br/>StatementRequest<br/>OpResult<br/>StatementServiceGrpc]
+    end
+    subgraph "ojp-grpc-commons"
+    PROTO[Protocol Buffer Contracts<br/>StatementService.proto]
+    SAMPLE_REQ[StatementRequest<br/>session<br/>sql<br/>parameters<br/>statementUUID]
+    SAMPLE_RES[OpResult Stream<br/>query_result<br/>labels<br/>rows]
+    end
+    subgraph "ojp-server"
+    SERVER_GEN[Generated Java Classes<br/>StatementRequest<br/>OpResult<br/>StatementServiceGrpc]
+    SERVER_CODE[Server Code<br/>StatementServiceImpl]
+    end
+    PROTO -->|protoc generates| DRIVER_GEN
+    PROTO -->|protoc generates| SERVER_GEN
+    SAMPLE_REQ -.->|defined in| PROTO
+    SAMPLE_RES -.->|defined in| PROTO
+    DRIVER_CODE --> DRIVER_GEN
+    SERVER_GEN --> SERVER_CODE
+    DRIVER_GEN -->|shared language| SERVER_GEN
+    DRIVER_CODE -->|gRPC messages| SERVER_CODE
+    style PROTO fill:#90caf9
+    style SAMPLE_REQ fill:#bbdefb
+    style SAMPLE_RES fill:#bbdefb
+    style DRIVER_GEN fill:#81c784
+    style DRIVER_CODE fill:#c8e6c9
+    style SERVER_GEN fill:#ffd54f
+    style SERVER_CODE fill:#fff59d
+```
 
 The **ojp-grpc-commons** module contains the gRPC service definitions and Protocol Buffer message schemas shared between the driver and server.
 
@@ -287,12 +351,29 @@ OJP uses **gRPC** (Google Remote Procedure Call) as its communication protocol, 
 
 ### Why gRPC?
 
-**[IMAGE PROMPT 4]**: Create a comparison infographic:
-Traditional REST/JSON vs gRPC/Protocol Buffers
-Show metrics: Latency, Throughput, Payload Size, Connection Efficiency
-Use bar charts or comparison cards
-Highlight gRPC advantages: HTTP/2, Binary encoding, Streaming, Type safety
-Professional infographic style with clear data visualization
+```mermaid
+block-beta
+    columns 3
+    title["REST/JSON vs gRPC/Protocol Buffers"]:3
+    metric["Metric"]
+    rest["Traditional REST/JSON"]
+    grpc["gRPC/Protocol Buffers"]
+    latency["Latency"]
+    restLatency["Higher<br/>HTTP/1.1 request overhead"]
+    grpcLatency["Lower<br/>HTTP/2 + compact payloads"]
+    throughput["Throughput"]
+    restThroughput["Good<br/>One request/response at a time"]
+    grpcThroughput["Excellent<br/>Multiplexed concurrent streams"]
+    payload["Payload Size"]
+    restPayload["Larger<br/>Text JSON"]
+    grpcPayload["60-80% smaller<br/>Binary Protobuf"]
+    connection["Connection Efficiency"]
+    restConnection["Lower<br/>More connection overhead"]
+    grpcConnection["Higher<br/>Single HTTP/2 channel, many streams"]
+    features["Protocol Features"]
+    restFeatures["Runtime validation<br/>Limited streaming"]
+    grpcFeatures["HTTP/2<br/>Binary encoding<br/>Streaming<br/>Type safety"]
+```
 
 From the Architectural Decision Record (ADR-002):
 
@@ -303,19 +384,6 @@ gRPC brings several compelling advantages to OJP's architecture. Its HTTP/2 mult
 When comparing REST/JSON to gRPC/Protobuf, the differences are striking. REST typically uses HTTP/1.1 with text-based JSON encoding, leading to larger payloads and limited streaming capabilities. Type checking happens at runtime, and performance is merely good. gRPC, on the other hand, uses HTTP/2 with binary encoding, achieving 60-80% payload size reduction, native streaming support, compile-time type safety, and excellent performance.
 
 ### Request-Response Flow
-
-**[IMAGE PROMPT 5]**: Create a detailed sequence diagram showing:
-1. Application calls executeQuery()
-2. OJP Driver serializes to protobuf
-3. gRPC call over HTTP/2
-4. OJP Server deserializes
-5. Server acquires pool connection
-6. SQL executed on database
-7. Results serialized to protobuf
-8. Streamed back via gRPC
-9. Driver deserializes
-10. Returns to application
-Use professional sequence diagram style with clear swim lanes and timing indicators
 
 Let's trace a complete SQL query execution:
 
@@ -329,23 +397,34 @@ sequenceDiagram
     participant Pool as HikariCP Pool
     participant DB as Database
 
-    App->>Driver: executeQuery("SELECT * FROM users")
-    Driver->>Driver: Serialize to Protobuf
-    Driver->>gRPC: StatementRequest
-    gRPC->>Server: HTTP/2 Stream
-    Server->>Server: Deserialize Protobuf
-    Server->>Pool: getConnection()
-    Pool->>DB: Execute SQL
-    DB-->>Pool: ResultSet (1000 rows)
-    Pool-->>Server: Release connection
-    Server->>Server: Serialize to Protobuf
-    Server->>gRPC: Stream ResultSetResponse
-    gRPC->>Driver: HTTP/2 Stream (chunked)
-    Driver->>Driver: Deserialize Protobuf
-    Driver-->>App: JDBC ResultSet
+    rect rgb(227, 242, 253)
+    Note over App,Server: Steps 1-3: Request creation, protobuf serialization, and HTTP/2 transmission (~1-2ms)
+    App->>Driver: 1. executeQuery("SELECT * FROM users")
+    Driver->>Driver: 2. Serialize StatementRequest to Protobuf
+    Driver->>gRPC: 3a. Send StatementRequest
+    gRPC->>Server: 3b. HTTP/2 stream delivers request
+    end
 
-    Note over Driver,Server: Connection held only<br/>during execution
-    Note over Server,DB: Streaming for<br/>large result sets
+    rect rgb(255, 243, 224)
+    Note over Server,DB: Steps 4-7: Server processing and database work (duration depends on query)
+    Server->>Server: 4. Deserialize Protobuf
+    Server->>Pool: 5. Acquire pooled connection
+    Pool->>DB: 6. Execute SQL
+    DB-->>Pool: 7a. Return ResultSet rows
+    Pool-->>Server: 7b. Return rows for serialization
+    end
+
+    rect rgb(232, 245, 233)
+    Note over Server,App: Steps 8-10: Result streaming and driver deserialization (~2-5ms for 1000 rows)
+    Server->>gRPC: 8. Stream serialized ResultSetResponse chunks
+    gRPC->>Driver: 8b. HTTP/2 response stream
+    Driver->>Driver: 9. Deserialize Protobuf chunks
+    Driver-->>App: 10. Return JDBC ResultSet
+    end
+
+    Note over Pool,DB: Database connection held during steps 6-7<br/>from SQL execution until rows are handed back
+    Note over Driver,Server: Total network overhead: ~5-10ms<br/>request + response path, typically less than database work
+    Note over Server,App: Streaming keeps large result sets incremental
 ```
 
 **Key Observations**:
@@ -358,14 +437,50 @@ sequenceDiagram
 
 ### Session Management
 
-**[IMAGE PROMPT 6]**: Create a diagram showing:
-LEFT: Multiple application threads/requests
-CENTER: Session Manager maintaining session state (sessionId, transaction state, isolation level)
-RIGHT: Server-side resources (connections, prepared statements)
-Show how sessionId maps requests to resources
-Use professional system architecture diagram style
+OJP sessions provide the bridge between stateless gRPC calls and stateful JDBC behavior. Every driver request carries a `sessionId`, and the server uses that identifier to find the right transaction state, isolation level, connection, and cached statement resources.
 
-Sessions maintain state across multiple requests:
+```mermaid
+graph LR
+    subgraph "Application Threads and Requests"
+    REQ1[Thread 1<br/>sessionId: A<br/>executeQuery]
+    REQ2[Thread 2<br/>sessionId: B<br/>commit]
+    REQ3[Thread 3<br/>sessionId: A<br/>fetchNextRows]
+    end
+
+    subgraph "Session Manager"
+    SESS_A[Session A<br/>transaction: active<br/>isolation: READ_COMMITTED]
+    SESS_B[Session B<br/>transaction: auto-commit<br/>isolation: SERIALIZABLE]
+    end
+
+    subgraph "Server-Side Resources"
+    CONN_A[(Connection A<br/>sticky while transaction active)]
+    CONN_B[(Connection B<br/>borrowed per operation)]
+    PS_A[Prepared Statement Cache<br/>session A statements]
+    PS_B[Prepared Statement Cache<br/>session B statements]
+    end
+
+    REQ1 -->|sessionId A| SESS_A
+    REQ3 -->|sessionId A| SESS_A
+    REQ2 -->|sessionId B| SESS_B
+    SESS_A --> CONN_A
+    SESS_A --> PS_A
+    SESS_B --> CONN_B
+    SESS_B --> PS_B
+
+    style REQ1 fill:#90caf9
+    style REQ2 fill:#90caf9
+    style REQ3 fill:#90caf9
+    style SESS_A fill:#81c784
+    style SESS_B fill:#81c784
+    style CONN_A fill:#ffcc80
+    style CONN_B fill:#ffcc80
+    style PS_A fill:#ffe0b2
+    style PS_B fill:#ffe0b2
+```
+
+This resource mapping diagram shows how multiple request streams can safely share the same OJP server without losing JDBC semantics. Requests with the same `sessionId` converge on the same session record, while different sessions remain isolated from each other.
+
+The next diagram focuses on the lifecycle of a single session as it moves between creation, normal query execution, transaction handling, and cleanup:
 
 ```mermaid
 stateDiagram-v2
@@ -397,13 +512,6 @@ Each OJP session has several important characteristics that make the system work
 
 ### Connection Multiplexing
 
-**[IMAGE PROMPT 7]**: Create a technical diagram showing:
-Multiple JDBC operations from different threads
-All multiplexed over a single gRPC channel (HTTP/2 connection)
-Show concurrent streams within the single TCP connection
-Label: "10 concurrent queries" → "1 TCP connection" → "10 database operations"
-Use network diagram style with clear connection visualization
-
 One of gRPC's killer features is connection multiplexing:
 
 ```mermaid
@@ -412,31 +520,58 @@ graph LR
     T1[Thread 1<br/>Query 1]
     T2[Thread 2<br/>Query 2]
     T3[Thread 3<br/>Query 3]
-    T4[Thread 4<br/>Query 4]
+    TM[...]
+    T10[Thread 10<br/>Query 10]
     end
-    
+
     subgraph "gRPC Channel"
-    CH[Single TCP Connection<br/>HTTP/2 Multiplexing]
+    CH[1 TCP Connection<br/>gRPC over HTTP/2<br/>10 concurrent streams]
     end
-    
+
     subgraph "OJP Server"
     S1[Handler 1]
     S2[Handler 2]
     S3[Handler 3]
-    S4[Handler 4]
+    SM[...]
+    S10[Handler 10]
     end
-    
+
+    subgraph "Database Operations"
+    DB1[DB Operation 1]
+    DB2[DB Operation 2]
+    DB3[DB Operation 3]
+    DBM[...]
+    DB10[DB Operation 10]
+    end
+
+    SUMMARY[10 concurrent queries<br/>→ 1 TCP connection<br/>→ 10 database operations]
+
+    SUMMARY --> CH
     T1 -.->|Stream 1| CH
     T2 -.->|Stream 2| CH
     T3 -.->|Stream 3| CH
-    T4 -.->|Stream 4| CH
-    
+    TM -.->|Streams 4-9| CH
+    T10 -.->|Stream 10| CH
+
     CH -->|Stream 1| S1
     CH -->|Stream 2| S2
     CH -->|Stream 3| S3
-    CH -->|Stream 4| S4
-    
+    CH -->|Streams 4-9| SM
+    CH -->|Stream 10| S10
+
+    S1 --> DB1
+    S2 --> DB2
+    S3 --> DB3
+    SM --> DBM
+    S10 --> DB10
+
+    style SUMMARY fill:#90caf9
     style CH fill:#4caf50
+    style DB1 fill:#ffcc80
+    style DB2 fill:#ffcc80
+    style DB3 fill:#ffcc80
+    style DBM fill:#ffcc80
+    style DB10 fill:#ffcc80
 ```
 
 This multiplexing delivers several concrete benefits. The reduced overhead from maintaining one TCP connection instead of many translates to better performance and resource utilization. Server resources are conserved—fewer sockets and file descriptors mean more capacity for actual work. Most importantly, the system can handle concurrent operations gracefully, with multiple queries in flight simultaneously without the connection management overhead of traditional approaches.
@@ -449,12 +584,32 @@ At the core of OJP's efficiency is its use of **HikariCP**, the fastest JDBC con
 
 ### Why HikariCP?
 
-**[IMAGE PROMPT 8]**: Create a performance comparison chart:
-Show HikariCP vs other connection pools (C3P0, DBCP, Tomcat Pool)
-Metrics: Throughput (ops/sec), Latency (ms), Memory usage
-Bar chart or radar chart showing HikariCP's superiority
-Include quote: "HikariCP is the fastest JDBC connection pool"
-Professional data visualization style
+```mermaid
+block-beta
+    columns 4
+    title["Connection Pool Performance Comparison"]:4
+    pool["Pool"]
+    throughput["Throughput<br/>(ops/sec)"]
+    latency["Average Latency<br/>(ms, lower is better)"]
+    memory["Memory Usage<br/>(relative footprint)"]
+    hikari["HikariCP"]
+    hikariThroughput["45,000<br/>Very high"]
+    hikariLatency["0.9<br/>Lowest"]
+    hikariMemory["Lowest<br/>Minimal footprint"]
+    tomcat["Tomcat Pool"]
+    tomcatThroughput["23,000<br/>Medium"]
+    tomcatLatency["1.8<br/>Medium"]
+    tomcatMemory["Moderate<br/>Average footprint"]
+    dbcp["DBCP2"]
+    dbcpThroughput["20,000<br/>Medium"]
+    dbcpLatency["2.1<br/>Higher"]
+    dbcpMemory["Moderate<br/>Average footprint"]
+    c3p0["C3P0"]
+    c3p0Throughput["18,000<br/>Lower"]
+    c3p0Latency["2.3<br/>Highest"]
+    c3p0Memory["Higher<br/>Larger footprint"]
+    quote["HikariCP is the fastest JDBC connection pool"]:4
+```
 
 From the Architectural Decision Record (ADR-003):
 
@@ -466,11 +621,29 @@ Performance benchmarks tell the story clearly. HikariCP achieves approximately 4
 
 ### Pool Sizing and Configuration
 
-**[IMAGE PROMPT 9]**: Create an infographic showing optimal pool sizing:
-Show relationship between: # of cores, # of concurrent queries, optimal pool size
-Include modern formulas for SSD/cloud storage and traditional spinning disk scenarios
-Visualize with server icons, CPU cores, and database connections
-Professional technical infographic style
+```mermaid
+graph LR
+    INPUTS[Modern SSD / cloud inputs<br/>8 CPU cores<br/>50 concurrent handlers<br/>5ms query / 25ms think time]
+    SIMPLE[Simple rule<br/>cores + 2<br/>8 + 2 = 10]
+    WORKLOAD["Workload formula<br/>T_n x (C_m / T_m) + buffer<br/>50 x (5 / 25) + 3 = 13"]
+    RESULT[Start with 10-13 connections]
+    CHECK[Then watch metrics<br/>connection wait time<br/>database CPU headroom]
+    LEGACY["Legacy spinning disk only<br/>(cores x 2) + effective_spindle_count"]
+
+    INPUTS --> SIMPLE
+    INPUTS --> WORKLOAD
+    SIMPLE --> RESULT
+    WORKLOAD --> RESULT
+    RESULT --> CHECK
+    LEGACY -.->|separate legacy formula| RESULT
+
+    style INPUTS fill:#bbdefb
+    style SIMPLE fill:#c8e6c9
+    style WORKLOAD fill:#c8e6c9
+    style RESULT fill:#81c784
+    style CHECK fill:#e3f2fd
+    style LEGACY fill:#ffcc80
+```
 
 #### Modern Pool Sizing Formula
 
@@ -588,29 +761,14 @@ connectionTestQuery=SELECT 1
 
 **Pool Sizing Guidelines**:
 
-A common formula for pool sizing:
+Use the modern formula above for SSD-backed and cloud databases. For an 8-core database server, a good starting point is often around 10 connections using the `cores + 2` rule, or 13 connections in the high-frequency OLTP example. Increase only when metrics show connection wait time while database CPU still has headroom.
+
+For legacy spinning-disk systems, the traditional formula still applies:
 ```
 connections = ((core_count * 2) + effective_spindle_count)
 ```
 
-For modern SSDs (effectively infinite spindles):
-```
-connections = core_count * 2
-```
-
-**Example**: For a database server with 8 cores:
-- Optimal pool size: 16-20 connections
-- This handles concurrent queries efficiently without overwhelming the database
-
 ### Connection Abstraction Layer
-
-**[IMAGE PROMPT 10]**: Create an architecture diagram showing:
-TOP: OJP Server using ConnectionPoolProvider interface
-MIDDLE: Provider SPI layer (abstraction)
-BOTTOM: Multiple implementations (HikariCP, DBCP2, Custom)
-Show pluggable architecture with different providers
-UML-style interface diagram showing polymorphism
-Professional software architecture diagram style
 
 OJP includes a **Connection Pool Provider SPI** (Service Provider Interface) that abstracts the underlying connection pool implementation:
 
@@ -732,17 +890,6 @@ This architecture makes OJP adaptable to specialized requirements while maintain
 
 ### Complete System Architecture
 
-**[IMAGE PROMPT 11]**: Create a comprehensive end-to-end architecture diagram showing:
-- Application layer (multiple instances)
-- OJP JDBC Driver layer
-- Network layer (gRPC/HTTP2)
-- OJP Server layer (with all internal components)
-- Connection Pool layer (HikariCP with multiple DB pools)
-- Database layer (multiple databases)
-Include all protocols, ports, and data flows
-Use professional enterprise architecture poster style
-Large, detailed, suitable for printing
-
 Here's the complete OJP architecture from end to end:
 
 ```mermaid
@@ -835,14 +982,6 @@ graph TB
 
 ### Component Interaction
 
-**[IMAGE PROMPT 12]**: Create a detailed component interaction diagram showing:
-- How components communicate
-- What data flows between them
-- Key interfaces and contracts
-- Configuration and dependencies
-Use UML component diagram notation
-Professional software architecture documentation style
-
 Let's examine how components interact during a typical database operation:
 
 ```mermaid
@@ -872,7 +1011,7 @@ sequenceDiagram
     Server->>HikariCP: getConnection()
     HikariCP->>DB: Use real connection
     DB-->>HikariCP: ResultSet
-    Note over HikariCP,Server: Connection held for ResultSet
+    Note over HikariCP,Server: Connection remains associated with the OJP session after acquisition
     Server->>Commons: Serialize ResultSetResponse
     Server-->>Driver: Stream results
     Driver->>Driver: Deserialize to JDBC ResultSet
@@ -885,22 +1024,15 @@ sequenceDiagram
     Note over App: Close resources
     App->>Driver: rs.close()
     Driver->>Server: CloseResultSet RPC
-    Server->>HikariCP: Release connection NOW
+    Server->>Server: Close ResultSet and free cursor state
     App->>Driver: conn.close()
     Driver->>Server: CloseSession RPC
+    Server->>HikariCP: Release connection to pool
     Server->>Server: Cleanup session
     Server-->>Driver: Acknowledged
 ```
 
 ### Data Flow Diagram
-
-**[IMAGE PROMPT 13]**: Create a data flow diagram (DFD) showing:
-- External entities (Applications, Databases, Monitoring systems)
-- Processes (OJP Driver, OJP Server, Connection Pools)
-- Data stores (Session cache, Prepared statement cache, Metrics)
-- Data flows (SQL queries, Result sets, Metrics, Configuration)
-Use standard DFD notation with appropriate symbols
-Professional systems analysis diagram style
 
 The flow of data through the OJP system:
 
@@ -921,6 +1053,7 @@ graph LR
     subgraph "OJP Server Process"
     P4[Receive<br/>Requests]
     P5[Execute<br/>SQL]
+    P8[Manage<br/>Connection Pools]
     P6[Stream<br/>Results]
     P7[Collect<br/>Metrics]
     end
@@ -929,6 +1062,7 @@ graph LR
     DS1[(Session<br/>State)]
     DS2[(Prepared<br/>Statement<br/>Cache)]
     DS3[(Metrics<br/>Store)]
+    DS4[(Configuration)]
     end
     
     A -->|SQL Queries| P1
@@ -936,9 +1070,14 @@ graph LR
     P2 -->|gRPC| P4
     P4 --> DS1
     P4 --> DS2
+    DS4 -->|Pool and server settings| P4
+    DS4 -->|Pool sizing| P8
     P4 --> P5
-    P5 -->|JDBC| D
-    D -->|Results| P5
+    P5 -->|Connection request| P8
+    P8 -->|JDBC connection| P5
+    P8 -->|Pooled JDBC| D
+    D -->|Result sets| P8
+    P8 -->|Result sets| P5
     P5 --> P6
     P6 -->|gRPC| P3
     P3 -->|JDBC Results| A
@@ -952,6 +1091,7 @@ graph LR
     style DS1 fill:#c5e1a5
     style DS2 fill:#c5e1a5
     style DS3 fill:#c5e1a5
+    style DS4 fill:#c5e1a5
 ```
 
 ---

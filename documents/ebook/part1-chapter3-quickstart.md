@@ -11,7 +11,7 @@ Before starting with OJP, ensure you have the following prerequisites in place.
 ### Java Version Requirements
 
 **[IMAGE PROMPT 1]**: Create a simple requirements checklist infographic:
-- OJP Server: Java 21+ (with Java logo)
+- OJP Server: Java 25+ (with Java logo)
 - OJP JDBC Driver: Java 11+ (with Java logo)
 - Maven 3.9+ or Gradle (with logos)
 - Docker (optional, with Docker logo)
@@ -20,7 +20,7 @@ Use clean, modern icon-based design with checkmarks
 Professional getting-started guide style
 
 OJP has different Java requirements for server and client:
-- **OJP Server** requires **Java 21 or higher**
+- **OJP Server** requires **Java 25 or higher**
 - **OJP JDBC Driver** requires **Java 11 or higher** (for broader client compatibility)
 
 **Verify your Java version**:
@@ -31,12 +31,12 @@ java -version
 
 Expected output:
 ```
-openjdk version "22.0.1" 2024-04-16
-OpenJDK Runtime Environment (build 22.0.1+8-16)
-OpenJDK 64-Bit Server VM (build 22.0.1+8-16, mixed mode, sharing)
+openjdk version "25.0.1" 2026-10-20
+OpenJDK Runtime Environment (build 25.0.1+8-16)
+OpenJDK 64-Bit Server VM (build 25.0.1+8-16, mixed mode, sharing)
 ```
 
-If you don't have Java 22+, you can download it from Eclipse Temurin at adoptium.net, Oracle JDK from oracle.com, or Amazon Corretto from aws.amazon.com/corretto.
+If you don't have Java 25+, you can download it from Eclipse Temurin at adoptium.net, Oracle JDK from oracle.com, or Amazon Corretto from aws.amazon.com/corretto.
 
 ### Docker/Container Options
 
@@ -109,7 +109,7 @@ docker run --rm -d \
   --name ojp-server \
   --network host \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 This command downloads the OJP Server image (approximately 50MB) and starts it with your downloaded drivers mounted. The server starts on port 1059 for gRPC communication and exposes metrics on port 9159 for Prometheus. The `-d` flag runs the container in detached mode, while `--rm` ensures the container is automatically removed when stopped.
@@ -143,7 +143,7 @@ docker run --rm -d \
   -e OJP_SERVER_PORT=9059 \
   -e OJP_PROMETHEUS_PORT=9090 \
   -e OJP_SERVER_LOGLEVEL=DEBUG \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 **For Proprietary Databases** (Oracle, SQL Server, DB2):
@@ -158,7 +158,7 @@ docker run --rm -d \
   --name ojp-server \
   --network host \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 Place all required JDBC driver JARs in the `ojp-libs` directory on your host machine before starting the container.
@@ -182,8 +182,8 @@ If Docker isn't available, use the standalone executable JAR. From version **0.4
 
 ```bash
 # Download the OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/0.4.14-beta/ojp-server-0.4.14-beta-shaded.jar
-chmod +x ojp-server-0.4.14-beta-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.0-RC1-shaded.jar
+chmod +x ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 **Download Database Drivers**:
@@ -197,7 +197,7 @@ bash download-drivers.sh
 **Start the Server**:
 
 ```bash
-java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-0.4.14-beta-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 **With Custom Configuration**:
@@ -208,14 +208,14 @@ java \
   -Dojp.server.port=9059 \
   -Dojp.prometheus.port=9090 \
   -Dojp.server.logLevel=DEBUG \
-  -jar ojp-server-0.4.14-beta-shaded.jar
+  -jar ojp-server-1.0.0-RC1-shaded.jar
 ```
 
 **Run as Background Service**:
 
 ```bash
 # Start in background
-nohup java -Duser.timezone=UTC -jar ojp-server-0.4.14-beta-shaded.jar \
+nohup java -Duser.timezone=UTC -jar ojp-server-1.0.0-RC1-shaded.jar \
   > ojp-server.log 2>&1 &
 
 # Check it's running
@@ -293,7 +293,7 @@ Professional code documentation style
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -569,7 +569,7 @@ The easiest way to integrate OJP with Spring Boot is the `spring-boot-starter-oj
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>spring-boot-starter-ojp</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -701,7 +701,7 @@ docker network create ojp-network
 docker run --network ojp-network --name postgres postgres:15
 
 # Start OJP Server
-docker run --network ojp-network --name ojp-server rrobetti/ojp:0.4.14-beta
+docker run --network ojp-network --name ojp-server rrobetti/ojp:1.0.0-RC1
 
 # Application connects to: ojp-server:1059
 # OJP connects to: postgres:5432

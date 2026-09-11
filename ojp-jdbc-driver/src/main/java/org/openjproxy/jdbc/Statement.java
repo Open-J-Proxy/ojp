@@ -7,6 +7,8 @@ import com.openjproxy.grpc.OpResult;
 import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.TargetCall;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
@@ -15,12 +17,14 @@ import org.openjproxy.grpc.client.StatementService;
 
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLTransientConnectionException;
 import java.sql.SQLWarning;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 import static org.openjproxy.jdbc.Constants.EMPTY_PARAMETERS_LIST;
 
 @Slf4j
@@ -37,7 +41,21 @@ public class Statement implements java.sql.Statement {
 
     protected boolean closed;
     protected ResultSet lastResultSet;
-    protected int lastUpdateCount;
+    // JDBC contract: -1 means "no update count" (i.e., the last executed statement returned a
+    // ResultSet, or no statement has been executed yet). 0 has a different, valid meaning
+    // ("an update statement affected 0 rows") and must never be used as the default here,
+    // otherwise callers relying on getUpdateCount()==-1 to detect "no more results" (e.g. DataGrip)
+    // will incorrectly believe another result is pending and hang waiting for it.
+    protected int lastUpdateCount = -1;
+    // Once the server has told us there are no more results for the current execution,
+    // cache that terminal state locally to avoid a network round-trip on every redundant
+    // getMoreResults() call (some clients poll this repeatedly after the query has finished).
+    private boolean moreResultsExhausted;
+
+    protected void resetMoreResultsState() {
+        this.moreResultsExhausted = false;
+        this.lastUpdateCount = -1;
+    }
 
     public Statement(Connection connection, StatementService statementService) {
         this(connection, statementService, null);
@@ -63,23 +81,107 @@ public class Statement implements java.sql.Statement {
         }
     }
 
+    /**
+     * Attempts to acquire a throttle slot before executing a statement.
+     * Returns true if a slot was acquired (caller must call releaseThrottle after the work),
+     * or false if throttling is disabled.
+     * Throws SQLTransientException immediately if the limit is reached.
+     */
+    protected boolean acquireThrottle(ClientThrottleManager throttle, ClientThrottleMode mode,
+                                    boolean inTransaction) throws SQLException {
+        if (throttle == null) {
+            return false;
+        }
+        if (!throttle.tryAcquire(mode, inTransaction)) {
+            throw new SQLTransientConnectionException(
+                    "Client throttle limit reached; request rejected to avoid overloading the database");
+        }
+        return true;
+    }
+
+    /**
+     * Extracts the overload lane from a gRPC RESOURCE_EXHAUSTED trailer
+     * ({@code ojp-overload-lane}). Returns {@link ClientThrottleManager.OverloadLane#UNKNOWN}
+     * when no trailer is present (server pre-Phase-D or non-overload error).
+     */
+    private static ClientThrottleManager.OverloadLane extractLane(StatusRuntimeException sre) {
+        io.grpc.Metadata trailers = sre.getTrailers();
+        if (trailers == null) {
+            return ClientThrottleManager.OverloadLane.UNKNOWN;
+        }
+        io.grpc.Metadata.Key<String> key = io.grpc.Metadata.Key.of(ClientThrottleManager.OVERLOAD_LANE_HEADER,
+                io.grpc.Metadata.ASCII_STRING_MARSHALLER);
+        return ClientThrottleManager.OverloadLane.parse(trailers.get(key));
+    }
+
+    /**
+     * If the exception is a RESOURCE_EXHAUSTED status from the server, notifies the throttle
+     * manager to halve its reactive limit (AIMD multiplicative decrease) so that the next
+     * request is rejected client-side instead of hitting the still-overloaded server.
+     * The original exception is always returned to the caller for rethrowing.
+     *
+     * <p>Reads the {@code ojp-overload-lane} trailer (when present) and routes through
+     * {@link ClientThrottleManager#notifyServerOverload(ClientThrottleManager.OverloadLane)},
+     * which suppresses halving for slow-lane and queue-depth signals (cross-lane
+     * contamination fix).</p>
+     */
+    protected StatusRuntimeException onServerOverload(ClientThrottleManager throttle, ClientThrottleMode mode,
+                                                      StatusRuntimeException sre) {
+        if (throttle != null && mode != ClientThrottleMode.OFF
+                && sre.getStatus().getCode() == Status.Code.RESOURCE_EXHAUSTED) {
+            throttle.notifyServerOverload(extractLane(sre));
+        }
+        return sre;
+    }
+
     @Override
     public ResultSet executeQuery(String sql) throws SQLException {
         log.debug("executeQuery: {}", sql);
         checkClosed();
-        Iterator<OpResult> itResults = this.statementService.executeQuery(this.connection.getSession(), sql,
-                EMPTY_PARAMETERS_LIST, this.statementUUID, this.properties);
-        return new ResultSet(itResults, this.statementService, this);
+        this.lastUpdateCount = -1;
+        resetMoreResultsState();
+        ClientThrottleManager throttle = this.connection.getThrottleManager();
+        ClientThrottleMode mode = this.connection.getThrottleMode();
+        // getAutoCommit() may throw SQLException; evaluate before acquiring a slot
+        // so that release() is never called without a matching acquire.
+        boolean inTransaction = !this.connection.getAutoCommit();
+        boolean acquired = acquireThrottle(throttle, mode, inTransaction);
+        try {
+            Iterator<OpResult> itResults = this.statementService.executeQuery(this.connection.getSession(), sql,
+                    EMPTY_PARAMETERS_LIST, this.statementUUID, this.properties);
+            return new ResultSet(itResults, this.statementService, this);
+        } catch (StatusRuntimeException sre) {
+            throw handle(onServerOverload(throttle, mode, sre));
+        } finally {
+            if (acquired) {
+                throttle.release(mode, inTransaction);
+            }
+        }
     }
 
     @Override
     public int executeUpdate(String sql) throws SQLException {
         log.debug("executeUpdate: {}", sql);
         checkClosed();
-        OpResult result = this.statementService.executeUpdate(this.connection.getSession(), sql, EMPTY_PARAMETERS_LIST,
-                this.statementUUID, this.properties);
-        this.connection.setSession(result.getSession());//TODO see if can do this in one place instead of updating session everywhere
-        return result.getIntValue();
+        resetMoreResultsState();
+        ClientThrottleManager throttle = this.connection.getThrottleManager();
+        ClientThrottleMode mode = this.connection.getThrottleMode();
+        // getAutoCommit() may throw SQLException; evaluate before acquiring a slot
+        // so that release() is never called without a matching acquire.
+        boolean inTransaction = !this.connection.getAutoCommit();
+        boolean acquired = acquireThrottle(throttle, mode, inTransaction);
+        try {
+            OpResult result = this.statementService.executeUpdate(this.connection.getSession(), sql, EMPTY_PARAMETERS_LIST,
+                    this.statementUUID, this.properties);
+            this.connection.setSession(result.getSession());
+            return result.getIntValue();
+        } catch (StatusRuntimeException sre) {
+            throw handle(onServerOverload(throttle, mode, sre));
+        } finally {
+            if (acquired) {
+                throttle.release(mode, inTransaction);
+            }
+        }
     }
 
     @Override
@@ -152,7 +254,10 @@ public class Statement implements java.sql.Statement {
     public SQLWarning getWarnings() throws SQLException {
         log.debug("getWarnings called");
         checkClosed();
-        return this.callProxy(CallType.CALL_GET, "Warnings", SQLWarning.class);
+        // The server serializes a SQLWarning chain as List<Map<String,Object>> (see CallResourceAction),
+        // because arbitrary Throwable subclasses cannot be transported via ProtoConverter.
+        List<?> entries = this.callProxy(CallType.CALL_GET, "Warnings", List.class);
+        return SqlWarningUtils.buildWarningChain(entries);
     }
 
     @Override
@@ -173,8 +278,7 @@ public class Statement implements java.sql.Statement {
     public boolean execute(String sql) throws SQLException {
         log.debug("execute: {}", sql);
         checkClosed();
-        String trimmedSql = sql.trim().toUpperCase();
-        if (trimmedSql.startsWith("SELECT")) {
+        if (SqlStatementClassifier.looksLikeQuery(sql)) {
             // Delegate to executeQuery
             ResultSet resultSet = this.executeQuery(sql);
             // Store the ResultSet for later retrieval if needed
@@ -206,7 +310,14 @@ public class Statement implements java.sql.Statement {
     public boolean getMoreResults() throws SQLException {
         log.debug("getMoreResults called");
         checkClosed();
-        return this.callProxy(CallType.CALL_GET, "MoreResults", Boolean.class);
+        if (this.moreResultsExhausted) {
+            return false;
+        }
+        boolean result = this.callProxy(CallType.CALL_GET, "MoreResults", Boolean.class);
+        if (!result) {
+            this.moreResultsExhausted = true;
+        }
+        return result;
     }
 
     @Override
@@ -269,6 +380,7 @@ public class Statement implements java.sql.Statement {
     public int[] executeBatch() throws SQLException {
         log.debug("executeBatch called");
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "Batch", int[].class);
     }
 
@@ -283,7 +395,14 @@ public class Statement implements java.sql.Statement {
     public boolean getMoreResults(int current) throws SQLException {
         log.debug("getMoreResults: {}", current);
         checkClosed();
-        return this.callProxy(CallType.CALL_GET, "MoreResults", Boolean.class, Arrays.asList(current));
+        if (this.moreResultsExhausted) {
+            return false;
+        }
+        boolean result = this.callProxy(CallType.CALL_GET, "MoreResults", Boolean.class, Arrays.asList(current));
+        if (!result) {
+            this.moreResultsExhausted = true;
+        }
+        return result;
     }
 
     @Override
@@ -298,6 +417,7 @@ public class Statement implements java.sql.Statement {
     public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
         log.debug("executeUpdate: {}, autoGeneratedKeys={}", sql, autoGeneratedKeys);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "Update", Integer.class, Arrays.asList(sql, autoGeneratedKeys));
     }
 
@@ -305,6 +425,7 @@ public class Statement implements java.sql.Statement {
     public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
         log.debug("executeUpdate: {}, columnIndexes.length={}", sql, columnIndexes != null ? columnIndexes.length : 0);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "Update", Integer.class, Arrays.asList(sql, columnIndexes));
     }
 
@@ -312,6 +433,7 @@ public class Statement implements java.sql.Statement {
     public int executeUpdate(String sql, String[] columnNames) throws SQLException {
         log.debug("executeUpdate: {}, columnNames.length={}", sql, columnNames != null ? columnNames.length : 0);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "Update", Integer.class, Arrays.asList(sql, columnNames));
     }
 
@@ -319,6 +441,7 @@ public class Statement implements java.sql.Statement {
     public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
         log.debug("execute: {}, autoGeneratedKeys={}", sql, autoGeneratedKeys);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "", Boolean.class, Arrays.asList(sql, autoGeneratedKeys));
     }
 
@@ -326,6 +449,7 @@ public class Statement implements java.sql.Statement {
     public boolean execute(String sql, int[] columnIndexes) throws SQLException {
         log.debug("execute: {}, columnIndexes.length={}", sql, columnIndexes != null ? columnIndexes.length : 0);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "", Boolean.class, Arrays.asList(sql, columnIndexes));
     }
 
@@ -333,6 +457,7 @@ public class Statement implements java.sql.Statement {
     public boolean execute(String sql, String[] columnNames) throws SQLException {
         log.debug("execute: {}, columnNames.length={}", sql, columnNames != null ? columnNames.length : 0);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "", Boolean.class, Arrays.asList(sql, columnNames));
     }
 
@@ -431,6 +556,7 @@ public class Statement implements java.sql.Statement {
     public long[] executeLargeBatch() throws SQLException {
         log.debug("executeLargeBatch called");
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "LargeBatch", long[].class);
     }
 
@@ -438,6 +564,7 @@ public class Statement implements java.sql.Statement {
     public long executeLargeUpdate(String sql) throws SQLException {
         log.debug("executeLargeUpdate: {}", sql);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "LargeUpdate", Long.class, Arrays.asList(sql));
     }
 
@@ -445,6 +572,7 @@ public class Statement implements java.sql.Statement {
     public long executeLargeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
         log.debug("executeLargeUpdate: {}, autoGeneratedKeys={}", sql, autoGeneratedKeys);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "LargeUpdate", Long.class,
                 Arrays.asList(sql, autoGeneratedKeys));
     }
@@ -453,6 +581,7 @@ public class Statement implements java.sql.Statement {
     public long executeLargeUpdate(String sql, int columnIndexes[]) throws SQLException {
         log.debug("executeLargeUpdate: {}, columnIndexes.length={}", sql, columnIndexes != null ? columnIndexes.length : 0);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "LargeUpdate", Long.class,
                 Arrays.asList(sql, columnIndexes));
     }
@@ -461,11 +590,12 @@ public class Statement implements java.sql.Statement {
     public long executeLargeUpdate(String sql, String columnNames[]) throws SQLException {
         log.debug("executeLargeUpdate: {}, columnNames.length={}", sql, columnNames != null ? columnNames.length : 0);
         checkClosed();
+        resetMoreResultsState();
         return this.callProxy(CallType.CALL_EXECUTE, "LargeUpdate", Long.class,
                 Arrays.asList(sql, columnNames));
     }
 
-    private CallResourceRequest.Builder newCallBuilder() {
+    protected CallResourceRequest.Builder newCallBuilder() {
         log.debug("newCallBuilder called");
         CallResourceRequest.Builder builder = CallResourceRequest.newBuilder()
                 .setSession(this.connection.getSession())
@@ -479,12 +609,12 @@ public class Statement implements java.sql.Statement {
         return builder;
     }
 
-    private <T> T callProxy(CallType callType, String targetName, Class<?> returnType) throws SQLException {
+    protected <T> T callProxy(CallType callType, String targetName, Class<?> returnType) throws SQLException {
         log.debug("callProxy: {}, {}, {}", callType, targetName, returnType);
         return this.callProxy(callType, targetName, returnType, Constants.EMPTY_OBJECT_LIST);
     }
 
-    private <T> T callProxy(CallType callType, String targetName, Class<?> returnType, List<Object> params) throws SQLException {
+    protected <T> T callProxy(CallType callType, String targetName, Class<?> returnType, List<Object> params) throws SQLException {
         log.debug("callProxy: {}, {}, {}, params.size={}", callType, targetName, returnType, params != null ? params.size() : 0);
         CallResourceRequest.Builder reqBuilder = this.newCallBuilder();
         reqBuilder.setTarget(

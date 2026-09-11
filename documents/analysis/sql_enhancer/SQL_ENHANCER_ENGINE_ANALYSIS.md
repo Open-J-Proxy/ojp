@@ -694,14 +694,14 @@ public static final boolean DEFAULT_SQL_ENHANCER_LOG_OPTIMIZATIONS = true;
 <dependency>
     <groupId>org.apache.calcite</groupId>
     <artifactId>calcite-core</artifactId>
-    <version>1.37.0</version> <!-- Latest stable version -->
+    <version>1.0.0-RC1</version> <!-- Latest stable version -->
 </dependency>
 
 <!-- Optional: For specific database dialect support -->
 <dependency>
     <groupId>org.apache.calcite</groupId>
     <artifactId>calcite-babel</artifactId>
-    <version>1.37.0</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 

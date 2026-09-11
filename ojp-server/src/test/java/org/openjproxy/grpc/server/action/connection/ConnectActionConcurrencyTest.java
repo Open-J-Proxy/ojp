@@ -11,6 +11,7 @@ import org.openjproxy.grpc.server.ServerConfiguration;
 import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.UnpooledConnectionDetails;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry;
 import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 
 import javax.sql.DataSource;
@@ -60,6 +61,7 @@ class ConnectActionConcurrencyTest {
                 new ConcurrentHashMap<>(),
                 new ConcurrentHashMap<>(),
                 new ConcurrentHashMap<>(),
+                new ReadWriteDataSourceRegistry(),
                 mock(XAConnectionPoolProvider.class),
                 new MultinodeXaCoordinator(),
                 new ClusterHealthTracker(),
@@ -138,6 +140,7 @@ class ConnectActionConcurrencyTest {
                 new ConcurrentHashMap<>(),
                 new ConcurrentHashMap<>(),
                 new ConcurrentHashMap<>(),
+                new ReadWriteDataSourceRegistry(),
                 mock(XAConnectionPoolProvider.class),
                 new MultinodeXaCoordinator(),
                 new ClusterHealthTracker(),

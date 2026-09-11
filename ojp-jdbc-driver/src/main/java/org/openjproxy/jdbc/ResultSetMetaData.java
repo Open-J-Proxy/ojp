@@ -14,13 +14,23 @@ import org.openjproxy.grpc.client.StatementService;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 public class ResultSetMetaData implements java.sql.ResultSetMetaData {
 
+    // Sentinel used to cache a legitimately null attribute value, since ConcurrentHashMap does not allow null values.
+    private static final Object NULL_VALUE = new Object();
+
     private final StatementService statementService;
     private final RemoteProxyResultSet resultSet;
     private final PreparedStatement ps;
+
+    // Metadata is immutable for the lifetime of a given ResultSet/PreparedStatement, so every attribute
+    // is cached on first access to avoid a network round trip per column per row (e.g. tools that call
+    // getMetaData() attributes repeatedly while rendering results).
+    private final Map<String, Object> metadataCache = new ConcurrentHashMap<>();
 
     public ResultSetMetaData(RemoteProxyResultSet resultSet, StatementService statementService) {
         this.resultSet = resultSet;
@@ -203,6 +213,12 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
 
     private <T> T retrieveMetadataAttribute(CallType callType, String attrName, Integer column,  Class returnType) throws SQLException {
         log.debug("retrieveMetadataAttribute: {}, {}, {}, {}", callType, attrName, column, returnType);
+        String cacheKey = attrName + "|" + column;
+        Object cached = this.metadataCache.get(cacheKey);
+        if (cached != null) {
+            return (T) (cached == NULL_VALUE ? null : cached);
+        }
+
         CallResourceRequest.Builder reqBuilder = this.newCallBuilder();
         List<Object> params = Constants.EMPTY_OBJECT_LIST;
         if (column > -1) {
@@ -228,10 +244,12 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
 
         List<ParameterValue> values = response.getValuesList();
         if (values.isEmpty()) {
+            this.metadataCache.put(cacheKey, NULL_VALUE);
             return null;
         }
 
         Object result = ProtoConverter.fromParameterValue(values.get(0));
+        this.metadataCache.put(cacheKey, result == null ? NULL_VALUE : result);
         return (T) result;
     }
 }

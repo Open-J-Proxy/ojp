@@ -220,4 +220,81 @@ class OjpSystemPropertiesBridgeTest {
             System.clearProperty(namedProp);
         }
     }
+
+    // ---- read/write splitting properties ------------------------------------
+
+    @Test
+    void toSystemPropertyKeyShouldHandleReadWriteSplittingKeys() {
+        // camelCase property names pass through unchanged
+        assertEquals("primary.ojp.readwrite.enabled",
+                OjpSystemPropertiesBridge.toSystemPropertyKey("primary.ojp.readwrite.enabled"));
+        assertEquals("primary.ojp.readwrite.role",
+                OjpSystemPropertiesBridge.toSystemPropertyKey("primary.ojp.readwrite.role"));
+        assertEquals("replica1.ojp.readwrite.role",
+                OjpSystemPropertiesBridge.toSystemPropertyKey("replica1.ojp.readwrite.role"));
+        assertEquals("replica1.ojp.readwrite.primary",
+                OjpSystemPropertiesBridge.toSystemPropertyKey("replica1.ojp.readwrite.primary"));
+        assertEquals("replica1.ojp.connection.url",
+                OjpSystemPropertiesBridge.toSystemPropertyKey("replica1.ojp.connection.url"));
+    }
+
+    @Test
+    void toSystemPropertyKeyShouldConvertKebabCaseReadWriteSplittingKeys() {
+        // kebab-case variants (as written in application.properties) are converted to camelCase
+        assertEquals("primary.ojp.readwrite.replicaSelectionStrategy",
+                OjpSystemPropertiesBridge.toSystemPropertyKey(
+                        "primary.ojp.readwrite.replica-selection-strategy"));
+        assertEquals("primary.ojp.readwrite.stickySessionSeconds",
+                OjpSystemPropertiesBridge.toSystemPropertyKey(
+                        "primary.ojp.readwrite.sticky-session-seconds"));
+        assertEquals("primary.ojp.readwrite.replicaFailoverToPrimary",
+                OjpSystemPropertiesBridge.toSystemPropertyKey(
+                        "primary.ojp.readwrite.replica-failover-to-primary"));
+    }
+
+    @Test
+    void shouldForwardReadWriteSplittingPropertiesAsSystemProperties() {
+        String propEnabled   = "primary.ojp.readwrite.enabled";
+        String propRole      = "primary.ojp.readwrite.role";
+        String propStrategy  = "primary.ojp.readwrite.replicaSelectionStrategy";
+        String propSticky    = "primary.ojp.readwrite.stickySessionSeconds";
+        String propR1Role    = "replica1.ojp.readwrite.role";
+        String propR1Primary = "replica1.ojp.readwrite.primary";
+        String propR1Url     = "replica1.ojp.connection.url";
+        System.clearProperty(propEnabled);
+        System.clearProperty(propRole);
+        System.clearProperty(propStrategy);
+        System.clearProperty(propSticky);
+        System.clearProperty(propR1Role);
+        System.clearProperty(propR1Primary);
+        System.clearProperty(propR1Url);
+        try {
+            MockEnvironment env = new MockEnvironment();
+            env.setProperty("primary.ojp.readwrite.enabled", "true");
+            env.setProperty("primary.ojp.readwrite.role", "primary");
+            env.setProperty("primary.ojp.readwrite.replica-selection-strategy", "ROUND_ROBIN");
+            env.setProperty("primary.ojp.readwrite.sticky-session-seconds", "5");
+            env.setProperty("replica1.ojp.readwrite.role", "replica");
+            env.setProperty("replica1.ojp.readwrite.primary", "primary");
+            env.setProperty("replica1.ojp.connection.url", "jdbc:postgresql://replica.host/db");
+
+            new OjpSystemPropertiesBridge(env).applySystemProperties();
+
+            assertEquals("true",    System.getProperty(propEnabled));
+            assertEquals("primary", System.getProperty(propRole));
+            assertEquals("ROUND_ROBIN", System.getProperty(propStrategy));
+            assertEquals("5",       System.getProperty(propSticky));
+            assertEquals("replica", System.getProperty(propR1Role));
+            assertEquals("primary", System.getProperty(propR1Primary));
+            assertEquals("jdbc:postgresql://replica.host/db", System.getProperty(propR1Url));
+        } finally {
+            System.clearProperty(propEnabled);
+            System.clearProperty(propRole);
+            System.clearProperty(propStrategy);
+            System.clearProperty(propSticky);
+            System.clearProperty(propR1Role);
+            System.clearProperty(propR1Primary);
+            System.clearProperty(propR1Url);
+        }
+    }
 }

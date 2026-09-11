@@ -386,7 +386,7 @@ xa.maxPoolSize=20
 <dependency>
     <groupId>org.apache.commons</groupId>
     <artifactId>commons-pool2</artifactId>
-    <version>2.12.0</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 

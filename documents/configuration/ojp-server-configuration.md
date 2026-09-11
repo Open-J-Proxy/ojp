@@ -15,10 +15,24 @@ The server supports configuration through both JVM system properties and environ
 |--------------------------------------|--------------------------------------|---------|-----------|--------------------------------------------------------|---------|
 | `ojp.server.port`                    | `OJP_SERVER_PORT`                    | int     | 1059      | gRPC server port                                       | 0.2.0-beta |
 | `ojp.prometheus.port`                | `OJP_PROMETHEUS_PORT`                | int     | 9159      | Prometheus metrics HTTP server port                    | 0.2.0-beta |
-| `ojp.server.virtualThreads.enabled`  | `OJP_SERVER_VIRTUALTHREADS_ENABLED`  | boolean | true      | Use Java virtual threads for gRPC request handling     | 0.4.11-beta |
+| `ojp.server.virtualThreads.enabled`  | `OJP_SERVER_VIRTUALTHREADS_ENABLED`  | boolean | false     | Use Java virtual threads for gRPC request handling     | 0.4.11-beta |
 | `ojp.server.threadPoolSize`          | `OJP_SERVER_THREADPOOLSIZE`          | int     | 200       | Fixed thread pool size when virtual threads are disabled | 0.2.0-beta |
 | `ojp.server.maxRequestSize`          | `OJP_SERVER_MAXREQUESTSIZE`          | int     | 4194304   | Maximum request size in bytes (4MB)                    | 0.2.0-beta |
 | `ojp.server.connectionIdleTimeout`   | `OJP_SERVER_CONNECTIONIDLETIMEOUT`   | long    | 30000     | Connection idle timeout in milliseconds                | 0.2.0-beta |
+| `ojp.server.maxConcurrentRequests`   | `OJP_SERVER_MAXCONCURRENTREQUESTS`   | int     | 200       | Global hard cap on concurrent in-flight gRPC calls across **all** datasources and clients. Over-limit calls are rejected with `RESOURCE_EXHAUSTED`. `0` disables the cap. Intended as **JVM self-protection, not workload shaping** — see [Global Concurrency Cap](#global-concurrency-cap-jvm-self-protection). | 0.4.0-beta |
+
+#### Global Concurrency Cap (JVM self-protection)
+
+OJP uses a layered concurrency model:
+
+- **Soft cap, per-datasource (primary backpressure).** Per-datasource admission semaphores (HikariCP slots + `ojp.server.admissionControl.maxQueueDepth` waiters, plus SQS fast/slow lanes when enabled) shape workload and isolate noisy neighbours. Almost all `RESOURCE_EXHAUSTED` rejections under normal load should come from this layer.
+- **Hard cap, global (safety net).** `ojp.server.maxConcurrentRequests` is a single process-wide gRPC in-flight counter ([`ConcurrencyThrottleInterceptor`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/ConcurrencyThrottleInterceptor.java)). It protects the server JVM (gRPC threads, heap, file descriptors) from total collapse when per-datasource limits are misconfigured or when many datasources surge at once.
+
+Because the global cap is shared across all datasources and clients, tripping it rejects requests indiscriminately and can cause unrelated clients to throttle. Size it generously — a rule of thumb is **sum of per-datasource `(poolSize + maxQueueDepth)` × 1.5** — so the per-datasource caps reject first under expected load. Treat the global cap as JVM self-protection, not workload shaping; if you find yourself tuning it to shape traffic, tune the per-datasource limits instead.
+
+
+
+> **Note on `ojp.server.virtualThreads.enabled`:** Virtual threads are disabled by default because, during heavy-concurrency testing with the current OJP code, they proved less efficient than platform threads. This may change as the OJP code evolves — further investigation is needed to determine whether future improvements could make virtual threads beneficial. You can still opt in by setting this property to `true`.
 
 ### Logging Settings
 
@@ -108,6 +122,7 @@ For detailed configuration examples for each database, see [SSL/TLS Certificate 
 |-------------------------------|-------------------------------|---------|---------|------------------------------------------------|-------|
 | `ojp.telemetry.enabled`   | `OJP_TELEMETRY_ENABLED`   | boolean | true    | Master switch: Enable/disable OpenTelemetry infrastructure (Prometheus server, MeterProvider, TracerProvider)  | 0.2.0-beta |
 | `ojp.opentelemetry.endpoint`  | `OJP_OPENTELEMETRY_ENDPOINT`  | string  | ""      | OpenTelemetry exporter endpoint (empty = default) | 0.2.0-beta |
+| `ojp.telemetry.circuitbreaker.enabled` | `OJP_TELEMETRY_CIRCUITBREAKER_ENABLED` | boolean | true | Enable/disable circuit breaker metrics while keeping other telemetry enabled | 0.4.0-beta |
 
 ### Tracing Settings
 
@@ -165,33 +180,11 @@ Controls how the server batches rows into gRPC streaming messages when returning
 - The default of 100 matches the historical behaviour and is a safe starting point for most workloads.
 - Values below 1 or above 10000 are rejected and the default is used instead.
 
-### Statement Eager-Close Settings
+### Connection Pool Settings
 
-Controls whether simple, non-transactional DML operations (`INSERT`, `UPDATE`, `DELETE`, `MERGE`) take a fast path that acquires a pooled connection, executes the statement, and immediately returns the connection — without creating a server-side session.
-
-| Property                              | Environment Variable                  | Type    | Default | Description                                                                 | Since           |
-|---------------------------------------|---------------------------------------|---------|---------|-----------------------------------------------------------------------------|-----------------|
-| `ojp.statement.eagerClose.enabled`   | `OJP_STATEMENT_EAGERCLOSE_ENABLED`   | boolean | true    | Enable the eager-close fast path for eligible non-transactional DML updates | 0.4.15-SNAPSHOT |
-
-**When the eager-close path is taken:**
-- No server-side session is created — the connection is returned to the pool immediately after execution.
-- The cache invalidation hook (`ojp.query.cache.enabled`) still fires when enabled.
-
-**When the eager-close path is bypassed (falls through to the standard path):**
-- An active session UUID is present (session-pinned connection).
-- An active transaction UUID is present.
-- A batch operation flag is set.
-- Generated-keys tracking is requested.
-- An existing statement UUID is present (session-held prepared statement).
-- The SQL contains session-affinity hints (`SET`, `USE`, `CALL`, stored procedures, etc.).
-- Parameters include LOB or stream types (BLOB, CLOB, ASCII_STREAM, UNICODE_STREAM, BINARY_STREAM).
-- The first SQL keyword is not `INSERT`, `UPDATE`, `DELETE`, or `MERGE`.
-
-**Disabling the eager-close path:**
-```bash
-# Disable eager-close if you need session-level semantics for all DML
--Dojp.statement.eagerClose.enabled=false
-```
+| Property                                       | Environment Variable                           | Type | Default | Description                                       | Since |
+|-------------------------------------------------|-------------------------------------------------|------|---------|-----------------------------------------------------|-------|
+| `ojp.connection.pool.leakDetectionThreshold`   | `OJP_CONNECTION_POOL_LEAKDETECTIONTHRESHOLD`   | long | 0       | HikariCP leak detection threshold (ms). `0` = disabled. Leave at `0` unless diagnosing abandoned sessions — OJP holds one physical connection per client session by design, so any non-zero value will produce false-positive warnings for long-lived sessions (e.g. SQL IDEs). | 0.5.4-SNAPSHOT |
 
 ### Slow Query Segregation Settings
 
@@ -200,8 +193,17 @@ Controls whether simple, non-transactional DML operations (`INSERT`, `UPDATE`, `
 | `ojp.server.slowQuerySegregation.enabled`         | `OJP_SERVER_SLOWQUERYSEGREGATION_ENABLED`         | boolean | false    | Enable for mixed fast+slow workloads; usually keep off for pure OLTP/OLAP | 0.2.0-beta |
 | `ojp.server.slowQuerySegregation.slowSlotPercentage` | `OJP_SERVER_SLOWQUERYSEGREGATION_SLOWSLOTPERCENTAGE` | int     | 20       | Percentage of slots for slow operations (0-100) | 0.2.0-beta |
 | `ojp.server.slowQuerySegregation.idleTimeout`     | `OJP_SERVER_SLOWQUERYSEGREGATION_IDLETIMEOUT`     | long    | 10000    | Idle timeout for slot borrowing (milliseconds)  | 0.2.0-beta |
-| `ojp.server.slowQuerySegregation.slowSlotTimeout` | `OJP_SERVER_SLOWQUERYSEGREGATION_SLOWSLOTTIMEOUT` | long    | 120000   | Timeout for acquiring slow operation slots (ms) | 0.2.0-beta |
-| `ojp.server.slowQuerySegregation.fastSlotTimeout` | `OJP_SERVER_SLOWQUERYSEGREGATION_FASTSLOTTIMEOUT` | long    | 60000    | Timeout for acquiring fast operation slots (ms) | 0.2.0-beta |
+| `ojp.server.slowQuerySegregation.slowSlotTimeout` | `OJP_SERVER_SLOWQUERYSEGREGATION_SLOWSLOTTIMEOUT` | long    | 120000   | Slow-lane slot wait timeout (ms). When slow query segregation is enabled, this setting takes precedence. | 0.2.0-beta |
+| `ojp.server.slowQuerySegregation.fastSlotTimeout` | `OJP_SERVER_SLOWQUERYSEGREGATION_FASTSLOTTIMEOUT` | long    | 60000    | Fast-lane slot wait timeout (ms). When slow query segregation is enabled, this setting takes precedence. | 0.2.0-beta |
+| `ojp.server.slowQuerySegregation.classificationMode` | `OJP_SERVER_SLOWQUERYSEGREGATION_CLASSIFICATIONMODE` | enum (`RELATIVE_FAST_BASELINE` / `ABSOLUTE_THRESHOLD`) | `RELATIVE_FAST_BASELINE` | Slow-query classification strategy. `RELATIVE_FAST_BASELINE` is the default adaptive mode. | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.slowQueryThresholdMs` | `OJP_SERVER_SLOWQUERYSEGREGATION_SLOWQUERYTHRESHOLDMS` | long | 1000 | Deterministic slow-query threshold in milliseconds used by `ABSOLUTE_THRESHOLD` mode. | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.minimumSlowQueryMs` | `OJP_SERVER_SLOWQUERYSEGREGATION_MINIMUMSLOWQUERYMS` | long | 100 | Minimum operation average in milliseconds required before entering slow classification in relative mode. | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.slowMultiplier` | `OJP_SERVER_SLOWQUERYSEGREGATION_SLOWMULTIPLIER` | double | 5.0 | Relative-mode multiplier against fast baseline required to enter slow classification. | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.recoveryMultiplier` | `OJP_SERVER_SLOWQUERYSEGREGATION_RECOVERYMULTIPLIER` | double | 3.0 | Relative-mode multiplier against fast baseline for recovering from slow to fast. Must be less than `slowMultiplier`. | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.minSamples` | `OJP_SERVER_SLOWQUERYSEGREGATION_MINSAMPLES` | int | 20 | Minimum per-query-shape sample count required before classification. | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.baselinePercentile` | `OJP_SERVER_SLOWQUERYSEGREGATION_BASELINEPERCENTILE` | int | 50 | Percentile used to compute fast baseline from currently-fast query-shape averages (1-99). | 0.4.19-SNAPSHOT |
+| `ojp.server.slowQuerySegregation.baselineRefreshIntervalSeconds` | `OJP_SERVER_SLOWQUERYSEGREGATION_BASELINEREFRESHINTERVALSECONDS` | long | 10 | Interval for refreshing cached fast baseline (seconds). `0` recomputes baseline on each classification check. | 0.4.19-SNAPSHOT |
+| `ojp.server.admissionControl.maxQueueDepth`       | `OJP_SERVER_ADMISSIONCONTROL_MAXQUEUEDEPTH`       | int     | 0        | Max admission waiters before fail-fast overload (0 = auto as `totalSlots × 2` per semaphore; `totalSlots` is the pool slot count used by admission control) | 0.4.16-SNAPSHOT |
 
 ### SQL Enhancer and Schema Loader Settings
 
@@ -326,7 +328,18 @@ INFO  SchemaCache - Schema cache updated with 42 tables
 
 For JDBC driver and client-side connection pool configuration, see:
 
-- **[OJP JDBC Configuration](ojp-jdbc-configuration.md)** - JDBC driver setup and client connection pool settings
+- **[OJP JDBC Configuration](ojp-jdbc-configuration.md)** — JDBC driver setup, client connection pool settings, and read/write splitting configuration
+
+### Read/Write Splitting
+
+OJP supports automatic read/write traffic splitting configured entirely through `ojp.properties` on the client side. No server-side settings are required. The server reads the `*.ojp.readwrite.*` properties forwarded by the driver and creates isolated replica connection pools automatically.
+
+Key points:
+- Stateless auto-commit SELECTs are routed to a replica; all other operations go to the primary
+- Operations inside an explicit transaction always use the primary
+- **Sticky sessions are opt-in** — `stickySessionSeconds` defaults to `0` (disabled). Enable only when the application must read its own writes outside a transaction. A non-zero value keeps reads on the primary for that many seconds after every write.
+
+See **[OJP JDBC Configuration — Read/Write Splitting](ojp-jdbc-configuration.md#readwrite-splitting-configuration)** for the full property reference and examples.
 
 ## Configuration Methods
 
@@ -356,7 +369,7 @@ Set configuration using environment variables:
 ```bash
 export OJP_SERVER_PORT=8080
 export OJP_PROMETHEUS_PORT=9091
-export OJP_OPENTELEMETRY_ENABLED=false
+export OJP_TELEMETRY_ENABLED=false
 export OJP_SERVER_VIRTUALTHREADS_ENABLED=true
 export OJP_SERVER_THREADPOOLSIZE=100
 export OJP_SERVER_CIRCUITBREAKERTIMEOUT=120000
@@ -372,7 +385,7 @@ java -Duser.timezone=UTC -jar ojp-server.jar
 ```bash
 docker run -e OJP_SERVER_PORT=8080 \
            -e OJP_PROMETHEUS_PORT=9091 \
-           -e OJP_OPENTELEMETRY_ENABLED=false \
+           -e OJP_TELEMETRY_ENABLED=false \
            -e OJP_SERVER_CIRCUITBREAKERTIMEOUT=120000 \
            -e OJP_SERVER_SLOWQUERYSEGREGATION_ENABLED=true \
            -e OJP_SERVER_ALLOWEDIPS="192.168.1.0/24,10.0.0.1" \
@@ -451,7 +464,12 @@ The Slow Query Segregation feature monitors all database operations and classifi
 
 1. **Operation Monitoring**: Every SQL operation is tracked using a hash of the SQL statement
 2. **Execution Time Tracking**: Execution times are recorded and averaged using a weighted formula: `new_average = ((stored_average * 4) + new_measurement) / 5`
-3. **Classification**: An operation is classified as "slow" if its average execution time is **2x or greater** than the overall average execution time
+3. **Classification**:
+   - `RELATIVE_FAST_BASELINE` (default): compares each query-shape average against a fast baseline (default median of currently-fast query-shape averages), with hysteresis for stable enter/recover behavior.
+   - `ABSOLUTE_THRESHOLD`: operation average is **greater than or equal to** `ojp.server.slowQuerySegregation.slowQueryThresholdMs` (deterministic mode).
+   - In relative mode, already-classified slow query-shapes are excluded from the baseline to prevent baseline pollution.
+   - `minimumSlowQueryMs` prevents tiny-latency operations from being marked slow when baseline is very low.
+   - `slowMultiplier` controls slow-lane entry and `recoveryMultiplier` controls return to fast lane.
 4. **Slot Management**: The total number of concurrent operations is limited by the HikariCP connection pool maximum size
 5. **Slot Borrowing**: If one pool (slow/fast) is idle for a configurable time, the other pool can borrow its slots
 
@@ -472,6 +490,23 @@ ojp.server.slowQuerySegregation.slowSlotTimeout=120000
 
 # Timeout for acquiring fast operation slots (milliseconds)
 ojp.server.slowQuerySegregation.fastSlotTimeout=60000
+
+# Classification mode (`RELATIVE_FAST_BASELINE` or `ABSOLUTE_THRESHOLD`)
+ojp.server.slowQuerySegregation.classificationMode=RELATIVE_FAST_BASELINE
+
+# Relative-fast-baseline controls (defaults shown)
+ojp.server.slowQuerySegregation.minimumSlowQueryMs=100
+ojp.server.slowQuerySegregation.slowMultiplier=5.0
+ojp.server.slowQuerySegregation.recoveryMultiplier=3.0
+ojp.server.slowQuerySegregation.minSamples=20
+ojp.server.slowQuerySegregation.baselinePercentile=50
+ojp.server.slowQuerySegregation.baselineRefreshIntervalSeconds=10
+
+# Deterministic slow-query threshold in milliseconds (used by ABSOLUTE_THRESHOLD mode)
+ojp.server.slowQuerySegregation.slowQueryThresholdMs=1000
+
+# Admission queue depth cap across all admission-control modes (0 = auto)
+ojp.server.admissionControl.maxQueueDepth=0
 ```
 
 ### Benefits
@@ -481,6 +516,15 @@ ojp.server.slowQuerySegregation.fastSlotTimeout=60000
 - **Prevents resource starvation in mixed workloads**: Fast operations aren't blocked by slow ones within each datasource
 - **Adaptive learning**: Automatically discovers and adapts to slow operations per datasource
 - **Efficient resource utilization**: Smart slot borrowing maximizes connection pool usage while maintaining safety
+
+### Admission Timeout Model (Pooled Lazy Sessions)
+
+OJP uses a single timeout owner for pooled lazy session allocation: the admission semaphore.
+
+- `ojp.connection.pool.connectionTimeout` (non-XA) and `ojp.xa.connection.pool.connectionTimeout` (XA) define the admission wait budget.
+- Backend pool borrow is configured fail-fast after admission.
+- This prevents additive latency under contention (admission wait + pool borrow wait), and keeps timeout semantics consistent across XA and non-XA paths.
+- With slow query segregation enabled, operations are routed to fast/slow slot lanes for isolation, and `ojp.server.slowQuerySegregation.fastSlotTimeout` / `ojp.server.slowQuerySegregation.slowSlotTimeout` take precedence for lane admission waits.
 
 ## Configuration Examples
 
@@ -559,7 +603,7 @@ data:
   OJP_SERVER_SLOWQUERYSEGREGATION_FASTSLOTTIMEOUT: "60000"
   OJP_SERVER_ALLOWEDIPS: "10.244.0.0/16"
   OJP_PROMETHEUS_ALLOWEDIPS: "10.244.0.0/16"
-  OJP_OPENTELEMETRY_ENABLED: "true"
+  OJP_TELEMETRY_ENABLED: "true"
 ```
 
 ## Configuration Validation
@@ -609,8 +653,10 @@ INFO org.openjproxy.grpc.server.ServerConfiguration -   Slow Query Slot Percenta
    - Increase timeouts in environments with occasional very slow queries
 4. **Connection Pools**: Configure client-side pool sizes based on application requirements
 5. **Request Size**: Increase for applications that handle large result sets
+6. **Read/Write Splitting**: Size replica pools (`{replica}.ojp.pool.maxPoolSize`) to handle peak read traffic; leave `stickySessionSeconds` at `0` unless read-your-writes outside transactions is required
 
 ## Related Documentation
 
 - **[Slow Query Segregation Documentation](../designs/SLOW_QUERY_SEGREGATION.md)** - Detailed guide to the slow query segregation feature
+- **[OJP JDBC Configuration](ojp-jdbc-configuration.md)** - Client-side pool settings and read/write splitting configuration
 - **[Example Configuration Properties](ojp-server-example.properties)** - Complete example configuration file with all settings

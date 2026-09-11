@@ -205,8 +205,12 @@ public class ResultSetHelper {
 
             if (row % context.getServerConfiguration().getResultsetRowsPerBlock() == 0) {
                 justSent = true;
+                // Enrich session with throttle data so the driver-side ClientThrottleManager
+                // can update its reactive limit from each block, not just the connect response.
+                SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
+                        .enrichWithThrottle(session, context);
                 // Send a block of records
-                responseObserver.onNext(ResultSetWrapper.wrapResults(session, results, labels,
+                responseObserver.onNext(ResultSetWrapper.wrapResults(enrichedSession, results, labels,
                         resultSetUUID, resultSetMode));
                 labels = null; // Labels only included in the first block
                 results = new ArrayList<>();
@@ -215,8 +219,10 @@ public class ResultSetHelper {
 
         if (!justSent) {
             // Send a block of remaining records
+            SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
+                    .enrichWithThrottle(session, context);
             responseObserver.onNext(
-                    ResultSetWrapper.wrapResults(session, results, labels, resultSetUUID, resultSetMode));
+                    ResultSetWrapper.wrapResults(enrichedSession, results, labels, resultSetUUID, resultSetMode));
         }
 
         responseObserver.onCompleted();

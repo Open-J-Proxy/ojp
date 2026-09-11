@@ -84,6 +84,7 @@ class ResultSetHelperBlockSizeTest {
                 null,
                 null,
                 null,
+                null,
                 sessionManager,
                 null,
                 serverConfiguration,

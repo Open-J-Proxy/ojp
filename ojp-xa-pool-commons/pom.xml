@@ -6,20 +6,20 @@
 
     <name>OJP XA Pool Commons</name>
     <artifactId>ojp-xa-pool-commons</artifactId>
-    <version>0.4.15-SNAPSHOT</version>
+    <version>1.0.0-RC1</version>
     <description>Apache Commons Pool 2 XA Connection Pool Provider for OJP</description>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>0.4.15-SNAPSHOT</version>
+        <version>1.0.0-RC1</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <properties>
-        <slf4j.version>2.0.17</slf4j.version>
+        <slf4j.version>2.0.18</slf4j.version>
         <commons-pool2.version>2.13.1</commons-pool2.version>
-        <opentelemetry.version>1.60.1</opentelemetry.version>
+        <opentelemetry.version>1.62.0</opentelemetry.version>
     </properties>
 
     <dependencies>
@@ -144,8 +144,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <source>25</source>
+                    <target>25</target>
                 </configuration>
             </plugin>
             <!--Signs the JARs for deployments-->

@@ -142,12 +142,10 @@ sequenceDiagram
 2. **Virtual Connection Returned**: OJP JDBC Driver returns a connection object immediately (no database connection yet)
 3. **Lazy Connection Allocation**: When you execute a query, OJP Server allocates a real database connection from its pool
 4. **Query Execution**: The query runs on the real connection
-5. **Smart Release**: The real connection returns to the pool after the operation completes (but remains held for active transactions or open ResultSets)
+5. **Smart Release**: Once OJP has acquired a real database connection for a session, that connection remains associated with the OJP session until `Connection.close()` terminates the session. Closing a `ResultSet` releases cursor and server-side result-set resources, but does not by itself return the pooled database connection.
 6. **Virtual Connection Remains**: Your application still holds the "connection," but minimal database resources are consumed
 
-**Important**: Real connections are retained for the duration of:
-- Active transactions (until `commit()` or `rollback()` is called)
-- Open ResultSets (until `ResultSet.close()` or the ResultSet is fully consumed)
+**Important**: After a real connection is acquired, it remains associated with the OJP session until `Connection.close()` is called. Active transactions and open ResultSets still matter because they keep server-side work and resources alive, but closing a `ResultSet` alone does not return the database connection to the pool.
 
 #### Prompt 5
 
@@ -437,7 +435,7 @@ classDiagram
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -959,7 +957,7 @@ sequenceDiagram
     Server->>HikariCP: getConnection()
     HikariCP->>DB: Use real connection
     DB-->>HikariCP: ResultSet
-    Note over HikariCP,Server: Connection held for ResultSet
+    Note over HikariCP,Server: Connection remains associated with the OJP session after acquisition
     Server->>Commons: Serialize ResultSetResponse
     Server-->>Driver: Stream results
     Driver->>Driver: Deserialize to JDBC ResultSet
@@ -972,9 +970,10 @@ sequenceDiagram
     Note over App: Close resources
     App->>Driver: rs.close()
     Driver->>Server: CloseResultSet RPC
-    Server->>HikariCP: Release connection NOW
+    Server->>Server: Close ResultSet and free cursor state
     App->>Driver: conn.close()
     Driver->>Server: CloseSession RPC
+    Server->>HikariCP: Release connection to pool
     Server->>Server: Cleanup session
     Server-->>Driver: Acknowledged
 ```
@@ -1051,7 +1050,7 @@ graph LR
 #### Prompt 1
 
 **[IMAGE PROMPT 1]**: Create a simple requirements checklist infographic:
-- OJP Server: Java 21+ (with Java logo)
+- OJP Server: Java 25+ (with Java logo)
 - OJP JDBC Driver: Java 11+ (with Java logo)
 - Maven 3.9+ or Gradle (with logos)
 - Docker (optional, with Docker logo)
@@ -1060,7 +1059,7 @@ Use clean, modern icon-based design with checkmarks
 Professional getting-started guide style
 
 OJP has different Java requirements for server and client:
-- **OJP Server** requires **Java 21 or higher**
+- **OJP Server** requires **Java 25 or higher**
 - **OJP JDBC Driver** requires **Java 11 or higher** (for broader client compatibility)
 
 **Verify your Java version**:
@@ -1071,12 +1070,12 @@ java -version
 
 Expected output:
 ```
-openjdk version "22.0.1" 2024-04-16
-OpenJDK Runtime Environment (build 22.0.1+8-16)
-OpenJDK 64-Bit Server VM (build 22.0.1+8-16, mixed mode, sharing)
+openjdk version "25.0.1" 2026-10-20
+OpenJDK Runtime Environment (build 25.0.1+8-16)
+OpenJDK 64-Bit Server VM (build 25.0.1+8-16, mixed mode, sharing)
 ```
 
-If you don't have Java 22+, you can download it from Eclipse Temurin at adoptium.net, Oracle JDK from oracle.com, or Amazon Corretto from aws.amazon.com/corretto.
+If you don't have Java 25+, you can download it from Eclipse Temurin at adoptium.net, Oracle JDK from oracle.com, or Amazon Corretto from aws.amazon.com/corretto.
 
 #### Prompt 2
 
@@ -1107,7 +1106,7 @@ docker run --rm -d \
   --name ojp-server \
   --network host \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:0.4.14-beta
+  rrobetti/ojp:1.0.0-RC1
 ```
 
 This downloads the OJP Server image (approximately 50MB) and starts it with your downloaded drivers mounted. The server starts on port 1059 for gRPC communication and exposes metrics on port 9159 for Prometheus. The `-d` flag runs the container in detached mode, while `--rm` ensures the container is automatically removed when stopped.
@@ -1160,7 +1159,7 @@ Professional code documentation style
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>0.4.14-beta</version>
+    <version>1.0.0-RC1</version>
 </dependency>
 ```
 
@@ -1957,7 +1956,7 @@ version: '3.8'
 
 services:
   ojp-server:
-    image: rrobetti/ojp:0.4.14-beta
+    image: rrobetti/ojp:1.0.0-RC1
     ports:
       - "1059:1059"
       - "9159:9159"

@@ -65,3 +65,45 @@ Note that `jpa.default.properties.hibernate.dialect` has to be present.
 >
 > See [OJP JDBC Configuration](../../configuration/ojp-jdbc-configuration.md) for the full list of
 > `ojp.properties` settings.
+
+---
+
+## Runtime Dependencies
+
+The OJP JDBC driver marks two dependencies as `provided`, meaning they are **not** bundled
+inside the JAR and must be present on the classpath at runtime.
+
+| Provided dependency | Supplied automatically by Micronaut? |
+|---|---|
+| `org.slf4j:slf4j-api` | ✅ Yes — `micronaut-logging` (via Logback or SLF4J Simple) |
+| `jakarta.transaction:jakarta.transaction-api` | ⚠️ Depends — see note below |
+
+**`jakarta.transaction-api` availability in Micronaut:**
+
+| Micronaut dependency in your project | `jakarta.transaction-api` available? |
+|---|---|
+| `micronaut-data-jdbc` or `micronaut-data-jpa` | ✅ Yes — pulled in transitively |
+| `micronaut-transaction` | ✅ Yes — pulled in transitively |
+| None of the above (JDBC only, no Micronaut Data) | ❌ Must add explicitly |
+
+If your project does **not** use Micronaut Data or `micronaut-transaction`, and you want to
+use OJP XA connections (`OjpXADataSource`), add the following dependency:
+
+```xml
+<!-- Required for OJP XA connections when micronaut-transaction is not on the classpath -->
+<dependency>
+    <groupId>jakarta.transaction</groupId>
+    <artifactId>jakarta.transaction-api</artifactId>
+    <version>1.0.0-RC1</version>
+</dependency>
+```
+
+> **Note:** For regular (non-XA) OJP connections the `jakarta.transaction-api` JAR is only
+> needed at compile time to resolve `javax.transaction.xa.*`; on Java 11+ these classes are
+> also available from the JDK's `java.transaction.xa` module, so in practice you can omit
+> this dependency if you are not using XA transactions.
+
+> **Classpath isolation:** Since OJP 0.5.x all third-party libraries bundled inside
+> `ojp-jdbc-driver` (gRPC, Netty, Protobuf, Guava, Commons Lang) are relocated to the
+> `org.openjproxy.shaded.*` namespace and will not conflict with Micronaut's own copies of
+> those libraries.

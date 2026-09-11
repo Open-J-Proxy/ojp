@@ -232,7 +232,7 @@ The separation of slow queries into a dedicated connection pool to prevent them 
 The mechanism by which clients find available service instances. In OJP multinode deployments, discovery is configuration-based (JDBC URL lists all servers).
 
 **Session Affinity**  
-Also called "sticky sessions," the routing of related requests to the same backend server. OJP implements session affinity for transactions and temporary tables.
+Also called "sticky sessions," the routing of related requests to the same backend server. OJP implements session affinity for transactions and temporary tables. In the context of read/write splitting, sticky sessions ensure reads go to the primary for a configurable window after a write (see `stickySessionSeconds`). Sticky sessions are **opt-in** (default: disabled) — only enable when the application must see its own writes immediately outside of an explicit transaction.
 
 **Slow Query**  
 A database query that takes significantly longer than average to execute. OJP automatically detects slow queries and can segregate them to prevent resource contention.

@@ -6,7 +6,7 @@ This guide provides step-by-step instructions for implementing a custom XA conne
 
 ## Prerequisites
 
-- Java 21 or higher
+- Java 25 or higher
 - Understanding of XA/2PC protocols
 - Familiarity with connection pooling concepts
 - Knowledge of the target pooling library (e.g., HikariCP, Oracle UCP, etc.)

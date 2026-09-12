@@ -70,8 +70,8 @@ public class StatementServiceGrpcClient implements StatementService {
     private void grpcChannelOpenAndStubsInitialized(String url) {
         if (this.statemetServiceStub == null && this.statemetServiceBlockingStub == null) {
             Matcher matcher = pattern.matcher(url);
-            String host = DEFAULT_HOST;
-            int port = CommonConstants.DEFAULT_PORT_NUMBER;
+            String host;
+            int port;
 
             if (matcher.find()) {
                 String hostPort = matcher.group(1);
@@ -276,6 +276,9 @@ public class StatementServiceGrpcClient implements StatementService {
             LobReference finalLobRef = sfFinalLobReference.get();
             log.debug("Final lob ref received");
             return finalLobRef;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Unable to write LOB: " + e.getMessage(), e);
         } catch (StatusRuntimeException e) {
             throw handle(e);
         } catch (Exception e) {
@@ -297,7 +300,7 @@ public class StatementServiceGrpcClient implements StatementService {
 
             final Throwable[] errorReceived = {null};
 
-            this.statemetServiceStub.readLob(readLobRequest, new ServerCallStreamObserver<LobDataBlock>() {
+            this.statemetServiceStub.readLob(readLobRequest, new ServerCallStreamObserver<>() {
                 private final AtomicBoolean abFirstResponseReceived = new AtomicBoolean(true);
 
                 @Override
@@ -372,10 +375,13 @@ public class StatementServiceGrpcClient implements StatementService {
             }
 
             return lobGrpcIterator;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Unable to read LOB: " + e.getMessage(), e);
         } catch (StatusRuntimeException e) {
             throw handle(e);
         } catch (Exception e) {
-            throw new SQLException("Unable to write LOB: " + e.getMessage(), e);
+            throw new SQLException("Unable to read LOB: " + e.getMessage(), e);
         }
     }
 
@@ -411,13 +417,13 @@ public class StatementServiceGrpcClient implements StatementService {
         throw toTerminateSessionSQLException(lastFailure);
     }
 
-    SessionTerminationStatus terminateSessionRpc(SessionInfo session) throws Exception {
+    SessionTerminationStatus terminateSessionRpc(SessionInfo session) {
         return this.statemetServiceBlockingStub.terminateSession(session);
     }
 
     private Exception normalizeTerminateSessionException(Exception exception) {
         if (exception instanceof StatusRuntimeException) {
-            Metadata metadata = Status.trailersFromThrowable((StatusRuntimeException) exception);
+            Metadata metadata = Status.trailersFromThrowable(exception);
             if (metadata == null) {
                 return exception;
             }

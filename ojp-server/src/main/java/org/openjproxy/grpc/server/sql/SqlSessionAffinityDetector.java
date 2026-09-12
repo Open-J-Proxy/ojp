@@ -27,7 +27,7 @@ public class SqlSessionAffinityDetector {
      * - DECLARE GLOBAL TEMPORARY TABLE (DB2)
      */
     private static final Pattern TEMP_TABLE_PATTERN = Pattern.compile(
-        "^\\s*(CREATE\\s+(GLOBAL\\s+|LOCAL\\s+)?(TEMP(ORARY)?|TEMPORARY)\\s+TABLE|DECLARE\\s+GLOBAL\\s+TEMPORARY\\s+TABLE)",
+        "^\\s*(CREATE\\s+(GLOBAL\\s+|LOCAL\\s+)?TEMP(ORARY)?\\s+TABLE|DECLARE\\s+GLOBAL\\s+TEMPORARY\\s+TABLE)",
         Pattern.CASE_INSENSITIVE
     );
 

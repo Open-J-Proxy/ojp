@@ -55,7 +55,7 @@ public class Lob {
 
     public long length() throws SQLException {
         log.debug("length called");
-        return this.callProxy(Long.class);
+        return this.callProxy();
     }
 
     protected OutputStream setBinaryStream(LobType lobType, long pos) {
@@ -185,9 +185,9 @@ public class Lob {
                 .setResourceUUID(this.getUUID());
     }
 
-    private <T> T callProxy(Class returnType) throws SQLException {
-        log.debug("callProxy: {}, {}, {}", CallType.CALL_LENGTH, "", returnType);
-        return this.callProxy(CallType.CALL_LENGTH, "", returnType, Constants.EMPTY_OBJECT_LIST);
+    private <T> T callProxy() throws SQLException {
+        log.debug("callProxy: {}, {}, {}", CallType.CALL_LENGTH, "", Long.class);
+        return this.callProxy(CallType.CALL_LENGTH, "", Long.class, Constants.EMPTY_OBJECT_LIST);
     }
 
     /**

@@ -6,17 +6,12 @@ import com.openjproxy.grpc.ResultRow;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.openjproxy.grpc.server.cache.CacheConfiguration;
-import org.openjproxy.grpc.server.cache.CacheRule;
-import org.openjproxy.grpc.server.cache.QueryResultCache;
-import org.openjproxy.grpc.server.cache.QueryResultCacheRegistry;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,7 +34,7 @@ class CacheEndToEndTest {
     @BeforeEach
     void setUp() {
         registry = QueryResultCacheRegistry.getInstance();
-        datasourceName = "test_ds_" + UUID.randomUUID().toString();
+        datasourceName = "test_ds_" + UUID.randomUUID();
         
         // Clear any existing cache
         registry.clear();
@@ -88,19 +83,6 @@ class CacheEndToEndTest {
      */
     @Test
     void testCompleteQueryLifecycle() {
-        // Configure cache
-        CacheRule rule = new CacheRule(
-            Pattern.compile("SELECT .* FROM products.*"),
-            Duration.ofMinutes(10),
-            List.of("products"),
-            true
-        );
-        CacheConfiguration config = new CacheConfiguration(
-            datasourceName,
-            true,
-            List.of(rule)
-        );
-        
         QueryResultCache cache = registry.getOrCreate(datasourceName);
         
         // Simulate first query (cache MISS)
@@ -150,19 +132,6 @@ class CacheEndToEndTest {
      */
     @Test
     void testAutomaticInvalidationOnWrite() {
-        // Configure cache
-        CacheRule rule = new CacheRule(
-            Pattern.compile("SELECT .* FROM products.*"),
-            Duration.ofMinutes(10),
-            List.of("products"),
-            true
-        );
-        CacheConfiguration config = new CacheConfiguration(
-            datasourceName,
-            true,
-            List.of(rule)
-        );
-        
         QueryResultCache cache = registry.getOrCreate(datasourceName);
         
         // Cache a query result
@@ -205,16 +174,6 @@ class CacheEndToEndTest {
         String ds1 = "datasource1";
         String ds2 = "datasource2";
         
-        CacheRule rule = new CacheRule(
-            Pattern.compile("SELECT .*"),
-            Duration.ofMinutes(10),
-            List.of(),
-            true
-        );
-        
-        CacheConfiguration config1 = new CacheConfiguration(ds1, true, List.of(rule));
-        CacheConfiguration config2 = new CacheConfiguration(ds2, true, List.of(rule));
-        
         QueryResultCache cache1 = registry.getOrCreate(ds1);
         QueryResultCache cache2 = registry.getOrCreate(ds2);
         
@@ -256,18 +215,6 @@ class CacheEndToEndTest {
      */
     @Test
     void testComplexQueryPatterns() {
-        CacheRule rule = new CacheRule(
-            Pattern.compile("SELECT .* FROM orders.*JOIN.*"),
-            Duration.ofMinutes(5),
-            List.of("orders", "order_items"),
-            true
-        );
-        CacheConfiguration config = new CacheConfiguration(
-            datasourceName,
-            true,
-            List.of(rule)
-        );
-        
         QueryResultCache cache = registry.getOrCreate(datasourceName);
         
         // Complex query with JOIN
@@ -323,19 +270,12 @@ class CacheEndToEndTest {
      */
     @Test
     void testRealisticEcommerceWorkload() {
-        // Configure cache for product and user queries
-        List<CacheRule> rules = List.of(
-            new CacheRule(Pattern.compile("SELECT .* FROM products.*"), Duration.ofMinutes(10), List.of("products"), true),
-            new CacheRule(Pattern.compile("SELECT .* FROM users.*"), Duration.ofMinutes(5), List.of("users"), true)
-        );
-        CacheConfiguration config = new CacheConfiguration(datasourceName, true, rules);
         QueryResultCache cache = registry.getOrCreate(datasourceName);
         
         // Simulate workload
         int totalRequests = 1000;
         int productReads = 700;
         int userReads = 200;
-        int writes = 100;
         
         Random random = new Random(42); // Fixed seed for reproducibility
         
@@ -417,8 +357,8 @@ class CacheEndToEndTest {
         
         // Assert performance targets
         assertTrue(hitRate > 0.30, "Hit rate should be > 30% for realistic workload");
-        assertTrue(stats.getHits() + stats.getMisses() == cacheableQueries, 
-                   "Total cache operations should match cacheable queries");
+        assertEquals(stats.getHits() + stats.getMisses(), cacheableQueries,
+                "Total cache operations should match cacheable queries");
     }
     
     /**
@@ -429,13 +369,6 @@ class CacheEndToEndTest {
      */
     @Test
     void testConcurrentAccessUnderLoad() throws Exception {
-        CacheRule rule = new CacheRule(
-            Pattern.compile("SELECT .*"),
-            Duration.ofMinutes(10),
-            List.of("test_table"),
-            true
-        );
-        CacheConfiguration config = new CacheConfiguration(datasourceName, true, List.of(rule));
         QueryResultCache cache = registry.getOrCreate(datasourceName);
         
         int threadCount = 20;
@@ -507,13 +440,6 @@ class CacheEndToEndTest {
      */
     @Test
     void testLargeResultSetHandling() {
-        CacheRule rule = new CacheRule(
-            Pattern.compile("SELECT .*"),
-            Duration.ofMinutes(10),
-            List.of(),
-            true
-        );
-        CacheConfiguration config = new CacheConfiguration(datasourceName, true, List.of(rule));
         QueryResultCache cache = registry.getOrCreate(datasourceName);
         
         String sql = "SELECT * FROM large_table";

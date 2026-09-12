@@ -15,8 +15,8 @@ import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class CockroachDBSavepointTests {
@@ -224,14 +224,11 @@ class CockroachDBSavepointTests {
         connection.createStatement().execute("INSERT INTO savepoint_test_table (id, name) VALUES (1, 'Alice')");
         Savepoint sp1 = connection.setSavepoint("sp_error");
 
-        try {
-            // This should fail due to duplicate key
-            connection.createStatement().execute("INSERT INTO savepoint_test_table (id, name) VALUES (1, 'Duplicate')");
-            fail("Should have thrown SQLException");
-        } catch (SQLException e) {
-            // Expected - rollback to savepoint
-            connection.rollback(sp1);
-        }
+        // This should fail due to duplicate key
+        Statement insertStmt = connection.createStatement();
+        assertThrows(SQLException.class, () ->
+                insertStmt.execute("INSERT INTO savepoint_test_table (id, name) VALUES (1, 'Duplicate')"));
+        connection.rollback(sp1);
 
         // Insert a different record
         connection.createStatement().execute("INSERT INTO savepoint_test_table (id, name) VALUES (2, 'Bob')");

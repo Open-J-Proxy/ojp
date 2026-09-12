@@ -19,14 +19,15 @@ import java.sql.SQLException;
 @Slf4j
 public class Clob extends Lob implements java.sql.Clob {
 
-    public Clob(Connection connection, LobServiceImpl lobService, StatementService statementService, LobReference lobReference) {
+    public Clob(Connection connection, LobServiceImpl lobService, StatementService statementService,
+            LobReference lobReference) {
         super(connection, lobService, statementService, lobReference);
     }
 
     @Override
     public String getSubString(long pos, int length) throws SQLException {
         log.debug("getSubString: {}, {}", pos, length);
-        BufferedInputStream bis = new BufferedInputStream(this.getBinaryStream(pos, length + 1));
+        BufferedInputStream bis = new BufferedInputStream(this.getBinaryStream(pos, length + 1L));
         try {
             return new String(bis.readAllBytes());
         } catch (IOException e) {
@@ -70,7 +71,7 @@ public class Clob extends Lob implements java.sql.Clob {
         log.debug("setString: {}, {}, {}, {}", pos, str, offset, len);
         int writtenCount = 0;
         try (Writer writer = this.setCharacterStream(pos)) {
-            for (int i  = offset; i < len; i++) {
+            for (int i = offset; i < len; i++) {
                 writer.write(str.charAt(i));
                 writtenCount++;
             }

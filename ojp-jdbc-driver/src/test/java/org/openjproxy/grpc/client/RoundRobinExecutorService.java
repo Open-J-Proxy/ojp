@@ -113,9 +113,9 @@ public class RoundRobinExecutorService implements ExecutorService, AutoCloseable
         try {
             for (Callable<T> task : tasks)
                 futures.add(submit(task));
-            for (Future<T> f : futures)
-                return f.get();
-            throw new ExecutionException("No tasks completed", null);
+            if (futures.isEmpty())
+                throw new ExecutionException("No tasks completed", null);
+            return futures.get(0).get();
         } finally {
             for (Future<?> f : futures) f.cancel(true);
         }

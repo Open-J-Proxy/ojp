@@ -68,10 +68,8 @@ class HydratedResultSetMetadataTest {
     }
 
     @Test
-    void testInvalidColumnAccess() {
-        assertThrows(SQLException.class, () -> {
-            HydratedResultSetMetadata hydrated = new HydratedResultSetMetadata(mockMetaData);
-            hydrated.getColumnLabel(2); // Out of bounds
-        });
+    void testInvalidColumnAccess() throws SQLException {
+        HydratedResultSetMetadata hydrated = new HydratedResultSetMetadata(mockMetaData);
+        assertThrows(SQLException.class, () -> hydrated.getColumnLabel(2));
     }
 }

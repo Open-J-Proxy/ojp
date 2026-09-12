@@ -10,7 +10,8 @@ import java.util.List;
 
 /**
  * Iterator over the blocks received when getting a LOB object.
- * IMPORTANT: can only be consumed once as per the data is removed from memory once consumed.
+ * IMPORTANT: can only be consumed once as per the data is removed from memory
+ * once consumed.
  */
 public class LobGrpcIterator implements Iterator<LobDataBlock> {
     private final List<LobDataBlock> blocksReceived = Collections.synchronizedList(new ArrayList<>());
@@ -29,8 +30,9 @@ public class LobGrpcIterator implements Iterator<LobDataBlock> {
         }
         while (blocksReceived.isEmpty() && !finished) {
             try {
-                Thread.sleep(1);//TODO implement this wait in a more efficient way.
+                Thread.sleep(1);// TODO implement this wait in a more efficient way.
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
             }
         }

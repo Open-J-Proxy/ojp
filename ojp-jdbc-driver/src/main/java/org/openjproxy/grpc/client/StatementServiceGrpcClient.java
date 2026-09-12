@@ -417,7 +417,7 @@ public class StatementServiceGrpcClient implements StatementService {
         throw toTerminateSessionSQLException(lastFailure);
     }
 
-    SessionTerminationStatus terminateSessionRpc(SessionInfo session) {
+    SessionTerminationStatus terminateSessionRpc(SessionInfo session) throws Exception {
         return this.statemetServiceBlockingStub.terminateSession(session);
     }
 

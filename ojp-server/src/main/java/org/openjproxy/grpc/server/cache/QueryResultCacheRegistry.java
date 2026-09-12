@@ -14,7 +14,7 @@ public class QueryResultCacheRegistry {
     // Default cache settings
     private static final int DEFAULT_MAX_ENTRIES = 10_000;
     private static final Duration DEFAULT_MAX_AGE = Duration.ofMinutes(10);
-    private static final long DEFAULT_MAX_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
+    private static final long DEFAULT_MAX_SIZE_BYTES = 100L * 1024 * 1024; // 100MB
 
     private final ConcurrentMap<String, QueryResultCache> caches = new ConcurrentHashMap<>();
     private QueryCacheMetrics metrics = NoOpQueryCacheMetrics.getInstance();
@@ -52,21 +52,22 @@ public class QueryResultCacheRegistry {
      */
     public QueryResultCache getOrCreate(String datasourceName) {
         return caches.computeIfAbsent(datasourceName,
-            k -> new QueryResultCache(datasourceName, DEFAULT_MAX_ENTRIES, DEFAULT_MAX_AGE, DEFAULT_MAX_SIZE_BYTES, metrics));
+                k -> new QueryResultCache(datasourceName, DEFAULT_MAX_ENTRIES, DEFAULT_MAX_AGE, DEFAULT_MAX_SIZE_BYTES,
+                        metrics));
     }
 
     /**
      * Get or create a cache for the specified datasource with custom settings.
      *
      * @param datasourceName The datasource name
-     * @param maxEntries Maximum number of entries
-     * @param maxAge Maximum age for entries
-     * @param maxSizeBytes Maximum total size in bytes
+     * @param maxEntries     Maximum number of entries
+     * @param maxAge         Maximum age for entries
+     * @param maxSizeBytes   Maximum total size in bytes
      * @return The cache instance
      */
     public QueryResultCache getOrCreate(String datasourceName, int maxEntries, Duration maxAge, long maxSizeBytes) {
         return caches.computeIfAbsent(datasourceName,
-            k -> new QueryResultCache(datasourceName, maxEntries, maxAge, maxSizeBytes, metrics));
+                k -> new QueryResultCache(datasourceName, maxEntries, maxAge, maxSizeBytes, metrics));
     }
 
     /**
@@ -124,13 +125,13 @@ public class QueryResultCacheRegistry {
     public String getAllStatistics() {
         StringBuilder sb = new StringBuilder();
         sb.append("Cache Statistics:\n");
-        caches.forEach((datasourceName, cache) -> {
-            sb.append(String.format("  %s: %s (entries=%d, size=%d bytes)\n",
-                datasourceName,
-                cache.getStatistics(),
-                cache.getEntryCount(),
-                cache.getCurrentSizeBytes()));
-        });
+        caches.forEach((datasourceName, cache) ->
+            sb.append(String.format("  %s: %s (entries=%d, size=%d bytes)%n",
+                    datasourceName,
+                    cache.getStatistics(),
+                    cache.getEntryCount(),
+                    cache.getCurrentSizeBytes()))
+        );
         return sb.toString();
     }
 }

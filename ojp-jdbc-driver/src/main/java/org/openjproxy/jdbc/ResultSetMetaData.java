@@ -20,15 +20,18 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class ResultSetMetaData implements java.sql.ResultSetMetaData {
 
-    // Sentinel used to cache a legitimately null attribute value, since ConcurrentHashMap does not allow null values.
+    // Sentinel used to cache a legitimately null attribute value, since
+    // ConcurrentHashMap does not allow null values.
     private static final Object NULL_VALUE = new Object();
 
     private final StatementService statementService;
     private final RemoteProxyResultSet resultSet;
     private final PreparedStatement ps;
 
-    // Metadata is immutable for the lifetime of a given ResultSet/PreparedStatement, so every attribute
-    // is cached on first access to avoid a network round trip per column per row (e.g. tools that call
+    // Metadata is immutable for the lifetime of a given
+    // ResultSet/PreparedStatement, so every attribute
+    // is cached on first access to avoid a network round trip per column per row
+    // (e.g. tools that call
     // getMetaData() attributes repeatedly while rendering results).
     private final Map<String, Object> metadataCache = new ConcurrentHashMap<>();
 
@@ -51,7 +54,7 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
             org.openjproxy.jdbc.ResultSet rs = (org.openjproxy.jdbc.ResultSet) resultSet;
             return rs.getLabelsMap().size();
         } else {
-            return this.retrieveMetadataAttribute(CallType.CALL_GET, "ColumnCount",-1, Integer.class);
+            return this.retrieveMetadataAttribute(CallType.CALL_GET, "ColumnCount", -1, Integer.class);
         }
     }
 
@@ -211,7 +214,8 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
         throw new SQLException("isWrappedFor not supported.");
     }
 
-    private <T> T retrieveMetadataAttribute(CallType callType, String attrName, Integer column,  Class returnType) throws SQLException {
+    private <T> T retrieveMetadataAttribute(CallType callType, String attrName, Integer column, Class returnType)
+            throws SQLException {
         log.debug("retrieveMetadataAttribute: {}, {}, {}, {}", callType, attrName, column, returnType);
         String cacheKey = attrName + "|" + column;
         Object cached = this.metadataCache.get(cacheKey);
@@ -222,7 +226,7 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
         CallResourceRequest.Builder reqBuilder = this.newCallBuilder();
         List<Object> params = Constants.EMPTY_OBJECT_LIST;
         if (column > -1) {
-            params = Arrays.asList(Integer.valueOf(column));
+            params = Arrays.asList(column);
         }
         reqBuilder.setTarget(
                 TargetCall.newBuilder()
@@ -233,8 +237,7 @@ public class ResultSetMetaData implements java.sql.ResultSetMetaData {
                                 .setResourceName(attrName)
                                 .addAllParams(ProtoConverter.objectListToParameterValues(params))
                                 .build())
-                        .build()
-        );
+                        .build());
         CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
         if (this.resultSet != null) {
             this.resultSet.getConnection().setSession(response.getSession());

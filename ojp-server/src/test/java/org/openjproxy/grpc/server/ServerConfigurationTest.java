@@ -45,6 +45,7 @@ class ServerConfigurationTest {
         System.clearProperty("ojp.server.slowQuerySegregation.baselinePercentile");
         System.clearProperty("ojp.server.slowQuerySegregation.baselineRefreshIntervalSeconds");
         System.clearProperty("ojp.libs.path");
+        System.clearProperty("ojp.statement.eagerClose.enabled");
         System.clearProperty("ojp.resultset.rowsPerBlock");
         TestPropertyCleanupUtils.clearStatementCacheProperties();
     }
@@ -390,6 +391,23 @@ class ServerConfigurationTest {
         assertEquals(ServerConfiguration.DEFAULT_TRACING_SAMPLE_RATE, config.getTracingSampleRate(), 0.001);
 
         System.clearProperty("ojp.tracing.sampleRate");
+    }
+
+    @Test
+    void shouldDefaultStatementEagerCloseToTrue() {
+        ServerConfiguration config = new ServerConfiguration();
+
+        assertTrue(config.isStatementEagerCloseEnabled());
+        assertEquals(ServerConfiguration.DEFAULT_STATEMENT_EAGER_CLOSE_ENABLED, config.isStatementEagerCloseEnabled());
+    }
+
+    @Test
+    void shouldEnableStatementEagerCloseWhenPropertyIsTrue() {
+        System.setProperty("ojp.statement.eagerClose.enabled", "true");
+
+        ServerConfiguration config = new ServerConfiguration();
+
+        assertTrue(config.isStatementEagerCloseEnabled());
     }
 
     @Test

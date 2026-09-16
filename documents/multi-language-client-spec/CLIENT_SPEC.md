@@ -1,7 +1,7 @@
 # OJP Multi-Language Client Specification
 
 > **Status:** Draft — April 2026
-> **Last updated:** 2026-05-20
+> **Last updated:** 2026-09-16
 > **Scope:** Defines every aspect that a new OJP client library (in any language) must implement to be fully compatible with an OJP server. Written language-agnostically; Java-specific concepts are labelled as reference implementation only.
 > **Reference implementation:** `ojp-jdbc-driver` module.
 > **Protocol source of truth:** `ojp-grpc-commons/src/main/proto/StatementService.proto` and `echo.proto`.
@@ -49,6 +49,7 @@
    - 7.13 [DataSource / Integration API](#713-datasource--integration-api)
    - 7.14 [Client-Side Throttling](#714-client-side-throttling)
 8. [Testing Coverage](#8-testing-coverage)
+9. [Client Implementation Levels](#9-client-implementation-levels)
 
 ---
 
@@ -1620,6 +1621,38 @@ H2 tests (in-process, no external dependency) must always be runnable in CI with
 > | DataSource API | [`OjpDataSourceTest`](../../ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/OjpDataSourceTest.java), [`OjpXADataSourceTest`](../../ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/xa/OjpXADataSourceTest.java) |
 > | Health check config | [`HealthCheckConfigTest`](../../ojp-jdbc-driver/src/test/java/org/openjproxy/grpc/client/HealthCheckConfigTest.java), [`MultinodeRetryConfigTest`](../../ojp-jdbc-driver/src/test/java/org/openjproxy/grpc/client/MultinodeRetryConfigTest.java) |
 > | Session tracker unit | [`SessionTrackerTest`](../../ojp-jdbc-driver/src/test/java/org/openjproxy/grpc/client/SessionTrackerTest.java) |
+
+---
+
+
+## 9. Client Implementation Levels
+
+To standardize implementation maturity across languages, OJP now defines a 10-level capability model documented in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md).
+
+### Level summary
+
+| Level | Focus |
+|---|---|
+| L1 | Basic connectivity + CRUD |
+| L2 | Typed parameters + statement variants |
+| L3 | Result-set streaming/pagination protocol |
+| L4 | Non-XA transaction semantics + savepoints |
+| L5 | LOB/stream handling |
+| L6 | Session affinity correctness |
+| L7 | Multinode load balancing + health + cluster sync |
+| L8 | Failover/recovery/redistribution operational resilience |
+| L9 | XA transaction support |
+| L10 | Full operational conformance in multinode scenarios |
+
+### Current reference-client status
+
+The Java reference client (`ojp-jdbc-driver`) currently demonstrates different achieved levels per database in tests. The current matrix is maintained in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md), including:
+
+- highest achieved level per supported database,
+- evidence references to existing test suites,
+- explicit note that operational levels are mostly validated by protocol-level multinode tests (database-neutral).
+
+When implementing a new language client, declare both target and tested level per database, and list gaps explicitly by level.
 
 ---
 

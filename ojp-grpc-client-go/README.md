@@ -3,6 +3,28 @@
 This folder contains a Go application client for OJP.
 It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
+## Current Implementation Level Assessment
+
+| Assessment | Value |
+|---|---|
+| Highest achieved level in this module | **L1** |
+| Summary | This module currently provides a basic CRUD client flow. It does not yet have per-database integration test suites to claim higher cumulative levels by database. |
+
+### Current Test-Proven Coverage by Database (`ojp-grpc-client-go`)
+
+| Database | Highest achieved level (current tests) | Evidence highlights |
+|---|---:|---|
+| **H2** | **Not established** | No database-specific integration suite in this module yet. |
+| **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
+| **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
+| **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
+| **Oracle** | **Not established** | No database-specific integration suite in this module yet. |
+| **SQL Server** | **Not established** | No database-specific integration suite in this module yet. |
+| **DB2** | **Not established** | No database-specific integration suite in this module yet. |
+| **CockroachDB** | **Not established** | No database-specific integration suite in this module yet. |
+
+Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
+
 ## Folder Structure
 
 ```text
@@ -195,3 +217,4 @@ Run:
 ```bash
 go test ./cmd/ojp-grpc-client
 ```
+

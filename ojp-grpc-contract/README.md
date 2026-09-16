@@ -68,13 +68,21 @@ const protoPath = require.resolve('@ojp/grpc-contract/proto/StatementService.pro
 ```
 
 While this package isn't published to a registry yet, consumers in this workspace use a
-pinned `file:` reference (`"@ojp/grpc-contract": "file:../ojp-grpc-contract"`), which npm
-resolves the exact same way it would a registry package — only the source differs.
+`file:` reference (`"@ojp/grpc-contract": "file:../ojp-grpc-contract"`). **Note this is
+not a true version pin**: npm's `file:` protocol always resolves to whatever is currently
+on disk at that path, regardless of the target's own `package.json` version field — unlike
+a registry dependency, it will silently pick up local changes on the next `npm install`.
+Until this package is published to a registry, the "pinning" is a matter of workflow
+discipline (only touch `ojp-grpc-contract/` deliberately, per the maintainer workflow
+below) rather than a mechanical guarantee enforced by npm itself.
 
 ## Maintainer workflow — updating the contract
 
 This package must never be hand-edited directly. To pull in a change made upstream (in the
-main `ojp` monorepo's `ojp-grpc-commons`):
+main `ojp` monorepo's `ojp-grpc-commons`), this package's folder must currently sit
+**inside** an `ojp` monorepo checkout (e.g. `<ojp-checkout>/ojp-grpc-contract`, next to
+`<ojp-checkout>/ojp-grpc-commons`) — `pull-from-ojp.js` resolves the source path relative
+to its own location, not via any configurable setting:
 
 ```bash
 npm run pull-from-ojp   # copies the latest .proto from a sibling ../ojp checkout
@@ -92,5 +100,5 @@ and re-test them against the new contract before publishing/tagging a release.
 ```bash
 npm run verify          # fails if proto/*.proto drifted from the recorded hash
 npm run record-hash     # (re-)records the hash for the current package.json version
-npm run pull-from-ojp   # maintainer-only: refresh proto/ from a sibling ojp checkout
+npm run pull-from-ojp   # maintainer-only: refresh proto/ from the parent ojp checkout
 ```

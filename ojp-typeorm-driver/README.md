@@ -42,8 +42,8 @@ logic expects) and keeping results safely `JSON.stringify`-able.
 
 ## Installation
 
-This package is not yet published; use a local `file:` dependency (as done in this
-monorepo's own `package.json`):
+This package is not yet published; use a local `file:` dependency pointing at this
+package's folder from the consuming project's `package.json`:
 
 ```json
 {

@@ -95,9 +95,10 @@ Important points:
   LOBs (advancing the cursor ahead would invalidate the LOBs): the server signals this
   via `OpResult.flag`, and the driver then fetches each additional row with a unary
   `fetchNextRows` call, transparently to whoever consumes `executeQueryStream`/`executeQuery`.
-  This path faithfully follows the protocol and reference JDBC driver's contract,
-  but **has not yet been validated by real integration tests** (no SQL Server/DB2
-  available in the current development environment) — treat it as experimental until then.
+  This path faithfully follows the protocol and reference JDBC driver's contract, and has
+  been **validated against a real SQL Server Always On AG cluster** (see the dedicated
+  section below); DB2 support follows the same code path but remains untested (no DB2
+  environment available in this session).
 
 ## Transaction semantics (important)
 
@@ -424,7 +425,8 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
       `OjpXAResource`, validated end-to-end against a real `ojp-server` + PostgreSQL
       (two-phase commit, rollback, one-phase optimization, `recover`, `isSameRM`); see
       the dedicated section above for known scope reductions vs. the JDBC reference.
-- [ ] TypeORM adapter (`@ojp/typeorm-driver`) for direct use in NestJS.
+- [x] TypeORM adapter (`@ojp/typeorm-driver`) for direct use in NestJS — see the
+      dedicated package, validated against PostgreSQL and a live SQL Server database.
 
 ## Scripts
 

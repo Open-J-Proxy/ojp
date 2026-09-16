@@ -1,7 +1,7 @@
 # OJP Client Specification — Machine-Oriented Reference
 
 > **Status:** Normative — April 2026
-> **Last updated:** 2026-05-20
+> **Last updated:** 2026-09-16
 > **Scope:** Defines the complete behavioral contract for any OJP client implementation.
 > **Keywords:** MUST, MUST NOT, SHOULD, MAY as defined in RFC 2119.
 > **Protocol source:** `ojp-grpc-commons/src/main/proto/StatementService.proto`, `echo.proto`
@@ -538,3 +538,47 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 | `xa_rollback(xid)` | `xaRollback(XaRollbackRequest)` | MUST NOT retry |
 | `xa_recover()` | `xaRecover(XaRecoverRequest)` | |
 | `xa_forget(xid)` | `xaForget(XaForgetRequest)` | |
+| `xa_set_timeout(seconds)` | `xaSetTransactionTimeout(XaSetTransactionTimeoutRequest)` | |
+| `xa_get_timeout()` | `xaGetTransactionTimeout(XaGetTransactionTimeoutRequest)` | |
+| `xa_is_same_rm(session1, session2)` | `xaIsSameRM(XaIsSameRMRequest)` | |
+
+---
+
+## 12. Implementation Levels (Normative Classification)
+
+Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md).
+
+### 12.1 Level definitions
+
+| Level | Required capability set |
+|---|---|
+| **L1** | `connect`, `executeQuery`, `executeUpdate`, `terminateSession`; basic CRUD path |
+| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants |
+| **L3** | Streaming query/result protocol (`executeQuery` stream + `fetchNextRows`) + cursor resource lifecycle |
+| **L4** | Non-XA transaction RPCs and savepoint semantics |
+| **L5** | LOB protocol (`createLob`, `readLob`) and stream round-trips |
+| **L6** | Session affinity enforcement via `sessionUUID` + `targetServer` |
+| **L7** | Multinode balancing, health checking, cluster health propagation, `connHash` cache/reconnect |
+| **L8** | Failover/recovery/redistribution operational behavior |
+| **L9** | XA RPC lifecycle and XA routing/error semantics |
+| **L10** | Full conformance of L1–L9 under multinode operational scenarios |
+
+### 12.2 Current reference-client achieved level by database
+
+| Database | Achieved level |
+|---|---:|
+| H2 | L8 |
+| PostgreSQL | L10 |
+| MySQL | L8 |
+| MariaDB | L6 |
+| Oracle | L9 |
+| SQL Server | L9 |
+| DB2 | L8 |
+| CockroachDB | L8 |
+
+### 12.3 Conformance reporting rules
+
+1. A client implementation MUST declare target level and tested-achieved level.
+2. The tested-achieved level MUST be reported per database.
+3. Missing capabilities MUST be declared as explicit level gaps (for example: `L9 missing`).
+4. Operational level claims (L7+) SHOULD cite multinode protocol tests and database-specific evidence separately.

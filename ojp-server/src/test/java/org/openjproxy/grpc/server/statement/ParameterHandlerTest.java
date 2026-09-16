@@ -162,6 +162,30 @@ class ParameterHandlerTest {
     }
 
     @Test
+    void shouldBindOffsetDateTimeTimestampParameterViaSetObject() throws SQLException {
+        java.time.OffsetDateTime value = java.time.OffsetDateTime.parse("2024-01-15T12:30:00+02:00");
+        Parameter param = Parameter.builder().index(1).type(ParameterType.TIMESTAMP).values(List.of(value)).build();
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+        verify(ps).setObject(1, value);
+    }
+
+    @Test
+    void shouldBindLocalDateTimeTimestampParameterViaSetObject() throws SQLException {
+        java.time.LocalDateTime value = java.time.LocalDateTime.parse("2024-01-15T12:30:00");
+        Parameter param = Parameter.builder().index(1).type(ParameterType.TIMESTAMP).values(List.of(value)).build();
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+        verify(ps).setObject(1, value);
+    }
+
+    @Test
+    void shouldBindInstantTimestampParameterAsConvertedTimestamp() throws SQLException {
+        java.time.Instant value = java.time.Instant.parse("2024-01-15T12:30:00Z");
+        Parameter param = Parameter.builder().index(1).type(ParameterType.TIMESTAMP).values(List.of(value)).build();
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+        verify(ps).setTimestamp(1, Timestamp.from(value));
+    }
+
+    @Test
     void shouldBindNullParameterDirectly() throws SQLException {
         Parameter param = Parameter.builder().index(1).type(ParameterType.NULL)
                 .values(List.of(java.sql.Types.VARCHAR)).build();

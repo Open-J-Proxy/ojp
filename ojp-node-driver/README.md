@@ -21,8 +21,10 @@ could eventually power adapters for TypeORM/Knex (for use in NestJS).
 
 - There is no connection pool on the Node client side — the real pool lives in `ojp-server`.
 - Each `OjpClient` represents a logical session (equivalent to a `java.sql.Connection`).
-- The `.proto` used is synced from `ojp-grpc-commons` (source of truth) via
-  `npm run sync-proto`.
+- The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
+  versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
+  and `ojp-server` (see that package's README for its versioning policy and how it's kept
+  in sync with the upstream `ojp-grpc-commons` source of truth).
 
 ## Connection string format
 
@@ -428,8 +430,7 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
 
 ```bash
 npm install
-npm run sync-proto   # copies the latest .proto from ojp-grpc-commons
-npm run build        # compiles TypeScript to dist/ (includes automatic .proto copy)
+npm run build        # compiles TypeScript to dist/
 npm test             # unit tests (parser, type mapping) — no external infrastructure needed
 npm run test:integration  # integration against ojp-server + PostgreSQL (requires OJP_ENABLE_INTEGRATION_TESTS=true)
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)

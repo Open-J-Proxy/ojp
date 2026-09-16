@@ -22,9 +22,10 @@ direct database connection.
 This means:
 
 - No application-level connection pool: the shim leases lightweight `OjpClient` gRPC
-  sessions from a small internal pool, but the *real* physical connection pool (HikariCP)
-  lives entirely in `ojp-server`. Never enable a real `pg`/`mssql` pool alongside this —
-  see the "Critical rules" section in the main repo's `AGENTS.md`.
+  sessions from a small internal pool, but the *real* physical connection pool (pluggable
+  via SPI on the server side) lives entirely in `ojp-server`. Never enable a real
+  `pg`/`mssql` pool alongside this — see the "Critical rules" section in the main repo's
+  `AGENTS.md`.
 - TypeORM's query builder, migrations, entity hydration, transactions, etc. all work
   unmodified — only the transport underneath is swapped out.
 

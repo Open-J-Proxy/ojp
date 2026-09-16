@@ -7,11 +7,12 @@ gRPC, using the same contract (`StatementService.proto`) as the official JDBC dr
 
 ## Why this driver exists
 
-OJP is made up of `ojp-server` (which owns the real connection pools via HikariCP) and
-client drivers that make gRPC calls instead of opening direct connections to the database.
-This package is the Node.js equivalent of `ojp-jdbc-driver` in Java — but since there's
-no "JDBC" standard in the Node.js ecosystem, it exposes its own API (`pg`-style) that
-could eventually power adapters for TypeORM/Knex (for use in NestJS).
+OJP is made up of `ojp-server` (which owns the real connection pools — pluggable via SPI on
+the server side) and client drivers that make gRPC calls instead of opening direct
+connections to the database. This package is the Node.js equivalent of `ojp-jdbc-driver`
+in Java — but since there's no "JDBC" standard in the Node.js ecosystem, it exposes its
+own API (`pg`-style) that could eventually power adapters for TypeORM/Knex (for use in
+NestJS).
 
 ## Architecture
 

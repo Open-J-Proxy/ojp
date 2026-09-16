@@ -1,3 +1,4 @@
+<img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=d0bcc022-901a-411e-a8de-ac19a21576dd" />
 
 # Open J Proxy
 

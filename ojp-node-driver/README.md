@@ -25,6 +25,13 @@ could eventually power adapters for TypeORM/Knex (for use in NestJS).
   versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
   and `ojp-server` (see that package's README for its versioning policy and how it's kept
   in sync with the upstream `ojp-grpc-commons` source of truth).
+- `src/proto/types.ts` is a **hand-written** mirror of the `.proto` messages (more ergonomic
+  than a generic generator's output — e.g. `int64` as `string`, `oneof` members as plain
+  optional properties, a custom `TimestampWithZone` shape). `scripts/verify-proto-types.js`
+  guards it against silent drift: it walks every message/enum reachable from the RPCs this
+  driver implements and fails (`npm run verify-types`, wired into `prebuild`/`pretest`) if
+  a field or type is missing from `types.ts`. It does not generate code — just fails loudly
+  when the hand-written file falls behind the contract.
 
 ## Connection string format
 
@@ -432,6 +439,7 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
 
 ```bash
 npm install
+npm run verify-types # fails if src/proto/types.ts drifted from StatementService.proto (also runs as prebuild/pretest)
 npm run build        # compiles TypeScript to dist/
 npm test             # unit tests (parser, type mapping) — no external infrastructure needed
 npm run test:integration  # integration against ojp-server + PostgreSQL (requires OJP_ENABLE_INTEGRATION_TESTS=true)

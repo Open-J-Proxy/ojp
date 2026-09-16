@@ -68,6 +68,21 @@ export interface TimestampWithZone {
   originalType?: TemporalType;
 }
 
+/** Mirrors the .proto's IntArray message (used by ParameterValue.int_array_value). */
+export interface IntArray {
+  values: number[];
+}
+
+/** Mirrors the .proto's LongArray message (used by ParameterValue.long_array_value). */
+export interface LongArray {
+  values: string[];
+}
+
+/** Mirrors the .proto's StringArray message (used by ParameterValue.string_array_value). */
+export interface StringArray {
+  values: string[];
+}
+
 export interface ParameterValue {
   boolValue?: boolean;
   intValue?: number;
@@ -76,8 +91,8 @@ export interface ParameterValue {
   doubleValue?: number;
   stringValue?: string;
   bytesValue?: Buffer;
-  intArrayValue?: { values: number[] };
-  longArrayValue?: { values: string[] };
+  intArrayValue?: IntArray;
+  longArrayValue?: LongArray;
   isNull?: boolean;
   timestampValue?: TimestampWithZone;
   dateValue?: { year: number; month: number; day: number };
@@ -86,7 +101,7 @@ export interface ParameterValue {
   rowidValue?: string;
   uuidValue?: string;
   bigintegerValue?: string;
-  stringArrayValue?: { values: string[] };
+  stringArrayValue?: StringArray;
   rowidlifetimeValue?: string;
 }
 

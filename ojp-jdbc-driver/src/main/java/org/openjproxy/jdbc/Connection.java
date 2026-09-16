@@ -8,7 +8,6 @@ import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.TargetCall;
-import com.openjproxy.grpc.TransactionStatus;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -184,10 +183,14 @@ public class Connection implements java.sql.Connection {
         log.debug("setAutoCommit: {}", autoCommit);
         checkValid();
         checkValid();
-        //if switching on autocommit with active transaction, commit current transaction.
-        if (!this.autoCommit && autoCommit &&
-                TransactionStatus.TRX_ACTIVE.equals(session.getTransactionInfo().getTransactionStatus())) {
-            this.session = this.statementService.commitTransaction(this.session);
+        //If switching on autocommit, commit whatever is pending on the current transaction
+        //and tell the server to also restore autoCommit on the physical connection. This must
+        //not be gated on the transaction status: even right after an explicit commit()/rollback()
+        //the physical connection remains in manual-commit mode until autoCommit is restored, so
+        //skipping this call in that case would leave it stuck in manual-commit mode.
+        if (!this.autoCommit && autoCommit) {
+            SessionInfo commitRequest = this.session.toBuilder().setRestoreAutoCommit(true).build();
+            this.session = this.statementService.commitTransaction(commitRequest);
             //If switching autocommit off, start a new transaction
         } else if (this.autoCommit && !autoCommit) {
             this.session = this.statementService.startTransaction(this.session);

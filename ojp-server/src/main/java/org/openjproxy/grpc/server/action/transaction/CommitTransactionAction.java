@@ -48,6 +48,9 @@ public class CommitTransactionAction implements Action<SessionInfo, SessionInfo>
         try {
             Connection conn = context.getSessionManager().getConnection(sessionInfo);
             conn.commit();
+            if (sessionInfo.getRestoreAutoCommit()) {
+                conn.setAutoCommit(true);
+            }
 
             TransactionInfo transactionInfo = TransactionInfo.newBuilder()
                     .setTransactionStatus(TransactionStatus.TRX_COMMITED)

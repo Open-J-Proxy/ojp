@@ -1,0 +1,497 @@
+syntax = "proto3";
+option java_multiple_files = true;
+package com.openjproxy.grpc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "google/type/date.proto";
+import "google/type/timeofday.proto";
+
+message ConnectionDetails {
+    string url = 1;
+    string user = 2;
+    string password = 3;
+    string clientUUID = 4;
+    repeated PropertyEntry properties = 6;
+    bool isXA = 7;  // Flag to indicate XA connection
+    repeated string serverEndpoints = 8;  // List of server endpoints in the cluster for coordination
+    string clusterHealth = 9;  // Cluster health status (e.g., "localhost:10591(UP);localhost:10592(DOWN)")
+}
+
+// Enum representing parameter types for JDBC
+enum ParameterTypeProto {
+    PT_NULL = 0;
+    PT_BOOLEAN = 1;
+    PT_BYTE = 2;
+    PT_SHORT = 3;
+    PT_INT = 4;
+    PT_LONG = 5;
+    PT_FLOAT = 6;
+    PT_DOUBLE = 7;
+    PT_BIG_DECIMAL = 8;
+    PT_STRING = 9;
+    PT_BYTES = 10;
+    PT_DATE = 11;
+    PT_TIME = 12;
+    PT_TIMESTAMP = 13;
+    PT_ASCII_STREAM = 14;
+    PT_UNICODE_STREAM = 15;
+    PT_BINARY_STREAM = 16;
+    PT_OBJECT = 17;
+    PT_CHARACTER_READER = 18;
+    PT_REF = 19;
+    PT_BLOB = 20;
+    PT_CLOB = 21;
+    PT_ARRAY = 22;
+    PT_URL = 23;
+    PT_ROW_ID = 24;
+    PT_N_STRING = 25;
+    PT_N_CHARACTER_STREAM = 26;
+    PT_N_CLOB = 27;
+    PT_SQL_XML = 28;
+}
+
+// Enum to track the original Java type for TimestampWithZone and Date/Time types
+enum TemporalType {
+    TEMPORAL_TYPE_UNSPECIFIED = 0;  // Default/unknown
+    TEMPORAL_TYPE_TIMESTAMP = 1;    // Original type was java.sql.Timestamp
+    TEMPORAL_TYPE_CALENDAR = 2;     // Original type was java.util.Calendar
+    TEMPORAL_TYPE_OFFSET_DATE_TIME = 3;  // Original type was java.time.OffsetDateTime
+    TEMPORAL_TYPE_LOCAL_DATE_TIME = 4;  // Original type was java.time.LocalDateTime
+    TEMPORAL_TYPE_INSTANT = 5;  // Original type was java.time.Instant
+    TEMPORAL_TYPE_LOCAL_DATE = 6;  // Original type was java.time.LocalDate
+    TEMPORAL_TYPE_LOCAL_TIME = 7;  // Original type was java.time.LocalTime
+    TEMPORAL_TYPE_OFFSET_TIME = 8;  // Original type was java.time.OffsetTime
+}
+
+// Wrapper message for timestamp with timezone information
+message TimestampWithZone {
+    google.protobuf.Timestamp instant = 1;  // Absolute instant (seconds + nanos since epoch)
+    string timezone = 2;  // IANA ZoneId string (e.g., "Europe/Rome") or offset (e.g., "+02:00")
+    TemporalType original_type = 3;  // Track original Java type (Timestamp or Calendar)
+}
+
+// Message representing a single value in a parameter
+message ParameterValue {
+    oneof value {
+        bool bool_value = 1;
+        int32 int_value = 2;
+        int64 long_value = 3;
+        float float_value = 4;
+        double double_value = 5;
+        string string_value = 6;
+        bytes bytes_value = 7;
+        IntArray int_array_value = 8;
+        LongArray long_array_value = 9;
+        bool is_null = 10;  // Explicit null marker to distinguish null from empty bytes
+        TimestampWithZone timestamp_value = 11;  // Timestamp with timezone
+        google.type.Date date_value = 12;  // Date-only value (year, month, day)
+        google.type.TimeOfDay time_value = 13;  // Time-only value (hours, minutes, seconds, nanos)
+        // URL encoded as string: URL.toExternalForm() on write, new URL(string) on read
+        // Presence-aware: unset means null, empty string is a valid (though unusual) URL value
+        google.protobuf.StringValue url_value = 14;
+        // RowId encoded as base64 string of rowId.getBytes()
+        // Opaque bytes representation - vendor-specific, cannot be reconstructed into java.sql.RowId
+        // Presence-aware: unset means null, empty string means zero-length rowid bytes
+        google.protobuf.StringValue rowid_value = 15;
+        // UUID encoded as canonical string representation (8-4-4-4-12 hex format)
+        // Presence-aware: unset means null
+        google.protobuf.StringValue uuid_value = 16;
+        // BigInteger encoded as string (decimal representation)
+        // Presence-aware: unset means null
+        google.protobuf.StringValue biginteger_value = 17;
+        // String array for JDBC methods like execute(sql, String[] columnNames)
+        StringArray string_array_value = 18;
+        // RowIdLifetime encoded as enum name string (e.g., "ROWID_VALID_FOREVER")
+        // Presence-aware: unset means null
+        google.protobuf.StringValue rowidlifetime_value = 19;
+    }
+}
+
+// Message for int array
+message IntArray {
+    repeated int32 values = 1;
+}
+
+// Message for long array
+message LongArray {
+    repeated int64 values = 1;
+}
+
+// Message for string array
+message StringArray {
+    repeated string values = 1;
+}
+
+// Message representing a JDBC parameter
+message ParameterProto {
+    int32 index = 1;
+    ParameterTypeProto type = 2;
+    repeated ParameterValue values = 3;
+}
+
+// Message representing a property entry (key-value pair)
+message PropertyEntry {
+    string key = 1;
+    oneof value {
+        bool bool_value = 2;
+        int32 int_value = 3;
+        int64 long_value = 4;
+        float float_value = 5;
+        double double_value = 6;
+        string string_value = 7;
+        bytes bytes_value = 8;
+    }
+}
+
+// Message representing a row in a result set
+message ResultRow {
+    repeated ParameterValue columns = 1;
+}
+
+// Message representing query result data
+message OpQueryResultProto {
+    string resultSetUUID = 1;
+    repeated string labels = 2;
+    repeated ResultRow rows = 3;
+}
+
+enum DbName {
+    H2 = 0;
+    MYSQL = 1;
+    MARIADB = 2;
+    POSTGRES = 3;
+    ORACLE = 4;
+    SQL_SERVER = 5;
+    DB2 = 6;
+    UNMAPPED = 7;
+}
+
+enum SessionStatus {
+    SESSION_ACTIVE = 0;
+    SESSION_TERMINATED = 1;
+}
+
+//TRX stands for transaction
+enum TransactionStatus {
+    TRX_ACTIVE = 0;
+    TRX_COMMITED = 1;
+    TRX_ROLLBACK = 2;
+}
+
+message TransactionInfo {
+    string transactionUUID = 1;
+    TransactionStatus transactionStatus = 2;
+}
+
+message SessionInfo {
+    string connHash = 1;
+    string clientUUID = 2;
+    //only set if connection has to be the same among different requests, within transaction boundaries or when using LOB objects.
+    string sessionUUID = 3;
+    TransactionInfo transactionInfo = 4;
+    SessionStatus sessionStatus = 5;
+    bool isXA = 6;  // Flag indicating this is an XA session
+    string targetServer = 7;  // Server endpoint (host:port) for session stickiness binding
+    string clusterHealth = 8;  // Cluster health status: "host1:port1(UP);host2:port2(DOWN);..."
+    int32 clientCount = 9;
+    int32 maxAdmission = 10;
+    int32 observedPeak = 11;
+}
+
+enum ResultType {
+    INTEGER = 0;
+    RESULT_SET_DATA = 1;
+    UUID_STRING = 2;
+}
+
+message OpResult {
+    SessionInfo session = 1;
+    ResultType type = 2;
+    oneof result {
+        int32 int_value = 3;
+        OpQueryResultProto query_result = 4;
+        string uuid_value = 5;
+    }
+    string uuid = 6;
+    string flag = 7;
+}
+
+message StatementRequest {
+    SessionInfo session = 1;
+    string sql = 2;
+    repeated ParameterProto parameters = 3;
+    string statementUUID = 4;
+    repeated PropertyEntry properties = 5;
+}
+
+enum SqlErrorType {
+    SQL_EXCEPTION = 0;
+    SQL_DATA_EXCEPTION = 1;
+    SQL_TRANSIENT_CONNECTION_EXCEPTION = 2;
+}
+
+message SqlErrorResponse {
+    string reason = 1;
+    string sqlState = 2;
+    int32 vendorCode = 3;
+    SqlErrorType sqlErrorType = 4;
+}
+
+//LT stands for Lob Type
+enum LobType {
+    LT_BLOB = 0;
+    LT_CLOB = 1;
+    LT_BINARY_STREAM = 2;
+    LT_ASCII_STREAM = 3;
+    LT_UNICODE_STREAM = 4;
+    LT_CHARACTER_STREAM = 5;
+}
+
+message LobReference {
+    SessionInfo session = 1;
+    string uuid = 2;
+    int32 bytesWritten = 3;
+    LobType lobType = 4;
+    //5 till 6 only used to query Binary streams.
+    int32 columnIndex = 5;
+    string stmtUUID = 6;
+}
+
+message ReadLobRequest {
+    LobReference lobReference = 1;
+    int64 position = 2;
+    int32 length = 3;
+}
+
+message LobDataBlock {
+    SessionInfo session = 1;
+    int64 position = 2;
+    bytes data = 3;
+    LobType lobType = 4;
+    repeated PropertyEntry metadata = 5; // Used for Binary stream where the prepared statement has to be created before the execution to set the stream directly to it.
+}
+
+message SessionTerminationStatus {
+    bool terminated = 1;
+}
+
+enum ResourceType {
+    RES_RESULT_SET = 0;
+    RES_STATEMENT = 1;
+    RES_PREPARED_STATEMENT = 2;
+    RES_CALLABLE_STATEMENT = 3;
+    RES_LOB = 4;
+    RES_CONNECTION = 5;
+    RES_SAVEPOINT = 6;
+}
+
+enum CallType {
+    CALL_SET = 0;
+    CALL_GET = 1;
+    CALL_IS = 2;
+    CALL_ALL = 3;
+    CALL_NULLS = 4;
+    CALL_USES = 5;
+    CALL_SUPPORTS = 6;
+    CALL_STORES = 7;
+    CALL_NULL = 8;
+    CALL_DOES = 9;
+    CALL_DATA = 10;
+    CALL_NEXT = 11;
+    CALL_CLOSE = 12;
+    CALL_WAS = 13;
+    CALL_CLEAR = 14;
+    CALL_FIND = 15;
+    CALL_BEFORE = 16;
+    CALL_AFTER = 17;
+    CALL_FIRST = 18;
+    CALL_LAST = 19;
+    CALL_ABSOLUTE = 20;
+    CALL_RELATIVE = 21;
+    CALL_PREVIOUS = 22;
+    CALL_ROW = 23;
+    CALL_UPDATE = 24;
+    CALL_INSERT = 25;
+    CALL_DELETE = 26;
+    CALL_REFRESH = 27;
+    CALL_CANCEL = 28;
+    CALL_MOVE = 29;
+    CALL_OWN = 30;
+    CALL_OTHERS = 31;
+    CALL_UPDATES = 32;
+    CALL_DELETES = 33;
+    CALL_INSERTS = 34;
+    CALL_LOCATORS = 35;
+    CALL_AUTO = 36;
+    CALL_GENERATED = 37;
+    CALL_RELEASE = 38;
+    CALL_NATIVE = 39;
+    CALL_PREPARE = 40;
+    CALL_ROLLBACK = 41;
+    CALL_ABORT = 42;
+    CALL_EXECUTE = 43;
+    CALL_ADD = 44;
+    CALL_ENQUOTE = 45;
+    CALL_REGISTER = 46;
+    CALL_LENGTH = 47;
+}
+
+message TargetCall {
+    CallType callType = 1;
+    string resourceName = 2;
+    repeated ParameterValue params = 3;
+    TargetCall nextCall = 4;
+}
+
+message CallResourceRequest {
+    SessionInfo session = 1;
+    ResourceType resourceType = 2;
+    string resourceUUID = 3;
+    TargetCall target = 4;
+    repeated PropertyEntry properties = 5;
+}
+
+message CallResourceResponse {
+    SessionInfo session = 1;
+    string resourceUUID = 2;
+    repeated ParameterValue values = 3;
+}
+
+message ResultSetFetchRequest {
+    SessionInfo session = 1;
+    string resultSetUUID = 2;
+    int32 size = 3;
+}
+
+// Represents a distributed transaction identifier (Xid)
+message XidProto {
+    int32 formatId = 1;
+    bytes globalTransactionId = 2;
+    bytes branchQualifier = 3;
+}
+
+// Request to start an XA transaction
+message XaStartRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+    int32 flags = 3;
+}
+
+// Request to end an XA transaction
+message XaEndRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+    int32 flags = 3;
+}
+
+// Request to prepare an XA transaction
+message XaPrepareRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+}
+
+// Response for prepare operation
+message XaPrepareResponse {
+    SessionInfo session = 1;
+    int32 result = 2; // XA_OK or XA_RDONLY
+}
+
+// Request to commit an XA transaction
+message XaCommitRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+    bool onePhase = 3;
+}
+
+// Request to rollback an XA transaction
+message XaRollbackRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+}
+
+// Request to recover XIDs
+message XaRecoverRequest {
+    SessionInfo session = 1;
+    int32 flag = 2;
+}
+
+// Response for recover operation
+message XaRecoverResponse {
+    SessionInfo session = 1;
+    repeated XidProto xids = 2;
+}
+
+// Request to forget an XA transaction
+message XaForgetRequest {
+    SessionInfo session = 1;
+    XidProto xid = 2;
+}
+
+// Request to set transaction timeout
+message XaSetTransactionTimeoutRequest {
+    SessionInfo session = 1;
+    int32 seconds = 2;
+}
+
+// Response for set transaction timeout
+message XaSetTransactionTimeoutResponse {
+    SessionInfo session = 1;
+    bool success = 2;
+}
+
+// Request to get transaction timeout
+message XaGetTransactionTimeoutRequest {
+    SessionInfo session = 1;
+}
+
+// Response for get transaction timeout
+message XaGetTransactionTimeoutResponse {
+    SessionInfo session = 1;
+    int32 seconds = 2;
+}
+
+// Request to check if two sessions are from the same resource manager
+message XaIsSameRMRequest {
+    SessionInfo session1 = 1;
+    SessionInfo session2 = 2;
+}
+
+// Response for isSameRM check
+message XaIsSameRMResponse {
+    bool isSame = 1;
+}
+
+// Generic XA response for operations that don't return specific data
+message XaResponse {
+    SessionInfo session = 1;
+    bool success = 2;
+    string message = 3;
+}
+
+
+service StatementService {
+    rpc connect(ConnectionDetails) returns (SessionInfo);
+    rpc executeUpdate(StatementRequest) returns (OpResult);
+    rpc executeQuery(StatementRequest) returns (stream OpResult);
+    rpc fetchNextRows(ResultSetFetchRequest) returns (OpResult);
+    rpc createLob(stream LobDataBlock) returns (stream LobReference);
+    rpc readLob(ReadLobRequest) returns (stream LobDataBlock);
+    rpc terminateSession(SessionInfo) returns (SessionTerminationStatus);
+    rpc startTransaction(SessionInfo) returns (SessionInfo);
+    rpc commitTransaction(SessionInfo) returns (SessionInfo);
+    rpc rollbackTransaction(SessionInfo) returns (SessionInfo);
+    rpc callResource(CallResourceRequest) returns (CallResourceResponse);
+    
+    // XA Transaction Operations
+    rpc xaStart(XaStartRequest) returns (XaResponse);
+    rpc xaEnd(XaEndRequest) returns (XaResponse);
+    rpc xaPrepare(XaPrepareRequest) returns (XaPrepareResponse);
+    rpc xaCommit(XaCommitRequest) returns (XaResponse);
+    rpc xaRollback(XaRollbackRequest) returns (XaResponse);
+    rpc xaRecover(XaRecoverRequest) returns (XaRecoverResponse);
+    rpc xaForget(XaForgetRequest) returns (XaResponse);
+    rpc xaSetTransactionTimeout(XaSetTransactionTimeoutRequest) returns (XaSetTransactionTimeoutResponse);
+    rpc xaGetTransactionTimeout(XaGetTransactionTimeoutRequest) returns (XaGetTransactionTimeoutResponse);
+    rpc xaIsSameRM(XaIsSameRMRequest) returns (XaIsSameRMResponse);
+}

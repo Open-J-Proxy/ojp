@@ -3,6 +3,29 @@
 This folder contains a Go application client for OJP.
 It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
+## Current Implementation Level Assessment
+
+| Assessment | Value |
+|---|---|
+| Highest achieved level in this module | **L1** |
+| Summary | This Go module currently implements a basic CRUD client flow and does not yet implement the full typed-parameter, result-set resource, or LOB contracts required for higher cumulative levels. |
+
+| Level | Status in `ojp-grpc-client-go` | Notes |
+|---|---|---|
+| L1 | ✅ Achieved | `Connect`, `ExecuteUpdate`, `ExecuteQuery`, `TerminateSession` are implemented and used in the sample flow. |
+| L2 | ❌ Not achieved | No generic typed-parameter binding layer / statement-variant abstraction yet. |
+| L3 | ❌ Not achieved | No `fetchNextRows` / resource-lifecycle (`callResource`) client API exposed. |
+| L4 | ⚠️ Partial | Transaction RPC helpers exist, but levels are cumulative and L2/L3 are not complete. |
+| L5 | ❌ Not achieved | No LOB API (`createLob`, `readLob`) exposed. |
+| L6 | ⚠️ Partial | Session tracking exists in multinode code, but full cumulative path to L6 is incomplete. |
+| L7 | ⚠️ Partial | Multinode load balancing/failover helpers exist, but cumulative lower-level protocol coverage is incomplete. |
+| L8 | ❌ Not achieved | No full recovery/redistribution conformance coverage documented. |
+| L9 | ⚠️ Partial | Several XA RPC helpers exist, but `xaIsSameRM` and full cumulative requirements are not complete. |
+| L10 | ❌ Not achieved | Full conformance is not implemented yet. |
+
+Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
+
+
 ## Folder Structure
 
 ```text
@@ -196,19 +219,3 @@ Run:
 go test ./cmd/ojp-grpc-client
 ```
 
-## Client Implementation Levels (L1–L10)
-
-Reference: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
-
-| Level | Focus |
-|---|---|
-| L1 | Basic connectivity + CRUD |
-| L2 | Typed parameters + statement variants |
-| L3 | Result-set streaming/pagination protocol |
-| L4 | Non-XA transaction semantics + savepoints |
-| L5 | LOB/stream handling |
-| L6 | Session affinity correctness |
-| L7 | Multinode load balancing + health + cluster sync |
-| L8 | Failover/recovery/redistribution operational resilience |
-| L9 | XA transaction support |
-| L10 | Full operational conformance in multinode scenarios |

@@ -8,23 +8,22 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 | Assessment | Value |
 |---|---|
 | Highest achieved level in this module | **L1** |
-| Summary | This Go module currently implements a basic CRUD client flow and does not yet implement the full typed-parameter, result-set resource, or LOB contracts required for higher cumulative levels. |
+| Summary | This module currently provides a basic CRUD client flow. It does not yet have per-database integration test suites to claim higher cumulative levels by database. |
 
-| Level | Status in `ojp-grpc-client-go` | Notes |
-|---|---|---|
-| L1 | ✅ Achieved | `Connect`, `ExecuteUpdate`, `ExecuteQuery`, `TerminateSession` are implemented and used in the sample flow. |
-| L2 | ❌ Not achieved | No generic typed-parameter binding layer / statement-variant abstraction yet. |
-| L3 | ❌ Not achieved | No `fetchNextRows` / resource-lifecycle (`callResource`) client API exposed. |
-| L4 | ⚠️ Partial | Transaction RPC helpers exist, but levels are cumulative and L2/L3 are not complete. |
-| L5 | ❌ Not achieved | No LOB API (`createLob`, `readLob`) exposed. |
-| L6 | ⚠️ Partial | Session tracking exists in multinode code, but full cumulative path to L6 is incomplete. |
-| L7 | ⚠️ Partial | Multinode load balancing/failover helpers exist, but cumulative lower-level protocol coverage is incomplete. |
-| L8 | ❌ Not achieved | No full recovery/redistribution conformance coverage documented. |
-| L9 | ⚠️ Partial | Several XA RPC helpers exist, but `xaIsSameRM` and full cumulative requirements are not complete. |
-| L10 | ❌ Not achieved | Full conformance is not implemented yet. |
+### Current Test-Proven Coverage by Database (`ojp-grpc-client-go`)
+
+| Database | Highest achieved level (current tests) | Evidence highlights |
+|---|---:|---|
+| **H2** | **Not established** | No database-specific integration suite in this module yet. |
+| **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
+| **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
+| **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
+| **Oracle** | **Not established** | No database-specific integration suite in this module yet. |
+| **SQL Server** | **Not established** | No database-specific integration suite in this module yet. |
+| **DB2** | **Not established** | No database-specific integration suite in this module yet. |
+| **CockroachDB** | **Not established** | No database-specific integration suite in this module yet. |
 
 Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
-
 
 ## Folder Structure
 

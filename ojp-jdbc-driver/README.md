@@ -4,21 +4,23 @@
 
 | Assessment | Value |
 |---|---|
-| Highest achieved level in this module | **L10** |
-| Summary | `ojp-jdbc-driver` is the reference implementation and includes the full protocol/operational feature surface. Database-specific validated level still varies by database and is tracked in the central matrix. |
+| Assessment mode | **Test-proven by database** |
+| Summary | Levels are claimed only where supporting integration tests exist. There is no single level claim for all databases in this module. |
 
-| Level | Status in `ojp-jdbc-driver` | Notes |
-|---|---|---|
-| L1 | ✅ Achieved | Core connect/query/update/session lifecycle implemented. |
-| L2 | ✅ Achieved | Typed parameters and JDBC statement variants are implemented. |
-| L3 | ✅ Achieved | Streaming + paged result/resource protocol is implemented. |
-| L4 | ✅ Achieved | Non-XA transactions and savepoints are implemented. |
-| L5 | ✅ Achieved | LOB and stream APIs are implemented. |
-| L6 | ✅ Achieved | Session affinity and target-server routing are implemented. |
-| L7 | ✅ Achieved | Multinode load balancing, health checks, and cluster sync are implemented. |
-| L8 | ✅ Achieved | Failover/recovery operational mechanisms are implemented. |
-| L9 | ✅ Achieved | XA transaction APIs are implemented. |
-| L10 | ✅ Achieved | Full client capability surface is implemented in this module. |
+### Current Test-Proven Coverage by Database (Java Reference)
+
+This table describes what is currently demonstrated by tests in `ojp-jdbc-driver/src/test/java`.
+
+| Database | Highest achieved level (current tests) | Evidence highlights |
+|---|---:|---|
+| **H2** | **L8** | CRUD, type coverage, transaction/savepoint, session affinity, and non-XA operational behavior (`H2*` integration suites + multinode client tests). |
+| **PostgreSQL** | **L10** | Full non-XA + XA coverage (`PostgresXAIntegrationTest`), session affinity, slow-query/operational tests, plus multinode/XA operational suites. |
+| **MySQL** | **L8** | CRUD/types/session-affinity and operational multinode behavior are covered; no dedicated MySQL XA suite found. |
+| **MariaDB** | **L6** | Covered mainly through shared MySQL/MariaDB suites and generic CRUD paths; dedicated MariaDB operational/XA depth is limited. |
+| **Oracle** | **L9** | Strong CRUD/types/LOB/transaction coverage plus Oracle XA (`OracleXAIntegrationTest`); full multinode-XA conformance not database-dedicated. |
+| **SQL Server** | **L9** | Broad SQL Server suites including metadata/result-set/LOB/session-affinity and XA (`SQLServerXAIntegrationTest`). |
+| **DB2** | **L8** | Strong CRUD/types/LOB/transaction/session-affinity coverage; no dedicated DB2 XA integration suite found. |
+| **CockroachDB** | **L8** | CRUD/types/LOB/transaction and large result-set coverage; no dedicated XA coverage found. |
 
 Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
 

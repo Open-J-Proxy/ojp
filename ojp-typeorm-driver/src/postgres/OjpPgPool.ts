@@ -48,7 +48,7 @@ export interface OjpPgPoolOptions {
  * Pools a small number of already-connected `OjpClient` gRPC sessions (bounded by
  * `max`, default 10 — same default TypeORM itself uses for `poolSize`). This is NOT
  * client-side physical-connection pooling: an `OjpClient` session is a cheap gRPC
- * handle, not a pinned database connection — the real pool (HikariCP) lives entirely
+ * handle, not a pinned database connection — the real pool (pluggable via SPI) lives entirely
  * on the ojp-server. What's reused here is only the (comparatively expensive) gRPC
  * channel/session setup, exactly like reusing `java.sql.Connection` handles that the
  * JDBC driver itself does not eagerly bind to a physical connection either.

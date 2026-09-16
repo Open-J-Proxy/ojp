@@ -84,9 +84,9 @@ interface StreamedRow {
  * Node.js client for the ojp-server. Wraps the StatementService gRPC channel and the
  * lifecycle of a session (connect -> execute* -> [transaction] -> terminateSession).
  *
- * Does not implement a connection pool: the actual pool (HikariCP) lives in the
- * ojp-server; each OjpClient instance corresponds to a logical session, just like a
- * java.sql.Connection in the JDBC driver.
+ * Does not implement a connection pool: the actual pool (pluggable via SPI on the server
+ * side) lives in the ojp-server; each OjpClient instance corresponds to a logical
+ * session, just like a java.sql.Connection in the JDBC driver.
  */
 export class OjpClient {
   private grpcClient?: StatementServiceClient;
@@ -127,9 +127,9 @@ export class OjpClient {
 
   private buildConnectionDetails(): ConnectionDetails {
     return {
-      // The ojp-server passes this URL through to HikariCP/DriverManager, which requires
-      // the "jdbc:" prefix (e.g. jdbc:postgresql://host/db). The OJP connection string
-      // does not include that prefix, so it is added here.
+      // The ojp-server passes this URL to its JDBC connection pool provider, which
+      // requires the "jdbc:" prefix (e.g. jdbc:postgresql://host/db). The OJP connection
+      // string does not include that prefix, so it is added here.
       url: `jdbc:${this.parsedUrl.backendUrl}`,
       user: this.options.user ?? '',
       password: this.options.password ?? '',

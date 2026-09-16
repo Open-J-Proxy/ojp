@@ -48,8 +48,8 @@ export interface OjpMssqlPoolOptions {
  * Pools a small number of already-connected `OjpClient` gRPC sessions (bounded by
  * `pool.max`, default 10 — same default `mssql`/TypeORM itself uses). This is NOT
  * client-side physical-connection pooling: an `OjpClient` session is a cheap gRPC handle,
- * not a pinned database connection — the real pool (HikariCP) lives entirely on the
- * ojp-server. What's reused here is only the (comparatively expensive) gRPC channel/session
+ * not a pinned database connection — the real pool (pluggable via SPI) lives entirely on
+ * the ojp-server. What's reused here is only the (comparatively expensive) gRPC channel/session
  * setup, mirroring the same design already used by `OjpPgPool`.
  *
  * Unlike the Postgres shim (where `pool.connect()` is the explicit per-caller lease point),

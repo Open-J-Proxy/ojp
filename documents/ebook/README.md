@@ -6,7 +6,7 @@ This comprehensive e-book provides complete documentation for Open-J-Proxy (OJP)
 
 ## Content Overview
 
-**Total Content**: 26 chapters + 7 appendices  
+**Total Content**: ~1.3MB across 26 chapters + 7 appendices  
 **Visual Assets**: 237 AI-ready image prompts, 82 Mermaid diagrams  
 **Completion**: 100% (all 26 chapters written)
 

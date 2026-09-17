@@ -40,7 +40,7 @@ Simple examples:
 
 ## 13a.3 Server Sizing (Starting Point)
 
-Start small, then measure:
+Start small, then measure. These numbers are baseline estimates for light-to-medium workloads, not universal production sizing rules:
 
 - **CPU**: 2-4 vCPU per OJP node
 - **Memory**: 4-8 GB RAM per OJP node
@@ -52,7 +52,7 @@ These are starting points only. Real sizing depends mainly on:
 - Number of client applications and pools
 - Telemetry and logging level
 
-Always validate with load tests that mirror production traffic. Do not treat starting numbers as fixed rules.
+Always validate with load tests that mirror production traffic. Use a benchmark profile close to your real workload (query mix, concurrency, transaction patterns, and client count). Do not treat starting numbers as fixed rules.
 
 For deeper capacity planning, see [Chapter 22](part7-chapter22-performance-engineering.md).
 

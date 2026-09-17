@@ -21,8 +21,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * End-to-end regression tests for a bug where {@link Connection#setAutoCommit(boolean)
  * setAutoCommit(true)} failed to restore the physical connection's autocommit mode on the
- * server after leaving manual-commit mode (see {@code CommitTransactionAction} and the
- * {@code restoreAutoCommit} field added to {@code SessionInfo}).
+ * server after leaving manual-commit mode. The fix delegates {@code setAutoCommit(true)}
+ * straight to the physical connection's own {@code setAutoCommit(boolean)} method via the
+ * generic {@code callResource}/{@code CALL_SET} mechanism, relying on the JDBC contract that
+ * switching out of manual-commit mode implicitly commits any pending transaction.
  *
  * <p>Without the fix, any statement executed after {@code setAutoCommit(true)} silently opens
  * a phantom transaction on the physical connection (still in manual-commit mode) that is never

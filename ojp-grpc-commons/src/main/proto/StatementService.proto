@@ -197,12 +197,6 @@ message SessionInfo {
     int32 clientCount = 9;
     int32 maxAdmission = 10;
     int32 observedPeak = 11;
-    // Set by the client only on a commitTransaction request originating from
-    // Connection.setAutoCommit(true) with an active transaction. Tells the server to
-    // also restore autoCommit=true on the physical connection after the commit,
-    // distinguishing it from a plain, explicit Connection.commit() (which must leave
-    // the physical connection in manual-commit mode).
-    bool restoreAutoCommit = 12;
 }
 
 enum ResultType {

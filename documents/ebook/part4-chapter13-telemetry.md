@@ -771,4 +771,4 @@ Application-specific metrics could flow through OJP's telemetry system in future
 
 This chapter covered OJP's observability capabilities comprehensively. You learned how OpenTelemetry integration provides metrics through Prometheus and distributed traces through Zipkin and OTLP backends, how to set up monitoring infrastructure with Grafana, and how to interpret the metrics OJP exposes. Both metrics and distributed tracing are available today, giving you comprehensive operational visibility into your proxy. SQL execution time histograms give you per-statement p50/p95/p99 latency data for all connections—XA and non-XA alike—without any application-side instrumentation.
 
-In the next chapter, we'll stay on operations and focus on practical production deployment guidance—how to run OJP Server safely, size it, monitor it, and upgrade it with minimal disruption.
+In the next chapter, we'll stay on operations and focus on practical production deployment guidance—[Chapter 13a: Running OJP Server in Production](part4-chapter13a-running-ojp-server-in-production.md).

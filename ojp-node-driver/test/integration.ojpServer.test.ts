@@ -21,14 +21,16 @@ const OJP_PASSWORD = process.env.OJP_TEST_PASSWORD ?? 'ojptest123';
 /**
  * IMPORTANT — transaction/autocommit semantics:
  * OJP replicates the real JDBC contract: `startTransaction()` turns off autocommit on
- * the physical connection on the server, and there is no gRPC call equivalent to
- * `setAutoCommit(true)` to "turn autocommit back on" after a commit/rollback — that
- * is the application's responsibility (just like in `java.sql.Connection`). In
- * practice, once a session enters transactional mode, it **stays** in that mode until
- * the connection is closed/reopened. That's why each test below uses its **own
- * connection** (`beforeEach`/`afterEach`), preventing transaction state from leaking
- * into the next test — the same pattern recommended for real applications (one
- * connection per unit of work).
+ * the physical connection on the server. Unlike `java.sql.Connection` (where autocommit
+ * must be restored explicitly via `setAutoCommit(true)`), this client always restores
+ * autocommit on the physical connection right after `commit()`/`rollback()` return (see
+ * `OjpClient.restoreAutoCommit()`), because every `startTransaction()`/`commit()`/
+ * `rollback()` pair here is meant to be a self-contained unit of work — matching the
+ * plain autocommit session semantics TypeORM/`@ojp/typeorm-driver` assume between
+ * transactions. Each test below still uses its **own connection**
+ * (`beforeEach`/`afterEach`) to keep transactional state fully isolated between tests,
+ * which remains the recommended pattern for real applications (one connection per unit
+ * of work).
  */
 describeIfEnabled('OjpClient - real integration (ojp-server + PostgreSQL)', () => {
   const tableName = `ojp_node_driver_test_${Date.now()}`;
@@ -113,6 +115,60 @@ describeIfEnabled('OjpClient - real integration (ojp-server + PostgreSQL)', () =
 
     const { rows } = await txClient.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [11]);
     expect(rows).toHaveLength(0);
+  }, 15_000);
+
+  /**
+   * Regression test for a durability bug: after `commit()`, the physical connection
+   * must go back to autocommit mode so that a later plain statement (issued outside any
+   * explicit transaction, exactly as TypeORM does between two independent repository
+   * calls) is committed on its own and survives the session being closed. Before
+   * `OjpClient.restoreAutoCommit()` existed, this INSERT would silently run inside a
+   * still-open transaction and be lost the moment the connection closed without an
+   * explicit commit — undetectable by tests that only check same-session visibility.
+   */
+  it('should autocommit a plain statement issued after a committed transaction, surviving reconnect', async () => {
+    txClient = await newClient();
+    await txClient.startTransaction();
+    await txClient.executeUpdate(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [12, 'in transaction']);
+    await txClient.commit();
+
+    await txClient.executeUpdate(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [13, 'plain after commit']);
+    await txClient.close();
+
+    const fresh = await newClient();
+    try {
+      const { rows } = await fresh.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [13]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].label).toBe('plain after commit');
+    } finally {
+      await fresh.close();
+    }
+  }, 15_000);
+
+  /**
+   * Same regression, but after a rollback instead of a commit — `rollback()` must also
+   * restore autocommit so subsequent plain statements aren't silently swallowed.
+   */
+  it('should autocommit a plain statement issued after a rolled-back transaction, surviving reconnect', async () => {
+    txClient = await newClient();
+    await txClient.startTransaction();
+    await txClient.executeUpdate(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [14, 'should disappear']);
+    await txClient.rollback();
+
+    await txClient.executeUpdate(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [15, 'plain after rollback']);
+    await txClient.close();
+
+    const fresh = await newClient();
+    try {
+      const { rows: rolledBack } = await fresh.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [14]);
+      expect(rolledBack).toHaveLength(0);
+
+      const { rows } = await fresh.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [15]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].label).toBe('plain after rollback');
+    } finally {
+      await fresh.close();
+    }
   }, 15_000);
 
   it('should return null for null values', async () => {

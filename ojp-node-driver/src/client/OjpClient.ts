@@ -8,6 +8,7 @@ import { markEndpointUnhealthy, orderEndpointsForAttempt } from './endpointHealt
 import { StatementServiceClient } from './statementServiceClient';
 import { OjpXAResource } from '../xa/OjpXAResource';
 import {
+  CallResourceRequest,
   ConnectionDetails,
   LobDataBlock,
   LobReference,
@@ -588,6 +589,7 @@ export class OjpClient {
         resolve();
       });
     });
+    await this.restoreAutoCommit();
   }
 
   async rollback(): Promise<void> {
@@ -600,6 +602,50 @@ export class OjpClient {
           return;
         }
         this.session = response;
+        resolve();
+      });
+    });
+    await this.restoreAutoCommit();
+  }
+
+  /**
+   * Restores autoCommit on the physical connection after `commit()`/`rollback()`.
+   *
+   * `commitTransaction`/`rollbackTransaction` mirror the JDBC `Connection.commit()`/
+   * `rollback()` methods, which per the JDBC spec do NOT change the connection's autoCommit
+   * mode — it stays in manual-commit mode until `Connection.setAutoCommit(true)` is called
+   * explicitly. This client, however, has no separate "set autocommit" API: every
+   * `startTransaction()`/`commit()`/`rollback()` here is meant to be one self-contained
+   * transaction, after which the session should behave like a fresh, autocommitting
+   * connection again (matching real Postgres/MySQL session semantics, and what
+   * `@ojp/typeorm-driver` relies on for any plain statement issued after a
+   * `dataSource.transaction()` block). Without this, such statements silently run inside an
+   * unclosed transaction and are lost when the session is later closed.
+   *
+   * Uses the same generic `callResource(CALL_SET, "AutoCommit", ...)` RPC the JDBC driver
+   * uses for `Connection.setAutoCommit(true)` (see `ojp-jdbc-driver`'s `Connection.java`),
+   * which the server dispatches, via reflection, straight to the physical connection's own
+   * `setAutoCommit(true)` — the same call that both commits any still-pending work and
+   * switches the connection back to autocommit mode.
+   */
+  private async restoreAutoCommit(): Promise<void> {
+    const session = this.requireSession();
+    const request: CallResourceRequest = {
+      session,
+      resourceType: 'RES_CONNECTION',
+      target: {
+        callType: 'CALL_SET',
+        resourceName: 'AutoCommit',
+        params: [{ boolValue: true }],
+      },
+    };
+    await new Promise<void>((resolve, reject) => {
+      this.requireClient().callResource(request, (err, response) => {
+        if (err) {
+          reject(this.toClientError(err));
+          return;
+        }
+        this.session = response.session;
         resolve();
       });
     });

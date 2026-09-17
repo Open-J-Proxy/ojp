@@ -5,6 +5,44 @@ gRPC, using the same contract (`StatementService.proto`) as the official JDBC dr
 
 > Status: **MVP under development**. API subject to change until stable v1.0.0.
 
+## Current Implementation Level Assessment
+
+Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
+
+| Assessment | Value |
+|---|---|
+| Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
+| Highest level with complete, no-gap coverage | **L3** |
+| Highest level with partial/documented evidence beyond L3 | **L9** (PostgreSQL XA only — see gaps below) |
+
+The level model is cumulative by definition (each level assumes every lower level is
+fully closed). This early implementation does **not** follow that clean progression: it
+already has real, tested capability at L5/L6/L9 while still missing pieces of L2 and L4.
+Reporting it level-by-level, honestly, instead of a single number:
+
+| Level | Status | Notes |
+|---|---|---|
+| **L1** | ✅ Achieved | `connect`/`close`, CRUD (insert/read/update/delete), tested against PostgreSQL and SQL Server. |
+| **L2** | ⚠️ Partial | Broad typed-parameter coverage (`ParameterTypeProto` — null, boolean, numeric, string, bytes, timestamp, `BigDecimal`, plus explicit type hints for dialect shims) is unit-tested extensively. There is **no** distinct PreparedStatement/Statement variant, **no** generated-keys retrieval, and **no** result-set metadata API. |
+| **L3** | ✅ Achieved | `executeQueryStream` (server-streaming, on-demand `fetchNextRows` pagination), including SQL Server "row-by-row" mode and early-cancellation behavior. |
+| **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
+| **L5** | ✅ H2 & SQL Server / ❌ PostgreSQL | `createLob` + transparent LOB reads tested for H2 (CLOB/BLOB) and SQL Server (multi-chunk BLOB, regression-tested). Not supported for PostgreSQL because `pgjdbc` itself doesn't implement `createBlob`/`createClob` — a backend driver limitation, not a gap in this client. |
+| **L6** | ✅ Achieved | Dedicated real-cluster test proves the client fails clearly instead of silently rerouting a bound session when its node goes down mid-session. |
+| **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
+| **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
+| **L9** | ✅ PostgreSQL only | Full two-phase and one-phase XA lifecycle, `recover()`, `isSameRM()`, and error-code mapping, tested end-to-end. Not exercised against SQL Server/H2/other backends in this driver. |
+| **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
+
+**Honest summary:** taken strictly (every lower level fully closed before claiming the
+next), the ceiling today is **L3** — closing L4 (savepoints + isolation control) is the
+next concrete step to unlock an uncontested L4/L5/L6 claim. That said, this PR already
+delivers tested, real capability further up the scale in specific slices (session
+affinity, PostgreSQL XA) that a strictly-linear read of the table would otherwise hide.
+Recommended next steps, roughly in priority order: (1) savepoints + transaction isolation
+control to close L4, (2) result-set metadata / generated keys to close L2, (3) extend the
+existing multinode test matrix to a least-connections strategy and SQL Server/H2 XA
+coverage.
+
 ## Why this driver exists
 
 OJP is made up of `ojp-server` (which owns the real connection pools — pluggable via SPI on
@@ -110,31 +148,31 @@ Important points:
 
 ## Transaction semantics (important)
 
-OJP faithfully replicates the `java.sql.Connection` contract: `startTransaction()`
-turns off autocommit on the real physical connection on `ojp-server` (equivalent to
-`setAutoCommit(false)`), and **there is no gRPC call equivalent to
-`setAutoCommit(true)`** to turn autocommit back on after a `commit()`/`rollback()`.
-This is the application's responsibility, just like in plain JDBC.
+`startTransaction()` turns off autocommit on the real physical connection on
+`ojp-server` (equivalent to `java.sql.Connection.setAutoCommit(false)`). Unlike plain
+JDBC, this driver does **not** require the application to separately call an
+equivalent of `setAutoCommit(true)` afterward: `commit()` and `rollback()` both
+restore autocommit on the physical connection themselves before returning (via the
+generic `callResource` RPC, the same mechanism the JDBC driver uses for
+`setAutoCommit(true)`), so every `startTransaction()` / `commit()`/`rollback()` pair is
+a **self-contained unit of work** — matching the plain autocommit session semantics
+`@ojp/typeorm-driver`/TypeORM assume between transactions.
 
-In practice, this means that **once a session enters transactional mode, it stays in
-that mode for the rest of the connection's lifecycle** — even after a successful
-`commit()` or `rollback()`. Every statement executed afterward remains part of an
-implicit transaction, which is only persisted with a new explicit
-`commit()`/`rollback()`. If one of these statements fails (e.g. invalid SQL),
-Postgres aborts the transaction and **all** subsequent statements on the same
-connection fail until a `rollback()` is called.
+This was fixed after discovering that plain statements issued right after a committed
+or rolled-back transaction were silently swallowed on connection close, because the
+physical connection was left stuck in manual-commit mode with no client-facing signal
+to leave it. Regression coverage: `test/integration.ojpServer.test.ts` (autocommit
+restored after both `commit()` and `rollback()`, verified via a fresh reconnect).
 
 Recommendations:
 
 - Treat each `OjpClient` as a **unit of work** (the "one connection per
-  transaction/request" pattern), just as you would with `java.sql.Connection` in JDBC
-  pools. Open, execute, finish (commit/rollback), and close (`close()`) — don't reuse
-  the same connection indefinitely mixing transactional and non-transactional code.
-- If you need to reuse the same connection after a `commit()`/`rollback()`, make sure
-  every subsequent statement is also inside an explicit `startTransaction()` /
-  `commit()`/`rollback()` pair.
+  transaction/request" pattern) for clarity, even though it's no longer strictly
+  required for correctness after a `commit()`/`rollback()`.
 - If an error occurs during a transaction, always call `rollback()` before continuing
-  to use the same connection.
+  to use the same connection — statements issued after a failed statement, but before
+  `rollback()`, will still fail (Postgres aborts the whole transaction until rolled
+  back), exactly as with plain JDBC.
 
 ## DECIMAL/NUMERIC/MONEY types (`java.math.BigDecimal`)
 

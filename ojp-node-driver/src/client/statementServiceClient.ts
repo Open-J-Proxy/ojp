@@ -1,5 +1,7 @@
 import * as grpc from '@grpc/grpc-js';
 import {
+  CallResourceRequest,
+  CallResourceResponse,
   ConnectionDetails,
   LobDataBlock,
   LobReference,
@@ -44,6 +46,7 @@ export interface StatementServiceClient extends grpc.Client {
   startTransaction(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionInfo) => void): void;
   commitTransaction(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionInfo) => void): void;
   rollbackTransaction(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionInfo) => void): void;
+  callResource(request: CallResourceRequest, callback: (err: grpc.ServiceError | null, response: CallResourceResponse) => void): void;
 
   // XA (distributed transaction) operations — see src/xa/OjpXAResource.ts.
   xaStart(request: XaStartRequest, callback: (err: grpc.ServiceError | null, response: XaResponse) => void): void;

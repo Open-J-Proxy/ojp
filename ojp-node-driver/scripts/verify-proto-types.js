@@ -10,9 +10,10 @@
  * types.ts.
  *
  * Scope: only messages/enums reachable (transitively) from IMPLEMENTED_RPCS are checked.
- * The `callResource` RPC family (TargetCall/CallResourceRequest/CallResourceResponse/
- * ResourceType/CallType) and DbName (server-internal only, never sent over the wire) are
- * intentionally out of scope — this driver's MVP does not implement callResource.
+ * `callResource` is implemented in a narrow, single-purpose way (see
+ * `OjpClient.restoreAutoCommit()`): only `CALL_SET`/`RES_CONNECTION`/`AutoCommit` is ever
+ * sent, but the full `TargetCall`/`CallResourceRequest`/`CallResourceResponse`/`ResourceType`/
+ * `CallType` shapes are still kept in sync here since they are reachable from that RPC.
  */
 const fs = require('fs');
 const path = require('path');
@@ -30,7 +31,7 @@ const OJP_PACKAGE_PREFIX = '.com.openjproxy.grpc.';
 const IMPLEMENTED_RPCS = [
   'connect', 'executeUpdate', 'executeQuery', 'fetchNextRows',
   'createLob', 'readLob', 'terminateSession',
-  'startTransaction', 'commitTransaction', 'rollbackTransaction',
+  'startTransaction', 'commitTransaction', 'rollbackTransaction', 'callResource',
   'xaStart', 'xaEnd', 'xaPrepare', 'xaCommit', 'xaRollback',
   'xaRecover', 'xaForget', 'xaSetTransactionTimeout', 'xaGetTransactionTimeout', 'xaIsSameRM',
 ];

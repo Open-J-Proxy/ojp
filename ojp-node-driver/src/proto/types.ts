@@ -111,6 +111,51 @@ export interface ParameterProto {
   values: ParameterValue[];
 }
 
+/**
+ * CallType enum from the .proto. Used by `callResource` to invoke arbitrary JDBC-resource
+ * methods by name/shape convention on the server (see `CallResourceAction`'s reflection-based
+ * dispatch). This driver only uses `CALL_SET` today, to restore `Connection.autoCommit` after
+ * `commit()`/`rollback()` — see `OjpClient.restoreAutoCommit()`.
+ */
+export type CallType =
+  | 'CALL_SET' | 'CALL_GET' | 'CALL_IS' | 'CALL_ALL' | 'CALL_NULLS' | 'CALL_USES'
+  | 'CALL_SUPPORTS' | 'CALL_STORES' | 'CALL_NULL' | 'CALL_DOES' | 'CALL_DATA'
+  | 'CALL_NEXT' | 'CALL_CLOSE' | 'CALL_WAS' | 'CALL_CLEAR' | 'CALL_FIND'
+  | 'CALL_BEFORE' | 'CALL_AFTER' | 'CALL_FIRST' | 'CALL_LAST' | 'CALL_ABSOLUTE'
+  | 'CALL_RELATIVE' | 'CALL_PREVIOUS' | 'CALL_ROW' | 'CALL_UPDATE' | 'CALL_INSERT'
+  | 'CALL_DELETE' | 'CALL_REFRESH' | 'CALL_CANCEL' | 'CALL_MOVE' | 'CALL_OWN'
+  | 'CALL_OTHERS' | 'CALL_UPDATES' | 'CALL_DELETES' | 'CALL_INSERTS' | 'CALL_LOCATORS'
+  | 'CALL_AUTO' | 'CALL_GENERATED' | 'CALL_RELEASE' | 'CALL_NATIVE' | 'CALL_PREPARE'
+  | 'CALL_ROLLBACK' | 'CALL_ABORT' | 'CALL_EXECUTE' | 'CALL_ADD' | 'CALL_ENQUOTE'
+  | 'CALL_REGISTER' | 'CALL_LENGTH';
+
+/** ResourceType enum from the .proto, identifying the kind of server-side resource a
+ * `callResource` request targets (ResultSet, Statement, Connection, ...). */
+export type ResourceType =
+  | 'RES_RESULT_SET' | 'RES_STATEMENT' | 'RES_PREPARED_STATEMENT' | 'RES_CALLABLE_STATEMENT'
+  | 'RES_LOB' | 'RES_CONNECTION' | 'RES_SAVEPOINT';
+
+export interface TargetCall {
+  callType: CallType;
+  resourceName: string;
+  params?: ParameterValue[];
+  nextCall?: TargetCall;
+}
+
+export interface CallResourceRequest {
+  session: SessionInfo;
+  resourceType: ResourceType;
+  resourceUUID?: string;
+  target: TargetCall;
+  properties?: PropertyEntry[];
+}
+
+export interface CallResourceResponse {
+  session: SessionInfo;
+  resourceUUID?: string;
+  values?: ParameterValue[];
+}
+
 export interface StatementRequest {
   session: SessionInfo;
   sql: string;

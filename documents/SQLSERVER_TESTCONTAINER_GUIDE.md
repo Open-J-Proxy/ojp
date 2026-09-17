@@ -38,7 +38,7 @@ All SQL Server test classes have been updated:
 #### Local Execution
 ```bash
 # Start OJP server first (requires Java 25+)
-java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar &
+java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.0-RC2-RC1-shaded.jar &
 
 # Run SQL Server tests
 mvn test -pl ojp-jdbc-driver -DenableSqlServerTests=true -Dtest="SQLServer*"

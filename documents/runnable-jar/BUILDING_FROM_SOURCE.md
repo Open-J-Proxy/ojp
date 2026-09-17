@@ -50,7 +50,7 @@ After a successful build, the runnable JAR will be at:
 ojp-server/target/ojp-server-<version>-shaded.jar
 ```
 
-For example: `ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar`
+For example: `ojp-server/target/ojp-server-1.0.0-RC2-RC1-shaded.jar`
 
 ### 4. Download JDBC Drivers
 
@@ -66,7 +66,7 @@ This downloads H2, PostgreSQL, MySQL, and MariaDB drivers to `./ojp-libs`.
 ### 5. Run the Server
 
 ```bash
-java -jar ojp-server/target/ojp-server-1.0.0-RC1-shaded.jar
+java -jar ojp-server/target/ojp-server-1.0.0-RC2-RC1-shaded.jar
 ```
 
 ## Troubleshooting

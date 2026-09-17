@@ -191,7 +191,7 @@ Allow at least **one week** of testing before promoting to GA.
 
 ### What to test
 
-- [ ] Deploy `rrobetti/ojp:1.0.0-RC1-RC1` against each supported database (PostgreSQL, MySQL, MariaDB, H2)
+- [ ] Deploy `rrobetti/ojp:1.0.0-RC2-RC1-RC1` against each supported database (PostgreSQL, MySQL, MariaDB, H2)
 - [ ] Run the full `ojp-jdbc-driver` integration test suite against the RC server
 - [ ] Verify JDBC driver `1.0.0-RC1` from Maven Central (not from local) connects correctly
 - [ ] Verify the Spring Boot starter auto-wires correctly against the RC artifacts

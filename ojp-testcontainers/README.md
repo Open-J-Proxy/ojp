@@ -66,7 +66,7 @@ Or with full image name:
 ```java
 @Container
 public static OjpContainer ojpContainer = new OjpContainer(
-    DockerImageName.parse("rrobetti/ojp:1.0.0-RC1")
+    DockerImageName.parse("rrobetti/ojp:1.0.0-RC2-RC1")
 );
 ```
 
@@ -92,7 +92,7 @@ If you want to use a custom Docker image (e.g., from a private registry or with 
 
 ```java
 DockerImageName customImage = DockerImageName.parse("myregistry.com/my-ojp:1.0.0")
-        .asCompatibleSubstituteFor("rrobetti/ojp:1.0.0-RC1");
+        .asCompatibleSubstituteFor("rrobetti/ojp:1.0.0-RC2-RC1");
         
 OjpContainer ojpContainer = new OjpContainer(customImage);
 ```
@@ -100,7 +100,7 @@ OjpContainer ojpContainer = new OjpContainer(customImage);
 ### Using a Specific Version
 
 ```java
-OjpContainer ojpContainer = new OjpContainer("rrobetti/ojp:1.0.0-RC1");
+OjpContainer ojpContainer = new OjpContainer("rrobetti/ojp:1.0.0-RC2-RC1");
 ```
 
 ## API Methods

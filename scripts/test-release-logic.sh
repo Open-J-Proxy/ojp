@@ -40,7 +40,7 @@ compute_versions() {
     local release
     local is_prerelease=false
     if [[ -n "${override}" ]]; then
-        release="${override}"
+        release="${override#v}"
         # Accept plain X.Y.Z  OR  X.Y.Z-<qualifier> (qualifier starts with a letter)
         if ! echo "${release}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z][A-Za-z0-9]*)?$'; then
             echo "ERROR: release_version '${release}' must be X.Y.Z or X.Y.Z-<qualifier> (e.g. 1.2.0, 1.0.0-RC1)"
@@ -208,6 +208,11 @@ assert_eq \
     "$(compute_versions "main" "1.0.0-SNAPSHOT" "1.0.0-RC2")"
 
 assert_eq \
+    "main + explicit v1.0.0-RC2 => normalize to 1.0.0-RC2, no bump, is_prerelease=true" \
+    "1.0.0-RC2|1.0.0-SNAPSHOT|true" \
+    "$(compute_versions "main" "1.0.0-SNAPSHOT" "v1.0.0-RC2")"
+
+assert_eq \
     "main + explicit 1.0.0-SNAPSHOT1 => publish SNAPSHOT1, no bump, is_prerelease=true" \
     "1.0.0-SNAPSHOT1|1.0.0-SNAPSHOT|true" \
     "$(compute_versions "main" "1.0.0-SNAPSHOT" "1.0.0-SNAPSHOT1")"
@@ -277,4 +282,3 @@ echo ""
 if [[ ${FAIL} -gt 0 ]]; then
     exit 1
 fi
-

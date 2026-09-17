@@ -210,8 +210,13 @@ jobs:
           # ── Determine release version ───────────────────────────────────────
           IS_PRERELEASE=false
           if [[ -n "${{ inputs.release_version }}" ]]; then
-            RELEASE="${{ inputs.release_version }}"
-            echo "Using provided release version: ${RELEASE}"
+            RELEASE_RAW="${{ inputs.release_version }}"
+            RELEASE="${RELEASE_RAW#v}"
+            if [[ "${RELEASE_RAW}" != "${RELEASE}" ]]; then
+              echo "Using provided release version: ${RELEASE_RAW} (normalized to ${RELEASE})"
+            else
+              echo "Using provided release version: ${RELEASE}"
+            fi
 
             # Validate format: plain X.Y.Z  OR  X.Y.Z-<qualifier>
             # Qualifier must start with a letter (e.g. RC1, RC2, SNAPSHOT1, alpha1)

@@ -24,9 +24,5 @@ This table describes what is currently demonstrated by tests in `ojp-jdbc-driver
 
 Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
 
-> mvn clean deploy
 
-Also need to deploy the ojp parent. Navigate to root folder uncomment the sign-artifacts plugin and execute:
-
-> mvn deploy -N
 

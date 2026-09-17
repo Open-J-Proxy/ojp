@@ -451,6 +451,8 @@ jobs:
               `- **Docker Hub:** [rrobetti/ojp:${{ steps.versions.outputs.release }}](https://hub.docker.com/r/rrobetti/ojp)`,
             ].join('\n');
 
+            const isPrerelease = '${{ steps.versions.outputs.is_prerelease }}' === 'true';
+
             await github.rest.repos.createRelease({
               owner,
               repo,
@@ -458,8 +460,8 @@ jobs:
               name:        generated.name,
               body:        generated.body + artifactsFooter,
               draft:       false,
-              prerelease:  ${{ steps.versions.outputs.is_prerelease }},
-              make_latest: String(${{ steps.versions.outputs.is_prerelease }}) === 'true' ? 'false' : 'true',
+              prerelease:  isPrerelease,
+              make_latest: isPrerelease ? 'false' : 'true',
             });
 
       # -----------------------------------------------------------------------

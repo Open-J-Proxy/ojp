@@ -8,7 +8,6 @@ import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.TargetCall;
-import com.openjproxy.grpc.TransactionStatus;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -184,10 +183,13 @@ public class Connection implements java.sql.Connection {
         log.debug("setAutoCommit: {}", autoCommit);
         checkValid();
         checkValid();
-        //if switching on autocommit with active transaction, commit current transaction.
-        if (!this.autoCommit && autoCommit &&
-                TransactionStatus.TRX_ACTIVE.equals(session.getTransactionInfo().getTransactionStatus())) {
-            this.session = this.statementService.commitTransaction(this.session);
+        //If switching on autocommit, delegate straight to the physical connection's own
+        //setAutoCommit(true). Every JDBC-compliant driver already implicitly commits
+        //whatever transaction is pending when switching out of manual-commit mode, so this
+        //single call both commits and restores autoCommit on the physical connection -
+        //there is no need to separately call commitTransaction() first.
+        if (!this.autoCommit && autoCommit) {
+            this.callProxy(CallType.CALL_SET, "AutoCommit", Void.class, Arrays.asList(autoCommit));
             //If switching autocommit off, start a new transaction
         } else if (this.autoCommit && !autoCommit) {
             this.session = this.statementService.startTransaction(this.session);

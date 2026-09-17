@@ -169,6 +169,8 @@ Keep production configuration outside the app binary/container where practical:
 - Cloud parameter/secret managers
 - VM-level secret injection
 
+Operational requirement: run OJP Server with JVM timezone set to UTC (`-Duser.timezone=UTC`) to avoid timestamp conversion problems across environments.
+
 Never commit passwords or private keys to source control.
 
 For configuration hierarchy and options, see [Chapter 6](part2-chapter6-server-configuration.md).
@@ -185,6 +187,7 @@ Before go-live, verify:
 - [ ] Monitoring enabled
 - [ ] Centralized logs enabled
 - [ ] Resource limits/requests configured
+- [ ] OJP Server JVM timezone set to UTC
 - [ ] Failover tested
 - [ ] Rolling upgrade tested
 - [ ] Load test completed

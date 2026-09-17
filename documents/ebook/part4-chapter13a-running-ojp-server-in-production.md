@@ -199,4 +199,4 @@ Before go-live, verify:
 
 ---
 
-This chapter provided a practical production playbook. In the next chapter, we'll move to protocol internals and wire format details.
+This chapter provided a practical production playbook. In the next chapter, we'll move to [Chapter 14: Protocol and Wire Format](part4-chapter14-protocol.md).

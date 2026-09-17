@@ -169,7 +169,12 @@ Keep production configuration outside the app binary/container where practical:
 - Cloud parameter/secret managers
 - VM-level secret injection
 
-Operational requirement: run OJP Server with JVM timezone set to UTC (`-Duser.timezone=UTC`) to avoid timestamp conversion problems across environments.
+Operational requirement: run OJP Server with JVM timezone set to UTC (`-Duser.timezone=UTC`) to avoid timestamp conversion problems across environments. This must be a JVM argument (not just host/container timezone settings).
+
+Practical examples:
+
+- Direct JVM start: `java -Duser.timezone=UTC -jar ojp-server.jar`
+- Containers/Kubernetes: set JVM args in the container command or `JAVA_TOOL_OPTIONS=-Duser.timezone=UTC`
 
 Never commit passwords or private keys to source control.
 

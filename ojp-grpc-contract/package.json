@@ -1,0 +1,15 @@
+{
+  "name": "@ojp/grpc-contract",
+  "version": "1.0.0",
+  "description": "Versioned distribution of the OJP gRPC/Protobuf contract (.proto files) for Node.js clients.",
+  "files": [
+    "proto",
+    "CONTRACT_HASH.json"
+  ],
+  "scripts": {
+    "verify": "node scripts/verify-hash.js",
+    "record-hash": "node scripts/record-hash.js",
+    "pull-from-ojp": "node scripts/pull-from-ojp.js"
+  },
+  "private": true
+}

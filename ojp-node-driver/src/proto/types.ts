@@ -1,0 +1,328 @@
+/**
+ * TypeScript types that mirror the StatementService.proto messages.
+ * Used as the data contract for calls made via @grpc/proto-loader
+ * (loaded with keepCase:false, enums:String, oneofs:true).
+ */
+
+export interface PropertyEntry {
+  key: string;
+  boolValue?: boolean;
+  intValue?: number;
+  longValue?: string;
+  floatValue?: number;
+  doubleValue?: number;
+  stringValue?: string;
+  bytesValue?: Buffer;
+}
+
+export interface ConnectionDetails {
+  url: string;
+  user: string;
+  password: string;
+  clientUUID: string;
+  properties?: PropertyEntry[];
+  isXA?: boolean;
+  serverEndpoints?: string[];
+  clusterHealth?: string;
+}
+
+export type TransactionStatus = 'TRX_ACTIVE' | 'TRX_COMMITED' | 'TRX_ROLLBACK';
+export type SessionStatus = 'SESSION_ACTIVE' | 'SESSION_TERMINATED';
+
+export interface TransactionInfo {
+  transactionUUID: string;
+  transactionStatus: TransactionStatus;
+}
+
+export interface SessionInfo {
+  connHash: string;
+  clientUUID: string;
+  sessionUUID: string;
+  transactionInfo?: TransactionInfo;
+  sessionStatus: SessionStatus;
+  isXA?: boolean;
+  targetServer?: string;
+  clusterHealth?: string;
+  clientCount?: number;
+  maxAdmission?: number;
+  observedPeak?: number;
+}
+
+/** ParameterTypeProto enum from the .proto, used to type each ParameterProto. */
+export type ParameterType =
+  | 'PT_NULL' | 'PT_BOOLEAN' | 'PT_BYTE' | 'PT_SHORT' | 'PT_INT' | 'PT_LONG'
+  | 'PT_FLOAT' | 'PT_DOUBLE' | 'PT_BIG_DECIMAL' | 'PT_STRING' | 'PT_BYTES'
+  | 'PT_DATE' | 'PT_TIME' | 'PT_TIMESTAMP' | 'PT_ASCII_STREAM' | 'PT_UNICODE_STREAM'
+  | 'PT_BINARY_STREAM' | 'PT_OBJECT' | 'PT_CHARACTER_READER' | 'PT_REF' | 'PT_BLOB'
+  | 'PT_CLOB' | 'PT_ARRAY' | 'PT_URL' | 'PT_ROW_ID' | 'PT_N_STRING'
+  | 'PT_N_CHARACTER_STREAM' | 'PT_N_CLOB' | 'PT_SQL_XML';
+
+export type TemporalType =
+  | 'TEMPORAL_TYPE_UNSPECIFIED' | 'TEMPORAL_TYPE_TIMESTAMP' | 'TEMPORAL_TYPE_CALENDAR'
+  | 'TEMPORAL_TYPE_OFFSET_DATE_TIME' | 'TEMPORAL_TYPE_LOCAL_DATE_TIME' | 'TEMPORAL_TYPE_INSTANT'
+  | 'TEMPORAL_TYPE_LOCAL_DATE' | 'TEMPORAL_TYPE_LOCAL_TIME' | 'TEMPORAL_TYPE_OFFSET_TIME';
+
+export interface TimestampWithZone {
+  instant?: { seconds: string; nanos: number };
+  timezone?: string;
+  originalType?: TemporalType;
+}
+
+/** Mirrors the .proto's IntArray message (used by ParameterValue.int_array_value). */
+export interface IntArray {
+  values: number[];
+}
+
+/** Mirrors the .proto's LongArray message (used by ParameterValue.long_array_value). */
+export interface LongArray {
+  values: string[];
+}
+
+/** Mirrors the .proto's StringArray message (used by ParameterValue.string_array_value). */
+export interface StringArray {
+  values: string[];
+}
+
+export interface ParameterValue {
+  boolValue?: boolean;
+  intValue?: number;
+  longValue?: string;
+  floatValue?: number;
+  doubleValue?: number;
+  stringValue?: string;
+  bytesValue?: Buffer;
+  intArrayValue?: IntArray;
+  longArrayValue?: LongArray;
+  isNull?: boolean;
+  timestampValue?: TimestampWithZone;
+  dateValue?: { year: number; month: number; day: number };
+  timeValue?: { hours: number; minutes: number; seconds: number; nanos: number };
+  urlValue?: string;
+  rowidValue?: string;
+  uuidValue?: string;
+  bigintegerValue?: string;
+  stringArrayValue?: StringArray;
+  rowidlifetimeValue?: string;
+}
+
+export interface ParameterProto {
+  index: number;
+  type: ParameterType;
+  values: ParameterValue[];
+}
+
+/**
+ * CallType enum from the .proto. Used by `callResource` to invoke arbitrary JDBC-resource
+ * methods by name/shape convention on the server (see `CallResourceAction`'s reflection-based
+ * dispatch). This driver only uses `CALL_SET` today, to restore `Connection.autoCommit` after
+ * `commit()`/`rollback()` — see `OjpClient.restoreAutoCommit()`.
+ */
+export type CallType =
+  | 'CALL_SET' | 'CALL_GET' | 'CALL_IS' | 'CALL_ALL' | 'CALL_NULLS' | 'CALL_USES'
+  | 'CALL_SUPPORTS' | 'CALL_STORES' | 'CALL_NULL' | 'CALL_DOES' | 'CALL_DATA'
+  | 'CALL_NEXT' | 'CALL_CLOSE' | 'CALL_WAS' | 'CALL_CLEAR' | 'CALL_FIND'
+  | 'CALL_BEFORE' | 'CALL_AFTER' | 'CALL_FIRST' | 'CALL_LAST' | 'CALL_ABSOLUTE'
+  | 'CALL_RELATIVE' | 'CALL_PREVIOUS' | 'CALL_ROW' | 'CALL_UPDATE' | 'CALL_INSERT'
+  | 'CALL_DELETE' | 'CALL_REFRESH' | 'CALL_CANCEL' | 'CALL_MOVE' | 'CALL_OWN'
+  | 'CALL_OTHERS' | 'CALL_UPDATES' | 'CALL_DELETES' | 'CALL_INSERTS' | 'CALL_LOCATORS'
+  | 'CALL_AUTO' | 'CALL_GENERATED' | 'CALL_RELEASE' | 'CALL_NATIVE' | 'CALL_PREPARE'
+  | 'CALL_ROLLBACK' | 'CALL_ABORT' | 'CALL_EXECUTE' | 'CALL_ADD' | 'CALL_ENQUOTE'
+  | 'CALL_REGISTER' | 'CALL_LENGTH';
+
+/** ResourceType enum from the .proto, identifying the kind of server-side resource a
+ * `callResource` request targets (ResultSet, Statement, Connection, ...). */
+export type ResourceType =
+  | 'RES_RESULT_SET' | 'RES_STATEMENT' | 'RES_PREPARED_STATEMENT' | 'RES_CALLABLE_STATEMENT'
+  | 'RES_LOB' | 'RES_CONNECTION' | 'RES_SAVEPOINT';
+
+export interface TargetCall {
+  callType: CallType;
+  resourceName: string;
+  params?: ParameterValue[];
+  nextCall?: TargetCall;
+}
+
+export interface CallResourceRequest {
+  session: SessionInfo;
+  resourceType: ResourceType;
+  resourceUUID?: string;
+  target: TargetCall;
+  properties?: PropertyEntry[];
+}
+
+export interface CallResourceResponse {
+  session: SessionInfo;
+  resourceUUID?: string;
+  values?: ParameterValue[];
+}
+
+export interface StatementRequest {
+  session: SessionInfo;
+  sql: string;
+  parameters?: ParameterProto[];
+  statementUUID?: string;
+  properties?: PropertyEntry[];
+}
+
+export interface ResultRow {
+  columns: ParameterValue[];
+}
+
+export interface OpQueryResultProto {
+  resultSetUUID: string;
+  labels: string[];
+  rows: ResultRow[];
+}
+
+export type ResultType = 'INTEGER' | 'RESULT_SET_DATA' | 'UUID_STRING';
+
+export interface OpResult {
+  session: SessionInfo;
+  type: ResultType;
+  intValue?: number;
+  queryResult?: OpQueryResultProto;
+  uuidValue?: string;
+  uuid?: string;
+  flag?: string;
+}
+
+export interface ResultSetFetchRequest {
+  session: SessionInfo;
+  resultSetUUID: string;
+  size: number;
+}
+
+export interface SessionTerminationStatus {
+  terminated: boolean;
+}
+
+export interface SqlErrorResponse {
+  reason: string;
+  sqlState: string;
+  vendorCode: number;
+  sqlErrorType: 'SQL_EXCEPTION' | 'SQL_DATA_EXCEPTION' | 'SQL_TRANSIENT_CONNECTION_EXCEPTION';
+}
+
+/** LobType enum from the .proto. */
+export type LobTypeProto =
+  | 'LT_BLOB' | 'LT_CLOB' | 'LT_BINARY_STREAM' | 'LT_ASCII_STREAM'
+  | 'LT_UNICODE_STREAM' | 'LT_CHARACTER_STREAM';
+
+export interface LobReference {
+  session: SessionInfo;
+  uuid: string;
+  bytesWritten?: number;
+  lobType: LobTypeProto;
+  columnIndex?: number;
+  stmtUUID?: string;
+}
+
+export interface ReadLobRequest {
+  lobReference: LobReference;
+  /** int64 in the .proto — serialized/deserialized as a string (proto-loader's longs:String option). */
+  position: string;
+  length: number;
+}
+
+export interface LobDataBlock {
+  session: SessionInfo;
+  /** int64 in the .proto — serialized/deserialized as a string (proto-loader's longs:String option). */
+  position: string;
+  data: Buffer;
+  lobType: LobTypeProto;
+  metadata?: PropertyEntry[];
+}
+
+/**
+ * Distributed transaction identifier, mirroring javax.transaction.xa.Xid's three
+ * fields exactly (formatId + globalTransactionId + branchQualifier).
+ */
+export interface XidProto {
+  formatId: number;
+  globalTransactionId: Buffer;
+  branchQualifier: Buffer;
+}
+
+export interface XaStartRequest {
+  session: SessionInfo;
+  xid: XidProto;
+  flags: number;
+}
+
+export interface XaEndRequest {
+  session: SessionInfo;
+  xid: XidProto;
+  flags: number;
+}
+
+export interface XaPrepareRequest {
+  session: SessionInfo;
+  xid: XidProto;
+}
+
+export interface XaPrepareResponse {
+  session: SessionInfo;
+  /** XA_OK (0) or XA_RDONLY (3) — see xaConstants.ts. */
+  result: number;
+}
+
+export interface XaCommitRequest {
+  session: SessionInfo;
+  xid: XidProto;
+  onePhase: boolean;
+}
+
+export interface XaRollbackRequest {
+  session: SessionInfo;
+  xid: XidProto;
+}
+
+export interface XaRecoverRequest {
+  session: SessionInfo;
+  flag: number;
+}
+
+export interface XaRecoverResponse {
+  session: SessionInfo;
+  xids: XidProto[];
+}
+
+export interface XaForgetRequest {
+  session: SessionInfo;
+  xid: XidProto;
+}
+
+export interface XaSetTransactionTimeoutRequest {
+  session: SessionInfo;
+  seconds: number;
+}
+
+export interface XaSetTransactionTimeoutResponse {
+  session: SessionInfo;
+  success: boolean;
+}
+
+export interface XaGetTransactionTimeoutRequest {
+  session: SessionInfo;
+}
+
+export interface XaGetTransactionTimeoutResponse {
+  session: SessionInfo;
+  seconds: number;
+}
+
+export interface XaIsSameRMRequest {
+  session1: SessionInfo;
+  session2: SessionInfo;
+}
+
+export interface XaIsSameRMResponse {
+  isSame: boolean;
+}
+
+/** Generic response for XA operations that only report success/failure (start/end/commit/rollback/forget). */
+export interface XaResponse {
+  session: SessionInfo;
+  success: boolean;
+  message: string;
+}

@@ -1,0 +1,20 @@
+{
+  "name": "ojp-node-driver-example",
+  "version": "0.1.0",
+  "description": "Beginner-friendly example: TypeORM + @ojp/typeorm-driver, running full CRUD through ojp-server against PostgreSQL or SQL Server.",
+  "private": true,
+  "scripts": {
+    "start": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@ojp/typeorm-driver": "file:../ojp-typeorm-driver",
+    "dotenv": "16.4.5",
+    "reflect-metadata": "0.2.2",
+    "typeorm": "0.3.20"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "ts-node": "10.9.2",
+    "typescript": "5.5.3"
+  }
+}

@@ -13,16 +13,21 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.Parameter;
+import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.LobDataBlocksInputStream;
 import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.cache.QueryCacheHelper;
 import org.openjproxy.grpc.server.sql.SqlSessionAffinityDetector;
+import org.openjproxy.grpc.server.statement.EagerCloseHelper;
 import org.openjproxy.grpc.server.statement.ParameterHandler;
 import org.openjproxy.grpc.server.statement.StatementFactory;
 import org.openjproxy.grpc.server.utils.StatementRequestValidator;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -97,6 +102,15 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
      */
     @SuppressWarnings("java:S2095")
     private OpResult executeUpdateInternal(ActionContext actionContext, StatementRequest request) throws SQLException {
+        if (actionContext.getServerConfiguration().isStatementEagerCloseEnabled()
+                && EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession())) {
+            log.debug("Attempting eager-close path for executeUpdate");
+            OpResult eagerResult = executeUpdateEagerClose(actionContext, request);
+            if (eagerResult != null) {
+                return eagerResult;
+            }
+        }
+
         int updated = 0;
         ConnectionSessionDTO dto = null;
 
@@ -254,6 +268,55 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             return builder.setType(ResultType.UUID_STRING).setUuidValue(psUUID).build();
         }
         return builder.setType(ResultType.INTEGER).setIntValue(updated).build();
+    }
+
+    /**
+     * Executes a non-transactional DML update using the eager-close path.
+     *
+     * <p>Acquires a physical connection, executes the update, and immediately
+     * releases all JDBC resources using try-with-resources. No server-side session
+     * is created or modified.
+     *
+     * <p>Returns {@code null} when the pooled DataSource is unavailable for the
+     * given connection hash, signalling the caller to fall back to the standard path.
+     *
+     * @param actionContext the action context
+     * @param request       the statement request
+     * @return the operation result, or {@code null} if the standard path should be used
+     * @throws SQLException if the update fails
+     */
+    private OpResult executeUpdateEagerClose(ActionContext actionContext, StatementRequest request)
+            throws SQLException {
+        String connHash = request.getSession().getConnHash();
+        DataSource dataSource = actionContext.getDatasourceMap().get(connHash);
+        if (dataSource == null) {
+            // Not a pooled connection — fall through to the standard path
+            return null;
+        }
+
+        List<Parameter> params = ProtoConverter.fromProtoList(request.getParametersList());
+        int updated;
+
+        try (Connection conn = ConnectionAcquisitionManager.acquireConnection(dataSource, connHash)) {
+            if (CollectionUtils.isNotEmpty(params)) {
+                try (PreparedStatement ps = conn.prepareStatement(request.getSql())) {
+                    ParameterHandler.addParametersPreparedStatement(
+                            actionContext.getSessionManager(), request.getSession(), ps, params);
+                    updated = ps.executeUpdate();
+                }
+            } else {
+                try (Statement stmt = conn.createStatement()) {
+                    updated = stmt.executeUpdate(request.getSql());
+                }
+            }
+        }
+
+        QueryCacheHelper.invalidateCacheIfEnabled(actionContext, request.getSession(), request.getSql());
+        return OpResult.newBuilder()
+                .setType(ResultType.INTEGER)
+                .setSession(request.getSession())
+                .setIntValue(updated)
+                .build();
     }
 
     /**

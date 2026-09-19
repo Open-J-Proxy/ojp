@@ -88,7 +88,7 @@ PostgreSQL arrays have a few practical requirements:
 - some element types are standard scalars, others are PostgreSQL-specific
 - array text syntax exists, but escaping rules can be tricky
 
-My opinion: if OJP supports only one-dimensional scalar arrays first, that is acceptable for a first release **as long as the limitation is explicit**. Pretending full support too early would be worse than shipping a smaller, honest feature.
+A first release can reasonably limit scope to one-dimensional scalar arrays **as long as the limitation is explicit**. Claiming broader support too early would create documentation and compatibility risk.
 
 ---
 
@@ -175,7 +175,7 @@ Do not implement a real `java.sql.Array`. Instead, convert Java arrays into Post
 
 ### Verdict
 
-Useful only as a **short-term workaround**. I do **not** recommend this as the long-term design.
+Most suitable as a **short-term workaround** rather than as the long-term design.
 
 ---
 
@@ -200,7 +200,7 @@ Try to move backend/vendor array objects through OJP more or less directly.
 
 ### Verdict
 
-I think this is the wrong direction. It is too fragile for a proxy architecture.
+This option is high-risk for a proxy architecture because it is too fragile across transport and driver boundaries.
 
 ---
 
@@ -228,7 +228,7 @@ Define an OJP-native array payload in `ojp-grpc-commons` and implement `org.open
 
 ### Verdict
 
-This is my recommended base architecture.
+This option provides the cleanest base architecture for OJP.
 
 ---
 
@@ -258,7 +258,7 @@ Examples:
 
 ### Verdict
 
-This is the best **overall roadmap**, with Option 3 as the core and vendor-specific adapters only where justified.
+As a roadmap, this option balances extensibility and pragmatism, with Option 3 as the core and vendor-specific adapters only where justified.
 
 ---
 
@@ -266,7 +266,7 @@ This is the best **overall roadmap**, with Option 3 as the core and vendor-speci
 
 ### 5.1 Phase 1 scope
 
-I suggest Phase 1 support only these PostgreSQL cases:
+A reasonable Phase 1 scope is limited to these PostgreSQL cases:
 
 - one-dimensional arrays
 - common scalar types:
@@ -353,9 +353,9 @@ Example concept:
 - slightly more verbose
 - more validation logic needed
 
-### My opinion
+### Comparative assessment
 
-I would choose **B**. OJP already has `ParameterValue`, and arrays are not performance-critical enough to justify a complicated parallel type system unless benchmarking later proves otherwise.
+Sub-option **B** is the more extensible default because OJP already has `ParameterValue`, and arrays are unlikely to be performance-critical enough to justify a separate parallel type system unless benchmarking later proves otherwise.
 
 ---
 
@@ -377,7 +377,7 @@ Required changes:
    - implemented in Phase 1, or
    - explicitly unsupported initially
 
-My suggestion: support `getArray()` first and defer `getResultSet()` if needed. `getResultSet()` is nice for completeness, but it is not the first thing that will unblock Liquibase users.
+If scope reduction is needed, `getArray()` can be prioritized over `getResultSet()`. `getResultSet()` improves JDBC completeness, but it is less likely to be the first feature needed to unblock Liquibase users.
 
 ### 6.2 gRPC commons (`ojp-grpc-commons`)
 
@@ -445,7 +445,7 @@ This section is about **likely target support for OJP array implementation**, no
 4. **DB2** only after verified demand
 5. Do not spend effort on MySQL/MariaDB/SQL Server for `java.sql.Array`
 
-Why I feel strongly about this: trying to force a fake cross-database array abstraction onto databases that do not have native arrays will create a confusing API and a large maintenance burden for little value.
+Trying to force a cross-database array abstraction onto databases that do not have native arrays would create a confusing API and a large maintenance burden for limited value.
 
 ---
 
@@ -455,7 +455,7 @@ Why I feel strongly about this: trying to force a fake cross-database array abst
 
 **Decision needed:** should OJP arrays be fully materialized on the client?
 
-**My answer:** yes.
+**Assessment:** yes is the simpler default.
 
 Reason:
 
@@ -465,19 +465,19 @@ Reason:
 
 ### 8.2 Multi-dimensional arrays in Phase 1?
 
-**My answer:** no.
+**Assessment:** no for Phase 1.
 
 Support them later, after one-dimensional arrays are stable.
 
 ### 8.3 `Array.getResultSet()` in Phase 1?
 
-**My answer:** maybe not.
+**Assessment:** deferring it is acceptable.
 
 If schedule pressure exists, it is a reasonable Phase 2 feature. But if implemented, it should be based on the materialized client-side array object, not another server round-trip.
 
 ### 8.4 Should OJP silently coerce Java arrays passed through `setObject(...)`?
 
-**My answer:** be conservative.
+**Assessment:** a conservative policy is safer.
 
 Support the cases that are clearly mappable, and reject ambiguous cases with a good error message. Silent magic here can create very confusing bugs.
 
@@ -533,9 +533,9 @@ must be preserved exactly.
 
 ### 10.4 Oracle pressure too early
 
-I expect someone will say: "If we do PostgreSQL arrays, let's also do Oracle collections now."
+One likely pressure point is: "If PostgreSQL arrays are added, Oracle collections should be added immediately too."
 
-My opinion: that would be a mistake unless there is a concrete paying user or issue behind it. Oracle collections are meaningfully more complex than PostgreSQL arrays.
+Expanding immediately to Oracle collections would materially increase scope unless there is a concrete user requirement driving that work. Oracle collections are meaningfully more complex than PostgreSQL arrays.
 
 ### 10.5 Transport complexity creep
 
@@ -547,7 +547,7 @@ This is the core architectural tension in this feature.
 
 ## 11. Questions for Maintainers
 
-These are the questions I would want answered before implementation starts:
+These are the key questions to answer before implementation starts:
 
 1. **What exact user scenarios must be unblocked first?**
    - Liquibase migrations only?
@@ -555,7 +555,7 @@ These are the questions I would want answered before implementation starts:
    - direct JDBC `setArray/getArray`?
 
 2. **Is Phase 1 allowed to exclude `Array.getResultSet()`?**
-   - I think yes, but it should be explicit.
+   - A "yes" answer is workable, but it should be explicit.
 
 3. **Do we need multi-dimensional PostgreSQL arrays in Phase 1?**
    - My recommendation is no.
@@ -571,7 +571,7 @@ These are the questions I would want answered before implementation starts:
 7. **Do we want Oracle collection support on the roadmap now, or only after PostgreSQL proves stable?**
 
 8. **Should unsupported databases throw `SQLFeatureNotSupportedException` at `createArrayOf(...)`, or only when binding occurs?**
-   - I strongly prefer failing early.
+   - Failing early is preferable.
 
 ---
 
@@ -617,7 +617,7 @@ These are the questions I would want answered before implementation starts:
 
 If the goal is a **real** `java.sql.Array` implementation, OJP should build a **canonical array payload** and implement PostgreSQL first.
 
-If the goal is only to unblock a narrow class of Liquibase scripts quickly, a PostgreSQL text-literal workaround could be added temporarily, but I would treat that as a stopgap and not as the final design.
+If the goal is only to unblock a narrow class of Liquibase scripts quickly, a PostgreSQL text-literal workaround could be added temporarily, but it should be treated as a stopgap rather than as the final design.
 
 ### My recommended decision
 

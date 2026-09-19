@@ -7,6 +7,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.math.BigDecimal;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.DriverManager;
@@ -421,6 +422,53 @@ class H2MultipleTypesIntegrationTest {
             // This is acceptable - not all databases support all java.time types
         } finally {
             conn.close();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/h2_connection.csv")
+    void arrayRoundTripTest(String driverClass, String url, String user, String pwd) throws SQLException {
+        Assumptions.assumeTrue(isH2TestEnabled, "Skipping H2 tests - not enabled");
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            try {
+                conn.createStatement().execute("DROP TABLE h2_array_types_test");
+            } catch (SQLException ignored) {
+                // table may not exist yet
+            }
+
+            conn.createStatement().execute(
+                    "CREATE TABLE h2_array_types_test (" +
+                    "  id INT PRIMARY KEY," +
+                    "  array_col INTEGER ARRAY" +
+                    ")"
+            );
+
+            Array inputArray = conn.createArrayOf("INTEGER", new Object[]{1, 2, 3});
+            java.sql.PreparedStatement psInsert = conn.prepareStatement(
+                    "INSERT INTO h2_array_types_test (id, array_col) VALUES (?, ?)"
+            );
+            psInsert.setInt(1, 1);
+            psInsert.setArray(2, inputArray);
+            psInsert.executeUpdate();
+
+            java.sql.PreparedStatement psSelect = conn.prepareStatement(
+                    "SELECT array_col FROM h2_array_types_test WHERE id = ?"
+            );
+            psSelect.setInt(1, 1);
+            ResultSet rs = psSelect.executeQuery();
+
+            assertTrue(rs.next());
+            Array outputArray = rs.getArray("array_col");
+            assertNotNull(outputArray);
+            assertArrayEquals(new Object[]{1, 2, 3}, (Object[]) outputArray.getArray());
+
+            outputArray.free();
+            inputArray.free();
+            rs.close();
+            psSelect.close();
+            psInsert.close();
+            conn.createStatement().execute("DROP TABLE h2_array_types_test");
         }
     }
 

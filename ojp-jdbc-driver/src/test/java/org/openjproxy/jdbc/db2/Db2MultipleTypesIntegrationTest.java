@@ -7,6 +7,7 @@ import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
+import java.sql.Array;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Date;
@@ -22,6 +23,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -481,4 +483,61 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         conn.close();
     }
 
+    @ParameterizedTest
+    @CsvFileSource(resources = "/db2_connection.csv")
+    void arrayRoundTripWithUserDefinedType(String driverClass, String url, String user, String pwd) throws SQLException {
+        assumeFalse(isTestDisabled, "DB2 tests are disabled");
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            try (java.sql.Statement schemaStmt = conn.createStatement()) {
+                schemaStmt.execute("SET SCHEMA DB2INST1");
+            }
+
+            try {
+                TestDBUtils.executeUpdate(conn, "DROP TABLE DB2_ARRAY_TYPES_TEST");
+            } catch (SQLException ignored) {
+                // table may not exist yet
+            }
+            try {
+                TestDBUtils.executeUpdate(conn, "DROP TYPE DB2_ARRAY_VARCHAR RESTRICT");
+            } catch (SQLException ignored) {
+                // type may not exist yet
+            }
+
+            TestDBUtils.executeUpdate(conn, "CREATE TYPE DB2_ARRAY_VARCHAR AS VARCHAR(32) ARRAY[10]");
+            TestDBUtils.executeUpdate(conn,
+                    "CREATE TABLE DB2_ARRAY_TYPES_TEST (" +
+                    "id INTEGER PRIMARY KEY, " +
+                    "array_col DB2_ARRAY_VARCHAR" +
+                    ")"
+            );
+
+            Array inputArray = conn.createArrayOf("VARCHAR", new Object[]{"ONE", "TWO", "THREE"});
+            java.sql.PreparedStatement psInsert = conn.prepareStatement(
+                    "INSERT INTO DB2_ARRAY_TYPES_TEST (id, array_col) VALUES (?, ?)"
+            );
+            psInsert.setInt(1, 1);
+            psInsert.setArray(2, inputArray);
+            psInsert.executeUpdate();
+
+            java.sql.PreparedStatement psSelect = conn.prepareStatement(
+                    "SELECT array_col FROM DB2_ARRAY_TYPES_TEST WHERE id = ?"
+            );
+            psSelect.setInt(1, 1);
+            ResultSet rs = psSelect.executeQuery();
+
+            assertTrue(rs.next());
+            Array outputArray = rs.getArray("array_col");
+            assertNotNull(outputArray);
+            assertArrayEquals(new Object[]{"ONE", "TWO", "THREE"}, (Object[]) outputArray.getArray());
+
+            outputArray.free();
+            inputArray.free();
+            rs.close();
+            psSelect.close();
+            psInsert.close();
+            TestDBUtils.executeUpdate(conn, "DROP TABLE DB2_ARRAY_TYPES_TEST");
+            TestDBUtils.executeUpdate(conn, "DROP TYPE DB2_ARRAY_VARCHAR RESTRICT");
+        }
+    }
 }

@@ -13,14 +13,14 @@ This document analyzes what OJP would need in order to support `java.sql.Array`,
 OJP does **not** currently implement `java.sql.Array` in a usable way. The PostgreSQL user report is consistent with the current codebase. To support PostgreSQL arrays correctly, OJP needs:
 
 1. A real client-side `org.openjproxy.jdbc.Array` implementation
-2. A transport format for array values over gRPC
+2. A transport format for array values over gRPC, preferably without changing the proto contracts unless that becomes unavoidable
 3. Server-side binding logic that can create database-native arrays
 4. Result-set decoding logic for array columns
 5. A database capability model, because JDBC array support is highly vendor-specific
 
 ### Recommendation
 
-**Recommended direction:** implement a **canonical OJP array payload** for common scalar arrays first, with **PostgreSQL as the first-class target**, and leave vendor-specific edge cases behind explicit capability checks.
+**Recommended direction:** implement a **hydrated OJP array payload** for common scalar arrays first, with **PostgreSQL as the first-class target**, and prefer carrying that payload over the existing transport before considering any proto contract change.
 
 That is not the smallest amount of work, but it is the best technical direction. A PostgreSQL-only string-literal workaround would be faster, but it would also be brittle, incomplete, and hard to generalize cleanly.
 
@@ -108,7 +108,7 @@ It should behave like a normal materialized JDBC `Array`, not like a remote LOB 
 
 ### 3.2 Transport work
 
-OJP needs a new transport representation for arrays. The current transport handles some primitive Java arrays (`int[]`, `long[]`, `String[]`) in isolated places, but that is **not enough** for JDBC `Array`.
+OJP needs an array transport representation. The current transport already handles some primitive Java arrays (`int[]`, `long[]`, `String[]`) in isolated places, but that is **not enough** for JDBC `Array`.
 
 The transport needs to carry at least:
 
@@ -117,6 +117,8 @@ The transport needs to carry at least:
 - ordered elements
 - null element markers
 - optional nesting / dimensions
+
+The preferred first attempt is to represent a hydrated array using the **existing** transport model, for example by carrying array metadata plus materialized elements through existing `ParameterValue` / list-style structures. A proto contract change should be treated as a fallback path, not as the default assumption.
 
 ### 3.3 Server-side binding work
 
@@ -204,16 +206,20 @@ This option is high-risk for a proxy architecture because it is too fragile acro
 
 ---
 
-### Option 3: Canonical OJP array payload for standard scalar arrays
+### Option 3: Hydrated OJP array payload over the existing transport
 
 ### Idea
 
-Define an OJP-native array payload in `ojp-grpc-commons` and implement `org.openjproxy.jdbc.Array` as a materialized client-side object. Server-side code converts between that canonical form and the backend driver's native array form.
+Define an OJP-native hydrated array payload in `ojp-grpc-commons`, transfer it in one shot using the existing transport model if possible, and implement `org.openjproxy.jdbc.Array` as a materialized client-side object. Server-side code converts between that hydrated form and the backend driver's native array form.
+
+This is conceptually closer to the current hydrated LOB handling than to the remote-reference LOB path: the server fully reads the backend array, transfers it once to the client, and the client exposes it through a local `java.sql.Array` implementation.
 
 ### Pros
 
 - Best fit for OJP architecture
 - Clean JDBC story for PostgreSQL
+- Avoids changing proto contracts unless the existing transport proves insufficient
+- Close to the way OJP already reasons about eagerly hydrated data
 - Extensible to H2 and potentially DB2
 - Can support reads and writes consistently
 - Avoids vendor object leakage through transport
@@ -222,21 +228,47 @@ Define an OJP-native array payload in `ojp-grpc-commons` and implement `org.open
 ### Cons
 
 - More work than a literal workaround
-- Requires protobuf/schema changes
+- May still require transport reshaping in converters and DTO handling
 - Requires type mapping design
 - Needs careful handling of nulls and nested arrays
+- Arrays may be large enough to create memory pressure if hydration is not bounded
 
 ### Verdict
 
-This option provides the cleanest base architecture for OJP.
+This option provides the cleanest base architecture for OJP, especially if it can be implemented without changing the proto interfaces.
 
 ---
 
-### Option 4: Hybrid model
+### Option 4: Explicit proto extension for arrays
 
 ### Idea
 
-Use the canonical OJP payload for supported scalar arrays, but allow vendor-specific fallback paths where necessary.
+Add a first-class array message to the proto contracts and map `java.sql.Array` directly onto that new wire format.
+
+### Pros
+
+- Most explicit wire contract
+- Easier to validate at the schema level
+- Easier to evolve toward nested arrays or richer type metadata later
+
+### Cons
+
+- Changes shared contracts
+- Increases rollout coordination between modules
+- Harder to justify if the same outcome can be achieved with existing transport structures
+- Raises backward-compatibility and maintenance costs earlier
+
+### Verdict
+
+This should be treated as a **last resort** if the hydrated-existing-transport path proves too awkward or too limiting.
+
+---
+
+### Option 5: Hybrid model
+
+### Idea
+
+Use the hydrated OJP payload for supported scalar arrays, but allow vendor-specific fallback paths where necessary.
 
 Examples:
 
@@ -308,7 +340,7 @@ Those can come later.
 
 ## 5.2 Suggested payload shape
 
-At a minimum, OJP's canonical array payload should include:
+At a minimum, OJP's hydrated array payload should include:
 
 - `baseTypeName` - e.g. `integer`, `text`, `uuid`
 - `jdbcBaseType` - e.g. `Types.INTEGER`
@@ -355,7 +387,7 @@ Example concept:
 
 ### Comparative assessment
 
-Sub-option **B** is the more extensible default because OJP already has `ParameterValue`, and arrays are unlikely to be performance-critical enough to justify a separate parallel type system unless benchmarking later proves otherwise.
+Sub-option **B** is the more extensible default because OJP already has `ParameterValue`, and arrays are unlikely to be performance-critical enough to justify a separate parallel type system unless benchmarking later proves otherwise. It also aligns better with a no-proto-change strategy because it can reuse existing generic value containers more naturally than a new strongly typed wire schema.
 
 ---
 
@@ -383,12 +415,13 @@ If scope reduction is needed, `getArray()` can be prioritized over `getResultSet
 
 Required changes:
 
-1. Extend proto contract for array payloads
+1. First, try to model hydrated arrays with the existing proto contracts and current `ParameterValue` / list-style transport
 2. Extend `ProtoConverter` for:
    - `java.sql.Array`
    - array payload DTO
    - nested element serialization
-3. Add compatibility tests for:
+3. Only if that approach proves insufficient, add a dedicated proto contract for array payloads
+4. Add compatibility tests for:
    - null array
    - empty array
    - array with null elements
@@ -399,9 +432,9 @@ Required changes:
 Required changes:
 
 1. Update parameter handling for `ParameterType.ARRAY`
-2. Convert OJP payload to backend `java.sql.Array`
+2. Convert the hydrated OJP payload to backend `java.sql.Array`
 3. Free backend array objects when appropriate
-4. Materialize backend result arrays into OJP payloads on reads
+4. Materialize backend result arrays into hydrated OJP payloads on reads
 5. Add capability checks by database type
 
 ### 6.4 Testing
@@ -417,7 +450,7 @@ Minimum test matrix:
   - `createArrayOf` + `setArray`
   - `getArray`
 - H2:
-  - confirm whether the same canonical path works
+  - confirm whether the same hydrated-transfer path works
 - MySQL/MariaDB:
   - confirm unsupported behavior remains explicit and predictable
 
@@ -462,6 +495,7 @@ Reason:
 - arrays are usually much smaller and simpler than LOBs
 - JDBC users expect immediate access to array contents
 - avoiding a remote handle makes lifecycle management simpler
+- the pattern is compatible with a hydrated-transfer model similar to the way OJP already handles some eagerly materialized data
 
 ### 8.2 Multi-dimensional arrays in Phase 1?
 
@@ -558,7 +592,7 @@ These are the key questions to answer before implementation starts:
    - A "yes" answer is workable, but it should be explicit.
 
 3. **Do we need multi-dimensional PostgreSQL arrays in Phase 1?**
-   - My recommendation is no.
+   - A "no" answer keeps the first implementation much safer.
 
 4. **Do we want to support Java primitive arrays and object arrays equally at launch?**
    - Example: `int[]` vs `Integer[]`.
@@ -587,11 +621,12 @@ These are the key questions to answer before implementation starts:
 
 #### Phase 1: PostgreSQL one-dimensional scalar arrays
 
-- canonical OJP array payload
+- hydrated OJP array payload using the existing transport if possible
 - `createArrayOf`
 - `setArray`
 - `getArray`
 - clear unsupported messages for the rest
+- no proto change unless implementation pressure proves it is necessary
 
 #### Phase 2: H2 validation + API completeness
 
@@ -615,17 +650,18 @@ These are the key questions to answer before implementation starts:
 
 ## 13. Final Recommendation
 
-If the goal is a **real** `java.sql.Array` implementation, OJP should build a **canonical array payload** and implement PostgreSQL first.
+If the goal is a **real** `java.sql.Array` implementation, OJP should build a **hydrated array payload**, implement PostgreSQL first, and try to carry that payload through the existing transport before changing any proto contracts.
 
 If the goal is only to unblock a narrow class of Liquibase scripts quickly, a PostgreSQL text-literal workaround could be added temporarily, but it should be treated as a stopgap rather than as the final design.
 
-### My recommended decision
+### Recommended decision
 
 1. Commit to **PostgreSQL-first**
-2. Use a **canonical OJP array transport model**
-3. Limit Phase 1 to **one-dimensional scalar arrays**
-4. Fail early and clearly on unsupported databases
-5. Defer Oracle/DB2 until there is proven demand
+2. Use a **hydrated OJP array transport model**
+3. Prefer the **existing proto contracts** first
+4. Limit Phase 1 to **one-dimensional scalar arrays**
+5. Fail early and clearly on unsupported databases
+6. Defer Oracle/DB2 until there is proven demand
 
 That gives OJP the cleanest balance of user value, correctness, and future extensibility.
 

@@ -180,7 +180,11 @@ public class CallableStatement implements java.sql.CallableStatement {
     @Override
     public Array getArray(int parameterIndex) throws SQLException {
         log.debug("getArray: {}", parameterIndex);
-        return this.callProxy(CallType.CALL_GET, "Array", Array.class, List.of(parameterIndex));
+        String arrayUUID = this.callProxy(CallType.CALL_GET, "Array", String.class, List.of(parameterIndex));
+        if (arrayUUID == null || arrayUUID.isBlank()) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array(this.connection, this.statementService, arrayUUID);
     }
 
     @Override
@@ -492,7 +496,11 @@ public class CallableStatement implements java.sql.CallableStatement {
     @Override
     public Array getArray(String parameterName) throws SQLException {
         log.debug("getArray: {}", parameterName);
-        return this.callProxy(CallType.CALL_GET, "Array", Array.class, List.of(parameterName));
+        String arrayUUID = this.callProxy(CallType.CALL_GET, "Array", String.class, List.of(parameterName));
+        if (arrayUUID == null || arrayUUID.isBlank()) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array(this.connection, this.statementService, arrayUUID);
     }
 
     @Override
@@ -895,7 +903,14 @@ public class CallableStatement implements java.sql.CallableStatement {
     @Override
     public void setArray(int parameterIndex, Array x) throws SQLException {
         log.debug("setArray: {}, <Array>", parameterIndex);
-        this.callProxy(CallType.CALL_SET, "Array", Void.class, List.of(parameterIndex, x));
+        if (x == null) {
+            this.callProxy(CallType.CALL_SET, "Array", Void.class, java.util.Arrays.asList(parameterIndex, null));
+            return;
+        }
+        if (!(x instanceof org.openjproxy.jdbc.Array)) {
+            throw new SQLFeatureNotSupportedException("Only OJP proxied Array instances are currently supported.");
+        }
+        this.callProxy(CallType.CALL_SET, "Array", Void.class, List.of(parameterIndex, ((org.openjproxy.jdbc.Array) x).getUuid()));
     }
 
     @Override

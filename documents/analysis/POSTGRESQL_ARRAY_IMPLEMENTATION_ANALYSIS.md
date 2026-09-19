@@ -264,7 +264,52 @@ This should be treated as a **last resort** if the hydrated-existing-transport p
 
 ---
 
-### Option 5: Hybrid model
+### Option 5: Pure proxied `java.sql.Array` backed by server session state
+
+### Idea
+
+Keep the real backend `java.sql.Array` object on the OJP server, store it in the session the same way other server-side resources are tracked, and expose a client-side proxy object whose methods call back through `callProxy`.
+
+In practical terms, this would behave more like a proxied `Blob`/`Clob` handle than like a hydrated value:
+
+- `Connection.createArrayOf(...)` would create the backend array on the server and return a proxy handle
+- `ResultSet.getArray(...)` would return a proxy handle tied to the server-side array object
+- methods such as `getBaseTypeName()`, `getBaseType()`, `free()`, and possibly `getResultSet()` would call back to the server on demand
+
+### Feasibility
+
+This is **partially feasible** with the current architecture:
+
+- OJP already has a generic `callProxy` pattern for remote JDBC objects
+- server-side session state already stores some non-statement resources by UUID
+- `CallResourceAction` already recognizes `java.sql.Array` results and stores them server-side when they are returned from reflective calls
+
+However, it is **not a full solution by itself** because `Array.getArray()` still needs to return the actual array contents to the client, which reintroduces the transport problem for `Object[]` / typed element payloads.
+
+### Pros
+
+- Very close to OJP's existing proxy model
+- Good fit for methods that are naturally metadata- or handle-oriented (`getBaseTypeName`, `getBaseType`, `free`)
+- Avoids immediate eager hydration for every array read
+- Potentially reduces upfront transfer cost for applications that fetch arrays but only inspect metadata
+- Can complement a hydrated strategy later if some array methods remain better served remotely
+
+### Cons
+
+- Does **not** eliminate the need to transport array contents for `getArray()` and slice methods
+- Introduces more round-trips than a hydrated design
+- Requires explicit lifecycle and cleanup handling for server-side array objects
+- Current resource typing is not a natural fit yet; a clean implementation likely needs either a dedicated array resource type or a more general session-attribute resource model
+- More vulnerable to invalidation/lifecycle quirks if a backend driver treats arrays similarly to cursor-scoped objects
+- Harder to reason about performance when applications iterate heavily over array accessors
+
+### Verdict
+
+This is a **credible option** and worth documenting, but it is better viewed as a proxy-oriented variant or complement rather than as a complete replacement for hydrated array transfer. It helps with object identity and server-side lifecycle, but it does not by itself solve how `getArray()` returns portable element data to the client.
+
+---
+
+### Option 6: Hybrid model
 
 ### Idea
 
@@ -290,7 +335,7 @@ Examples:
 
 ### Verdict
 
-As a roadmap, this option balances extensibility and pragmatism, with Option 3 as the core and vendor-specific adapters only where justified.
+As a roadmap, this option balances extensibility and pragmatism, with Option 3 as the core, Option 5 available where a true proxy handle is useful, and vendor-specific adapters added only where justified.
 
 ---
 
@@ -659,9 +704,10 @@ If the goal is only to unblock a narrow class of Liquibase scripts quickly, a Po
 1. Commit to **PostgreSQL-first**
 2. Use a **hydrated OJP array transport model**
 3. Prefer the **existing proto contracts** first
-4. Limit Phase 1 to **one-dimensional scalar arrays**
-5. Fail early and clearly on unsupported databases
-6. Defer Oracle/DB2 until there is proven demand
+4. Treat a **pure proxied array handle** as an optional complement, not as the only transport strategy
+5. Limit Phase 1 to **one-dimensional scalar arrays**
+6. Fail early and clearly on unsupported databases
+7. Defer Oracle/DB2 until there is proven demand
 
 That gives OJP the cleanest balance of user value, correctness, and future extensibility.
 

@@ -506,7 +506,7 @@ Support the cases that are clearly mappable, and reject ambiguous cases with a g
 
 ### 10.1 Documentation drift
 
-There is already documentation that suggests PostgreSQL arrays are fully supported, while the code and tests do not support that claim consistently. The clearest example is `documents/ebook/appendix-e-jdbc-compatibility.md`, section `E.1.4 Array and Struct Support`, which currently says PostgreSQL arrays are "Fully supported (getArray, getResultSet, getBaseType)".
+There has already been documentation drift in this area. For example, `documents/ebook/appendix-e-jdbc-compatibility.md`, section `E.1.4 Array and Struct Support`, needed correction because it had described PostgreSQL arrays as fully supported while the code and tests did not support that claim consistently.
 
 **Concern:** if implementation work starts without first aligning that compatibility appendix and any related support matrices, users will remain confused.
 

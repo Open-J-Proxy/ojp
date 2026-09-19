@@ -110,7 +110,7 @@ public class Array implements java.sql.Array {
 
     private Object[] toObjectArray(Object raw) {
         if (raw == null) {
-            return null;
+            return new Object[0];
         }
         if (raw instanceof List<?>) {
             return ((List<?>) raw).toArray();

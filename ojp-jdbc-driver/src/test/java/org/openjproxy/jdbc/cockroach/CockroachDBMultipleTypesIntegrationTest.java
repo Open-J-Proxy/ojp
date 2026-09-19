@@ -422,7 +422,11 @@ class CockroachDBMultipleTypesIntegrationTest {
             assertTrue(rs.next());
             Array outputArray = rs.getArray("array_col");
             assertNotNull(outputArray);
-            assertArrayEquals(new Object[]{1, 2, 3}, (Object[]) outputArray.getArray());
+            Object[] outputValues = (Object[]) outputArray.getArray();
+            assertEquals(3, outputValues.length);
+            assertEquals(1, ((Number) outputValues[0]).longValue());
+            assertEquals(2, ((Number) outputValues[1]).longValue());
+            assertEquals(3, ((Number) outputValues[2]).longValue());
 
             outputArray.free();
             inputArray.free();

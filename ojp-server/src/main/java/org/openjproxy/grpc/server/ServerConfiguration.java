@@ -93,6 +93,9 @@ public class ServerConfiguration {
     private static final String TELEMETRY_CACHE_METRICS_ENABLED_KEY = "ojp.telemetry.cache.metrics.enabled";
     private static final String TELEMETRY_CIRCUIT_BREAKER_ENABLED_KEY = "ojp.telemetry.circuitbreaker.enabled";
 
+    // Eager Close ResultSet mode configuration key
+    private static final String EAGER_CLOSE_ENABLED_KEY = "ojp.resultset.eagerClose.enabled";
+
     // TLS configuration keys
     private static final String TLS_ENABLED_KEY = "ojp.server.tls.enabled";
     private static final String TLS_KEYSTORE_PATH_KEY = "ojp.server.tls.keystore.path";
@@ -178,6 +181,9 @@ public class ServerConfiguration {
     public static final boolean DEFAULT_TELEMETRY_POOL_METRICS_ENABLED = true; // Enabled by default when OpenTelemetry is enabled
     public static final boolean DEFAULT_TELEMETRY_CACHE_METRICS_ENABLED = true; // Enabled by default when OpenTelemetry is enabled
     public static final boolean DEFAULT_TELEMETRY_CIRCUIT_BREAKER_ENABLED = true; // Enabled by default when OpenTelemetry is enabled
+
+    // Eager Close ResultSet mode default values
+    public static final boolean DEFAULT_EAGER_CLOSE_ENABLED = true; // Enabled by default
 
     // TLS default values
     public static final boolean DEFAULT_TLS_ENABLED = false; // Disabled by default for backwards compatibility
@@ -282,6 +288,9 @@ public class ServerConfiguration {
     private final String tlsTruststoreType;
     private final boolean tlsClientAuthRequired;
 
+    // Eager Close ResultSet mode configuration
+    private final boolean eagerCloseEnabled;
+
     // ResultSet streaming configuration
     private final int resultsetRowsPerBlock;
 
@@ -367,6 +376,9 @@ public class ServerConfiguration {
         this.tlsKeystoreType = getStringProperty(TLS_KEYSTORE_TYPE_KEY, "JKS");
         this.tlsTruststoreType = getStringProperty(TLS_TRUSTSTORE_TYPE_KEY, "JKS");
         this.tlsClientAuthRequired = getBooleanProperty(TLS_CLIENT_AUTH_REQUIRED_KEY, DEFAULT_TLS_CLIENT_AUTH_REQUIRED);
+
+        // Eager Close ResultSet mode configuration
+        this.eagerCloseEnabled = getBooleanProperty(EAGER_CLOSE_ENABLED_KEY, DEFAULT_EAGER_CLOSE_ENABLED);
 
         // Tracing configuration
         this.tracingEnabled = getBooleanProperty(TRACING_ENABLED_KEY, DEFAULT_TRACING_ENABLED);
@@ -619,6 +631,8 @@ public class ServerConfiguration {
             logger.info("  TLS Keystore Type: {}", tlsKeystoreType);
             logger.info("  TLS Truststore Type: {}", tlsTruststoreType);
         }
+        logger.info("Eager Close ResultSet Mode:");
+        logger.info("  Eager Close Enabled: {}", eagerCloseEnabled);
         logger.info("Tracing Configuration:");
         logger.info("  Tracing Enabled: {}", tracingEnabled);
         if (tracingEnabled) {
@@ -953,6 +967,10 @@ public class ServerConfiguration {
 
     public boolean isTelemetryCacheMetricsEnabled() {
         return telemetryCacheMetricsEnabled;
+    }
+
+    public boolean isEagerCloseEnabled() {
+        return eagerCloseEnabled;
     }
 
     public int getResultsetRowsPerBlock() {

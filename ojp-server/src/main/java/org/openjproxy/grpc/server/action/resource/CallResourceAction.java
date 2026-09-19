@@ -178,6 +178,17 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
                 responseBuilder.setSession(request.getSession());
             }
 
+            // If the session was eagerly terminated (e.g., after a fully-read ResultSet with no LOBs
+            // outside a transaction), the resource may be null. Return an empty success response so
+            // that close() calls from the JDBC driver do not surface as errors to the application.
+            if (resource == null) {
+                log.debug("Resource not found for session {} (session may have been eagerly closed) - returning empty success",
+                        request.getSession().getSessionUUID());
+                responseObserver.onNext(responseBuilder.build());
+                responseObserver.onCompleted();
+                return;
+            }
+
             List<Object> paramsReceived = (request.getTarget().getParamsCount() > 0) ?
                     ProtoConverter.parameterValuesToObjectList(request.getTarget().getParamsList()) : EMPTY_LIST;
             Class<?> clazz = resource.getClass();

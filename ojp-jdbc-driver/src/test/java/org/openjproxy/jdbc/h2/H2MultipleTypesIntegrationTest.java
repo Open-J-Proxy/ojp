@@ -461,7 +461,11 @@ class H2MultipleTypesIntegrationTest {
             assertTrue(rs.next());
             Array outputArray = rs.getArray("array_col");
             assertNotNull(outputArray);
-            assertArrayEquals(new Object[]{1, 2, 3}, (Object[]) outputArray.getArray());
+            Object[] outputValues = (Object[]) outputArray.getArray();
+            assertEquals(3, outputValues.length);
+            assertEquals(1, ((Number) outputValues[0]).intValue());
+            assertEquals(2, ((Number) outputValues[1]).intValue());
+            assertEquals(3, ((Number) outputValues[2]).intValue());
 
             outputArray.free();
             inputArray.free();

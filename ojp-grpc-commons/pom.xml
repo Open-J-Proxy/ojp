@@ -6,12 +6,12 @@
 
     <name>OJP Commons</name>
     <artifactId>ojp-grpc-commons</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1-SNAPSHOT</version>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 

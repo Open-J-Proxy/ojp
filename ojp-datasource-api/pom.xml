@@ -6,13 +6,13 @@
 
     <name>OJP Datasource API</name>
     <artifactId>ojp-datasource-api</artifactId>
-    <version>1.0.0-RC3</version>
+    <version>1.0.0</version>
     <description>Connection Pool Abstraction API for OJP</description>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>1.0.0-RC3</version>
+        <version>1.0.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 

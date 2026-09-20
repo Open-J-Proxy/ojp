@@ -5,7 +5,7 @@
 
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-parent</artifactId>
-    <version>1.0.0-RC3</version>
+    <version>1.0.0</version>
     <packaging>pom</packaging>
 
     <name>OJP Parent</name>

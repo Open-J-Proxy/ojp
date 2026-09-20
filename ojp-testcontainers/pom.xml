@@ -6,13 +6,13 @@
 
     <name>OJP TestContainers</name>
     <artifactId>ojp-testcontainers</artifactId>
-    <version>1.0.0-RC2</version>
+    <version>1.0.0-RC3</version>
     <description>TestContainers support for OJP Server integration testing</description>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>1.0.0-RC2</version>
+        <version>1.0.0-RC3</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 

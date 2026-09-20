@@ -6,13 +6,13 @@
 
     <name>OJP XA Pool Commons</name>
     <artifactId>ojp-xa-pool-commons</artifactId>
-    <version>1.0.0-RC2</version>
+    <version>1.0.0-RC3</version>
     <description>Apache Commons Pool 2 XA Connection Pool Provider for OJP</description>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>1.0.0-RC2</version>
+        <version>1.0.0-RC3</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 

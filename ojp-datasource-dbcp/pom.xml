@@ -6,13 +6,13 @@
 
     <name>OJP Datasource DBCP</name>
     <artifactId>ojp-datasource-dbcp</artifactId>
-    <version>1.0.0-RC2</version>
+    <version>1.0.0-RC3</version>
     <description>Apache Commons DBCP Connection Pool Provider for OJP</description>
 
     <parent>
         <groupId>org.openjproxy</groupId>
         <artifactId>ojp-parent</artifactId>
-        <version>1.0.0-RC2</version>
+        <version>1.0.0-RC3</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -26,7 +26,7 @@
         <dependency>
             <groupId>org.openjproxy</groupId>
             <artifactId>ojp-datasource-api</artifactId>
-            <version>1.0.0-RC2</version>
+            <version>1.0.0-RC3</version>
         </dependency>
 
         <!-- Apache Commons DBCP2 -->

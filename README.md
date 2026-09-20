@@ -60,20 +60,20 @@ cd ..
 docker run --rm -d \
   --network host \
   -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
-  rrobetti/ojp:1.0.0-RC2-RC1
+  rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
 
 **Alternative: Runnable JAR (No Docker)**
 
 ```bash
 # Download OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.0-RC2-RC1-shaded.jar
-chmod +x ojp-server-1.0.0-RC2-RC1-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.0-RC3-RC2-RC1-shaded.jar
+chmod +x ojp-server-1.0.0-RC3-RC2-RC1-shaded.jar
 
 # Download open source JDBC drivers
 curl -LO https://raw.githubusercontent.com/Open-J-Proxy/ojp/main/ojp-server/download-drivers.sh
 bash download-drivers.sh  # Downloads H2, PostgreSQL, MySQL, MariaDB to ojp-libs/
-java -Duser.timezone=UTC -jar ojp-server-1.0.0-RC2-RC1-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.0-RC3-RC2-RC1-shaded.jar
 ```
 
 📖 See [Executable JAR Setup Guide](documents/runnable-jar/README.md) for details.

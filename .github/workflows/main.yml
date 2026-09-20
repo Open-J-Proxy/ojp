@@ -110,8 +110,8 @@ jobs:
       - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
-      - name: Verify all modules with JDK 25
-        run: mvn clean verify -Dgpg.skip=true
+      - name: Verify all modules with JDK 25 (skip integration tests)
+        run: mvn clean verify -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true

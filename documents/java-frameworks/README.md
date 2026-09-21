@@ -1,11 +1,10 @@
 # Introduction
-Each folder under this directory has detailed documentation on how to integrate OJP with different frameworks and tools.
+Each folder under this directory has detailed documentation on how to integrate OJP with different frameworks.
 
 - [Spring Boot](spring-boot/README.md)
 - [Quarkus](quarkus/README.md)
 - [Micronaut](micronaut/README.md)
 - [Jakarta EE](jakarta-ee/README.md)
-- [DBeaver](dbeaver/README.md)
 
 Note that the steps are always similar and follow 3 basic steps:
 

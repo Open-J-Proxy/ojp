@@ -76,11 +76,11 @@ Located in [java-frameworks/](java-frameworks/):
 - [Spring Boot Integration](java-frameworks/spring-boot/README.md)
 - [Micronaut Integration](java-frameworks/micronaut/README.md)
 - [Quarkus Integration](java-frameworks/quarkus/README.md)
-- [DBeaver Tutorial](java-frameworks/dbeaver/README.md)
 
 ## Developer Guides
 
 Located in [guides/](guides/):
+- [DBeaver Tutorial](guides/DBEAVER.md) - How to use the OJP JDBC driver in DBeaver
 - [Release Process & Maven Central Integration](guides/RELEASE_PROCESS.md) - One-click release workflow, Sonatype setup, and suggestions
 - [Adding Database XA Support](guides/ADDING_DATABASE_XA_SUPPORT.md) - How to add XA support for new databases
 

@@ -76,6 +76,7 @@ Located in [java-frameworks/](java-frameworks/):
 - [Spring Boot Integration](java-frameworks/spring-boot/README.md)
 - [Micronaut Integration](java-frameworks/micronaut/README.md)
 - [Quarkus Integration](java-frameworks/quarkus/README.md)
+- [DBeaver Tutorial](java-frameworks/dbeaver/README.md)
 
 ## Developer Guides
 

@@ -6,6 +6,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 
+import java.io.Reader;
+import java.io.StringWriter;
+import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -210,6 +213,45 @@ public class Db2ResultSetTest {
         assertEquals(Types.INTEGER, metaData.getColumnType(3));
         assertEquals(Types.DECIMAL, metaData.getColumnType(4));
         assertEquals(Types.SMALLINT, metaData.getColumnType(5));
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/db2_connection.csv")
+    void testDb2ClobObjectAccess(String driverClass, String url, String user, String pwd) throws Exception {
+        setUp(driverClass, url, user, pwd);
+
+        try {
+            statement.execute("DROP TABLE DB2INST1.db2_clob_object_test");
+        } catch (SQLException e) {
+            // Ignore
+        }
+
+        statement.execute("CREATE TABLE DB2INST1.db2_clob_object_test (" +
+                "id INTEGER NOT NULL PRIMARY KEY, " +
+                "clob_col CLOB(1M))");
+        statement.execute("INSERT INTO DB2INST1.db2_clob_object_test VALUES (1, 'DB2 CLOB content')");
+
+        resultSet = statement.executeQuery("SELECT clob_col FROM DB2INST1.db2_clob_object_test WHERE id = 1");
+        assertTrue(resultSet.next());
+
+        Object value = resultSet.getObject("clob_col");
+        assertTrue(value instanceof Clob);
+        assertEquals("DB2 CLOB content", resultSet.getObject("clob_col", String.class));
+
+        Clob clob = resultSet.getObject("clob_col", Clob.class);
+        assertEquals("DB2 CLOB content", clob.getSubString(1, (int) clob.length()));
+
+        try (Reader reader = clob.getCharacterStream()) {
+            StringWriter writer = new StringWriter();
+            reader.transferTo(writer);
+            assertEquals("DB2 CLOB content", writer.toString());
+        }
+
+        try (Reader reader = resultSet.getCharacterStream("clob_col")) {
+            StringWriter writer = new StringWriter();
+            reader.transferTo(writer);
+            assertEquals("DB2 CLOB content", writer.toString());
+        }
     }
 
     @ParameterizedTest

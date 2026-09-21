@@ -743,7 +743,7 @@ public class ResultSet extends RemoteProxyResultSet {
             return super.getObject(columnIndex);
         }
         lastValueRead = currentDataBlock.get(blockIdx.get())[columnIndex - 1];
-        return lastValueRead;
+        return this.resolveObjectValue(columnIndex, lastValueRead);
     }
 
     @Override
@@ -761,8 +761,12 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getCharacterStream(columnIndex);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        Clob clob = this.getClob(columnIndex);
+        if (clob == null) {
+            lastValueRead = null;
+            return null;
+        }
+        return clob.getCharacterStream();
     }
 
     @Override
@@ -771,8 +775,7 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getCharacterStream(columnLabel);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        return this.getCharacterStream(this.labelsMap.get(columnLabel.toUpperCase()) + 1);
     }
 
     @Override
@@ -2254,7 +2257,16 @@ public class ResultSet extends RemoteProxyResultSet {
         if (lastValueRead == null) {
             return null;
         }
-        return (T) lastValueRead;
+        if (type == null || Object.class.equals(type)) {
+            return (T) this.resolveObjectValue(columnIndex, lastValueRead);
+        }
+        if (String.class.equals(type)) {
+            return type.cast(this.getString(columnIndex));
+        }
+        if (Clob.class.equals(type) || java.sql.Clob.class.equals(type)) {
+            return type.cast(this.getClob(columnIndex));
+        }
+        return type.cast(this.resolveObjectValue(columnIndex, lastValueRead));
     }
 
     @Override
@@ -2263,11 +2275,18 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getObject(columnLabel, type);
         }
-        lastValueRead = currentDataBlock.get(blockIdx.get())[this.labelsMap.get(columnLabel.toUpperCase())];
-        if (lastValueRead == null) {
-            return null;
+        return this.getObject(this.labelsMap.get(columnLabel.toUpperCase()) + 1, type);
+    }
+
+    private Object resolveObjectValue(int columnIndex, Object value) throws SQLException {
+        if (isClobReferenceValue(value)) {
+            return this.getClob(columnIndex);
         }
-        return (T) lastValueRead;
+        return value;
+    }
+
+    private boolean isClobReferenceValue(Object value) {
+        return value instanceof String && ((String) value).startsWith(CommonConstants.OJP_CLOB_PREFIX);
     }
 
     @Override

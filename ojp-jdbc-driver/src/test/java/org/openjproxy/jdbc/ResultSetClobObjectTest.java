@@ -6,6 +6,7 @@ import com.openjproxy.grpc.LobDataBlock;
 import com.openjproxy.grpc.OpQueryResultProto;
 import com.openjproxy.grpc.OpResult;
 import com.openjproxy.grpc.ResultType;
+import com.openjproxy.grpc.ResultRow;
 import com.openjproxy.grpc.SessionInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -105,8 +106,8 @@ class ResultSetClobObjectTest {
                 .setQueryResult(OpQueryResultProto.newBuilder()
                         .setResultSetUUID("rs-uuid")
                         .addLabels("clob_col")
-                        .addRows(OpQueryResultProto.Row.newBuilder()
-                                .addValues(org.openjproxy.grpc.ProtoConverter.toParameterValue(
+                        .addRows(ResultRow.newBuilder()
+                                .addColumns(org.openjproxy.grpc.ProtoConverter.toParameterValue(
                                         CommonConstants.OJP_CLOB_PREFIX + CLOB_UUID))
                                 .build())
                         .build())

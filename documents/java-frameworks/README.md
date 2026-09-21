@@ -1,5 +1,5 @@
 # Introduction
-Each folder under this directory have detailed documentation on how to integrate OJP on different frameworks.
+Each folder under this directory has detailed documentation on how to integrate OJP with different frameworks.
 
 - [Spring Boot](spring-boot/README.md)
 - [Quarkus](quarkus/README.md)

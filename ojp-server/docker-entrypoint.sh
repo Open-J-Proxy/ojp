@@ -9,12 +9,13 @@ set -- \
 build_logging_property_arg() {
     env_value="$1"
     property_name="$2"
+    existing_jvm_options="${JAVA_TOOL_OPTIONS-} ${JDK_JAVA_OPTIONS-}"
 
     if [ -z "${env_value}" ]; then
         return
     fi
 
-    if printf '%s' "${JAVA_TOOL_OPTIONS-}" | grep -Fq -- "-D${property_name}="; then
+    if printf '%s' "${existing_jvm_options}" | grep -Fq -- "-D${property_name}="; then
         return
     fi
 

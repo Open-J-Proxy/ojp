@@ -4,7 +4,7 @@ set -eu
 append_logging_property() {
     property_name="$1"
     env_var_name="$2"
-    current_java_tool_options="${JAVA_TOOL_OPTIONS-}"
+    current_java_tool_options="${EXTRA_JAVA_TOOL_OPTIONS} ${JAVA_TOOL_OPTIONS-}"
 
     eval "env_value=\${$env_var_name-}"
 

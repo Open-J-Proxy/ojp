@@ -183,7 +183,6 @@ If Docker isn't available, use the standalone executable JAR. From version **0.4
 ```bash
 # Download the OJP Server JAR from Maven Central
 wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0/ojp-server-1.0.0-shaded.jar
-chmod +x ojp-server-1.0.0-shaded.jar
 ```
 
 **Download Database Drivers**:

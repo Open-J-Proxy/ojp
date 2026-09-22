@@ -10,12 +10,13 @@ build_logging_property_arg() {
     env_value="$1"
     property_name="$2"
     existing_jvm_options="${JAVA_TOOL_OPTIONS-} ${JDK_JAVA_OPTIONS-}"
+    property_pattern=$(printf '%s' "${property_name}" | sed 's/[.]/\\\\./g')
 
     if [ -z "${env_value}" ]; then
         return
     fi
 
-    if printf '%s' "${existing_jvm_options}" | grep -Fq -- "-D${property_name}="; then
+    if printf '%s' "${existing_jvm_options}" | grep -Eq -- "(^|[[:space:]])-D${property_pattern}(=|[[:space:]])"; then
         return
     fi
 

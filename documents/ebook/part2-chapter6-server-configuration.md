@@ -415,7 +415,7 @@ For development environments, prioritize visibility and fast feedback. Use INFO 
 ```bash
 # Development configuration
 export OJP_SERVER_PORT=1059
-export OJP_SERVER_LOGLEVEL=DEBUG
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS} -Dojp.server.logLevel=DEBUG"
 export OJP_PROMETHEUS_PORT=9159
 export OJP_SERVER_VIRTUALTHREADS_ENABLED=true
 export OJP_SERVER_THREADPOOLSIZE=50
@@ -429,7 +429,7 @@ Production environments require different trade-offs. Use ERROR or INFO logging 
 ```bash
 # Production configuration
 export OJP_SERVER_PORT=1059
-export OJP_SERVER_LOGLEVEL=ERROR  # Recommended for production performance
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS} -Dojp.server.logLevel=ERROR"  # Recommended for production performance
 export OJP_PROMETHEUS_PORT=9159
 export OJP_SERVER_VIRTUALTHREADS_ENABLED=true
 # OJP_SERVER_THREADPOOLSIZE applies only when virtual threads are disabled

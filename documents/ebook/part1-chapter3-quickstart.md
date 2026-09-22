@@ -142,7 +142,7 @@ docker run --rm -d \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
   -e OJP_SERVER_PORT=9059 \
   -e OJP_PROMETHEUS_PORT=9090 \
-  -e OJP_SERVER_LOGLEVEL=DEBUG \
+  -e JAVA_TOOL_OPTIONS="-Dojp.server.logLevel=DEBUG" \
   rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
 

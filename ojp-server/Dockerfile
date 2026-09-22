@@ -29,11 +29,10 @@ WORKDIR /opt/ojp
 
 COPY --chown=ojp:ojp ojp-libs/ /opt/ojp/ojp-libs/
 COPY --chown=ojp:ojp target/ojp-server-*-shaded.jar /opt/ojp/ojp-server.jar
+COPY --chown=ojp:ojp docker-entrypoint.sh /opt/ojp/docker-entrypoint.sh
+
+RUN chmod +x /opt/ojp/docker-entrypoint.sh
 
 USER ojp
 
-ENTRYPOINT ["java", \
-    "-XX:+UseG1GC", \
-    "-Dojp.libs.path=/opt/ojp/ojp-libs", \
-    "-Duser.timezone=UTC", \
-    "-jar", "/opt/ojp/ojp-server.jar"]
+ENTRYPOINT ["/opt/ojp/docker-entrypoint.sh"]

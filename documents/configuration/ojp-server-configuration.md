@@ -36,7 +36,9 @@ Because the global cap is shared across all datasources and clients, tripping it
 
 ### Logging Settings
 
-OJP Server uses Logback for logging with fully configurable options. All logging properties can be set via system properties or environment variables.
+OJP Server uses Logback for logging with fully configurable options.
+
+> **Important:** When you start OJP with `java -jar`, Logback reads its configuration before `ServerConfiguration` can translate OJP environment variables. Because of that startup order, logging settings should be passed as JVM system properties (`-D...`) or through `JAVA_TOOL_OPTIONS`. The official Docker image bridges the documented `OJP_SERVER_LOG*` environment variables into matching JVM properties during container startup.
 
 | Property                           | Environment Variable               | Type    | Default                            | Description                                   | Since      |
 |------------------------------------|------------------------------------|---------|------------------------------------|-----------------------------------------------|------------|
@@ -72,6 +74,18 @@ java -Duser.timezone=UTC \
      -Dojp.server.log.maxHistory=90 \
      -Dojp.server.log.totalSizeCap=10GB \
      -jar ojp-server.jar
+```
+
+**Equivalent setup with `JAVA_TOOL_OPTIONS`:**
+```bash
+export JAVA_TOOL_OPTIONS="\
+  -Duser.timezone=UTC \
+  -Dojp.server.logLevel=INFO \
+  -Dojp.server.log.file=/var/log/ojp/server.log \
+  -Dojp.server.log.maxHistory=90 \
+  -Dojp.server.log.totalSizeCap=10GB"
+
+java -jar ojp-server.jar
 ```
 
 ### Security Settings
@@ -399,9 +413,8 @@ docker run -e OJP_SERVER_PORT=8080 \
 Pass JVM parameters (heap size, system properties, GC options) using the `JAVA_TOOL_OPTIONS` environment variable:
 
 ```bash
-docker run -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC" \
+docker run -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dojp.server.logLevel=INFO" \
            -e OJP_SERVER_PORT=1059 \
-           -e OJP_SERVER_LOGLEVEL=INFO \
            -p 1059:1059 \
            -p 9159:9159 \
            rrobetti/ojp:latest

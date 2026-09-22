@@ -154,6 +154,8 @@ docker run -d \
 
 See [ojp-server-configuration.md](ojp-server-configuration.md) for a complete list of available configuration options.
 
+> **Logging note:** The official Docker image now converts `OJP_SERVER_LOGLEVEL`, `OJP_SERVER_LOG_FILE`, `OJP_SERVER_LOG_FILENAMEPATTERN`, `OJP_SERVER_LOG_MAXHISTORY`, `OJP_SERVER_LOG_TOTALSIZECAP`, and `OJP_SERVER_LOG_PATTERN` into JVM `-D` properties before Java starts. This is required because Logback initializes before the server reads regular OJP environment variables. `JAVA_TOOL_OPTIONS` remains the most explicit workaround and is still recommended when you want all JVM and logging settings in one place.
+
 ### Combining JAVA_TOOL_OPTIONS with OJP Environment Variables
 
 You can use both approaches together:
@@ -162,9 +164,8 @@ You can use both approaches together:
 docker run -d \
   --name ojp-server \
   -p 1059:1059 \
-  -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC" \
+  -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dojp.server.logLevel=INFO" \
   -e OJP_SERVER_PORT=1059 \
-  -e OJP_SERVER_LOGLEVEL=INFO \
   rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
 
@@ -203,14 +204,14 @@ docker run -d \
     -XX:+HeapDumpOnOutOfMemoryError \
     -XX:HeapDumpPath=/var/log/ojp/heapdump.hprof \
     -Dfile.encoding=UTF-8 \
-    -Duser.timezone=UTC" \
+    -Duser.timezone=UTC \
+    -Dojp.server.logLevel=INFO \
+    -Dojp.server.log.file=/var/log/ojp/server.log \
+    -Dojp.server.log.maxHistory=90" \
   -e OJP_SERVER_PORT=1059 \
   -e OJP_PROMETHEUS_PORT=9159 \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=300 \
-  -e OJP_SERVER_LOGLEVEL=INFO \
-  -e OJP_SERVER_LOG_FILE=/var/log/ojp/server.log \
-  -e OJP_SERVER_LOG_MAXHISTORY=90 \
   -e OJP_SERVER_ALLOWEDIPS="10.0.0.0/8" \
   rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
@@ -240,13 +241,13 @@ services:
         -XX:HeapDumpPath=/var/log/ojp/heapdump.hprof
         -Dfile.encoding=UTF-8
         -Duser.timezone=UTC
+        -Dojp.server.logLevel=INFO
+        -Dojp.server.log.file=/var/log/ojp/server.log
+        -Dojp.server.log.maxHistory=90
       OJP_SERVER_PORT: 1059
       OJP_PROMETHEUS_PORT: 9159
       OJP_SERVER_VIRTUALTHREADS_ENABLED: "true"
       OJP_SERVER_THREADPOOLSIZE: 300
-      OJP_SERVER_LOGLEVEL: INFO
-      OJP_SERVER_LOG_FILE: /var/log/ojp/server.log
-      OJP_SERVER_LOG_MAXHISTORY: 90
       OJP_SERVER_ALLOWEDIPS: "10.0.0.0/8"
     volumes:
       - ojp-logs:/var/log/ojp
@@ -295,8 +296,7 @@ docker logs -f ojp-server
 docker run -d \
   --name ojp-dev \
   -p 1059:1059 \
-  -e JAVA_TOOL_OPTIONS="-Xmx1g -Xms512m -Duser.timezone=UTC" \
-  -e OJP_SERVER_LOGLEVEL=DEBUG \
+  -e JAVA_TOOL_OPTIONS="-Xmx1g -Xms512m -Duser.timezone=UTC -Dojp.server.logLevel=DEBUG" \
   rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
 
@@ -308,10 +308,9 @@ docker run -d \
   --restart unless-stopped \
   -p 1059:1059 \
   -p 9159:9159 \
-  -e JAVA_TOOL_OPTIONS="-Xmx16g -Xms8g -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=America/New_York" \
+  -e JAVA_TOOL_OPTIONS="-Xmx16g -Xms8g -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=America/New_York -Dojp.server.logLevel=INFO" \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=500 \
-  -e OJP_SERVER_LOGLEVEL=INFO \
   -e OJP_SERVER_ALLOWEDIPS="10.0.0.0/8,172.16.0.0/12" \
   rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
@@ -323,8 +322,7 @@ docker run -d \
   --name ojp-debug \
   -p 1059:1059 \
   -p 5005:5005 \
-  -e JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005" \
-  -e OJP_SERVER_LOGLEVEL=DEBUG \
+  -e JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.logLevel=DEBUG -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005" \
   rrobetti/ojp:1.0.0-RC3-RC2-RC1
 ```
 

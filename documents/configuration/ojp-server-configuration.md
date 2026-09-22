@@ -38,7 +38,7 @@ Because the global cap is shared across all datasources and clients, tripping it
 
 OJP Server uses Logback for logging with fully configurable options.
 
-> **Important:** When you start OJP with `java -jar`, Logback reads its configuration before `ServerConfiguration` can translate OJP environment variables. Because of that startup order, logging settings should be passed as JVM system properties (`-D...`) or through `JAVA_TOOL_OPTIONS`. The official Docker image bridges the documented `OJP_SERVER_LOG*` environment variables into matching JVM properties during container startup.
+> **Important:** When you start OJP with `java -jar`, Logback reads its configuration before `ServerConfiguration` can translate OJP environment variables. Because of that startup order, logging settings should be passed as JVM system properties (`-D...`) or through `JAVA_TOOL_OPTIONS`. The official Docker image bridges the documented `OJP_SERVER_LOG*` environment variables into matching JVM properties during container startup. In that container entrypoint, the dedicated `OJP_SERVER_LOG*` variables are the source of truth for logging, so avoid setting the same logging property in both places.
 
 | Property                           | Environment Variable               | Type    | Default                            | Description                                   | Since      |
 |------------------------------------|------------------------------------|---------|------------------------------------|-----------------------------------------------|------------|

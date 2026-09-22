@@ -154,7 +154,7 @@ docker run -d \
 
 See [ojp-server-configuration.md](ojp-server-configuration.md) for a complete list of available configuration options.
 
-> **Logging note:** The official Docker image now converts `OJP_SERVER_LOGLEVEL`, `OJP_SERVER_LOG_FILE`, `OJP_SERVER_LOG_FILENAMEPATTERN`, `OJP_SERVER_LOG_MAXHISTORY`, `OJP_SERVER_LOG_TOTALSIZECAP`, and `OJP_SERVER_LOG_PATTERN` into JVM `-D` properties before Java starts. This is required because Logback initializes before the server reads regular OJP environment variables. `JAVA_TOOL_OPTIONS` remains the most explicit workaround and is still recommended when you want all JVM and logging settings in one place.
+> **Logging note:** The official Docker image now converts `OJP_SERVER_LOGLEVEL`, `OJP_SERVER_LOG_FILE`, `OJP_SERVER_LOG_FILENAMEPATTERN`, `OJP_SERVER_LOG_MAXHISTORY`, `OJP_SERVER_LOG_TOTALSIZECAP`, and `OJP_SERVER_LOG_PATTERN` into JVM `-D` properties before Java starts. This is required because Logback initializes before the server reads regular OJP environment variables. `JAVA_TOOL_OPTIONS` remains the most explicit workaround and is still recommended when you want all JVM and logging settings in one place, but if you set the same logging property in both places, prefer one source of truth instead of mixing them.
 
 ### Combining JAVA_TOOL_OPTIONS with OJP Environment Variables
 

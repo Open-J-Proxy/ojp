@@ -36,7 +36,7 @@ docker run -d \
   -p 1059:1059 \
   -p 9159:9159 \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 This starts the OJP Server with:
@@ -63,7 +63,7 @@ docker run -d \
   --name ojp-server \
   -p 1059:1059 \
   -e JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8 -Duser.timezone=UTC" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 #### Memory Configuration
@@ -75,7 +75,7 @@ docker run -d \
   --name ojp-server \
   -p 1059:1059 \
   -e JAVA_TOOL_OPTIONS="-Xmx2g -Xms1g -Duser.timezone=UTC" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 #### Combined JVM Parameters
@@ -87,7 +87,7 @@ docker run -d \
   --name ojp-server \
   -p 1059:1059 \
   -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC -XX:+UseG1GC" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 ### Common JVM Parameters
@@ -149,7 +149,7 @@ docker run -d \
   -e OJP_SERVER_LOGLEVEL=DEBUG \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=300 \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 See [ojp-server-configuration.md](ojp-server-configuration.md) for a complete list of available configuration options.
@@ -166,7 +166,7 @@ docker run -d \
   -p 1059:1059 \
   -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dojp.server.logLevel=INFO" \
   -e OJP_SERVER_PORT=1059 \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 Ports can also be overridden via JVM system properties inside `JAVA_TOOL_OPTIONS`. The `-p` mapping must match whichever value the server actually binds to:
@@ -176,7 +176,7 @@ docker run -d \
   --name ojp-server \
   -p 3020:3020 \
   -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Duser.timezone=UTC -Dojp.server.port=3020" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 > **⚠️ Precedence:** JVM system properties (`-Dojp.server.port`) take precedence over environment variables (`OJP_SERVER_PORT`). If both are set, the JVM property wins and the server binds to that port — make sure the `-p` mapping reflects the effective value.
@@ -213,7 +213,7 @@ docker run -d \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=300 \
   -e OJP_SERVER_ALLOWEDIPS="10.0.0.0/8" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 ### Docker Compose
@@ -225,7 +225,7 @@ version: '3.8'
 
 services:
   ojp-server:
-    image: rrobetti/ojp:1.0.0-RC3-RC2-RC1
+    image: rrobetti/ojp:1.0.0
     container_name: ojp-server
     restart: unless-stopped
     ports:
@@ -297,7 +297,7 @@ docker run -d \
   --name ojp-dev \
   -p 1059:1059 \
   -e JAVA_TOOL_OPTIONS="-Xmx1g -Xms512m -Duser.timezone=UTC -Dojp.server.logLevel=DEBUG" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 ### Example 2: High-Memory Production Server
@@ -312,7 +312,7 @@ docker run -d \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=500 \
   -e OJP_SERVER_ALLOWEDIPS="10.0.0.0/8,172.16.0.0/12" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 ### Example 3: Remote Debugging
@@ -323,7 +323,7 @@ docker run -d \
   -p 1059:1059 \
   -p 5005:5005 \
   -e JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.logLevel=DEBUG -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 Connect your IDE debugger to `localhost:5005`.
@@ -339,7 +339,7 @@ docker run -d \
   -e JAVA_TOOL_OPTIONS="-Xmx8g -Xms8g -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -Dfile.encoding=UTF-8 -Duser.timezone=UTC" \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=400 \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 ### Example 5: Adding Proprietary Drivers
@@ -363,7 +363,7 @@ docker run -d \
   -p 1059:1059 \
   -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
   -e JAVA_TOOL_OPTIONS="-Xmx4g -Xms2g -Dfile.encoding=UTF-8 -Duser.timezone=UTC" \
-  rrobetti/ojp:1.0.0-RC3-RC2-RC1
+  rrobetti/ojp:1.0.0
 ```
 
 ---
@@ -407,7 +407,7 @@ netstat -tuln | grep -E '1059|9159'
 
 3. Test with minimal configuration:
 ```bash
-docker run --rm rrobetti/ojp:1.0.0-RC3-RC2-RC1
+docker run --rm rrobetti/ojp:1.0.0
 ```
 
 ### Out of Memory Errors

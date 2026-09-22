@@ -308,7 +308,7 @@ docker run -d \
   --restart unless-stopped \
   -p 1059:1059 \
   -p 9159:9159 \
-  -e JAVA_TOOL_OPTIONS="-Xmx16g -Xms8g -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=America/New_York -Dojp.server.logLevel=INFO" \
+  -e JAVA_TOOL_OPTIONS="-Xmx16g -Xms8g -XX:+UseG1GC -Dfile.encoding=UTF-8 -Duser.timezone=UTC -Dojp.server.logLevel=INFO" \
   -e OJP_SERVER_VIRTUALTHREADS_ENABLED=true \
   -e OJP_SERVER_THREADPOOLSIZE=500 \
   -e OJP_SERVER_ALLOWEDIPS="10.0.0.0/8,172.16.0.0/12" \

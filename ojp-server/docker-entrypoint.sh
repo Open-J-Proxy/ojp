@@ -5,8 +5,31 @@ append_logging_property() {
     property_name="$1"
     env_var_name="$2"
     current_java_tool_options="${EXTRA_JAVA_TOOL_OPTIONS} ${JAVA_TOOL_OPTIONS-}"
+    env_value=""
 
-    eval "env_value=\${$env_var_name-}"
+    case "${env_var_name}" in
+        OJP_SERVER_LOGLEVEL)
+            env_value="${OJP_SERVER_LOGLEVEL-}"
+            ;;
+        OJP_SERVER_LOG_FILE)
+            env_value="${OJP_SERVER_LOG_FILE-}"
+            ;;
+        OJP_SERVER_LOG_FILENAMEPATTERN)
+            env_value="${OJP_SERVER_LOG_FILENAMEPATTERN-}"
+            ;;
+        OJP_SERVER_LOG_MAXHISTORY)
+            env_value="${OJP_SERVER_LOG_MAXHISTORY-}"
+            ;;
+        OJP_SERVER_LOG_TOTALSIZECAP)
+            env_value="${OJP_SERVER_LOG_TOTALSIZECAP-}"
+            ;;
+        OJP_SERVER_LOG_PATTERN)
+            env_value="${OJP_SERVER_LOG_PATTERN-}"
+            ;;
+        *)
+            return
+            ;;
+    esac
 
     if [ -z "${env_value}" ]; then
         return

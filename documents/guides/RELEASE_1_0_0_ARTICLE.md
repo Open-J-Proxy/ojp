@@ -37,11 +37,19 @@ Production readiness is also about how a project responds to risk. During the pr
 
 Equally important, 1.0.0 starts the LTS era for the 1.0.x line. That gives production adopters a stable maintenance track focused on bug fixes and security patches, while new feature evolution continues on the main development line. For engineering leaders, this separation is essential because it supports predictable upgrade planning without forcing feature churn into critical environments.
 
+## Performance validation under pressure
+
+Another important part of the 1.0 journey was performance validation in high-pressure scenarios. The team ran dedicated connection-management and HTAP-focused benchmarks to evaluate behavior when concurrency and mixed workload pressure increase, and the public write-up of that work is available here: [Connection Management Under Pressure: HTAP Benchmark](https://www.linkedin.com/pulse/connection-management-under-pressure-htap-benchmark-open-6kf4e/). These tests were used to validate practical production behavior, not only theoretical performance claims.
+
+The benchmark work also moved beyond release engineering and became research material. The results were consolidated into a scientific paper that is currently awaiting publication approval, which helps document the methodology and findings in a more formal way for the broader technical community.
+
 ## How OJP releases will work from now on
 
 From this point forward, OJP follows a simple yearly rhythm for long-term support: LTS releases are the `.0.0` major milestones, with one new LTS each year. The current LTS is `1.0.0`, and it remains the recommended production baseline today. Feature development can continue with non-LTS minors such as `1.1.0`, but those versions are part of the innovation track, not the long-term maintenance track.
 
 To make this practical for production teams, fixes for an LTS stay on its patch line. So when `1.0.0` needs a correction, the next LTS maintenance release is `1.0.1`, then `1.0.2`, and so on, always keeping compatibility inside the same LTS family. The next major `.0.0` LTS milestone will be `2.0.0`, planned for September 20, 2027, continuing the model of one LTS release per year.
+
+Open J Proxy `1.0.0` itself was released on September 20, 2026. That date was chosen intentionally because September 20 is Revolution Day in southern Brazil, where the OJP founder and this article’s author, Rogério Robetti, is from.
 
 ## Why 1.0.0 is the recommended starting point now
 

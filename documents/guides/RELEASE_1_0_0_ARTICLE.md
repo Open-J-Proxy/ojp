@@ -37,6 +37,12 @@ Production readiness is also about how a project responds to risk. During the pr
 
 Equally important, 1.0.0 starts the LTS era for the 1.0.x line. That gives production adopters a stable maintenance track focused on bug fixes and security patches, while new feature evolution continues on the main development line. For engineering leaders, this separation is essential because it supports predictable upgrade planning without forcing feature churn into critical environments.
 
+## How OJP releases will work from now on
+
+From this point forward, OJP follows a simple yearly rhythm for long-term support: LTS releases are the `.0.0` major milestones, with one new LTS each year. The current LTS is `1.0.0`, and it remains the recommended production baseline today. Feature development can continue with non-LTS minors such as `1.1.0`, but those versions are part of the innovation track, not the long-term maintenance track.
+
+To make this practical for production teams, fixes for an LTS stay on its patch line. So when `1.0.0` needs a correction, the next LTS maintenance release is `1.0.1`, then `1.0.2`, and so on, always keeping compatibility inside the same LTS family. The next major `.0.0` LTS milestone will be `2.0.0`, planned for September 20, 2027, continuing the model of one LTS release per year.
+
 ## Why 1.0.0 is the recommended starting point now
 
 If you tested OJP in beta, 1.0.0 is the release where that feedback has been consolidated into a stable baseline. If you are evaluating OJP for the first time, this is the version to begin with because it captures the hardening work, public validation, and issue resolution that define production trust. Open J Proxy 1.0.0 is recommended for production not because of the version number alone, but because the project did the difficult work needed to earn that recommendation.

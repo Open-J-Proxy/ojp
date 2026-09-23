@@ -82,6 +82,7 @@ Located in [java-frameworks/](java-frameworks/):
 Located in [guides/](guides/):
 - [DBeaver Tutorial](guides/DBEAVER.md) - How to use the OJP JDBC driver in DBeaver
 - [Release Process & Maven Central Integration](guides/RELEASE_PROCESS.md) - One-click release workflow, Sonatype setup, and suggestions
+- [Release Article: OJP 1.0.0](guides/RELEASE_1_0_0_ARTICLE.md) - Conversational release article for the 1.0.0 GA production-ready milestone
 - [Adding Database XA Support](guides/ADDING_DATABASE_XA_SUPPORT.md) - How to add XA support for new databases
 
 ### Code Contributions

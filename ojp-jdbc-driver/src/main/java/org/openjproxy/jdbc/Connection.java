@@ -578,7 +578,23 @@ public class Connection implements java.sql.Connection {
         if (DbName.MARIADB.equals(this.dbName)) {
             throw new SQLFeatureNotSupportedException("MariaDB does not support creating array of.");
         }
-        return new org.openjproxy.jdbc.Array();
+        CallResourceRequest.Builder reqBuilder = this.newCallBuilder();
+        reqBuilder.setTarget(
+                TargetCall.newBuilder()
+                        .setCallType(CallType.CALL_EXECUTE)
+                        .setResourceName("CreateArrayOf")
+                        .addAllParams(ProtoConverter.objectListToParameterValues(
+                                Arrays.asList(typeName, elements != null ? Arrays.asList(elements) : null)))
+                        .build()
+        );
+        CallResourceResponse response = this.statementService.callResource(reqBuilder.build());
+        this.setSession(response.getSession());
+        List<ParameterValue> values = response.getValuesList();
+        if (values.isEmpty()) {
+            return null;
+        }
+        String arrayUUID = (String) ProtoConverter.fromParameterValue(values.get(0));
+        return new org.openjproxy.jdbc.Array(this, this.statementService, arrayUUID);
     }
 
     @Override

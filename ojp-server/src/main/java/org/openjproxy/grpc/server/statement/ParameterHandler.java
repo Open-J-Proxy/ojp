@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.net.URL;
+import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Date;
@@ -233,6 +234,9 @@ public class ParameterHandler {
             case ROW_ID:
                 setRowIdParameter(ps, idx, param);
                 break;
+            case ARRAY:
+                setArrayParameter(sessionManager, session, ps, idx, param);
+                break;
             default:
                 ps.setObject(idx, param.getValues().get(0));
                 break;
@@ -346,6 +350,19 @@ public class ParameterHandler {
             ps.setBytes(idx, null);
         } else {
             ps.setBytes(idx, (byte[]) rowIdBytes);
+        }
+    }
+
+    /**
+     * Handles ARRAY parameters stored as server-side session attributes.
+     */
+    private static void setArrayParameter(SessionManager sessionManager, SessionInfo session, PreparedStatement ps, int idx,
+                                          Parameter param) throws SQLException {
+        Object arrayReference = param.getValues().get(0);
+        if (arrayReference == null) {
+            ps.setArray(idx, null);
+        } else {
+            ps.setArray(idx, (Array) sessionManager.getAttr(session, (String) arrayReference));
         }
     }
 }

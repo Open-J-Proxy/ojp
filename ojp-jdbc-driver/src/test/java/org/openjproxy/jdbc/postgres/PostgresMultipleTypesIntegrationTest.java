@@ -7,6 +7,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.math.BigDecimal;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.DriverManager;
@@ -401,26 +402,33 @@ public class PostgresMultipleTypesIntegrationTest {
         );
 
         java.sql.PreparedStatement psInsert = conn.prepareStatement(
-                "INSERT INTO test_postgres_types (uuid_col, json_col, array_col, text_col) VALUES (?, ?::json, ?::integer[], ?)"
+                "INSERT INTO test_postgres_types (uuid_col, json_col, array_col, text_col) VALUES (?, ?::json, ?, ?)"
         );
 
         // Test UUID
         psInsert.setObject(1, java.util.UUID.randomUUID());
         // Test JSON
         psInsert.setString(2, "{\"key\": \"value\"}");
-        // Test Array - OJP driver currently doesn't support Array serialization, so use string representation
-        psInsert.setString(3, "{1,2,3}"); // PostgreSQL array literal format
+        // Test Array through proxied java.sql.Array support
+        Array inputArray = conn.createArrayOf("INTEGER", new Object[]{1, 2, 3});
+        psInsert.setArray(3, inputArray);
         // Test TEXT
         psInsert.setString(4, "PostgreSQL text type");
 
         psInsert.executeUpdate();
 
-        java.sql.PreparedStatement psSelect = conn.prepareStatement("SELECT text_col FROM test_postgres_types WHERE id = 1");
+        java.sql.PreparedStatement psSelect = conn.prepareStatement("SELECT array_col, text_col FROM test_postgres_types WHERE id = 1");
         ResultSet resultSet = psSelect.executeQuery();
 
         assertTrue(resultSet.next());
+        Array outputArray = resultSet.getArray("array_col");
+        assertNotNull(outputArray);
+        Object[] outputValues = (Object[]) outputArray.getArray();
+        assertArrayEquals(new Object[]{1, 2, 3}, outputValues);
         assertEquals("PostgreSQL text type", resultSet.getString("text_col"));
 
+        outputArray.free();
+        inputArray.free();
         resultSet.close();
         psSelect.close();
         psInsert.close();

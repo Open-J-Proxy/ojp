@@ -1509,8 +1509,12 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getArray(columnIndex);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        lastValueRead = currentDataBlock.get(blockIdx.get())[columnIndex - 1];
+        if (lastValueRead == null) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array((Connection) this.getStatement().getConnection(),
+                this.getStatementService(), String.valueOf(lastValueRead));
     }
 
     @Override
@@ -1571,8 +1575,12 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getArray(columnLabel);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        lastValueRead = currentDataBlock.get(blockIdx.get())[this.labelsMap.get(columnLabel.toUpperCase())];
+        if (lastValueRead == null) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array((Connection) this.getStatement().getConnection(),
+                this.getStatementService(), String.valueOf(lastValueRead));
     }
 
     @Override

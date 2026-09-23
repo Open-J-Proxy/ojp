@@ -231,26 +231,29 @@ public class Db2ResultSetTest {
                 "clob_col CLOB(1M))");
         statement.execute("INSERT INTO DB2INST1.db2_clob_object_test VALUES (1, 'DB2 CLOB content')");
 
-        resultSet = statement.executeQuery("SELECT clob_col FROM DB2INST1.db2_clob_object_test WHERE id = 1");
-        assertTrue(resultSet.next());
+        try (Statement clobStatement = connection.createStatement();
+             ResultSet clobResultSet = clobStatement.executeQuery(
+                     "SELECT clob_col FROM DB2INST1.db2_clob_object_test WHERE id = 1")) {
+            assertTrue(clobResultSet.next());
 
-        Object value = resultSet.getObject("clob_col");
-        assertTrue(value instanceof Clob);
-        assertEquals("DB2 CLOB content", resultSet.getObject("clob_col", String.class));
+            Object value = clobResultSet.getObject("clob_col");
+            assertTrue(value instanceof Clob);
+            assertEquals("DB2 CLOB content", clobResultSet.getObject("clob_col", String.class));
 
-        Clob clob = resultSet.getObject("clob_col", Clob.class);
-        assertEquals("DB2 CLOB content", clob.getSubString(1, (int) clob.length()));
+            Clob clob = clobResultSet.getObject("clob_col", Clob.class);
+            assertEquals("DB2 CLOB content", clob.getSubString(1, (int) clob.length()));
 
-        try (Reader reader = clob.getCharacterStream()) {
-            StringWriter writer = new StringWriter();
-            reader.transferTo(writer);
-            assertEquals("DB2 CLOB content", writer.toString());
-        }
+            try (Reader reader = clob.getCharacterStream()) {
+                StringWriter writer = new StringWriter();
+                reader.transferTo(writer);
+                assertEquals("DB2 CLOB content", writer.toString());
+            }
 
-        try (Reader reader = resultSet.getCharacterStream("clob_col")) {
-            StringWriter writer = new StringWriter();
-            reader.transferTo(writer);
-            assertEquals("DB2 CLOB content", writer.toString());
+            try (Reader reader = clobResultSet.getCharacterStream("clob_col")) {
+                StringWriter writer = new StringWriter();
+                reader.transferTo(writer);
+                assertEquals("DB2 CLOB content", writer.toString());
+            }
         }
     }
 

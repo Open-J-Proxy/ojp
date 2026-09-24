@@ -226,7 +226,7 @@ If the caller sends another `executeUpdate`/`prepare` after a prior eager-close 
 - and execution proceeds normally.
 
 If the caller needs statement/session continuity across calls, the standard session-based path is used
-(for example, with explicit session/transaction context or statement UUID reuse).
+(for example, with explicit session/transaction context).
 
 #### Multi-statement performance guidance
 For clients that need fast execution of multiple statements in sequence, prefer running those statements in a

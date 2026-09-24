@@ -340,7 +340,7 @@ public class ParameterHandler {
     }
 
     private static void setRelayedPgObjectParameter(PreparedStatement ps, int idx, List<Object> values) throws SQLException {
-        Object pgObject = createPostgresPgObject((String) values.get(2), (String) values.get(0));
+        Object pgObject = createPostgresPgObject(ps, (String) values.get(2), (String) values.get(0));
         if (values.size() >= 5 && values.get(3) instanceof Integer && values.get(4) instanceof Integer) {
             ps.setObject(idx, pgObject, (Integer) values.get(3), (Integer) values.get(4));
             return;
@@ -352,9 +352,9 @@ public class ParameterHandler {
         ps.setObject(idx, pgObject);
     }
 
-    private static Object createPostgresPgObject(String typeName, String value) throws SQLException {
+    private static Object createPostgresPgObject(PreparedStatement ps, String typeName, String value) throws SQLException {
         try {
-            Class<?> pgObjectClass = Class.forName("org.postgresql.util.PGobject");
+            Class<?> pgObjectClass = loadPostgresPgObjectClass(ps);
             Object pgObject = pgObjectClass.getDeclaredConstructor().newInstance();
             pgObjectClass.getMethod("setType", String.class).invoke(pgObject, typeName);
             pgObjectClass.getMethod("setValue", String.class).invoke(pgObject, value);
@@ -362,6 +362,29 @@ public class ParameterHandler {
         } catch (ReflectiveOperationException e) {
             throw new SQLException("Unable to reconstruct PostgreSQL PGobject parameter for type " + typeName, e);
         }
+    }
+
+    private static Class<?> loadPostgresPgObjectClass(PreparedStatement ps) throws ClassNotFoundException {
+        ClassLoader[] candidateClassLoaders = {
+                ps.getClass().getClassLoader(),
+                Thread.currentThread().getContextClassLoader(),
+                ParameterHandler.class.getClassLoader()
+        };
+
+        for (ClassLoader classLoader : candidateClassLoaders) {
+            if (classLoader == null) {
+                continue;
+            }
+            try {
+                return Class.forName("org.postgresql.util.PGobject", true, classLoader);
+            } catch (ClassNotFoundException ignored) {
+                // Try the next relevant class loader. In production the PostgreSQL driver is often
+                // loaded from ojp-libs/, so the vendor PreparedStatement class loader is the most
+                // reliable place to resolve PGobject.
+            }
+        }
+
+        throw new ClassNotFoundException("org.postgresql.util.PGobject");
     }
 
     /**

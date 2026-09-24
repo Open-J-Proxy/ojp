@@ -155,6 +155,56 @@ class EagerCloseResultSetModeTest {
         assertEquals(1, responses.size(), "Exactly one response expected");
     }
 
+    @Test
+    void shouldAllowResultSetMetadataCallAfterEagerClose() throws Exception {
+        Connection conn = buildMockConnection(true);
+        SessionInfo session = sessionManager.createSession(CLIENT_UUID, conn);
+
+        ResultSet mockRs = buildMockResultSet(conn, false);
+        String rsUUID = sessionManager.registerResultSet(session, mockRs);
+
+        ActionContext ctx = buildContext(sessionManager, true);
+        ResultSetHelper.handleResultSet(ctx, session, rsUUID, noopObserver());
+
+        CallResourceRequest metadataReq = CallResourceRequest.newBuilder()
+                .setSession(session)
+                .setResourceType(ResourceType.RES_RESULT_SET)
+                .setResourceUUID(rsUUID)
+                .setTarget(TargetCall.newBuilder()
+                        .setCallType(CallType.CALL_GET)
+                        .setResourceName("Metadata")
+                        .setNextCall(TargetCall.newBuilder()
+                                .setCallType(CallType.CALL_GET)
+                                .setResourceName("ColumnCount")
+                                .build())
+                        .build())
+                .build();
+
+        List<CallResourceResponse> responses = new ArrayList<>();
+        List<Throwable> errors = new ArrayList<>();
+        StreamObserver<CallResourceResponse> observer = new StreamObserver<CallResourceResponse>() {
+            @Override
+            public void onNext(CallResourceResponse value) {
+                responses.add(value);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                errors.add(t);
+            }
+
+            @Override
+            public void onCompleted() {
+                // no-op
+            }
+        };
+
+        CallResourceAction.getInstance().execute(ctx, metadataReq, observer);
+
+        assertTrue(errors.isEmpty(), "No error expected for metadata call after RS eager close");
+        assertEquals(1, responses.size(), "Exactly one response expected");
+    }
+
     // -------------------------------------------------------------------------
     // Test 4: eager close enabled, auto-commit, forward-only RS –
     //         only the RS cursor is closed; Statement stays open for getMoreResults()

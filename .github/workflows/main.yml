@@ -132,7 +132,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -241,7 +241,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       # Start second OJP server WITH SQL enhancer enabled in OPTIMIZE mode
@@ -253,7 +253,7 @@ jobs:
         run: |
           docker run -d --name ojp-server-enhancer \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10593 -Dojp.prometheus.port=9163 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.sql.enhancer.enabled=true -Dojp.sql.enhancer.mode=OPTIMIZE -Dojp.sql.enhancer.dialect=POSTGRESQL" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10593 -Dojp.prometheus.port=9163 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true -Dojp.sql.enhancer.enabled=true -Dojp.sql.enhancer.mode=OPTIMIZE -Dojp.sql.enhancer.dialect=POSTGRESQL" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -379,7 +379,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -477,7 +477,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -566,7 +566,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -736,7 +736,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -840,7 +840,7 @@ jobs:
         run: |
           docker run -d --name ojp-server-1 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9159 -Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9159 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 1 container on gRPC port 10591, Prometheus port 9159"
 
@@ -849,7 +849,7 @@ jobs:
         run: |
           docker run -d --name ojp-server-2 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9160 -Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9160 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 2 container on gRPC port 10592, Prometheus port 9160"
 
@@ -963,7 +963,7 @@ jobs:
           echo "Restarting OJP Server 1..."
           docker run -d --name ojp-server-1 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9159 -Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9159 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
           echo "OJP Server 1 container restarted"
           sleep 10
@@ -1048,7 +1048,7 @@ jobs:
           echo "Restarting OJP Server 2..."
           docker run -d --name ojp-server-2 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9160 -Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9160 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
           echo "OJP Server 2 container restarted"
           sleep 10
@@ -1253,7 +1253,7 @@ jobs:
           # Enable DEBUG logging for XA pool operations via JAVA_TOOL_OPTIONS
           docker run -d --name ojp-server-xa-1 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9161 -Dojp.server.slowQuerySegregation.enabled=true -Dorg.slf4j.simpleLogger.log.org.openjproxy.xa.pool=DEBUG" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9161 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true -Dorg.slf4j.simpleLogger.log.org.openjproxy.xa.pool=DEBUG" \
             ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 1 container on gRPC port 10591, Prometheus port 9161 with DEBUG logging"
 
@@ -1263,7 +1263,7 @@ jobs:
           # Enable DEBUG logging for XA pool operations via JAVA_TOOL_OPTIONS
           docker run -d --name ojp-server-xa-2 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9162 -Dojp.server.slowQuerySegregation.enabled=true -Dorg.slf4j.simpleLogger.log.org.openjproxy.xa.pool=DEBUG" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9162 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true -Dorg.slf4j.simpleLogger.log.org.openjproxy.xa.pool=DEBUG" \
             ${{ env.OJP_IMAGE }}
           echo "Started OJP Server 2 container on gRPC port 10592, Prometheus port 9162 with DEBUG logging"
 
@@ -1388,7 +1388,7 @@ jobs:
           echo "Restarting OJP Server 1..."
           docker run -d --name ojp-server-xa-1 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9161 -Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10591 -Dojp.prometheus.port=9161 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
           echo "OJP Server 1 container restarted"
           
@@ -1489,7 +1489,7 @@ jobs:
           echo "Restarting OJP Server 2..."
           docker run -d --name ojp-server-xa-2 \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9162 -Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10592 -Dojp.prometheus.port=9162 -Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
           echo "OJP Server 2 container restarted"
           
@@ -1768,7 +1768,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -1873,7 +1873,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.statement.eagerClose.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start

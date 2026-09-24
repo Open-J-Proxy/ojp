@@ -417,8 +417,15 @@ session-continuity flow) so the server keeps the session/connection context for 
 Without that continuity, each statement can pass through admission queueing and connection re-borrow, which may
 increase end-to-end latency for multi-statement bursts.
 
+If you do not want one transaction around all statements, an operational workaround is to run a small query
+such as `SELECT 1` first on the same JDBC connection. This creates a server session so the next updates on that
+connection use the session-based path instead of eager-close.
+
 For workloads that are consistently multi-statement and latency-sensitive, consider a per-datasource override from
 the client side to disable eager-close for that datasource.
+
+Tradeoff: keeping session/connection context improves continuity for that client flow, but it also reduces the
+connection turnover gains that eager-close provides.
 
 #### Configuration
 ```bash

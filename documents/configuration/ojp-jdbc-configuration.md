@@ -144,6 +144,9 @@ The server-side eager-close behavior can be overridden per datasource using clie
 This is useful when some datasources run short auto-commit updates (keep eager-close on) while others run
 latency-sensitive multi-statement flows (consider transaction-based continuity and/or eager-close off).
 
+When you need session continuity without wrapping all statements in one transaction, you can run a lightweight
+query (for example `SELECT 1`) first on the same JDBC connection, then execute the update sequence.
+
 ```properties
 # Default datasource
 ojp.statement.eagerClose.enabled=true

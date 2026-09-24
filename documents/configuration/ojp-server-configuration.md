@@ -233,9 +233,16 @@ For clients that need fast execution of multiple statements in sequence, prefer 
 transaction (or otherwise keeping one server session open for the sequence). This avoids re-entering admission
 queueing and repeated borrow/release cycles for every statement.
 
+If a transaction is not desired, a practical workaround is to run a lightweight query (for example `SELECT 1`)
+first on the same JDBC connection. That creates a server session, so subsequent updates on that same connection
+follow the session-based path and do not use eager-close.
+
 If your workload is consistently multi-statement and sensitive to this overhead, consider:
 - using transactions for those paths, and/or
 - disabling eager-close for the affected datasource via client-side datasource properties.
+
+Keep in mind that this workaround intentionally keeps session/connection context alive for that connection, which
+improves continuity but can reduce pool turnover compared to pure eager-close.
 
 #### Per-datasource configuration
 Yes. You can set this per datasource through **client-side datasource properties**, so different pools can have different behavior.

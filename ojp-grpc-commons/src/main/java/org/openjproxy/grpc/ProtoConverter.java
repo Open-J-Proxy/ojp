@@ -12,6 +12,7 @@ import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.PropertyEntry;
 import com.openjproxy.grpc.ResultRow;
 import com.openjproxy.grpc.TimestampWithZone;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.OpQueryResult;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
@@ -93,6 +94,9 @@ public class ProtoConverter {
                 // TIME: convert using typed proto field
                 Object firstValue = parameter.getValues().get(0);
                 builder.addValues(toParameterValueTime(firstValue));
+            } else if (parameter.getType() == ParameterType.OBJECT && !parameter.getValues().isEmpty()
+                    && isPostgresPgObject(parameter.getValues().get(0))) {
+                addPostgresPgObjectValues(builder, parameter.getValues());
             } else if (parameter.getType() == ParameterType.OBJECT && parameter.getValues().size() == 2
                     && parameter.getValues().get(1) instanceof Integer) {
                 // OBJECT with targetSqlType: first value is the object, second value is java.sql.Types constant
@@ -117,6 +121,27 @@ public class ProtoConverter {
                     // For other types, just convert the value directly
                     builder.addValues(toParameterValue(value));
                 }
+                builder.addValues(toParameterValue(targetSqlType));
+            } else if (parameter.getType() == ParameterType.OBJECT && parameter.getValues().size() == 3
+                    && parameter.getValues().get(1) instanceof Integer
+                    && parameter.getValues().get(2) instanceof Integer) {
+                Object value = parameter.getValues().get(0);
+                Integer targetSqlType = (Integer) parameter.getValues().get(1);
+                Integer scaleOrLength = (Integer) parameter.getValues().get(2);
+
+                if (targetSqlType == java.sql.Types.TIMESTAMP || targetSqlType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE) {
+                    builder.addValues(toParameterValue(value));
+                } else if (targetSqlType == java.sql.Types.DATE) {
+                    builder.addValues(toParameterValueDate(value));
+                } else if (targetSqlType == java.sql.Types.TIME) {
+                    builder.addValues(toParameterValueTime(value));
+                } else if (targetSqlType == java.sql.Types.TIME_WITH_TIMEZONE) {
+                    builder.addValues(toParameterValue(value));
+                } else {
+                    builder.addValues(toParameterValue(value));
+                }
+                builder.addValues(toParameterValue(targetSqlType));
+                builder.addValues(toParameterValue(scaleOrLength));
             } else {
                 // For all other types, use standard conversion
                 for (Object value : parameter.getValues()) {
@@ -456,6 +481,36 @@ public class ProtoConverter {
         String className = value.getClass().getName();
         return "org.postgresql.util.PGobject".equals(className)
                 || className.startsWith("oracle.sql.json.Oracle");
+    }
+
+    private static boolean isPostgresPgObject(Object value) {
+        return value != null && "org.postgresql.util.PGobject".equals(value.getClass().getName());
+    }
+
+    private static void addPostgresPgObjectValues(ParameterProto.Builder builder, List<Object> values) {
+        Object pgObject = values.get(0);
+        builder.addValues(toParameterValue(extractPgObjectValue(pgObject)));
+        builder.addValues(toParameterValue(CommonConstants.OJP_RELAYED_PGOBJECT_MARKER));
+        builder.addValues(toParameterValue(extractPgObjectType(pgObject)));
+        for (int i = 1; i < values.size(); i++) {
+            builder.addValues(toParameterValue(values.get(i)));
+        }
+    }
+
+    private static String extractPgObjectValue(Object pgObject) {
+        try {
+            return (String) pgObject.getClass().getMethod("getValue").invoke(pgObject);
+        } catch (ReflectiveOperationException e) {
+            return pgObject.toString();
+        }
+    }
+
+    private static String extractPgObjectType(Object pgObject) {
+        try {
+            return (String) pgObject.getClass().getMethod("getType").invoke(pgObject);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException("Unsupported PostgreSQL PGobject without accessible getType()", e);
+        }
     }
 
     /**

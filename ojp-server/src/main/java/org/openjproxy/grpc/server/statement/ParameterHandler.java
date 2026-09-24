@@ -2,6 +2,7 @@ package org.openjproxy.grpc.server.statement;
 
 import com.openjproxy.grpc.SessionInfo;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
 import org.openjproxy.grpc.server.SessionManager;
@@ -237,6 +238,9 @@ public class ParameterHandler {
             case ARRAY:
                 setArrayParameter(sessionManager, session, ps, idx, param);
                 break;
+            case OBJECT:
+                setObjectParameter(ps, idx, param);
+                break;
             default:
                 ps.setObject(idx, param.getValues().get(0));
                 break;
@@ -304,6 +308,59 @@ public class ParameterHandler {
         } else {
             Clob clob = sessionManager.getLob(session, (String) clobUUID);
             ps.setClob(idx, clob.getCharacterStream());
+        }
+    }
+
+    private static void setObjectParameter(PreparedStatement ps, int idx, Parameter param) throws SQLException {
+        List<Object> values = param.getValues();
+        Object value = values.get(0);
+
+        if (isRelayedPgObject(values)) {
+            setRelayedPgObjectParameter(ps, idx, values);
+            return;
+        }
+
+        if (values.size() == 2 && values.get(1) instanceof Integer) {
+            ps.setObject(idx, value, (Integer) values.get(1));
+            return;
+        }
+
+        if (values.size() == 3 && values.get(1) instanceof Integer && values.get(2) instanceof Integer) {
+            ps.setObject(idx, value, (Integer) values.get(1), (Integer) values.get(2));
+            return;
+        }
+
+        ps.setObject(idx, value);
+    }
+
+    private static boolean isRelayedPgObject(List<Object> values) {
+        return values.size() >= 3
+                && CommonConstants.OJP_RELAYED_PGOBJECT_MARKER.equals(values.get(1))
+                && values.get(2) instanceof String;
+    }
+
+    private static void setRelayedPgObjectParameter(PreparedStatement ps, int idx, List<Object> values) throws SQLException {
+        Object pgObject = createPostgresPgObject((String) values.get(2), (String) values.get(0));
+        if (values.size() >= 5 && values.get(3) instanceof Integer && values.get(4) instanceof Integer) {
+            ps.setObject(idx, pgObject, (Integer) values.get(3), (Integer) values.get(4));
+            return;
+        }
+        if (values.size() >= 4 && values.get(3) instanceof Integer) {
+            ps.setObject(idx, pgObject, (Integer) values.get(3));
+            return;
+        }
+        ps.setObject(idx, pgObject);
+    }
+
+    private static Object createPostgresPgObject(String typeName, String value) throws SQLException {
+        try {
+            Class<?> pgObjectClass = Class.forName("org.postgresql.util.PGobject");
+            Object pgObject = pgObjectClass.getDeclaredConstructor().newInstance();
+            pgObjectClass.getMethod("setType", String.class).invoke(pgObject, typeName);
+            pgObjectClass.getMethod("setValue", String.class).invoke(pgObject, value);
+            return pgObject;
+        } catch (ReflectiveOperationException e) {
+            throw new SQLException("Unable to reconstruct PostgreSQL PGobject parameter for type " + typeName, e);
         }
     }
 

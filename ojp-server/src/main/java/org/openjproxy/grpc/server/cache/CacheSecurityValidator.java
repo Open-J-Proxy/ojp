@@ -12,7 +12,7 @@ public class CacheSecurityValidator {
     private static final Logger log = LoggerFactory.getLogger(CacheSecurityValidator.class);
 
     // Maximum size for cached results (200KB - same as rejection limit)
-    private static final long MAX_CACHE_SIZE = 200 * 1024;
+    private static final long MAX_CACHE_SIZE = 200L * 1024;
 
     /**
      * Validates that a cache key doesn't contain suspicious SQL patterns
@@ -31,7 +31,7 @@ public class CacheSecurityValidator {
         // Check for SQL injection patterns
         if (containsSqlInjectionPatterns(sql)) {
             log.warn("Suspicious SQL pattern detected in cache key - potential SQL injection: datasource={}, sql={}",
-                key.getDatasourceName(), truncateSql(sql, 100));
+                    key.getDatasourceName(), truncateSql(sql, 100));
             return false;
         }
 
@@ -40,7 +40,7 @@ public class CacheSecurityValidator {
             for (Object param : key.getParameters()) {
                 if (param != null && containsSuspiciousParameter(param.toString())) {
                     log.warn("Suspicious parameter detected in cache key: datasource={}, param={}",
-                        key.getDatasourceName(), truncate(param.toString(), 50));
+                            key.getDatasourceName(), truncate(param.toString(), 50));
                     return false;
                 }
             }
@@ -63,7 +63,7 @@ public class CacheSecurityValidator {
     /**
      * Validates that a cached result size is within specified limit.
      *
-     * @param result the cached query result
+     * @param result  the cached query result
      * @param maxSize maximum allowed size in bytes
      * @return true if the result size is acceptable
      */
@@ -104,11 +104,7 @@ public class CacheSecurityValidator {
 
         // Check for stacked queries (semicolon in middle of query)
         int semicolonIndex = lowerSql.indexOf(';');
-        if (semicolonIndex > 0 && semicolonIndex < lowerSql.length() - 1) {
-            return true;
-        }
-
-        return false;
+        return semicolonIndex > 0 && semicolonIndex < lowerSql.length() - 1;
     }
 
     /**
@@ -126,12 +122,8 @@ public class CacheSecurityValidator {
             return true;
         }
 
-        if (lowerParam.contains("drop ") || lowerParam.contains("delete ") ||
-            lowerParam.contains("update ") || lowerParam.contains("insert ")) {
-            return true;
-        }
-
-        return false;
+        return lowerParam.contains("drop ") || lowerParam.contains("delete ") ||
+                lowerParam.contains("update ") || lowerParam.contains("insert ");
     }
 
     /**

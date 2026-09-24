@@ -19,6 +19,7 @@ import org.openjproxy.grpc.server.JavaSqlInterfacesConverter;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.sql.Array;
 import java.sql.CallableStatement;
 import java.sql.PreparedStatement;
@@ -181,6 +182,18 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
             List<Object> paramsReceived = (request.getTarget().getParamsCount() > 0) ?
                     ProtoConverter.parameterValuesToObjectList(request.getTarget().getParamsList()) : EMPTY_LIST;
             Class<?> clazz = resource.getClass();
+            if (resource instanceof java.sql.Connection && CallType.CALL_EXECUTE.equals(request.getTarget().getCallType())
+                    && "CreateArrayOf".equalsIgnoreCase(request.getTarget().getResourceName())) {
+                createArrayOf(context, responseBuilder, request, responseObserver, paramsReceived);
+                return;
+            }
+            if (resource instanceof Array && CallType.CALL_CLOSE.equals(request.getTarget().getCallType())
+                    && request.getTarget().getResourceName().isBlank()) {
+                ((Array) resource).free();
+                responseObserver.onNext(responseBuilder.build());
+                responseObserver.onCompleted();
+                return;
+            }
             if ((!paramsReceived.isEmpty()) &&
                     ((CallType.CALL_RELEASE.equals(request.getTarget().getCallType()) &&
                             "Savepoint".equalsIgnoreCase(request.getTarget().getResourceName())) ||
@@ -197,18 +210,13 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
             Object resultFirstLevel;
             if (params != null && params.length > 0) {
                 resultFirstLevel = method.invoke(resource, paramsReceived.toArray());
-                if (resultFirstLevel instanceof CallableStatement cs) {
-                    resultFirstLevel = context.getSessionManager().registerCallableStatement(responseBuilder.getSession(), cs);
-                }
             } else {
                 resultFirstLevel = method.invoke(resource);
-                if (resultFirstLevel instanceof ResultSet rs) {
-                    resultFirstLevel = context.getSessionManager().registerResultSet(responseBuilder.getSession(), rs);
-                } else if (resultFirstLevel instanceof Array array) {
-                    String arrayUUID = UUID.randomUUID().toString();
-                    context.getSessionManager().registerAttr(responseBuilder.getSession(), arrayUUID, array);
-                    resultFirstLevel = arrayUUID;
-                }
+            }
+            resultFirstLevel = registerProxiedResult(context, responseBuilder, resultFirstLevel);
+            if (resource instanceof Array && "Array".equalsIgnoreCase(request.getTarget().getResourceName())
+                    && resultFirstLevel != null && resultFirstLevel.getClass().isArray()) {
+                resultFirstLevel = toTransportFriendlyArray(resultFirstLevel);
             }
             if (resultFirstLevel instanceof Savepoint sp) {
                 String uuid = UUID.randomUUID().toString();
@@ -238,9 +246,7 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
                 } else {
                     resultSecondLevel = methodNext.invoke(resultFirstLevel);
                 }
-                if (resultSecondLevel instanceof ResultSet rs) {
-                    resultSecondLevel = context.getSessionManager().registerResultSet(responseBuilder.getSession(), rs);
-                }
+                resultSecondLevel = registerProxiedResult(context, responseBuilder, resultSecondLevel);
                 responseBuilder.addValues(ProtoConverter.toParameterValue(resultSecondLevel));
             } else {
                 responseBuilder.addValues(ProtoConverter.toParameterValue(resultFirstLevel));
@@ -333,5 +339,126 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
             cursor = cursor.getNextWarning();
         }
         return list;
+    }
+
+    private void createArrayOf(ActionContext context, CallResourceResponse.Builder responseBuilder, CallResourceRequest request,
+                               StreamObserver<CallResourceResponse> responseObserver, List<Object> paramsReceived) throws SQLException {
+        ConnectionSessionDTO csDto = sessionConnection(context, request.getSession(), true);
+        responseBuilder.setSession(csDto.getSession());
+        if (paramsReceived.size() != 2) {
+            throw new SQLException("createArrayOf expects type name and element list.");
+        }
+        String typeName = (String) paramsReceived.get(0);
+        List<?> elements = (List<?>) paramsReceived.get(1);
+        Object[] normalizedElements = elements != null ? normalizeArrayElements(typeName, elements) : null;
+        Array array = csDto.getConnection().createArrayOf(typeName, normalizedElements);
+        String arrayUUID = UUID.randomUUID().toString();
+        context.getSessionManager().registerAttr(responseBuilder.getSession(), arrayUUID, array);
+        responseBuilder.addValues(ProtoConverter.toParameterValue(arrayUUID));
+        responseObserver.onNext(responseBuilder.build());
+        responseObserver.onCompleted();
+    }
+
+    private Object registerProxiedResult(ActionContext context, CallResourceResponse.Builder responseBuilder, Object result)
+            throws SQLException {
+        if (result instanceof CallableStatement cs) {
+            return context.getSessionManager().registerCallableStatement(responseBuilder.getSession(), cs);
+        }
+        if (result instanceof ResultSet rs) {
+            return context.getSessionManager().registerResultSet(responseBuilder.getSession(), rs);
+        }
+        if (result instanceof Array array) {
+            String arrayUUID = UUID.randomUUID().toString();
+            context.getSessionManager().registerAttr(responseBuilder.getSession(), arrayUUID, array);
+            return arrayUUID;
+        }
+        return result;
+    }
+
+    private Object toTransportFriendlyArray(Object arrayValue) {
+        if (arrayValue instanceof Integer[] values) {
+            int[] converted = new int[values.length];
+            for (int i = 0; i < values.length; i++) {
+                converted[i] = values[i];
+            }
+            return converted;
+        }
+        if (arrayValue instanceof Long[] values) {
+            long[] converted = new long[values.length];
+            for (int i = 0; i < values.length; i++) {
+                converted[i] = values[i];
+            }
+            return converted;
+        }
+        return javaArrayToList(arrayValue);
+    }
+
+    private Object[] normalizeArrayElements(String typeName, List<?> elements) {
+        Object[] normalized = new Object[elements.size()];
+        for (int i = 0; i < elements.size(); i++) {
+            normalized[i] = normalizeArrayElement(typeName, elements.get(i));
+        }
+        return normalized;
+    }
+
+    private Object normalizeArrayElement(String typeName, Object value) {
+        if (!(value instanceof Double numericValue)) {
+            return value;
+        }
+        String normalizedTypeName = typeName != null ? typeName.trim().toLowerCase() : "";
+        if (normalizedTypeName.endsWith("[]")) {
+            normalizedTypeName = normalizedTypeName.substring(0, normalizedTypeName.length() - 2);
+        }
+        if (normalizedTypeName.contains(".")) {
+            normalizedTypeName = normalizedTypeName.substring(normalizedTypeName.lastIndexOf('.') + 1);
+        }
+        if (isIntegerArrayType(normalizedTypeName)) {
+            return numericValue.intValue();
+        }
+        if (isLongArrayType(normalizedTypeName)) {
+            return numericValue.longValue();
+        }
+        if (isDecimalArrayType(normalizedTypeName)) {
+            return BigDecimal.valueOf(numericValue);
+        }
+        if (isFloatArrayType(normalizedTypeName)) {
+            return numericValue.floatValue();
+        }
+        return value;
+    }
+
+    private boolean isIntegerArrayType(String normalizedTypeName) {
+        return "integer".equals(normalizedTypeName)
+                || "int".equals(normalizedTypeName)
+                || "int4".equals(normalizedTypeName)
+                || "smallint".equals(normalizedTypeName)
+                || "int2".equals(normalizedTypeName);
+    }
+
+    private boolean isLongArrayType(String normalizedTypeName) {
+        return "bigint".equals(normalizedTypeName)
+                || "int8".equals(normalizedTypeName);
+    }
+
+    private boolean isDecimalArrayType(String normalizedTypeName) {
+        return "numeric".equals(normalizedTypeName)
+                || "decimal".equals(normalizedTypeName);
+    }
+
+    private boolean isFloatArrayType(String normalizedTypeName) {
+        return "real".equals(normalizedTypeName)
+                || "float4".equals(normalizedTypeName)
+                || "float8".equals(normalizedTypeName)
+                || "double".equals(normalizedTypeName)
+                || "double precision".equals(normalizedTypeName);
+    }
+
+    private List<Object> javaArrayToList(Object arrayValue) {
+        int length = java.lang.reflect.Array.getLength(arrayValue);
+        List<Object> values = new ArrayList<>(length);
+        for (int i = 0; i < length; i++) {
+            values.add(java.lang.reflect.Array.get(arrayValue, i));
+        }
+        return values;
     }
 }

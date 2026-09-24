@@ -319,6 +319,20 @@ public class MultinodeXAIntegrationTest {
     }
 
     /**
+     * Lazily initializes the shared client-side {@link OjpXADataSource} under a class lock.
+     * Single-check locking (not double-checked) — safe and sufficient for this test helper.
+     */
+    private static synchronized void ensureXaDataSource(String url, String user, String password) {
+        if (xaDataSource == null) {
+            xaDataSource = new OjpXADataSource();
+            xaDataSource.setUrl(url);
+            xaDataSource.setUser(user);
+            xaDataSource.setPassword(password);
+            log.info("✓ OjpXADataSource initialized (client-side has no pooling; server-side XA pool max=20-22)");
+        }
+    }
+
+    /**
      * Direct XA transaction wrapper: creates a new XAConnection, executes work inside an XA transaction,
      * and properly cleans up resources. 
      * 
@@ -335,20 +349,10 @@ public class MultinodeXAIntegrationTest {
     ) throws Exception {
         // Load driver if needed
         Class.forName(driverClass);
-        
+
         // Initialize XADataSource if needed (client-side, no pooling)
-        if (xaDataSource == null) {
-            synchronized (MultinodeXAIntegrationTest.class) {
-                if (xaDataSource == null) {
-                    xaDataSource = new OjpXADataSource();
-                    xaDataSource.setUrl(url);
-                    xaDataSource.setUser(user);
-                    xaDataSource.setPassword(password);
-                    log.info("✓ OjpXADataSource initialized (client-side has no pooling; server-side XA pool max=20-22)");
-                }
-            }
-        }
-        
+        ensureXaDataSource(url, user, password);
+
         // Create new XAConnection for this transaction
         XAConnection xaConn = xaDataSource.getXAConnection();
         Connection conn = null;

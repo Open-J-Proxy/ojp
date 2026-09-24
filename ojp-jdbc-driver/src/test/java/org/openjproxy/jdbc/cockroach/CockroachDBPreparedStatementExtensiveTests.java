@@ -336,10 +336,7 @@ class CockroachDBPreparedStatementExtensiveTests {
         ps = connection.prepareStatement("SELECT * FROM cockroachdb_prepared_stmt_test WHERE id = ?");
         ps.close();
 
-        assertThrows(SQLException.class, () -> {
-            ps.setInt(1, 1);
-            ps.executeQuery();
-        });
+        assertThrows(SQLException.class, () -> ps.executeQuery());
     }
 
     // Note: testMaxRows, testQueryTimeout, and testFetchSize are removed due to OJP driver issues

@@ -24,7 +24,7 @@ import java.util.Calendar;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
-public class PostgresCallableStatementTests {
+class PostgresCallableStatementTests {
 
     private static boolean isTestEnabled;
 
@@ -177,7 +177,7 @@ public class PostgresCallableStatementTests {
         ResultSet rs2 = stmt2.executeQuery();
         assertTrue(rs2.next());
         assertTrue(rs2.getBoolean(1));
-        assertThrows(SQLException.class, () -> stmt2.wasNull());
+        assertThrows(SQLException.class, stmt2::wasNull);
         rs2.close();
         stmt2.close();
         rs.close();
@@ -208,10 +208,7 @@ public class PostgresCallableStatementTests {
     void testInvalidParameterIndex(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
         // This test will intentionally fail due to an invalid parameter index
-        assertThrows(SQLException.class, () -> {
-            callableStatement = connection.prepareCall("{ CALL update_salary(?, ?, ?) }");
-            callableStatement.setInt(4, 1); // Invalid parameter index (should be 1, 2, or 3)
-            callableStatement.execute();
-        });
+        callableStatement = connection.prepareCall("{ CALL update_salary(?, ?, ?) }");
+        assertThrows(SQLException.class, () -> callableStatement.setInt(4, 1));
     }
 }

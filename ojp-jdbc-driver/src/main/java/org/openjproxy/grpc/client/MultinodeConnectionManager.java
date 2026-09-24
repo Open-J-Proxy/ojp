@@ -43,9 +43,14 @@ public class MultinodeConnectionManager {
 
     private static final Logger log = LoggerFactory.getLogger(MultinodeConnectionManager.class);
     private static final String DNS_PREFIX = "dns:///";
+    private static final String CONNECTION_TYPE_XA = "XA";
+    private static final String CONNECTION_TYPE_NON_XA = "non-XA";
+    private static final String DEFAULT_DATASOURCE_NAME = "default";
 
     private final List<ServerEndpoint> serverEndpoints;
     private final Map<ServerEndpoint, ChannelAndStub> channelMap;
+    /** Per-endpoint locks for channel creation; avoids synchronizing on method parameters. */
+    private final ConcurrentHashMap<ServerEndpoint, Object> channelCreationLocks;
     private final Map<String, ServerEndpoint> sessionToServerMap; // sessionUUID -> server
     private final Map<String, List<ServerEndpoint>> connHashToServersMap; // connHash -> list of servers that received connect()
     private final AtomicInteger roundRobinCounter;
@@ -97,6 +102,7 @@ public class MultinodeConnectionManager {
 
         this.serverEndpoints = List.copyOf(serverEndpoints);
         this.channelMap = new ConcurrentHashMap<>();
+        this.channelCreationLocks = new ConcurrentHashMap<>();
         this.sessionToServerMap = new ConcurrentHashMap<>();
         this.connHashToServersMap = new ConcurrentHashMap<>();
         this.connHashByConnectionKey = new ConcurrentHashMap<>();
@@ -162,8 +168,9 @@ public class MultinodeConnectionManager {
     }
 
     private ChannelAndStub createChannelAndStub(ServerEndpoint endpoint) {
-        // Synchronize on the endpoint to prevent concurrent channel creation for the same endpoint
-        synchronized (endpoint) {
+        // Dedicated lock per endpoint — do not synchronize on the method parameter
+        Object lock = channelCreationLocks.computeIfAbsent(endpoint, k -> new Object());
+        synchronized (lock) {
             String target = DNS_PREFIX + endpoint.getHost() + ":" + endpoint.getPort();
             ManagedChannel channel = GrpcChannelFactory.createChannel(target);
 
@@ -232,7 +239,8 @@ public class MultinodeConnectionManager {
         SessionInfo sessionInfo = connectToAllServers(connectionDetails);
 
         // Cache the connHash so future connect() calls can skip the RPC.
-        if (sessionInfo.getConnHash() != null && !sessionInfo.getConnHash().isEmpty()) {
+        sessionInfo.getConnHash();
+        if (!sessionInfo.getConnHash().isEmpty()) {
             connHashByConnectionKey.put(connectionKey, sessionInfo.getConnHash());
             connectionDetailsByConnHash.put(sessionInfo.getConnHash(), connectionDetails);
             log.info("Non-XA connHash cached for fast subsequent connects (connHash={})", sessionInfo.getConnHash());
@@ -298,14 +306,16 @@ public class MultinodeConnectionManager {
                 server.setLastFailureTime(0);
 
                 // Bind the XA session to the server that created it
-                if (sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) {
+                sessionInfo.getSessionUUID();
+                if (!sessionInfo.getSessionUUID().isEmpty()) {
                     sessionToServerMap.put(sessionInfo.getSessionUUID(), server);
                     sessionTracker.registerSession(sessionInfo.getSessionUUID(), server);
                     log.info("XA session {} bound to server {}", sessionInfo.getSessionUUID(), server.getAddress());
                 }
 
                 // Track which server received connect() for this connHash (for terminateSession cleanup)
-                if (sessionInfo.getConnHash() != null && !sessionInfo.getConnHash().isEmpty()) {
+                sessionInfo.getConnHash();
+                if (!sessionInfo.getConnHash().isEmpty()) {
                     connHashToServersMap.put(sessionInfo.getConnHash(), List.of(server));
                     log.info("Tracked server {} for XA connHash {}", server.getAddress(), sessionInfo.getConnHash());
                 }
@@ -353,7 +363,7 @@ public class MultinodeConnectionManager {
 
     /**
      * Extracts the {@code ojp.datasource.name} property from ConnectionDetails,
-     * returning {@code "default"} when absent.
+     * returning {@value #DEFAULT_DATASOURCE_NAME} when absent.
      */
     private String extractDataSourceName(ConnectionDetails connectionDetails) {
         for (com.openjproxy.grpc.PropertyEntry entry : connectionDetails.getPropertiesList()) {
@@ -361,7 +371,7 @@ public class MultinodeConnectionManager {
                 return entry.getStringValue();
             }
         }
-        return "default";
+        return DEFAULT_DATASOURCE_NAME;
     }
 
     /**
@@ -423,7 +433,8 @@ public class MultinodeConnectionManager {
         }
         log.info("Reconnecting after NOT_FOUND for connHash {}", connHash);
         SessionInfo sessionInfo = connectToAllServers(stored);
-        if (sessionInfo.getConnHash() != null && !sessionInfo.getConnHash().isEmpty()) {
+        sessionInfo.getConnHash();
+        if (!sessionInfo.getConnHash().isEmpty()) {
             String key = computeConnectionKey(stored);
             connHashByConnectionKey.put(key, sessionInfo.getConnHash());
             connectionDetailsByConnHash.put(sessionInfo.getConnHash(), stored);
@@ -782,7 +793,7 @@ public class MultinodeConnectionManager {
                     channelAndStub = createChannelAndStub(server);
                 }
 
-                log.info("Connecting to server {} ({} connection)", server.getAddress(), isXA ? "XA" : "non-XA");
+                log.info("Connecting to server {} ({} connection)", server.getAddress(), isXA ? CONNECTION_TYPE_XA : CONNECTION_TYPE_NON_XA);
                 SessionInfo sessionInfo = channelAndStub.blockingStub.connect(connectionDetails);
 
                 // Mark server as healthy
@@ -791,7 +802,8 @@ public class MultinodeConnectionManager {
 
                 // Bind session directly to the ServerEndpoint we just connected to
                 // Only bind sessions with UUIDs (actual server sessions, not lazy allocation)
-                if (sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) {
+                sessionInfo.getSessionUUID();
+                if (!sessionInfo.getSessionUUID().isEmpty()) {
                     // Direct binding to ServerEndpoint object - no string matching needed
                     sessionToServerMap.put(sessionInfo.getSessionUUID(), server);
                     sessionTracker.registerSession(sessionInfo.getSessionUUID(), server);
@@ -806,7 +818,7 @@ public class MultinodeConnectionManager {
                 }
 
                 log.info("Successfully connected to server {} ({} connection)",
-                        server.getAddress(), isXA ? "XA" : "non-XA");
+                        server.getAddress(), isXA ? CONNECTION_TYPE_XA : CONNECTION_TYPE_NON_XA);
                 successfulConnections++;
 
                 // Track that this server received a connect() call
@@ -852,8 +864,7 @@ public class MultinodeConnectionManager {
         // CRITICAL FIX: Check if primary session was invalidated by health checker during connect
         // This can happen if health checker runs between binding the session and returning from connect()
         String primarySessionUUID = primarySessionInfo.getSessionUUID();
-        if (primarySessionUUID != null && !primarySessionUUID.isEmpty()) {
-            if (!sessionToServerMap.containsKey(primarySessionUUID)) {
+        if (!primarySessionUUID.isEmpty() && !sessionToServerMap.containsKey(primarySessionUUID)) {
                 log.warn("[RACE-FIX] Primary session {} was invalidated during connect(), searching for valid session",
                         primarySessionUUID);
 
@@ -861,7 +872,7 @@ public class MultinodeConnectionManager {
                 SessionInfo validSession = null;
                 for (SessionInfo si : allSessionInfos) {
                     String uuid = si.getSessionUUID();
-                    if (uuid != null && !uuid.isEmpty() && sessionToServerMap.containsKey(uuid)) {
+                    if (!uuid.isEmpty() && sessionToServerMap.containsKey(uuid)) {
                         validSession = si;
                         log.info("[RACE-FIX] Found valid session {} to use instead", uuid);
                         break;
@@ -875,17 +886,18 @@ public class MultinodeConnectionManager {
                     throw new SQLException("All sessions were invalidated during connection establishment (servers failed during connect)");
                 }
             }
-        }
+
 
         // Track which servers received connect() for this connection hash
         // This is used during terminateSession() to ensure all servers are cleaned up
-        if (primarySessionInfo.getConnHash() != null && !primarySessionInfo.getConnHash().isEmpty()) {
+        primarySessionInfo.getConnHash();
+        if (!primarySessionInfo.getConnHash().isEmpty()) {
             connHashToServersMap.put(primarySessionInfo.getConnHash(), new ArrayList<>(connectedServers));
             log.info("Tracked {} servers for connection hash {}", connectedServers.size(), primarySessionInfo.getConnHash());
         }
 
         log.info("Connected to {} out of {} servers ({} connection)",
-                successfulConnections, serverEndpoints.size(), isXA ? "XA" : "non-XA");
+                successfulConnections, serverEndpoints.size(), isXA ? CONNECTION_TYPE_XA : CONNECTION_TYPE_NON_XA);
         return primarySessionInfo;
     }
 
@@ -907,7 +919,7 @@ public class MultinodeConnectionManager {
                     "This may cause 'Connection not found' errors if queries reach wrong server. " +
                     "SessionKey value: '{}', isEmpty: {}, isNull: {}",
                     sessionKey,
-                    sessionKey != null && sessionKey.isEmpty(),
+                    sessionKey != null,
                     sessionKey == null);
             ServerEndpoint selectedServer = selectHealthyServer();
             if (selectedServer == null) {
@@ -1198,13 +1210,15 @@ public class MultinodeConnectionManager {
     public void terminateSession(SessionInfo sessionInfo) {
         if (sessionInfo != null) {
             // Remove session binding if sessionUUID is present
-            if (sessionInfo.getSessionUUID() != null && !sessionInfo.getSessionUUID().isEmpty()) {
+            sessionInfo.getSessionUUID();
+            if (!sessionInfo.getSessionUUID().isEmpty()) {
                 unbindSession(sessionInfo.getSessionUUID());
                 log.debug("Removed session {} from server association map", sessionInfo.getSessionUUID());
             }
 
             // Remove connection hash mapping if present
-            if (sessionInfo.getConnHash() != null && !sessionInfo.getConnHash().isEmpty()) {
+            sessionInfo.getConnHash();
+            if (!sessionInfo.getConnHash().isEmpty()) {
                 connHashToServersMap.remove(sessionInfo.getConnHash());
                 log.debug("Removed connection hash {} from server tracking map", sessionInfo.getConnHash());
             }
@@ -1551,14 +1565,14 @@ public class MultinodeConnectionManager {
 
     /**
      * Extracts the datasource name from ConnectionDetails properties.
-     * Returns the value of "ojp.datasource.name" property, or "default" if not found.
+     * Returns the value of "ojp.datasource.name" property, or {@value #DEFAULT_DATASOURCE_NAME} if not found.
      *
      * @param connectionDetails The ConnectionDetails to extract from
-     * @return The datasource name, or "default" if not specified
+     * @return The datasource name, or {@value #DEFAULT_DATASOURCE_NAME} if not specified
      */
     private String extractDataSourceNameFromConnectionDetails(ConnectionDetails connectionDetails) {
         if (connectionDetails == null || connectionDetails.getPropertiesList().isEmpty()) {
-            return "default";
+            return DEFAULT_DATASOURCE_NAME;
         }
 
         for (PropertyEntry prop : connectionDetails.getPropertiesList()) {
@@ -1567,7 +1581,7 @@ public class MultinodeConnectionManager {
             }
         }
 
-        return "default";
+        return DEFAULT_DATASOURCE_NAME;
     }
 
     /**

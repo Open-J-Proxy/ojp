@@ -296,6 +296,7 @@ class EagerCloseResultSetModeTest {
                 null,
                 null,
                 null,
+                null,
                 mgr,
                 cbRegistry,
                 config,

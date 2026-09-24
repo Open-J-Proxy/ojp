@@ -391,6 +391,7 @@ No long-lived server session is kept for that operation.
 - Lower connection/statement retention time for short writes
 - Less session-management overhead
 - Better throughput for high-frequency auto-commit DML workloads
+- More efficient server-side pool usage by returning connections faster
 
 #### Safety conditions (fallback to standard path when violated)
 Eager-close is bypassed when:
@@ -408,6 +409,16 @@ This mode closes both the JDBC statement and the JDBC connection handle right af
 
 For pooled datasources, this means the connection is returned to the pool (not permanently destroyed), but the
 specific statement handle is gone. So a later statement execution will allocate/create resources again as needed.
+
+#### Multi-statement workloads: recommended approach
+If a client needs fast execution of many statements in one logical run, use a transaction (or another
+session-continuity flow) so the server keeps the session/connection context for that sequence.
+
+Without that continuity, each statement can pass through admission queueing and connection re-borrow, which may
+increase end-to-end latency for multi-statement bursts.
+
+For workloads that are consistently multi-statement and latency-sensitive, consider a per-datasource override from
+the client side to disable eager-close for that datasource.
 
 #### Configuration
 ```bash

@@ -200,6 +200,7 @@ all in the same request, without creating a long-lived server session.
 - Lower resource retention for short write statements.
 - Better pool turnover in write-heavy auto-commit workloads.
 - Avoids unnecessary session lifecycle overhead for simple updates.
+- Improves overall server-side connection utilization by returning pooled connections quickly.
 
 #### Conditions required to use eager-close
 The request falls back to the standard session path when any of the following is true:
@@ -226,6 +227,15 @@ If the caller sends another `executeUpdate`/`prepare` after a prior eager-close 
 
 If the caller needs statement/session continuity across calls, the standard session-based path is used
 (for example, with explicit session/transaction context or statement UUID reuse).
+
+#### Multi-statement performance guidance
+For clients that need fast execution of multiple statements in sequence, prefer running those statements in a
+transaction (or otherwise keeping one server session open for the sequence). This avoids re-entering admission
+queueing and repeated borrow/release cycles for every statement.
+
+If your workload is consistently multi-statement and sensitive to this overhead, consider:
+- using transactions for those paths, and/or
+- disabling eager-close for the affected datasource via client-side datasource properties.
 
 #### Per-datasource configuration
 Yes. You can set this per datasource through **client-side datasource properties**, so different pools can have different behavior.

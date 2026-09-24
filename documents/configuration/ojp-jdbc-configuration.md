@@ -141,6 +141,8 @@ Connection backgroundConn = DriverManager.getConnection(
 ### Per-DataSource Eager-Close Override
 
 The server-side eager-close behavior can be overridden per datasource using client-side properties in `ojp.properties`.
+This is useful when some datasources run short auto-commit updates (keep eager-close on) while others run
+latency-sensitive multi-statement flows (consider transaction-based continuity and/or eager-close off).
 
 ```properties
 # Default datasource

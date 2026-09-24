@@ -34,6 +34,7 @@ import java.sql.Ref;
 import java.sql.ResultSetMetaData;
 import java.sql.RowId;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -485,11 +486,19 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public void setArray(int parameterIndex, Array x) throws SQLException {
         log.debug("setArray: {}, {}", parameterIndex, x);
         this.checkClosed();
+        String arrayUUID = null;
+        if (x != null) {
+            if (x instanceof org.openjproxy.jdbc.Array) {
+                arrayUUID = ((org.openjproxy.jdbc.Array) x).getUuid();
+            } else {
+                throw new SQLFeatureNotSupportedException("Only OJP proxied Array instances are currently supported.");
+            }
+        }
         this.paramsMap.put(parameterIndex,
                 Parameter.builder()
                         .type(ARRAY)
                         .index(parameterIndex)
-                        .values(Arrays.asList(x))
+                        .values(Arrays.asList(arrayUUID))
                         .build());
     }
 

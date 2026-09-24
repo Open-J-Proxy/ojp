@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for BigDecimalWire serialization/deserialization.
  */
-public class BigDecimalWireTest {
+class BigDecimalWireTest {
 
     @Test
     void testNull() throws IOException {
@@ -65,7 +65,8 @@ public class BigDecimalWireTest {
         // BigDecimal with unscaled value 123 and scale -2 = 12300
         BigDecimal value = new BigDecimal(new BigInteger("123"), -2);
         assertRoundTrip(value);
-        // Verify it equals the expected value (they may have different string representations)
+        // Verify it equals the expected value (they may have different string
+        // representations)
         assertEquals(0, new BigDecimal("12300").compareTo(value));
     }
 
@@ -110,10 +111,10 @@ public class BigDecimalWireTest {
     void testSpecialScales() throws IOException {
         // Test with scale = 0
         assertRoundTrip(new BigDecimal(new BigInteger("12345"), 0));
-        
+
         // Test with large positive scale
         assertRoundTrip(new BigDecimal(new BigInteger("12345"), 100));
-        
+
         // Test with large negative scale
         assertRoundTrip(new BigDecimal(new BigInteger("12345"), -50));
     }
@@ -126,64 +127,58 @@ public class BigDecimalWireTest {
     }
 
     @Test
-    void testInvalidNegativeLength() {
-        assertThrows(IOException.class, () -> {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream dos = new DataOutputStream(baos);
-            
-            // Write presence flag
-            dos.writeByte(1);
-            // Write invalid negative length
-            dos.writeInt(-1);
-            dos.flush();
-            
-            // Try to read
-            ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-            DataInputStream dis = new DataInputStream(bais);
-            BigDecimalWire.readBigDecimal(dis);
-        });
+    void testInvalidNegativeLength() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(baos);
+
+        // Write presence flag
+        dos.writeByte(1);
+        // Write invalid negative length
+        dos.writeInt(-1);
+        dos.flush();
+
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        DataInputStream dis = new DataInputStream(bais);
+
+        assertThrows(IOException.class, () -> BigDecimalWire.readBigDecimal(dis));
     }
 
     @Test
-    void testExcessiveLength() {
-        assertThrows(IOException.class, () -> {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream dos = new DataOutputStream(baos);
-            
-            // Write presence flag
-            dos.writeByte(1);
-            // Write excessive length (> MAX_UNSCALED_LENGTH)
-            dos.writeInt(20_000_000);
-            dos.flush();
-            
-            // Try to read
-            ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-            DataInputStream dis = new DataInputStream(bais);
-            BigDecimalWire.readBigDecimal(dis);
-        });
+    void testExcessiveLength() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(baos);
+
+        // Write presence flag
+        dos.writeByte(1);
+        // Write excessive length (> MAX_UNSCALED_LENGTH)
+        dos.writeInt(20_000_000);
+        dos.flush();
+
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        DataInputStream dis = new DataInputStream(bais);
+
+        assertThrows(IOException.class, () -> BigDecimalWire.readBigDecimal(dis));
     }
 
     @Test
-    void testInvalidUnscaledValue() {
-        assertThrows(IOException.class, () -> {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream dos = new DataOutputStream(baos);
-            
-            // Write presence flag
-            dos.writeByte(1);
-            // Write invalid unscaled value (not a number)
-            String invalidValue = "not-a-number";
-            byte[] bytes = invalidValue.getBytes(StandardCharsets.UTF_8);
-            dos.writeInt(bytes.length);
-            dos.write(bytes);
-            dos.writeInt(2); // scale
-            dos.flush();
-            
-            // Try to read
-            ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-            DataInputStream dis = new DataInputStream(bais);
-            BigDecimalWire.readBigDecimal(dis);
-        });
+    void testInvalidUnscaledValue() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(baos);
+
+        // Write presence flag
+        dos.writeByte(1);
+        // Write invalid unscaled value (not a number)
+        String invalidValue = "not-a-number";
+        byte[] bytes = invalidValue.getBytes(StandardCharsets.UTF_8);
+        dos.writeInt(bytes.length);
+        dos.write(bytes);
+        dos.writeInt(2); // scale
+        dos.flush();
+
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        DataInputStream dis = new DataInputStream(bais);
+
+        assertThrows(IOException.class, () -> BigDecimalWire.readBigDecimal(dis));
     }
 
     @Test
@@ -191,25 +186,25 @@ public class BigDecimalWireTest {
         // Test writing and reading multiple BigDecimal values in sequence
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
-        
+
         BigDecimal[] values = {
-            null,
-            BigDecimal.ZERO,
-            new BigDecimal("123.456"),
-            new BigDecimal("-789.012"),
-            new BigDecimal("999999999999999999999999")
+                null,
+                BigDecimal.ZERO,
+                new BigDecimal("123.456"),
+                new BigDecimal("-789.012"),
+                new BigDecimal("999999999999999999999999")
         };
-        
+
         // Write all values
         for (BigDecimal value : values) {
             BigDecimalWire.writeBigDecimal(dos, value);
         }
         dos.flush();
-        
+
         // Read all values back
         ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
         DataInputStream dis = new DataInputStream(bais);
-        
+
         for (BigDecimal expected : values) {
             BigDecimal actual = BigDecimalWire.readBigDecimal(dis);
             assertEquals(expected, actual);
@@ -222,21 +217,22 @@ public class BigDecimalWireTest {
     private void assertRoundTrip(BigDecimal original) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream dos = new DataOutputStream(baos);
-        
+
         // Write
         BigDecimalWire.writeBigDecimal(dos, original);
         dos.flush();
-        
+
         // Read
         ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
         DataInputStream dis = new DataInputStream(bais);
         BigDecimal result = BigDecimalWire.readBigDecimal(dis);
-        
+
         // Assert
         assertEquals(original, result);
-        
+
         // If not null, also verify scale and unscaled value match
         if (original != null) {
+            assertNotNull(result);
             assertEquals(original.scale(), result.scale());
             assertEquals(original.unscaledValue(), result.unscaledValue());
         }

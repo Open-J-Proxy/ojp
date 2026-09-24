@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.net.URL;
+import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Date;
@@ -17,6 +18,8 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.Calendar;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -211,7 +214,7 @@ public class ParameterHandler {
                 ps.setTime(idx, (Time) param.getValues().get(0));
                 break;
             case TIMESTAMP:
-                ps.setTimestamp(idx, (Timestamp) param.getValues().get(0));
+                setTimestampParameter(ps, idx, param.getValues().get(0));
                 break;
             case BLOB:
                 setBlobParameter(sessionManager, session, ps, idx, param);
@@ -231,6 +234,9 @@ public class ParameterHandler {
             case ROW_ID:
                 setRowIdParameter(ps, idx, param);
                 break;
+            case ARRAY:
+                setArrayParameter(sessionManager, session, ps, idx, param);
+                break;
             default:
                 ps.setObject(idx, param.getValues().get(0));
                 break;
@@ -247,6 +253,30 @@ public class ParameterHandler {
             ps.setByte(idx, byteArray.length > 0 ? byteArray[0] : (byte) 0);
         } else {
             ps.setByte(idx, ((Integer) value).byteValue());
+        }
+    }
+
+    /**
+     * Handles TIMESTAMP parameter setting. {@code TemporalConverter.fromTimestampWithZoneToObject}
+     * reconstructs the original Java temporal type the client bound (a plain {@link Timestamp}
+     * covers most cases, but {@link java.time.OffsetDateTime}, {@link java.time.LocalDateTime},
+     * {@link Instant}, {@link java.time.OffsetTime} or {@link Calendar} are all possible,
+     * depending on the {@code TemporalType} hint the client sent) — a single unconditional
+     * {@code ps.setTimestamp(idx, (Timestamp) value)} cast would throw a {@link ClassCastException}
+     * for every one of those non-{@code Timestamp} variants.
+     */
+    private static void setTimestampParameter(PreparedStatement ps, int idx, Object value) throws SQLException {
+        if (value instanceof Timestamp) {
+            ps.setTimestamp(idx, (Timestamp) value);
+        } else if (value instanceof Instant) {
+            ps.setTimestamp(idx, Timestamp.from((Instant) value));
+        } else if (value instanceof Calendar) {
+            Calendar calendar = (Calendar) value;
+            ps.setTimestamp(idx, new Timestamp(calendar.getTimeInMillis()), calendar);
+        } else {
+            // java.time.OffsetDateTime / LocalDateTime / OffsetTime: bind via setObject(),
+            // relying on the JDBC 4.2 standard object mapping the driver provides for these types.
+            ps.setObject(idx, value);
         }
     }
 
@@ -320,6 +350,19 @@ public class ParameterHandler {
             ps.setBytes(idx, null);
         } else {
             ps.setBytes(idx, (byte[]) rowIdBytes);
+        }
+    }
+
+    /**
+     * Handles ARRAY parameters stored as server-side session attributes.
+     */
+    private static void setArrayParameter(SessionManager sessionManager, SessionInfo session, PreparedStatement ps, int idx,
+                                          Parameter param) throws SQLException {
+        Object arrayReference = param.getValues().get(0);
+        if (arrayReference == null) {
+            ps.setArray(idx, null);
+        } else {
+            ps.setArray(idx, (Array) sessionManager.getAttr(session, (String) arrayReference));
         }
     }
 }

@@ -117,9 +117,9 @@ OJP implements a subset of JDBC 4.2 interfaces through a gRPC proxy architecture
 ### E.1.4 Array and Struct Support
 
 **java.sql.Array** - **Partially Implemented**
-- PostgreSQL arrays: Fully supported (getArray, getResultSet, getBaseType)
-- Oracle arrays (VARRAY, NESTED TABLE): Fully supported
-- DB2 arrays: Limited support (depends on DB2 version)
+- PostgreSQL arrays: Proxied support for `createArrayOf()`, `setArray()`, `getArray()`, and basic array metadata methods via server-side session-backed `java.sql.Array` objects
+- Oracle arrays (VARRAY, NESTED TABLE): Not currently implemented in OJP
+- DB2 arrays: Not currently implemented in OJP
 - MySQL/MariaDB: Not applicable (no native array type)
 - SQL Server: Not applicable (no native array type)
 

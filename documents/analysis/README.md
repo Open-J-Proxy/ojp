@@ -129,6 +129,7 @@ the topology for every message type, consensus included.
 ### Driver Architecture
 
 - [DRIVER_EXTERNALIZATION_IMPLEMENTATION_SUMMARY.md](./DRIVER_EXTERNALIZATION_IMPLEMENTATION_SUMMARY.md) - Driver externalization implementation
+- [POSTGRESQL_ARRAY_IMPLEMENTATION_ANALYSIS.md](./POSTGRESQL_ARRAY_IMPLEMENTATION_ANALYSIS.md) - PostgreSQL-focused analysis for implementing `java.sql.Array` in OJP with extensibility notes for other databases
 
 ---
 
@@ -171,5 +172,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-09-02  
+**Last Updated:** 2026-09-19  
 **Maintained By:** OJP Core Team

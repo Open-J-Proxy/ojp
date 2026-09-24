@@ -1,7 +1,6 @@
 package org.openjproxy.grpc.server;
 
 import com.openjproxy.grpc.SessionInfo;
-import com.openjproxy.grpc.TransactionStatus;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.server.cache.CacheConfiguration;
@@ -272,11 +271,14 @@ public class SessionManagerImpl implements SessionManager {
             deregisterClientUUID(sessionInfo.getConnHash(), sessionInfo.getClientUUID());
         }
 
-        if (TransactionStatus.TRX_ACTIVE.equals(sessionInfo.getTransactionInfo().getTransactionStatus())) {
-            if (!targetSession.getConnection().getAutoCommit()) {
-                log.debug("Rolling back active transaction");
-                targetSession.getConnection().rollback();
-            }
+        // Roll back any dangling transaction based on the physical connection's actual
+        // autoCommit state, not the client-reported transaction status. A client can report
+        // TRX_COMMITED (e.g. optimistically, or due to a client-side bug) while the physical
+        // connection is still left in manual-commit mode with an uncommitted transaction; relying
+        // solely on the client-reported status would silently skip the safety rollback below.
+        if (!targetSession.getConnection().getAutoCommit()) {
+            log.debug("Rolling back active transaction on session termination");
+            targetSession.getConnection().rollback();
         }
         targetSession.terminate();
     }

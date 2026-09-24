@@ -6,9 +6,9 @@ This comprehensive e-book provides complete documentation for Open-J-Proxy (OJP)
 
 ## Content Overview
 
-**Total Content**: ~930KB across 25 chapters + 7 appendices  
+**Total Content**: ~1.3MB across 26 chapters + 7 appendices  
 **Visual Assets**: 237 AI-ready image prompts, 82 Mermaid diagrams  
-**Completion**: 100% (all 25 chapters written)
+**Completion**: 100% (all 26 chapters written)
 
 ## Documentation Version
 
@@ -43,8 +43,9 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 - [Chapter 12: Connection Pool Provider SPI](part3-chapter12-pool-provider-spi.md)
 - [Chapter 12a: Query Result Caching](part3-chapter12a-query-result-caching.md)
 
-### Part IV: Operations (2 chapters)
+### Part IV: Operations (3 chapters)
 - [Chapter 13: Telemetry and Monitoring](part4-chapter13-telemetry.md)
+- [Chapter 13a: Running OJP Server in Production](part4-chapter13a-running-ojp-server-in-production.md)
 - [Chapter 14: Protocol and Wire Format](part4-chapter14-protocol.md)
 
 ### Part V: Development & Contribution (4 chapters)
@@ -79,6 +80,7 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 3. Chapter 6: Server Configuration
 4. Chapter 11: Security & Network Architecture
 5. Chapter 13: Telemetry and Monitoring
+6. Chapter 13a: Running OJP Server in Production
 
 ### For Application Developers
 1. Chapter 4: Database Drivers and Setup

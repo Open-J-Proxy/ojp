@@ -6,6 +6,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 
+import java.io.Reader;
+import java.io.StringWriter;
+import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -217,6 +220,45 @@ public class OracleResultSetTest {
         assertEquals("CLOB content", rs.getString("clob_col"));
         
         rs.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/oracle_connections.csv")
+    void testOracleClobObjectAccess(String driverClass, String url, String user, String pwd) throws Exception {
+        setUp(driverClass, url, user, pwd);
+
+        try {
+            statement.execute("DROP TABLE oracle_clob_object_test");
+        } catch (Exception e) {
+            // Ignore
+        }
+
+        statement.execute("CREATE TABLE oracle_clob_object_test (" +
+                "id NUMBER(10) PRIMARY KEY, " +
+                "clob_col CLOB)");
+        statement.execute("INSERT INTO oracle_clob_object_test (id, clob_col) VALUES (1, 'Oracle CLOB content')");
+
+        resultSet = statement.executeQuery("SELECT clob_col FROM oracle_clob_object_test WHERE id = 1");
+        assertTrue(resultSet.next());
+
+        Object value = resultSet.getObject("clob_col");
+        assertTrue(value instanceof Clob);
+        assertEquals("Oracle CLOB content", resultSet.getObject("clob_col", String.class));
+
+        Clob clob = resultSet.getObject("clob_col", Clob.class);
+        assertEquals("Oracle CLOB content", clob.getSubString(1, (int) clob.length()));
+
+        try (Reader reader = clob.getCharacterStream()) {
+            StringWriter writer = new StringWriter();
+            reader.transferTo(writer);
+            assertEquals("Oracle CLOB content", writer.toString());
+        }
+
+        try (Reader reader = resultSet.getCharacterStream("clob_col")) {
+            StringWriter writer = new StringWriter();
+            reader.transferTo(writer);
+            assertEquals("Oracle CLOB content", writer.toString());
+        }
     }
 
     @ParameterizedTest

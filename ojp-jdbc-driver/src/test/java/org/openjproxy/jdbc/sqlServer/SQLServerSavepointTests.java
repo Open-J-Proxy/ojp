@@ -2,7 +2,6 @@ package org.openjproxy.jdbc.sqlServer;
 
 import org.openjproxy.jdbc.testutil.SQLServerConnectionProvider;
 import org.openjproxy.jdbc.testutil.TestDBUtils;
-import org.junit.Assert;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -18,6 +17,7 @@ import java.sql.Savepoint;
 import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
@@ -45,7 +45,6 @@ class SQLServerSavepointTests {
 
         // Test if savepoints are supported
         DatabaseMetaData metaData = conn.getMetaData();
-        boolean supportsNamedSavepoints = metaData.supportsNamedParameters();
         boolean supportsSavepoints = metaData.supportsSavepoints();
         
         if (!supportsSavepoints) {
@@ -361,15 +360,11 @@ class SQLServerSavepointTests {
             Savepoint sp = conn.setSavepoint("exception_test");
 
             // Try to insert duplicate key (should cause exception)
-            try {
-                ps.setInt(1, 1); // Duplicate key
-                ps.setString(2, "Duplicate");
-                ps.executeUpdate();
-                Assert.fail("Should have thrown SQLException for duplicate key");
-            } catch (SQLException e) {
-                // Expected exception
-                System.out.println("Caught expected exception: " + e.getMessage());
-            }
+            ps.setInt(1, 1); // Duplicate key
+            ps.setString(2, "Duplicate");
+            SQLException e = assertThrows(SQLException.class, ps::executeUpdate,
+                    "Should have thrown SQLException for duplicate key");
+            System.out.println("Caught expected exception: " + e.getMessage());
 
             ps.close();
 

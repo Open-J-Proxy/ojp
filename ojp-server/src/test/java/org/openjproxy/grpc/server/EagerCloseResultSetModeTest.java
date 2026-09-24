@@ -10,6 +10,7 @@ import com.openjproxy.grpc.TargetCall;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.resource.CallResourceAction;
 import org.openjproxy.grpc.server.action.session.ResultSetHelper;
@@ -46,6 +47,7 @@ import static org.mockito.Mockito.when;
  *   <li>Mode enabled, auto-commit, forward-only RS: only the RS is closed; Statement stays open for {@code getMoreResults()}.</li>
  *   <li>Active transaction: no eager close when {@code autoCommit=false}.</li>
  *   <li>LOBs registered: no eager close when the session contains LOBs.</li>
+ *   <li>Cached metadata calls keep working after eager close.</li>
  * </ol>
  */
 class EagerCloseResultSetModeTest {
@@ -156,7 +158,63 @@ class EagerCloseResultSetModeTest {
     }
 
     // -------------------------------------------------------------------------
-    // Test 4: eager close enabled, auto-commit, forward-only RS –
+    // Test 4: eager close enabled – metadata call works from cached snapshot
+    // -------------------------------------------------------------------------
+
+    @Test
+    void shouldServeMetadataCallFromCacheAfterEagerClose() throws Exception {
+        Connection conn = buildMockConnection(true);
+        SessionInfo session = sessionManager.createSession(CLIENT_UUID, conn);
+
+        ResultSet mockRs = buildMockResultSet(conn, false);
+        String rsUUID = sessionManager.registerResultSet(session, mockRs);
+
+        ActionContext ctx = buildContext(sessionManager, true);
+        ResultSetHelper.handleResultSet(ctx, session, rsUUID, noopObserver());
+
+        CallResourceRequest metadataReq = CallResourceRequest.newBuilder()
+                .setSession(session)
+                .setResourceType(ResourceType.RES_RESULT_SET)
+                .setResourceUUID(rsUUID)
+                .setTarget(TargetCall.newBuilder()
+                        .setCallType(CallType.CALL_GET)
+                        .setResourceName("MetaData")
+                        .setNextCall(TargetCall.newBuilder()
+                                .setCallType(CallType.CALL_IS)
+                                .setResourceName("AutoIncrement")
+                                .addParams(ProtoConverter.toParameterValue(1))
+                                .build())
+                        .build())
+                .build();
+
+        List<CallResourceResponse> responses = new ArrayList<>();
+        List<Throwable> errors = new ArrayList<>();
+        StreamObserver<CallResourceResponse> observer = new StreamObserver<CallResourceResponse>() {
+            @Override
+            public void onNext(CallResourceResponse value) {
+                responses.add(value);
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                errors.add(t);
+            }
+
+            @Override
+            public void onCompleted() {
+                // no-op
+            }
+        };
+
+        CallResourceAction.getInstance().execute(ctx, metadataReq, observer);
+
+        assertTrue(errors.isEmpty(), "No error expected for metadata call after eager close");
+        assertEquals(1, responses.size(), "Exactly one response expected");
+        assertEquals(false, ProtoConverter.fromParameterValue(responses.get(0).getValues(0)));
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 5: eager close enabled, auto-commit, forward-only RS –
     //         only the RS cursor is closed; Statement stays open for getMoreResults()
     // -------------------------------------------------------------------------
 
@@ -177,7 +235,7 @@ class EagerCloseResultSetModeTest {
     }
 
     // -------------------------------------------------------------------------
-    // Test 5: active transaction – no eager close when autoCommit=false
+    // Test 6: active transaction – no eager close when autoCommit=false
     // -------------------------------------------------------------------------
 
     @Test
@@ -198,7 +256,7 @@ class EagerCloseResultSetModeTest {
     }
 
     // -------------------------------------------------------------------------
-    // Test 6: LOBs registered – no eager close when session has LOB objects
+    // Test 7: LOBs registered – no eager close when session has LOB objects
     // -------------------------------------------------------------------------
 
     @Test

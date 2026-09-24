@@ -3,7 +3,6 @@ package org.openjproxy.grpc.server.action.resource;
 import com.openjproxy.grpc.CallResourceRequest;
 import com.openjproxy.grpc.CallResourceResponse;
 import com.openjproxy.grpc.CallType;
-import com.openjproxy.grpc.DbName;
 import com.openjproxy.grpc.ResourceType;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
@@ -63,8 +62,9 @@ import static org.openjproxy.grpc.server.action.streaming.SessionConnectionHelpe
  * Returned ResultSet, Array, CallableStatement, and Savepoint instances are automatically
  * registered with the session manager and replaced by UUIDs in the response.
  *
- * <p>DB2 has special handling for ResultSet metadata retrieval, which is delegated to
- * {@link #db2SpecialResultSetMetadata}.
+ * <p>ResultSet metadata calls can be served from a cached metadata snapshot when available
+ * (for example after eager-close mode), which is delegated to
+ * {@link #cachedResultSetMetadata}.
  *
  * <p>This class is a thread-safe singleton. Use {@link #getInstance()} to obtain the instance.
  *
@@ -115,7 +115,7 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
 
             CallResourceResponse.Builder responseBuilder = CallResourceResponse.newBuilder();
 
-            if (this.db2SpecialResultSetMetadata(context, request, responseObserver)) {
+            if (this.cachedResultSetMetadata(context, request, responseObserver)) {
                 return;
             }
 
@@ -280,27 +280,28 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
     }
 
     /**
-     * Handles DB2-specific ResultSet metadata retrieval.
+     * Handles ResultSet metadata retrieval using the cached metadata snapshot when available.
      *
-     * <p>DB2 stores ResultSet metadata separately from the ResultSet. When the request targets
-     * {@code getMetadata()} on a ResultSet for a DB2 connection, this method retrieves the
-     * cached metadata from the session and invokes the requested metadata method (e.g.,
-     * {@code isAutoIncrement(int column)}) directly.
+     * <p>The server stores a hydrated metadata object in the session under
+     * {@code rsMetadata|<resultSetUUID>}. This snapshot allows metadata calls to keep working
+     * even if the underlying JDBC ResultSet cursor was already closed (for example by eager close).
      *
-     * @param context         the action context
-     * @param request         the call resource request
+     * @param context          the action context
+     * @param request          the call resource request
      * @param responseObserver the gRPC observer to receive the response
-     * @return {@code true} if the DB2 special case was handled and the response was sent;
-     *         {@code false} if the request does not match this case and normal processing should continue
+     * @return {@code true} if the request was handled with cached metadata; otherwise {@code false}
      * @throws SQLException if invoking the metadata method fails
      */
-    private boolean db2SpecialResultSetMetadata(ActionContext context, CallResourceRequest request, StreamObserver<CallResourceResponse> responseObserver) throws SQLException {
-        if (DbName.DB2.equals(context.getDbNameMap().get(request.getSession().getConnHash())) &&
-                ResourceType.RES_RESULT_SET.equals(request.getResourceType()) &&
+    private boolean cachedResultSetMetadata(ActionContext context, CallResourceRequest request,
+            StreamObserver<CallResourceResponse> responseObserver) throws SQLException {
+        if (ResourceType.RES_RESULT_SET.equals(request.getResourceType()) &&
                 CallType.CALL_GET.equals(request.getTarget().getCallType()) &&
                 "Metadata".equalsIgnoreCase(request.getTarget().getResourceName())) {
             ResultSetMetaData resultSetMetaData = (ResultSetMetaData) context.getSessionManager().getAttr(request.getSession(),
                     RESULT_SET_METADATA_ATTR_PREFIX + request.getResourceUUID());
+            if (resultSetMetaData == null) {
+                return false;
+            }
             List<Object> paramsReceived = (request.getTarget().getNextCall().getParamsCount() > 0) ?
                     ProtoConverter.parameterValuesToObjectList(request.getTarget().getNextCall().getParamsList()) :
                     EMPTY_LIST;
@@ -316,7 +317,7 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
                 responseObserver.onCompleted();
                 return true;
             } catch (Exception e) {
-                throw new SQLException("Failed to call DB2 special result set metadata", e);
+                throw new SQLException("Failed to call cached result set metadata", e);
             }
         }
         return false;

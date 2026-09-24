@@ -138,6 +138,18 @@ Connection backgroundConn = DriverManager.getConnection(
     "jdbc:ojp[localhost:1059(background)]_postgres:mydb", "user", "pass");
 ```
 
+### Per-DataSource Eager-Close Override
+
+The server-side eager-close behavior can be overridden per datasource using client-side properties in `ojp.properties`.
+
+```properties
+# Default datasource
+ojp.statement.eagerClose.enabled=true
+
+# Specific datasource override
+analytics.ojp.statement.eagerClose.enabled=false
+```
+
 ## Client-Side Connection Pool Configuration
 
 ### How to Configure

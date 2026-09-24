@@ -231,15 +231,6 @@ If the caller needs statement/session continuity across calls, the standard sess
 Yes. You can set this per datasource through **client-side datasource properties**, so different pools can have different behavior.
 See the client configuration guide: [`documents/configuration/ojp-jdbc-configuration.md`](./ojp-jdbc-configuration.md).
 
-Example (`ojp.properties` style):
-```properties
-# Default datasource
-ojp.statement.eagerClose.enabled=true
-
-# Specific datasource override
-analytics.ojp.statement.eagerClose.enabled=false
-```
-
 ### Connection Pool Settings
 
 | Property                                       | Environment Variable                           | Type | Default | Description                                       | Since |

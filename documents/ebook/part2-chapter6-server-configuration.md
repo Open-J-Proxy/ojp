@@ -418,11 +418,6 @@ specific statement handle is gone. So a later statement execution will allocate/
 Per-datasource override is also supported through **client-side datasource properties** (see
 [OJP JDBC Configuration](../configuration/ojp-jdbc-configuration.md)), so different pools can use different settings:
 
-```properties
-ojp.statement.eagerClose.enabled=true
-analytics.ojp.statement.eagerClose.enabled=false
-```
-
 ## 6.8 Client Throttling Signals
 
 While client-side throttling is configured on the **driver side** (see

@@ -2,7 +2,7 @@
 
 ## Summary
 
-This branch previously attempted to optimize query lifecycle by eagerly closing resources as soon as a `ResultSet` was fully consumed.
+This analysis evaluates an attempt to optimize query lifecycle by eagerly closing resources as soon as a `ResultSet` was fully consumed.
 
 That approach has been **dropped** due to side effects that can break normal JDBC flows, especially when a client reuses the same `Connection` for multiple queries.
 
@@ -44,7 +44,7 @@ Even with guards, the behavior introduces correctness and lifecycle risks:
 
 ## Decision
 
-The eager close approach that closes connection/session as part of result set completion is not being pursued in this PR.
+The eager close approach that closes connection/session as part of result set completion is not being pursued.
 
 Current recommendation:
 

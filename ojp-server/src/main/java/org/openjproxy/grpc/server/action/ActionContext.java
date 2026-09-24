@@ -16,6 +16,7 @@ import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 import javax.sql.DataSource;
 import javax.sql.XADataSource;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * ActionContext holds all shared state and dependencies needed by Action classes.
@@ -83,6 +84,12 @@ public class ActionContext {
      * Value: cache configuration for query result caching
      */
     private final Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheConfigurationMap;
+    /**
+     * Per-connection-hash eager-close toggle for executeUpdate fast-path.
+     * Value is derived from client datasource properties when provided, otherwise
+     * falls back to the server default.
+     */
+    private final Map<String, Boolean> statementEagerCloseEnabledByConnHash;
 
     // ========== Read/Write Splitting ==========
 
@@ -165,6 +172,44 @@ public class ActionContext {
             CircuitBreakerRegistry circuitBreakerRegistry,
             ServerConfiguration serverConfiguration,
             SqlStatementMetrics sqlStatementMetrics, SqlEnhancerEngine sqlEnhancerEngine) {
+        this(
+                datasourceMap,
+                xaDataSourceMap,
+                xaRegistries,
+                unpooledConnectionDetailsMap,
+                dbNameMap,
+                admissionControlManagers,
+                cacheConfigurationMap,
+                new ConcurrentHashMap<>(),
+                readWriteDataSourceRegistry,
+                xaPoolProvider,
+                xaCoordinator,
+                clusterHealthTracker,
+                sessionManager,
+                circuitBreakerRegistry,
+                serverConfiguration,
+                sqlStatementMetrics,
+                sqlEnhancerEngine
+        );
+    }
+
+    public ActionContext(
+            Map<String, DataSource> datasourceMap,
+            Map<String, XADataSource> xaDataSourceMap,
+            Map<String, XATransactionRegistry> xaRegistries,
+            Map<String, UnpooledConnectionDetails> unpooledConnectionDetailsMap,
+            Map<String, DbName> dbNameMap,
+            Map<String, AdmissionControlManager> admissionControlManagers,
+            Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheConfigurationMap,
+            Map<String, Boolean> statementEagerCloseEnabledByConnHash,
+            org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry readWriteDataSourceRegistry,
+            XAConnectionPoolProvider xaPoolProvider,
+            MultinodeXaCoordinator xaCoordinator,
+            ClusterHealthTracker clusterHealthTracker,
+            SessionManager sessionManager,
+            CircuitBreakerRegistry circuitBreakerRegistry,
+            ServerConfiguration serverConfiguration,
+            SqlStatementMetrics sqlStatementMetrics, SqlEnhancerEngine sqlEnhancerEngine) {
 
         this.datasourceMap = datasourceMap;
         this.xaDataSourceMap = xaDataSourceMap;
@@ -173,6 +218,7 @@ public class ActionContext {
         this.dbNameMap = dbNameMap;
         this.admissionControlManagers = admissionControlManagers;
         this.cacheConfigurationMap = cacheConfigurationMap;
+        this.statementEagerCloseEnabledByConnHash = statementEagerCloseEnabledByConnHash;
         this.readWriteDataSourceRegistry = readWriteDataSourceRegistry;
         this.xaPoolProvider = xaPoolProvider;
         this.xaCoordinator = xaCoordinator;
@@ -212,6 +258,9 @@ public class ActionContext {
 
     public Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> getCacheConfigurationMap() {
         return cacheConfigurationMap;
+    }
+    public Map<String, Boolean> getStatementEagerCloseEnabledByConnHash() {
+        return statementEagerCloseEnabledByConnHash;
     }
     public org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry getReadWriteDataSourceRegistry() {
         return readWriteDataSourceRegistry;

@@ -45,6 +45,8 @@ import static org.openjproxy.grpc.server.GrpcExceptionHandler.sendSQLExceptionMe
 @Slf4j
 public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
+    private static final String STATEMENT_EAGER_CLOSE_ENABLED_KEY = "ojp.statement.eagerClose.enabled";
+
     private static final ConnectAction INSTANCE = new ConnectAction();
 
     // Lock objects for synchronizing pool creation per connection hash.
@@ -82,6 +84,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
         }
 
         String connHash = ConnectionHashGenerator.hashConnectionDetails(connectionDetails);
+        resolveAndStoreEagerCloseSetting(context, connectionDetails, connHash);
 
         // Use default XA configuration values (deprecated pass-through properties no longer supported)
         int maxXaTransactions = org.openjproxy.constants.CommonConstants.DEFAULT_MAX_XA_TRANSACTIONS;
@@ -98,6 +101,25 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
         // Handle non-XA connection
         handleRegularConnection(context, connectionDetails, connHash, responseObserver);
+    }
+
+    private void resolveAndStoreEagerCloseSetting(ActionContext context, ConnectionDetails connectionDetails, String connHash) {
+        boolean serverDefault = context.getServerConfiguration().isStatementEagerCloseEnabled();
+        boolean effectiveValue = serverDefault;
+        Properties clientProperties = ConnectionPoolConfigurer.extractClientProperties(connectionDetails);
+        String overrideValue = clientProperties.getProperty(STATEMENT_EAGER_CLOSE_ENABLED_KEY);
+
+        if (overrideValue != null) {
+            String normalized = overrideValue.trim();
+            if ("true".equalsIgnoreCase(normalized) || "false".equalsIgnoreCase(normalized)) {
+                effectiveValue = Boolean.parseBoolean(normalized);
+            } else {
+                log.warn("Invalid boolean value '{}' for property '{}'. Using server default {} for connHash {}",
+                        overrideValue, STATEMENT_EAGER_CLOSE_ENABLED_KEY, serverDefault, connHash);
+            }
+        }
+
+        context.getStatementEagerCloseEnabledByConnHash().put(connHash, effectiveValue);
     }
 
     /**

@@ -373,6 +373,56 @@ graph TD
     Q --> R[Adjust Classification]
 ```
 
+### Statement Eager-Close Mode (executeUpdate)
+
+OJP can optimize eligible non-transactional write operations (`INSERT`, `UPDATE`, `DELETE`, `MERGE`) with
+**statement eager-close mode**.
+
+When this mode is used, the server:
+1. borrows a pooled connection,
+2. creates and executes a JDBC statement,
+3. closes the statement,
+4. closes the JDBC connection handle (returns it to the pool),
+5. returns the update result.
+
+No long-lived server session is kept for that operation.
+
+#### Why this can help
+- Lower connection/statement retention time for short writes
+- Less session-management overhead
+- Better throughput for high-frequency auto-commit DML workloads
+
+#### Safety conditions (fallback to standard path when violated)
+Eager-close is bypassed when:
+- session UUID exists
+- transaction UUID exists
+- batch execution is requested
+- generated keys tracking is requested
+- statement UUID reuse is requested
+- SQL requires session affinity
+- request contains LOB/stream params
+- SQL is not plain `INSERT`/`UPDATE`/`DELETE`/`MERGE`
+
+#### Practical implication: resource reuse
+This mode closes both the JDBC statement and the JDBC connection handle right after execution.
+
+For pooled datasources, this means the connection is returned to the pool (not permanently destroyed), but the
+specific statement handle is gone. So a later statement execution will allocate/create resources again as needed.
+
+#### Configuration
+```bash
+# Global server default (enabled by default)
+-Dojp.statement.eagerClose.enabled=true
+```
+
+Per-datasource override is also supported through datasource properties, so different pools can use different
+settings:
+
+```properties
+ojp.statement.eagerClose.enabled=true
+analytics.ojp.statement.eagerClose.enabled=false
+```
+
 ## 6.8 Client Throttling Signals
 
 While client-side throttling is configured on the **driver side** (see

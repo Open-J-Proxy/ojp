@@ -85,6 +85,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         // Per-datasource cache configurations (shared with SessionManager)
         Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheCfgMap =
                 cacheConfigurationMap != null ? cacheConfigurationMap : new ConcurrentHashMap<>();
+        Map<String, Boolean> statementEagerCloseByConnHash = new ConcurrentHashMap<>();
         // Read/write splitting datasource registry
         org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry readWriteRegistry =
                 new org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry();
@@ -98,6 +99,7 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
                 dbNameMap,
                 admissionControlManagers,
                 cacheCfgMap,
+                statementEagerCloseByConnHash,
                 readWriteRegistry,
                 xaPoolProvider,
                 XA_COORDINATOR,

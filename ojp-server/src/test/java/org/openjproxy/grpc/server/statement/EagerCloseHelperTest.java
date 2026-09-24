@@ -8,6 +8,8 @@ import com.openjproxy.grpc.StatementRequest;
 import com.openjproxy.grpc.TransactionInfo;
 import com.openjproxy.grpc.TransactionStatus;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.openjproxy.constants.CommonConstants;
 
 import java.sql.Statement;
@@ -130,8 +132,6 @@ class EagerCloseHelperTest {
         // SQL does not support nested block comments; the first */ ends the comment.
         // /* outer /* inner */ is treated as: comment ends at first */, leaving " is still outer */"
         // which does not start with a comment token, so the rest is kept as-is.
-        String result = EagerCloseHelper.stripLeadingCommentsAndWhitespace(
-                "/* outer /* inner */ still outer */INSERT INTO foo VALUES (1)");
         // After the first block comment is stripped, remaining text starts with " still outer */"
         // which is not a DML keyword — isPlainDml should return false
         assertFalse(EagerCloseHelper.isPlainDml(
@@ -140,21 +140,16 @@ class EagerCloseHelperTest {
 
     // ========== canEagerCloseExecuteUpdate tests ==========
 
-    @Test
-    void shouldReturnTrueForSimpleInsertWithNoSession() {
-        StatementRequest request = buildRequest("INSERT INTO foo VALUES (1)", noSession());
-        assertTrue(EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession()));
-    }
-
-    @Test
-    void shouldReturnTrueForSimpleUpdateWithNoSession() {
-        StatementRequest request = buildRequest("UPDATE foo SET x=1 WHERE id=1", noSession());
-        assertTrue(EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession()));
-    }
-
-    @Test
-    void shouldReturnTrueForSimpleDeleteWithNoSession() {
-        StatementRequest request = buildRequest("DELETE FROM foo WHERE id=1", noSession());
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "INSERT INTO foo VALUES (1)",
+            "UPDATE foo SET x=1 WHERE id=1",
+            "DELETE FROM foo WHERE id=1",
+            "/* audit log */ INSERT INTO foo VALUES (1)",
+            "-- insert comment\nINSERT INTO foo VALUES (1)"
+    })
+    void shouldReturnTrueForEligibleSimpleDmlStatements(String sql) {
+        StatementRequest request = buildRequest(sql, noSession());
         assertTrue(EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession()));
     }
 
@@ -278,18 +273,6 @@ class EagerCloseHelperTest {
     void shouldReturnFalseForSelectStatement() {
         StatementRequest request = buildRequest("SELECT * FROM foo", noSession());
         assertFalse(EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession()));
-    }
-
-    @Test
-    void shouldReturnTrueForInsertAfterLeadingBlockComment() {
-        StatementRequest request = buildRequest("/* audit log */ INSERT INTO foo VALUES (1)", noSession());
-        assertTrue(EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession()));
-    }
-
-    @Test
-    void shouldReturnTrueForInsertAfterLeadingLineComment() {
-        StatementRequest request = buildRequest("-- insert comment\nINSERT INTO foo VALUES (1)", noSession());
-        assertTrue(EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession()));
     }
 
     @Test

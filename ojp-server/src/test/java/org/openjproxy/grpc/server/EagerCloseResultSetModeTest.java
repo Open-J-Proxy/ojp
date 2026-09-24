@@ -6,11 +6,14 @@ import com.openjproxy.grpc.CallType;
 import com.openjproxy.grpc.DbName;
 import com.openjproxy.grpc.ResourceType;
 import com.openjproxy.grpc.SessionInfo;
+import com.openjproxy.grpc.SqlErrorResponse;
 import com.openjproxy.grpc.TargetCall;
+import io.grpc.Metadata;
+import io.grpc.Status;
+import io.grpc.protobuf.ProtoUtils;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.resource.CallResourceAction;
 import org.openjproxy.grpc.server.action.session.ResultSetHelper;
@@ -26,10 +29,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -157,7 +162,7 @@ class EagerCloseResultSetModeTest {
     }
 
     @Test
-    void shouldAllowResultSetMetadataCallAfterEagerClose() throws Exception {
+    void shouldFailResultSetMetadataCallAfterEagerClose() throws Exception {
         Connection conn = buildMockConnection(true);
         SessionInfo session = sessionManager.createSession(CLIENT_UUID, conn);
 
@@ -202,10 +207,14 @@ class EagerCloseResultSetModeTest {
 
         CallResourceAction.getInstance().execute(ctx, metadataReq, observer);
 
-        assertTrue(errors.isEmpty(), "No error expected for metadata call after RS eager close");
-        assertEquals(1, responses.size(), "Exactly one response expected");
-        Object metadataValue = ProtoConverter.parameterValuesToObjectList(responses.getFirst().getValuesList()).getFirst();
-        assertEquals(1, metadataValue, "Cached ResultSet metadata must return expected column count");
+        assertTrue(responses.isEmpty(), "No success response expected for metadata call after RS eager close");
+        assertEquals(1, errors.size(), "Exactly one error expected");
+        Metadata trailers = Status.trailersFromThrowable(errors.getFirst());
+        assertNotNull(trailers, "Expected SQL error metadata in trailers");
+        SqlErrorResponse sqlError = trailers.get(ProtoUtils.keyForProto(SqlErrorResponse.getDefaultInstance()));
+        assertNotNull(sqlError, "Expected SqlErrorResponse in trailers");
+        assertEquals("ResultSet is already closed; metadata calls are not allowed after close.", sqlError.getReason(),
+                "Expected clear close error message");
     }
 
     // -------------------------------------------------------------------------
@@ -315,10 +324,16 @@ class EagerCloseResultSetModeTest {
         when(mockStmt.getConnection()).thenReturn(conn);
 
         ResultSet rs = mock(ResultSet.class);
+        AtomicBoolean closed = new AtomicBoolean(false);
         when(rs.getMetaData()).thenReturn(meta);
         when(rs.next()).thenReturn(hasRows ? Boolean.TRUE : Boolean.FALSE);
         when(rs.getStatement()).thenReturn(mockStmt);
         when(rs.getType()).thenReturn(ResultSet.TYPE_FORWARD_ONLY);
+        when(rs.isClosed()).thenAnswer(invocation -> closed.get());
+        doAnswer(invocation -> {
+            closed.set(true);
+            return null;
+        }).when(rs).close();
         return rs;
     }
 

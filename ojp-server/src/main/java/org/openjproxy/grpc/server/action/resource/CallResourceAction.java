@@ -23,7 +23,6 @@ import java.sql.Array;
 import java.sql.CallableStatement;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.sql.Savepoint;
@@ -75,7 +74,6 @@ import static org.openjproxy.grpc.server.action.streaming.SessionConnectionHelpe
 public class CallResourceAction implements Action<CallResourceRequest, CallResourceResponse> {
 
     private static final CallResourceAction INSTANCE = new CallResourceAction();
-    private static final String RESULT_SET_METADATA_ATTR_PREFIX = "rsMetadata|";
 
     private CallResourceAction() {
         // Private constructor prevents external instantiation
@@ -288,28 +286,7 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
             if (resultSet != null && !resultSet.isClosed()) {
                 return false;
             }
-            ResultSetMetaData resultSetMetaData = (ResultSetMetaData) context.getSessionManager().getAttr(
-                    request.getSession(), RESULT_SET_METADATA_ATTR_PREFIX + request.getResourceUUID());
-            if (resultSetMetaData == null) {
-                return false;
-            }
-            List<Object> paramsReceived = (request.getTarget().getNextCall().getParamsCount() > 0) ?
-                    ProtoConverter.parameterValuesToObjectList(request.getTarget().getNextCall().getParamsList()) :
-                    EMPTY_LIST;
-            Method methodNext = MethodReflectionUtils.findMethodByName(ResultSetMetaData.class,
-                    MethodNameGenerator.methodName(request.getTarget().getNextCall()),
-                    paramsReceived);
-            try {
-                Object metadataResult = methodNext.invoke(resultSetMetaData, paramsReceived.toArray());
-                responseObserver.onNext(CallResourceResponse.newBuilder()
-                        .setSession(request.getSession())
-                        .addValues(ProtoConverter.toParameterValue(metadataResult))
-                        .build());
-                responseObserver.onCompleted();
-                return true;
-            } catch (Exception e) {
-                throw new SQLException("Failed to call cached result set metadata", e);
-            }
+            throw new SQLException("ResultSet is already closed; metadata calls are not allowed after close.");
         }
         return false;
     }

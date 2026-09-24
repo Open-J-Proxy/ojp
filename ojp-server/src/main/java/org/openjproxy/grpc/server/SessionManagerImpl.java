@@ -182,8 +182,7 @@ public class SessionManagerImpl implements SessionManager {
 
     @Override
     public ResultSet getResultSet(SessionInfo sessionInfo, String uuid) {
-        Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
-        return session != null ? session.getResultSet(uuid) : null;
+        return this.sessionMap.get(sessionInfo.getSessionUUID()).getResultSet(uuid);
     }
 
     @Override
@@ -195,8 +194,7 @@ public class SessionManagerImpl implements SessionManager {
 
     @Override
     public Statement getStatement(SessionInfo sessionInfo, String uuid) {
-        Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
-        return session != null ? session.getStatement(uuid) : null;
+        return this.sessionMap.get(sessionInfo.getSessionUUID()).getStatement(uuid);
     }
 
     @Override
@@ -208,8 +206,7 @@ public class SessionManagerImpl implements SessionManager {
 
     @Override
     public PreparedStatement getPreparedStatement(SessionInfo sessionInfo, String uuid) {
-        Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
-        return session != null ? session.getPreparedStatement(uuid) : null;
+        return this.sessionMap.get(sessionInfo.getSessionUUID()).getPreparedStatement(uuid);
     }
 
     @Override
@@ -221,8 +218,7 @@ public class SessionManagerImpl implements SessionManager {
 
     @Override
     public CallableStatement getCallableStatement(SessionInfo sessionInfo, String uuid) {
-        Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
-        return session != null ? session.getCallableStatement(uuid) : null;
+        return this.sessionMap.get(sessionInfo.getSessionUUID()).getCallableStatement(uuid);
     }
 
     @Override
@@ -311,15 +307,13 @@ public class SessionManagerImpl implements SessionManager {
     @Override
     public void registerAttr(SessionInfo sessionInfo, String key, Object value) {
         Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
-        if (session != null) {
-            session.addAttr(key, value);
-        }
+        session.addAttr(key, value);
     }
 
     @Override
     public Object getAttr(SessionInfo sessionInfo, String key) {
         Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
-        return session != null ? session.getAttr(key) : null;
+        return session.getAttr(key);
     }
 
     @Override

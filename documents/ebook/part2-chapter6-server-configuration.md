@@ -394,11 +394,11 @@ No long-lived server session is kept for that operation.
 
 #### Safety conditions (fallback to standard path when violated)
 Eager-close is bypassed when:
-- session UUID exists
-- transaction UUID exists
+- a server session is already open for the connection
+- the operation is inside an active transaction
 - batch execution is requested
 - generated keys tracking is requested
-- statement UUID reuse is requested
+- an existing server-side statement handle is reused
 - SQL requires session affinity
 - request contains LOB/stream params
 - SQL is not plain `INSERT`/`UPDATE`/`DELETE`/`MERGE`
@@ -415,8 +415,8 @@ specific statement handle is gone. So a later statement execution will allocate/
 -Dojp.statement.eagerClose.enabled=true
 ```
 
-Per-datasource override is also supported through datasource properties, so different pools can use different
-settings:
+Per-datasource override is also supported through **client-side datasource properties** (see
+[OJP JDBC Configuration](../configuration/ojp-jdbc-configuration.md)), so different pools can use different settings:
 
 ```properties
 ojp.statement.eagerClose.enabled=true

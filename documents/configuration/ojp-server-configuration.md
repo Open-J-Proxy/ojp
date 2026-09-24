@@ -203,11 +203,11 @@ all in the same request, without creating a long-lived server session.
 
 #### Conditions required to use eager-close
 The request falls back to the standard session path when any of the following is true:
-- session UUID present
-- transaction UUID present
+- a server session is already open for the connection
+- the operation is inside an active transaction
 - batch mode requested
 - generated keys tracking requested
-- statement UUID already present (reusing session-held statement)
+- an existing server-side statement handle is being reused
 - session-affinity SQL (`SET`, temp-table/session-state style SQL, etc.)
 - LOB/stream parameters (BLOB/CLOB/ASCII_STREAM/UNICODE_STREAM/BINARY_STREAM)
 - SQL is not plain `INSERT`/`UPDATE`/`DELETE`/`MERGE`
@@ -228,7 +228,8 @@ If the caller needs statement/session continuity across calls, the standard sess
 (for example, with explicit session/transaction context or statement UUID reuse).
 
 #### Per-datasource configuration
-Yes. You can set this per datasource through datasource properties, so different pools can have different behavior.
+Yes. You can set this per datasource through **client-side datasource properties**, so different pools can have different behavior.
+See the client configuration guide: [`documents/configuration/ojp-jdbc-configuration.md`](./ojp-jdbc-configuration.md).
 
 Example (`ojp.properties` style):
 ```properties

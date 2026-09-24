@@ -7,6 +7,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.postgresql.util.PGobject;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
@@ -214,8 +215,7 @@ class ParameterHandlerTest {
         ParameterHandler.addParam(sessionManager, session, 1, ps, param);
 
         verify(ps).setObject(eq(1), argThat(value ->
-                value != null
-                        && "org.postgresql.util.PGobject".equals(value.getClass().getName())
+                value instanceof PGobject
                         && hasExpectedPgObjectState(value, "jsonb", "{\"name\":\"ojp\"}")));
     }
 

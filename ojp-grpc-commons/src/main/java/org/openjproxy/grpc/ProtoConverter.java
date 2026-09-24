@@ -47,6 +47,8 @@ import java.util.UUID;
  */
 public class ProtoConverter {
 
+    private static final Optional<Class<?>> POSTGRES_PGOBJECT_CLASS = loadOptionalClass("org.postgresql.util.PGobject");
+
     /**
      * Convert a Parameter DTO to ParameterProto message.
      * Handles temporal types (DATE, TIME, TIMESTAMP) with special conversion logic.
@@ -478,13 +480,21 @@ public class ProtoConverter {
         if (value == null) {
             return false;
         }
-        String className = value.getClass().getName();
-        return "org.postgresql.util.PGobject".equals(className)
-                || className.startsWith("oracle.sql.json.Oracle");
+        return isPostgresPgObject(value)
+                || value.getClass().getName().startsWith("oracle.sql.json.Oracle");
     }
 
     private static boolean isPostgresPgObject(Object value) {
-        return value != null && "org.postgresql.util.PGobject".equals(value.getClass().getName());
+        return value != null
+                && POSTGRES_PGOBJECT_CLASS.map(pgObjectClass -> pgObjectClass.isInstance(value)).orElse(false);
+    }
+
+    private static Optional<Class<?>> loadOptionalClass(String className) {
+        try {
+            return Optional.of(Class.forName(className));
+        } catch (ClassNotFoundException e) {
+            return Optional.empty();
+        }
     }
 
     private static void addPostgresPgObjectValues(ParameterProto.Builder builder, List<Object> values) {

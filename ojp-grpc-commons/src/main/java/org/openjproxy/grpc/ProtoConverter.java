@@ -105,24 +105,7 @@ public class ProtoConverter {
                 // This happens when setObject(index, value, targetSqlType) is called
                 Object value = parameter.getValues().get(0);
                 Integer targetSqlType = (Integer) parameter.getValues().get(1);
-
-                // Convert based on targetSqlType using java.sql.Types constants
-                if (targetSqlType == java.sql.Types.TIMESTAMP || targetSqlType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE) {
-                    // For TIMESTAMP types, use toParameterValue which handles java.time types
-                    builder.addValues(toParameterValue(value));
-                } else if (targetSqlType == java.sql.Types.DATE) {
-                    // For DATE type, use toParameterValueDate
-                    builder.addValues(toParameterValueDate(value));
-                } else if (targetSqlType == java.sql.Types.TIME) {
-                    // For plain TIME type, use toParameterValueTime (handles Time and LocalTime only)
-                    builder.addValues(toParameterValueTime(value));
-                } else if (targetSqlType == java.sql.Types.TIME_WITH_TIMEZONE) {
-                    // For TIME_WITH_TIMEZONE, use toParameterValue which handles OffsetTime
-                    builder.addValues(toParameterValue(value));
-                } else {
-                    // For other types, just convert the value directly
-                    builder.addValues(toParameterValue(value));
-                }
+                addObjectValueForTargetSqlType(builder, value, targetSqlType);
                 builder.addValues(toParameterValue(targetSqlType));
             } else if (parameter.getType() == ParameterType.OBJECT && parameter.getValues().size() == 3
                     && parameter.getValues().get(1) instanceof Integer
@@ -130,18 +113,7 @@ public class ProtoConverter {
                 Object value = parameter.getValues().get(0);
                 Integer targetSqlType = (Integer) parameter.getValues().get(1);
                 Integer scaleOrLength = (Integer) parameter.getValues().get(2);
-
-                if (targetSqlType == java.sql.Types.TIMESTAMP || targetSqlType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE) {
-                    builder.addValues(toParameterValue(value));
-                } else if (targetSqlType == java.sql.Types.DATE) {
-                    builder.addValues(toParameterValueDate(value));
-                } else if (targetSqlType == java.sql.Types.TIME) {
-                    builder.addValues(toParameterValueTime(value));
-                } else if (targetSqlType == java.sql.Types.TIME_WITH_TIMEZONE) {
-                    builder.addValues(toParameterValue(value));
-                } else {
-                    builder.addValues(toParameterValue(value));
-                }
+                addObjectValueForTargetSqlType(builder, value, targetSqlType);
                 builder.addValues(toParameterValue(targetSqlType));
                 builder.addValues(toParameterValue(scaleOrLength));
             } else {
@@ -520,6 +492,25 @@ public class ProtoConverter {
             return (String) pgObject.getClass().getMethod("getType").invoke(pgObject);
         } catch (ReflectiveOperationException e) {
             throw new IllegalArgumentException("Unsupported PostgreSQL PGobject without accessible getType()", e);
+        }
+    }
+
+    private static void addObjectValueForTargetSqlType(ParameterProto.Builder builder, Object value, int targetSqlType) {
+        if (targetSqlType == java.sql.Types.TIMESTAMP || targetSqlType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE) {
+            // For TIMESTAMP types, use toParameterValue which handles java.time types
+            builder.addValues(toParameterValue(value));
+        } else if (targetSqlType == java.sql.Types.DATE) {
+            // For DATE type, use toParameterValueDate
+            builder.addValues(toParameterValueDate(value));
+        } else if (targetSqlType == java.sql.Types.TIME) {
+            // For plain TIME type, use toParameterValueTime (handles Time and LocalTime only)
+            builder.addValues(toParameterValueTime(value));
+        } else if (targetSqlType == java.sql.Types.TIME_WITH_TIMEZONE) {
+            // For TIME_WITH_TIMEZONE, use toParameterValue which handles OffsetTime
+            builder.addValues(toParameterValue(value));
+        } else {
+            // For other types, just convert the value directly
+            builder.addValues(toParameterValue(value));
         }
     }
 

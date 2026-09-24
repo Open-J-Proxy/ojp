@@ -10,6 +10,7 @@ import com.openjproxy.grpc.TargetCall;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.resource.CallResourceAction;
 import org.openjproxy.grpc.server.action.session.ResultSetHelper;
@@ -203,6 +204,8 @@ class EagerCloseResultSetModeTest {
 
         assertTrue(errors.isEmpty(), "No error expected for metadata call after RS eager close");
         assertEquals(1, responses.size(), "Exactly one response expected");
+        Object metadataValue = ProtoConverter.parameterValuesToObjectList(responses.getFirst().getValuesList()).getFirst();
+        assertEquals(1, metadataValue, "Cached ResultSet metadata must return expected column count");
     }
 
     // -------------------------------------------------------------------------

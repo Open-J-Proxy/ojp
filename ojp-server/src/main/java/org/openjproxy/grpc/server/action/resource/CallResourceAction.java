@@ -284,6 +284,10 @@ public class CallResourceAction implements Action<CallResourceRequest, CallResou
                 && CallType.CALL_GET.equals(request.getTarget().getCallType())
                 && "Metadata".equalsIgnoreCase(request.getTarget().getResourceName())
                 && request.getTarget().hasNextCall()) {
+            ResultSet resultSet = context.getSessionManager().getResultSet(request.getSession(), request.getResourceUUID());
+            if (resultSet != null && !resultSet.isClosed()) {
+                return false;
+            }
             ResultSetMetaData resultSetMetaData = (ResultSetMetaData) context.getSessionManager().getAttr(
                     request.getSession(), RESULT_SET_METADATA_ATTR_PREFIX + request.getResourceUUID());
             if (resultSetMetaData == null) {

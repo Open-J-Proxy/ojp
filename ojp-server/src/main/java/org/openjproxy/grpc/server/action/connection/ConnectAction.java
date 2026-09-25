@@ -107,7 +107,9 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
         boolean serverDefault = context.getServerConfiguration().isStatementEagerCloseEnabled();
         boolean effectiveValue = serverDefault;
         Properties clientProperties = ConnectionPoolConfigurer.extractClientProperties(connectionDetails);
-        String overrideValue = clientProperties.getProperty(STATEMENT_EAGER_CLOSE_ENABLED_KEY);
+        String overrideValue = clientProperties != null
+                ? clientProperties.getProperty(STATEMENT_EAGER_CLOSE_ENABLED_KEY)
+                : null;
 
         if (overrideValue != null) {
             String normalized = overrideValue.trim();

@@ -431,26 +431,26 @@ columns 5
   MIX["Mixed"] MIX_1["Excellent"] MIX_2["Mixed"] MIX_3["Good"] MIX_4["Excellent"]
   BAT["Batch"] BAT_1["Mixed"] BAT_2["Good"] BAT_3["Poor"] BAT_4["Good"]
 
-  style H0 fill:#e0e0e0,stroke:#9e9e9e
-  style H1 fill:#e0e0e0,stroke:#9e9e9e
-  style H2 fill:#e0e0e0,stroke:#9e9e9e
-  style H3 fill:#e0e0e0,stroke:#9e9e9e
-  style H4 fill:#e0e0e0,stroke:#9e9e9e
-  style OLTP fill:#e0e0e0,stroke:#9e9e9e
-  style MIX fill:#e0e0e0,stroke:#9e9e9e
-  style BAT fill:#e0e0e0,stroke:#9e9e9e
+  style H0 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H1 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H2 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H3 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H4 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style OLTP fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style MIX fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style BAT fill:#e0e0e0,stroke:#9e9e9e,color:#000
 
   style OLTP_1 fill:#4caf50,color:#fff
-  style OLTP_2 fill:#ffc107
+  style OLTP_2 fill:#ffc107,color:#000
   style OLTP_3 fill:#4caf50,color:#fff
   style OLTP_4 fill:#4caf50,color:#fff
 
   style MIX_1 fill:#4caf50,color:#fff
   style MIX_2 fill:#ff7043,color:#fff
-  style MIX_3 fill:#ffc107
+  style MIX_3 fill:#ffc107,color:#000
   style MIX_4 fill:#4caf50,color:#fff
 
-  style BAT_1 fill:#ffc107
+  style BAT_1 fill:#ffc107,color:#000
   style BAT_2 fill:#4caf50,color:#fff
   style BAT_3 fill:#ff5252,color:#fff
   style BAT_4 fill:#4caf50,color:#fff

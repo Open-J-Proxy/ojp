@@ -108,7 +108,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
         }
 
         ConnectionSessionDTO dto = null;
-        UpdateExecutionResult executionResult = null;
+        UpdateExecutionResult executionResult = new UpdateExecutionResult();
 
         var sessionManager = actionContext.getSessionManager();
 
@@ -129,7 +129,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
                     : null;
 
-            executionResult = executeSqlAndCaptureOutcome(sessionManager, dto, request, params, ps, requiresGeneratedKeys);
+            executeSqlAndCaptureOutcome(sessionManager, dto, request, params, ps, requiresGeneratedKeys, executionResult);
 
             OpResult result = buildOpResult(request, dto.getSession(), executionResult.psUUID, executionResult.updated,
                     executionResult.generatedKeysUuid, actionContext);
@@ -143,7 +143,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
 
             return result;
         } finally {
-            closeStatementAndConnectionIfNoSession(dto, executionResult != null ? executionResult.statement : null);
+            closeStatementAndConnectionIfNoSession(dto, executionResult.statement);
         }
     }
 
@@ -167,11 +167,11 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                 .getOrDefault(connHash, actionContext.getServerConfiguration().isStatementEagerCloseEnabled());
     }
 
-    private UpdateExecutionResult executeSqlAndCaptureOutcome(SessionManager sessionManager, ConnectionSessionDTO dto,
-                                                              StatementRequest request, List<Parameter> params,
-                                                              PreparedStatement existingPreparedStatement,
-                                                              boolean requiresGeneratedKeys) throws SQLException {
-        UpdateExecutionResult result = new UpdateExecutionResult();
+    private void executeSqlAndCaptureOutcome(SessionManager sessionManager, ConnectionSessionDTO dto,
+                                             StatementRequest request, List<Parameter> params,
+                                             PreparedStatement existingPreparedStatement,
+                                             boolean requiresGeneratedKeys,
+                                             UpdateExecutionResult result) throws SQLException {
         PreparedStatement ps = existingPreparedStatement;
         if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys) {
             if (!request.getStatementUUID().isEmpty() && ps != null) {
@@ -187,11 +187,10 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                 result.updated = ps.executeUpdate();
             }
             result.statement = ps;
-            return result;
+            return;
         }
         result.statement = StatementFactory.createStatement(sessionManager, dto.getConnection(), request);
         result.updated = result.statement.executeUpdate(request.getSql());
-        return result;
     }
 
     /**

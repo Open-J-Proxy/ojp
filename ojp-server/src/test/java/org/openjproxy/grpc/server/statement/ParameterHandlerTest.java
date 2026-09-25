@@ -7,6 +7,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.postgresql.util.PGobject;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
 import org.openjproxy.grpc.server.SessionManager;
@@ -22,6 +24,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -186,6 +190,36 @@ class ParameterHandlerTest {
     }
 
     @Test
+    void shouldKeepLegacyObjectBindingWhenTargetSqlTypeMetadataExists() throws SQLException {
+        Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
+                .values(List.of("value", java.sql.Types.OTHER)).build();
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+        verify(ps).setObject(1, "value");
+    }
+
+    @Test
+    void shouldKeepLegacyObjectBindingWhenTargetSqlTypeAndScaleMetadataExist() throws SQLException {
+        BigDecimal value = new BigDecimal("12.34");
+        Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
+                .values(List.of(value, java.sql.Types.DECIMAL, 2)).build();
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+        verify(ps).setObject(1, value);
+    }
+
+    @Test
+    void shouldRebuildRelayedPgObjectBeforeBinding() throws SQLException {
+        Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
+                .values(List.of("{\"name\":\"ojp\"}", CommonConstants.OJP_RELAYED_PGOBJECT_MARKER, "jsonb"))
+                .build();
+
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+
+        verify(ps).setObject(eq(1), argThat(value ->
+                value instanceof PGobject
+                        && hasExpectedPgObjectState(value, "jsonb", "{\"name\":\"ojp\"}")));
+    }
+
+    @Test
     void shouldBindNullParameterDirectly() throws SQLException {
         Parameter param = Parameter.builder().index(1).type(ParameterType.NULL)
                 .values(List.of(java.sql.Types.VARCHAR)).build();
@@ -229,5 +263,15 @@ class ParameterHandlerTest {
 
         assertThrows(SQLException.class, () ->
                 ParameterHandler.addParam(sessionManager, session, 1, ps, param));
+    }
+
+    private static boolean hasExpectedPgObjectState(Object value, String expectedType, String expectedPayload) {
+        try {
+            String actualType = (String) value.getClass().getMethod("getType").invoke(value);
+            String actualPayload = (String) value.getClass().getMethod("getValue").invoke(value);
+            return expectedType.equals(actualType) && expectedPayload.equals(actualPayload);
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
     }
 }

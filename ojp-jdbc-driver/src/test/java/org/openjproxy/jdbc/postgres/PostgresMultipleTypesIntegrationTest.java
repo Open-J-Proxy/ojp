@@ -1,5 +1,6 @@
 package org.openjproxy.jdbc.postgres;
 
+import org.postgresql.util.PGobject;
 import org.openjproxy.jdbc.testutil.TestDBUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -506,6 +507,37 @@ public class PostgresMultipleTypesIntegrationTest {
         psOperator.close();
 
         psInsert.close();
+        conn.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/postgres_connection.csv")
+    void testPostgresJsonbPgObjectBinding(String driverClass, String url, String user, String pwd) throws Exception {
+        assumeFalse(!isTestEnabled, "Postgres tests are disabled");
+
+        Connection conn = DriverManager.getConnection(url, user, pwd);
+        TestDBUtils.createPostgresJsonTestTable(conn, "test_postgres_json_pgobject");
+
+        PGobject pgObject = new PGobject();
+        pgObject.setType("jsonb");
+        pgObject.setValue("{\"active\":true,\"name\":\"ojp\"}");
+
+        try (java.sql.PreparedStatement psInsert = conn.prepareStatement(
+                "INSERT INTO test_postgres_json_pgobject (jsonb_col) VALUES (?)")) {
+            psInsert.setObject(1, pgObject);
+            assertEquals(1, psInsert.executeUpdate());
+        }
+
+        try (java.sql.PreparedStatement psSelect = conn.prepareStatement(
+                "SELECT jsonb_col FROM test_postgres_json_pgobject WHERE id = 1");
+             ResultSet resultSet = psSelect.executeQuery()) {
+            assertTrue(resultSet.next());
+            String jsonb = resultSet.getString(1);
+            assertNotNull(jsonb);
+            assertTrue(jsonb.contains("\"active\": true") || jsonb.contains("\"active\":true"));
+            assertTrue(jsonb.contains("\"name\": \"ojp\"") || jsonb.contains("\"name\":\"ojp\""));
+        }
+
         conn.close();
     }
 

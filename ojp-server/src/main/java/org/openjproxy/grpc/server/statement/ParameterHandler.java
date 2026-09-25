@@ -321,12 +321,12 @@ public class ParameterHandler {
         }
 
         if (values.size() == 2 && values.get(1) instanceof Integer) {
-            ps.setObject(idx, value, (Integer) values.get(1));
+            setObjectWithTargetSqlType(ps, idx, value, (Integer) values.get(1));
             return;
         }
 
         if (values.size() == 3 && values.get(1) instanceof Integer && values.get(2) instanceof Integer) {
-            ps.setObject(idx, value, (Integer) values.get(1), (Integer) values.get(2));
+            setObjectWithTargetSqlType(ps, idx, value, (Integer) values.get(1), (Integer) values.get(2));
             return;
         }
 
@@ -350,6 +350,24 @@ public class ParameterHandler {
             return;
         }
         ps.setObject(idx, pgObject);
+    }
+
+    private static void setObjectWithTargetSqlType(PreparedStatement ps, int idx, Object value,
+                                                   int targetSqlType) throws SQLException {
+        if (value == null) {
+            ps.setNull(idx, targetSqlType);
+            return;
+        }
+        ps.setObject(idx, value, targetSqlType);
+    }
+
+    private static void setObjectWithTargetSqlType(PreparedStatement ps, int idx, Object value,
+                                                   int targetSqlType, int scaleOrLength) throws SQLException {
+        if (value == null) {
+            ps.setNull(idx, targetSqlType);
+            return;
+        }
+        ps.setObject(idx, value, targetSqlType, scaleOrLength);
     }
 
     private static Object createPostgresPgObject(PreparedStatement ps, String typeName, String value) throws SQLException {

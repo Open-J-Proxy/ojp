@@ -19,7 +19,6 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -191,36 +190,20 @@ class ParameterHandlerTest {
     }
 
     @Test
-    void shouldBindObjectParameterWithTargetSqlType() throws SQLException {
+    void shouldKeepLegacyObjectBindingWhenTargetSqlTypeMetadataExists() throws SQLException {
         Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
                 .values(List.of("value", java.sql.Types.OTHER)).build();
         ParameterHandler.addParam(sessionManager, session, 1, ps, param);
-        verify(ps).setObject(1, "value", java.sql.Types.OTHER);
+        verify(ps).setObject(1, "value");
     }
 
     @Test
-    void shouldBindObjectParameterWithTargetSqlTypeAndScale() throws SQLException {
+    void shouldKeepLegacyObjectBindingWhenTargetSqlTypeAndScaleMetadataExist() throws SQLException {
         BigDecimal value = new BigDecimal("12.34");
         Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
                 .values(List.of(value, java.sql.Types.DECIMAL, 2)).build();
         ParameterHandler.addParam(sessionManager, session, 1, ps, param);
-        verify(ps).setObject(1, value, java.sql.Types.DECIMAL, 2);
-    }
-
-    @Test
-    void shouldBindNullObjectParameterWithTargetSqlTypeAsSqlNull() throws SQLException {
-        Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
-                .values(Arrays.asList(null, java.sql.Types.TIMESTAMP)).build();
-        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
-        verify(ps).setNull(1, java.sql.Types.TIMESTAMP);
-    }
-
-    @Test
-    void shouldBindNullObjectParameterWithTargetSqlTypeAndScaleAsSqlNull() throws SQLException {
-        Parameter param = Parameter.builder().index(1).type(ParameterType.OBJECT)
-                .values(Arrays.asList(null, java.sql.Types.TIMESTAMP, 6)).build();
-        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
-        verify(ps).setNull(1, java.sql.Types.TIMESTAMP);
+        verify(ps).setObject(1, value);
     }
 
     @Test

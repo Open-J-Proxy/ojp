@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open-J-Proxy E-Book (Single Page)</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            line-height: 1.6;
+            background: #f8f9fb;
+            color: #1f2937;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+        .header {
+            background: #0f172a;
+            color: #f8fafc;
+            border-radius: 10px;
+            padding: 18px 20px;
+            margin-bottom: 20px;
+        }
+        .header h1 { margin: 0 0 8px; font-size: 1.5rem; }
+        .header p { margin: 0; opacity: 0.9; }
+        .status {
+            padding: 12px 14px;
+            border-radius: 8px;
+            background: #e0f2fe;
+            color: #0c4a6e;
+            margin-bottom: 16px;
+            font-size: 0.95rem;
+            border: 1px solid #bae6fd;
+        }
+        #ebook {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 24px;
+        }
+        pre {
+            background: #0b1020;
+            color: #e5e7eb;
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #d1d5db; padding: 6px 8px; vertical-align: top; }
+        blockquote {
+            margin: 0;
+            padding: 8px 12px;
+            border-left: 4px solid #93c5fd;
+            background: #eff6ff;
+        }
+        hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+        .muted { color: #475569; font-size: 0.9rem; }
+        .heading-anchor {
+            margin-left: 8px;
+            text-decoration: none;
+            color: #64748b;
+            font-weight: normal;
+            font-size: 0.9em;
+        }
+        .heading-anchor:hover { color: #0f172a; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>Open-J-Proxy E-Book (Single HTML Page)</h1>
+        <p>Combined from Markdown chapters in sequence, with image prompts removed and Mermaid diagrams rendered.</p>
+    </div>
+    <div id="status" class="status">Loading chapters...</div>
+    <main id="ebook"></main>
+    <p class="muted">Note: image prompts and image/logo embeds are intentionally removed.</p>
+</div>
+
+<script src="./vendor/marked.umd.js"></script>
+<script src="./vendor/purify.min.js"></script>
+<script src="./vendor/mermaid.min.js"></script>
+<script>
+    const EBOOK_FILES = [
+        'part1-chapter1-introduction.md',
+        'part1-chapter2-architecture.md',
+        'part1-chapter2a-smart-load-balancing.md',
+        'part1-chapter3-quickstart.md',
+        'part1-chapter3a-kubernetes-helm.md',
+        'part2-chapter4-database-drivers.md',
+        'part2-chapter5-jdbc-configuration.md',
+        'part2-chapter6-server-configuration.md',
+        'part2-chapter7-framework-integration.md',
+        'part3-chapter8-slow-query-segregation.md',
+        'part3-chapter8a-client-throttling.md',
+        'part3-chapter9-multinode-deployment.md',
+        'part3-chapter10-xa-transactions.md',
+        'part3-chapter11-security.md',
+        'part3-chapter12-pool-provider-spi.md',
+        'part3-chapter12a-query-result-caching.md',
+        'part4-chapter13-telemetry.md',
+        'part4-chapter13a-running-ojp-server-in-production.md',
+        'part4-chapter14-protocol.md',
+        'part5-chapter15-dev-setup.md',
+        'part5-chapter16-contributing-workflow.md',
+        'part5-chapter17-testing-code-quality.md',
+        'part5-chapter18-contributor-recognition.md',
+        'part6-chapter19-implementation-analysis.md',
+        'part6-chapter20-lessons-learned.md',
+        'part7-chapter21-vision-future.md',
+        'part7-chapter22-performance-engineering.md',
+        'appendix-a-command-reference.md',
+        'appendix-b-database-guides.md',
+        'appendix-c-glossary.md',
+        'appendix-d-resources.md',
+        'appendix-e-jdbc-compatibility.md',
+        'appendix-f-visual-assets.md',
+        'appendix-g-troubleshooting.md'
+    ];
+
+    const PROMPT_START_PATTERNS = [
+        /^\s*>\s*\*\*AI\s+Image\s+Prompt\*\*:/i,
+        /^\s*\*\*\[(?:AI\s+)?IMAGE[_\s]PROMPT[^\]]*\]\*\*:/i,
+        /^\s*\*\*IMAGE[_\s]PROMPT_[A-Z0-9_]+:\*\*/i
+    ];
+
+    function isPromptStart(line) {
+        return PROMPT_START_PATTERNS.some((pattern) => pattern.test(line));
+    }
+
+    function shouldStopSkipping(line) {
+        return line.trim() === ''
+            || /^#{1,6}\s+/.test(line)
+            || /^```/.test(line)
+            || /^~~~/.test(line)
+            || /^\s*[-*+]\s+/.test(line)
+            || /^\s*\d+\.\s+/.test(line)
+            || /^\s*\|/.test(line);
+    }
+
+    function stripImagePromptBlocks(markdown) {
+        const lines = markdown.split('\n');
+        const out = [];
+        let skippingPromptBlock = false;
+
+        for (const line of lines) {
+            if (skippingPromptBlock) {
+                if (shouldStopSkipping(line)) {
+                    skippingPromptBlock = false;
+                    if (line.trim() === '') {
+                        out.push('');
+                    } else {
+                        out.push(line);
+                    }
+                }
+                continue;
+            }
+
+            if (isPromptStart(line)) {
+                skippingPromptBlock = true;
+                continue;
+            }
+
+            out.push(line);
+        }
+
+        return out.join('\n');
+    }
+
+    function sanitizeMarkdown(markdown) {
+        let cleaned = stripImagePromptBlocks(markdown);
+        cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+        return cleaned.trim() + '\n';
+    }
+
+    function looksLikeMermaid(text) {
+        const firstLine = (text || '').trim().split('\n')[0]?.trim() || '';
+        return /^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|erDiagram|journey|gantt|pie|mindmap|timeline|quadrantChart|xychart-beta|sankey-beta|packet-beta|block-beta)\b/.test(firstLine);
+    }
+
+    function convertMermaidCodeBlocks(root) {
+        const codeBlocks = root.querySelectorAll('pre > code');
+        codeBlocks.forEach((code) => {
+            const className = (code.className || '').toLowerCase();
+            const isMermaidClass = className.includes('language-mermaid') || className.includes('lang-mermaid');
+            const isMermaid = isMermaidClass || looksLikeMermaid(code.textContent || '');
+            if (!isMermaid) {
+                return;
+            }
+            const pre = code.parentElement;
+            const div = document.createElement('div');
+            div.className = 'mermaid';
+            div.textContent = code.textContent;
+            pre.replaceWith(div);
+        });
+    }
+
+    function removeImageElements(root) {
+        root.querySelectorAll('img, picture').forEach((node) => node.remove());
+        root.querySelectorAll('a').forEach((link) => {
+            const mediaChildren = Array.from(link.children).filter((child) => {
+                const tag = child.tagName ? child.tagName.toLowerCase() : '';
+                return tag === 'img' || tag === 'picture' || child.querySelector?.('img, picture');
+            });
+            mediaChildren.forEach((child) => child.remove());
+            if (link.textContent.trim().length === 0 && link.children.length === 0) {
+                link.remove();
+            }
+        });
+    }
+
+    const usedHeadingIds = new Map();
+    const slugifyHeading = (value) => {
+        const plainText = String(value || '')
+            .replace(/<[^>]*>/g, '')
+            .normalize('NFKD')
+            .replace(/\p{Diacritic}/gu, '');
+        return plainText
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}\s-]/gu, '')
+            .trim()
+            .replace(/\s+/g, '-');
+    };
+    const getHeadingId = (rawText) => {
+        const base = slugifyHeading(rawText) || 'section';
+        const count = usedHeadingIds.get(base) || 0;
+        usedHeadingIds.set(base, count + 1);
+        return count === 0 ? base : `${base}-${count}`;
+    };
+
+    marked.use({
+        renderer: {
+            heading(token) {
+                const text = this.parser.parseInline(token.tokens);
+                const id = getHeadingId(text);
+                return `<h${token.depth} id="${id}">${text}<a class="heading-anchor" href="#${id}" aria-label="Link to this section"><span aria-hidden="true">#</span></a></h${token.depth}>`;
+            }
+        }
+    });
+
+    async function renderMermaidDiagrams(root) {
+        const diagrams = Array.from(root.querySelectorAll('.mermaid'));
+        let failedCount = 0;
+
+        for (let index = 0; index < diagrams.length; index += 1) {
+            const node = diagrams[index];
+            const source = node.textContent || '';
+            const diagramId = `mermaid-diagram-${index}-${Date.now()}`;
+            try {
+                const { svg, bindFunctions } = await window.mermaid.render(diagramId, source);
+                const container = document.createElement('div');
+                container.className = 'mermaid';
+                container.innerHTML = svg;
+                node.replaceWith(container);
+                if (typeof bindFunctions === 'function') {
+                    bindFunctions(container);
+                }
+            } catch (error) {
+                failedCount += 1;
+                const pre = document.createElement('pre');
+                const code = document.createElement('code');
+                code.className = 'language-mermaid';
+                code.textContent = source;
+                pre.appendChild(code);
+                node.replaceWith(pre);
+            }
+        }
+
+        return failedCount;
+    }
+
+    async function loadMarkdownFiles() {
+        const failures = [];
+        const chunks = [];
+
+        for (const file of EBOOK_FILES) {
+            try {
+                const response = await fetch(file, { cache: 'no-store' });
+                if (!response.ok) {
+                    failures.push(`${file} (${response.status})`);
+                    continue;
+                }
+                const markdown = await response.text();
+                const sanitized = sanitizeMarkdown(markdown);
+                chunks.push(`<!-- ${file} -->\n${sanitized}`);
+            } catch (error) {
+                failures.push(`${file} (${error?.message || 'request failed'})`);
+            }
+        }
+
+        return { combinedMarkdown: chunks.join('\n\n---\n\n'), failures, loadedCount: chunks.length };
+    }
+
+    async function render() {
+        const status = document.getElementById('status');
+        const ebookContainer = document.getElementById('ebook');
+        try {
+            marked.setOptions({
+                gfm: true,
+                breaks: false
+            });
+
+            const hasMermaid = !!(window.mermaid && typeof window.mermaid.initialize === 'function' && typeof window.mermaid.render === 'function');
+            let mermaidError = null;
+            if (hasMermaid) {
+                window.mermaid.initialize({
+                    startOnLoad: false,
+                    securityLevel: 'strict',
+                    theme: 'default'
+                });
+            } else {
+                mermaidError = 'Mermaid library unavailable; diagrams are shown as code blocks.';
+            }
+
+            const { combinedMarkdown, failures, loadedCount } = await loadMarkdownFiles();
+            usedHeadingIds.clear();
+            const parsedHtml = await marked.parse(combinedMarkdown);
+            const safeHtml = DOMPurify.sanitize(parsedHtml, {
+                USE_PROFILES: { html: true },
+                ADD_ATTR: ['id', 'class', 'href', 'aria-label', 'align'],
+                FORBID_ATTR: ['style']
+            });
+            ebookContainer.innerHTML = safeHtml;
+            removeImageElements(ebookContainer);
+            convertMermaidCodeBlocks(ebookContainer);
+            if (hasMermaid) {
+                try {
+                    const failedMermaidDiagrams = await renderMermaidDiagrams(ebookContainer);
+                    DOMPurify.sanitize(ebookContainer, {
+                        IN_PLACE: true,
+                        USE_PROFILES: { html: true, svg: true, svgFilters: true },
+                        ADD_ATTR: [
+                            'id', 'class', 'href', 'aria-label', 'align', 'role', 'aria-labelledby',
+                            'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
+                        ]
+                    });
+                    if (failedMermaidDiagrams > 0) {
+                        mermaidError = `${failedMermaidDiagrams} Mermaid diagram(s) failed and were left as code blocks`;
+                    }
+                } catch (error) {
+                    mermaidError = error?.message || 'one or more Mermaid diagrams failed to render';
+                }
+            }
+
+            if (failures.length > 0) {
+                status.textContent = `Loaded ${loadedCount} section(s) with ${failures.length} missing file(s): ${failures.join(', ')}${mermaidError ? `. Mermaid warning: ${mermaidError}` : ''}`;
+                status.style.background = '#fff7ed';
+                status.style.borderColor = '#fed7aa';
+                status.style.color = '#9a3412';
+            } else if (mermaidError) {
+                status.textContent = `Loaded ${loadedCount} sections. Mermaid warning: ${mermaidError}`;
+                status.style.background = '#fff7ed';
+                status.style.borderColor = '#fed7aa';
+                status.style.color = '#9a3412';
+            } else {
+                status.textContent = `Loaded ${loadedCount} sections successfully.`;
+                status.style.background = '#ecfdf5';
+                status.style.borderColor = '#86efac';
+                status.style.color = '#166534';
+            }
+        } catch (error) {
+            status.textContent = `Render failed: ${error?.message || 'unexpected error'}`;
+            status.style.background = '#fee2e2';
+            status.style.borderColor = '#fca5a5';
+            status.style.color = '#991b1b';
+        }
+    }
+
+    render();
+</script>
+</body>
+</html>

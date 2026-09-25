@@ -426,32 +426,32 @@ Before adopting OJP, it's essential to understand whether it fits your use case.
 ```mermaid
 block-beta
 columns 5
-  H0["Workload"] H1["Connection Efficiency"] H2["Latency Sensitivity"] H3["Transaction Patterns"] H4["Scale Elasticity"]
-  OLTP["OLTP"] OLTP_1["Excellent"] OLTP_2["Excellent"] OLTP_3["Excellent"] OLTP_4["Excellent"]
-  MIX["Mixed"] MIX_1["Excellent"] MIX_2["Good"] MIX_3["Good"] MIX_4["Excellent"]
-  BAT["Batch"] BAT_1["Mixed"] BAT_2["OK"] BAT_3["Poor"] BAT_4["Good"]
+  H0["Workload"] H1["Connection Efficiency"] H2["Latency Fit (with OJP)"] H3["Transaction Patterns"] H4["Scale Elasticity"]
+  OLTP["OLTP"] OLTP_1["Excellent"] OLTP_2["Good"] OLTP_3["Excellent"] OLTP_4["Excellent"]
+  MIX["Mixed"] MIX_1["Excellent"] MIX_2["Mixed"] MIX_3["Good"] MIX_4["Excellent"]
+  BAT["Batch"] BAT_1["Mixed"] BAT_2["Good"] BAT_3["Poor"] BAT_4["Good"]
 
-  style H0 fill:#e0e0e0,stroke:#9e9e9e
-  style H1 fill:#e0e0e0,stroke:#9e9e9e
-  style H2 fill:#e0e0e0,stroke:#9e9e9e
-  style H3 fill:#e0e0e0,stroke:#9e9e9e
-  style H4 fill:#e0e0e0,stroke:#9e9e9e
-  style OLTP fill:#e0e0e0,stroke:#9e9e9e
-  style MIX fill:#e0e0e0,stroke:#9e9e9e
-  style BAT fill:#e0e0e0,stroke:#9e9e9e
+  style H0 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H1 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H2 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H3 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style H4 fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style OLTP fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style MIX fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style BAT fill:#e0e0e0,stroke:#9e9e9e,color:#000
 
   style OLTP_1 fill:#4caf50,color:#fff
-  style OLTP_2 fill:#4caf50,color:#fff
+  style OLTP_2 fill:#ffc107,color:#000
   style OLTP_3 fill:#4caf50,color:#fff
   style OLTP_4 fill:#4caf50,color:#fff
 
   style MIX_1 fill:#4caf50,color:#fff
-  style MIX_2 fill:#ffc107
-  style MIX_3 fill:#ffc107
+  style MIX_2 fill:#ff7043,color:#fff
+  style MIX_3 fill:#ffc107,color:#000
   style MIX_4 fill:#4caf50,color:#fff
 
-  style BAT_1 fill:#ffc107
-  style BAT_2 fill:#ffc107
+  style BAT_1 fill:#ffc107,color:#000
+  style BAT_2 fill:#4caf50,color:#fff
   style BAT_3 fill:#ff5252,color:#fff
   style BAT_4 fill:#4caf50,color:#fff
 ```
@@ -459,14 +459,14 @@ columns 5
 OJP excels in specific architectural patterns and workload types:
 
 #### ✅ Online Transaction Processing (OLTP)
-**Perfect Fit** - OJP is designed for OLTP workloads characterized by:
+**Strong Fit (when 1-3ms added hop is acceptable)** - OJP is designed for OLTP workloads characterized by:
 - Short-lived queries (milliseconds to seconds)
 - High concurrency with many simultaneous connections
 - Read-heavy or balanced read/write patterns
 - Frequent connection open/close cycles
 - Elastic scaling requirements
 
-**Why It Works**: Virtual connections eliminate connection establishment overhead, pooling optimizes resource usage, and backpressure protects against traffic spikes.
+**Why It Works**: Virtual connections eliminate connection establishment overhead, pooling optimizes resource usage, and backpressure protects against traffic spikes. This is a throughput and resilience optimization, not a zero-latency optimization.
 
 **Example**: E-commerce platform with thousands of concurrent users, each session requiring database access for authentication, product lookups, and cart operations.
 

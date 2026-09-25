@@ -49,7 +49,7 @@ jobs:
       - name: Start OJP server (background)
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
-          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs -Dojp.statement.eagerClose.enabled=true \
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs -Dojp.statement.eagerClose.enabled=false \
             -jar "$jar" &>/tmp/ojp-server.log &
           echo "OJP server PID=$!"
 

@@ -345,31 +345,6 @@
         if (!indexList) {
             return;
         }
-
-        function setStatus(statusText, level = 'info', withDismiss = false) {
-            const status = document.getElementById('status');
-            const text = document.getElementById('status-text');
-            const dismiss = document.getElementById('status-dismiss');
-            text.textContent = statusText;
-            dismiss.style.display = withDismiss ? 'inline-block' : 'none';
-            if (level === 'error') {
-                status.style.background = '#fee2e2';
-                status.style.borderColor = '#fca5a5';
-                status.style.color = '#991b1b';
-            } else if (level === 'warning') {
-                status.style.background = '#fff7ed';
-                status.style.borderColor = '#fed7aa';
-                status.style.color = '#9a3412';
-            } else if (level === 'success') {
-                status.style.background = '#ecfdf5';
-                status.style.borderColor = '#86efac';
-                status.style.color = '#166534';
-            } else {
-                status.style.background = '#e0f2fe';
-                status.style.borderColor = '#bae6fd';
-                status.style.color = '#0c4a6e';
-            }
-        }
         indexList.innerHTML = '';
         const chapterHeadings = Array.from(document.querySelectorAll('#ebook h1[id]'));
         chapterHeadings.forEach((heading) => {
@@ -380,6 +355,31 @@
             item.appendChild(link);
             indexList.appendChild(item);
         });
+    }
+
+    function setStatus(statusText, level = 'info', withDismiss = false) {
+        const status = document.getElementById('status');
+        const text = document.getElementById('status-text');
+        const dismiss = document.getElementById('status-dismiss');
+        text.textContent = statusText;
+        dismiss.style.display = withDismiss ? 'inline-block' : 'none';
+        if (level === 'error') {
+            status.style.background = '#fee2e2';
+            status.style.borderColor = '#fca5a5';
+            status.style.color = '#991b1b';
+        } else if (level === 'warning') {
+            status.style.background = '#fff7ed';
+            status.style.borderColor = '#fed7aa';
+            status.style.color = '#9a3412';
+        } else if (level === 'success') {
+            status.style.background = '#ecfdf5';
+            status.style.borderColor = '#86efac';
+            status.style.color = '#166534';
+        } else {
+            status.style.background = '#e0f2fe';
+            status.style.borderColor = '#bae6fd';
+            status.style.color = '#0c4a6e';
+        }
     }
 
     async function loadMarkdownFiles() {
@@ -425,6 +425,7 @@
                     startOnLoad: false,
                     securityLevel: 'strict',
                     theme: 'default',
+                    flowchart: { htmlLabels: false },
                     themeVariables: {
                         primaryTextColor: '#1f2937',
                         secondaryTextColor: '#1f2937',

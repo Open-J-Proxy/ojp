@@ -113,8 +113,10 @@
     </section>
     <div id="status" class="status">
         <span id="status-text">Loading chapters...</span>
+        <button id="status-select-folder" type="button" style="display:none;">Select ebook folder</button>
         <button id="status-dismiss" type="button" style="display:none;">Dismiss</button>
     </div>
+    <input id="local-folder-input" type="file" webkitdirectory directory multiple style="display:none;">
     <main id="ebook" class="page"></main>
     <p class="muted">Note: image prompts and image/logo embeds are intentionally removed.</p>
 </div>
@@ -410,8 +412,10 @@
         const status = document.getElementById('status');
         const text = document.getElementById('status-text');
         const dismiss = document.getElementById('status-dismiss');
+        const selectFolder = document.getElementById('status-select-folder');
         text.textContent = statusText;
         dismiss.style.display = withDismiss ? 'inline-block' : 'none';
+        selectFolder.style.display = 'none';
         if (level === 'error') {
             status.style.background = '#fee2e2';
             status.style.borderColor = '#fca5a5';
@@ -437,11 +441,33 @@
         coverLabs.textContent = `Open J Proxy Labs - ${monthYear}`;
     }
 
-    async function loadMarkdownFiles() {
+    function findSelectedLocalFile(localFiles, fileName) {
+        return localFiles.find((file) => {
+            if (file.name === fileName) {
+                return true;
+            }
+            const relativePath = file.webkitRelativePath || '';
+            return relativePath.endsWith(`/${fileName}`);
+        });
+    }
+
+    async function loadMarkdownFiles(localFiles = []) {
         const failures = [];
         const chunks = [];
 
         for (const file of EBOOK_FILES) {
+            if (localFiles.length > 0) {
+                const localFile = findSelectedLocalFile(localFiles, file);
+                if (!localFile) {
+                    failures.push(`${file} (not found in selected folder)`);
+                    continue;
+                }
+                const markdown = await localFile.text();
+                const sanitized = sanitizeMarkdown(markdown);
+                chunks.push(`<!-- ${file} -->\n${sanitized}`);
+                continue;
+            }
+
             try {
                 const response = await fetch(`../${file}`, { cache: 'no-store' });
                 if (!response.ok) {
@@ -459,7 +485,7 @@
         return { combinedMarkdown: chunks.join('\n\n---\n\n'), failures, loadedCount: chunks.length };
     }
 
-    async function render() {
+    async function render(localFiles = []) {
         const ebookContainer = document.getElementById('ebook');
         try {
             marked.setOptions({
@@ -488,7 +514,7 @@
                 mermaidError = 'Mermaid library unavailable; diagrams are shown as code blocks.';
             }
 
-            const { combinedMarkdown, failures, loadedCount } = await loadMarkdownFiles();
+            const { combinedMarkdown, failures, loadedCount } = await loadMarkdownFiles(localFiles);
             usedHeadingIds.clear();
             const parsedHtml = await marked.parse(combinedMarkdown);
             const safeHtml = DOMPurify.sanitize(parsedHtml, {
@@ -512,9 +538,12 @@
 
             if (failures.length > 0) {
                 const fileProtocolHint = loadedCount === 0 && window.location?.protocol === 'file:'
-                    ? ' Hint: open this page via a local web server (http://localhost:...) instead of file:// so chapter fetch requests can succeed.'
+                    ? ' Hint: click "Select ebook folder" to load markdown files directly, or open this page via a local web server (http://localhost:...).'
                     : '';
                 setStatus(`Loaded ${loadedCount} section(s) with ${failures.length} missing file(s): ${failures.join(', ')}${mermaidError ? `. Mermaid warning: ${mermaidError}` : ''}${fileProtocolHint}`, 'warning', true);
+                if (loadedCount === 0 && window.location?.protocol === 'file:' && localFiles.length === 0) {
+                    document.getElementById('status-select-folder').style.display = 'inline-block';
+                }
             } else if (mermaidError) {
                 setStatus(`Loaded ${loadedCount} sections. Mermaid warning: ${mermaidError}`, 'warning', true);
             } else {
@@ -529,6 +558,19 @@
     document.getElementById('status-dismiss')?.addEventListener('click', () => {
         const status = document.getElementById('status');
         status.style.display = 'none';
+    });
+
+    document.getElementById('status-select-folder')?.addEventListener('click', () => {
+        document.getElementById('local-folder-input')?.click();
+    });
+
+    document.getElementById('local-folder-input')?.addEventListener('change', async (event) => {
+        const localFiles = Array.from(event.target.files || []);
+        if (localFiles.length === 0) {
+            return;
+        }
+        setStatus('Loading chapters from selected folder...', 'info', false);
+        await render(localFiles);
     });
 
     setCoverDate();

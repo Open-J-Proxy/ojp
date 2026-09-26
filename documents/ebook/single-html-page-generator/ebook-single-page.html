@@ -122,7 +122,6 @@
 <script src="./vendor/marked.umd.js"></script>
 <script src="./vendor/purify.min.js"></script>
 <script src="./vendor/mermaid.min.js"></script>
-<script src="./ebook-single-page-content.js"></script>
 <script>
     const EBOOK_FILES = [
         'part1-chapter1-introduction.md',
@@ -441,33 +440,20 @@
     async function loadMarkdownFiles() {
         const failures = [];
         const chunks = [];
-        const bundledMarkdown = window.EBOOK_MARKDOWN || {};
 
         for (const file of EBOOK_FILES) {
-            let markdown = null;
-            let loadError = 'Failed to fetch';
             try {
                 const response = await fetch(`../${file}`, { cache: 'no-store' });
-                if (response.ok) {
-                    markdown = await response.text();
-                } else {
-                    loadError = `${response.status}`;
+                if (!response.ok) {
+                    failures.push(`${file} (${response.status})`);
+                    continue;
                 }
+                const markdown = await response.text();
+                const sanitized = sanitizeMarkdown(markdown);
+                chunks.push(`<!-- ${file} -->\n${sanitized}`);
             } catch (error) {
-                loadError = error?.message || 'request failed';
+                failures.push(`${file} (${error?.message || 'Failed to fetch'})`);
             }
-
-            if (markdown === null && typeof bundledMarkdown[file] === 'string') {
-                markdown = bundledMarkdown[file];
-            }
-
-            if (markdown === null) {
-                failures.push(`${file} (${loadError})`);
-                continue;
-            }
-
-            const sanitized = sanitizeMarkdown(markdown);
-            chunks.push(`<!-- ${file} -->\n${sanitized}`);
         }
 
         return { combinedMarkdown: chunks.join('\n\n---\n\n'), failures, loadedCount: chunks.length };
@@ -525,7 +511,10 @@
             }
 
             if (failures.length > 0) {
-                setStatus(`Loaded ${loadedCount} section(s) with ${failures.length} missing file(s): ${failures.join(', ')}${mermaidError ? `. Mermaid warning: ${mermaidError}` : ''}`, 'warning', true);
+                const fileProtocolHint = loadedCount === 0 && window.location?.protocol === 'file:'
+                    ? ' Hint: open this page via a local web server (http://localhost:...) instead of file:// so chapter fetch requests can succeed.'
+                    : '';
+                setStatus(`Loaded ${loadedCount} section(s) with ${failures.length} missing file(s): ${failures.join(', ')}${mermaidError ? `. Mermaid warning: ${mermaidError}` : ''}${fileProtocolHint}`, 'warning', true);
             } else if (mermaidError) {
                 setStatus(`Loaded ${loadedCount} sections. Mermaid warning: ${mermaidError}`, 'warning', true);
             } else {

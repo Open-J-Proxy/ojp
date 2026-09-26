@@ -777,10 +777,10 @@ graph TB
     style MAYBE fill:#ffb74d,color:#000,stroke:#ef6c00,stroke-width:2px
     style BAD fill:#ff5252,color:#fff,stroke:#c62828,stroke-width:2px
 
-    linkStyle 0 stroke:#9e9e9e,stroke-width:2px
-    linkStyle 1,2,4 stroke:#ff5252,stroke-width:2px
-    linkStyle 3,5 stroke:#4caf50,stroke-width:2px
-    linkStyle 6,7 stroke:#ffb74d,stroke-width:2px
+    linkStyle 0,4,6 stroke:#9e9e9e,stroke-width:2px
+    linkStyle 1,7 stroke:#ff5252,stroke-width:2px
+    linkStyle 2,3,5 stroke:#4caf50,stroke-width:2px
+    linkStyle 8 stroke:#ffb74d,stroke-width:2px
 ```
 
 Use this framework to assess whether OJP reduces net risk for your team:
@@ -808,8 +808,8 @@ Answer "Yes" to several of these questions:
 #### ❌ Likely Not a Good Fit
 Answer "Yes" to any of these questions:
 1. Do you require microsecond-level latency for high-frequency trading or gaming?
-2. Is your workload pure data warehousing with few, long-running queries?
-3. Are you running a single monolithic application with no scaling plans?
+2. Is your workload a dedicated warehouse with few, long-running queries and no need for a gatekeeper?
+3. Are you running a very simple single application with stable load and no real observability or policy-control gap?
 4. Do you operate in an embedded environment where deploying servers is impractical?
 
 ### Common Pitfalls and Anti-Patterns

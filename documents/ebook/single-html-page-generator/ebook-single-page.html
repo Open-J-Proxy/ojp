@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Open-J-Proxy E-Book (Single Page)</title>
+    <title>Open-J-Proxy E-Book</title>
     <style>
         :root { color-scheme: light dark; }
         body {
@@ -18,15 +18,43 @@
             margin: 0 auto;
             padding: 24px;
         }
-        .header {
-            background: #0f172a;
-            color: #f8fafc;
+        .page {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
             border-radius: 10px;
-            padding: 18px 20px;
-            margin-bottom: 20px;
+            padding: 24px;
+            margin-bottom: 18px;
+            page-break-after: always;
         }
-        .header h1 { margin: 0 0 8px; font-size: 1.5rem; }
-        .header p { margin: 0; opacity: 0.9; }
+        .cover {
+            min-height: 70vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(145deg, #0f172a 0%, #1e293b 45%, #0b3b66 100%);
+            color: #f8fafc;
+            text-align: center;
+        }
+        .cover h1 {
+            margin: 0 0 10px;
+            font-size: 2.2rem;
+            letter-spacing: 0.04em;
+        }
+        .cover p { margin: 0; opacity: 0.93; }
+        .cover .labs {
+            margin-top: 18px;
+            display: inline-block;
+            border: 1px solid #38bdf8;
+            border-radius: 999px;
+            padding: 6px 14px;
+            color: #bae6fd;
+            font-weight: 600;
+        }
+        .toc h2 { margin-top: 0; }
+        .toc ol { margin: 0; padding-left: 20px; }
+        .toc li { margin: 6px 0; }
+        .toc a { color: #0f3a7d; text-decoration: none; }
+        .toc a:hover { text-decoration: underline; }
         .status {
             padding: 12px 14px;
             border-radius: 8px;
@@ -35,12 +63,6 @@
             margin-bottom: 16px;
             font-size: 0.95rem;
             border: 1px solid #bae6fd;
-        }
-        #ebook {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            padding: 24px;
         }
         pre {
             background: #0b1020;
@@ -72,12 +94,19 @@
 </head>
 <body>
 <div class="container">
-    <div class="header">
-        <h1>Open-J-Proxy E-Book (Single HTML Page)</h1>
-        <p>Combined from Markdown chapters in sequence, with image prompts removed and Mermaid diagrams rendered.</p>
-    </div>
+    <section class="page cover">
+        <div>
+            <h1>Open-J-Proxy E-Book</h1>
+            <p>Comprehensive guide to architecture, configuration, operations, and contribution.</p>
+            <div class="labs">Open J Proxy Labs</div>
+        </div>
+    </section>
+    <section class="page toc">
+        <h2>Index</h2>
+        <ol id="index-list"></ol>
+    </section>
     <div id="status" class="status">Loading chapters...</div>
-    <main id="ebook"></main>
+    <main id="ebook" class="page"></main>
     <p class="muted">Note: image prompts and image/logo embeds are intentionally removed.</p>
 </div>
 
@@ -268,8 +297,9 @@
                 const svgFragment = DOMPurify.sanitize(svg, {
                     RETURN_DOM_FRAGMENT: true,
                     USE_PROFILES: { svg: true, svgFilters: true },
+                    ADD_TAGS: ['style'],
                     ADD_ATTR: [
-                        'id', 'class', 'role', 'aria-labelledby',
+                        'id', 'class', 'style', 'role', 'aria-labelledby',
                         'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
                     ]
                 });
@@ -277,6 +307,23 @@
                 node.replaceWith(container);
                 if (typeof bindFunctions === 'function') {
                     bindFunctions(container);
+                }
+
+                function renderIndexFromHeadings() {
+                    const indexList = document.getElementById('index-list');
+                    if (!indexList) {
+                        return;
+                    }
+                    indexList.innerHTML = '';
+                    const chapterHeadings = Array.from(document.querySelectorAll('#ebook h1[id]'));
+                    chapterHeadings.forEach((heading) => {
+                        const item = document.createElement('li');
+                        const link = document.createElement('a');
+                        link.href = `#${heading.id}`;
+                        link.textContent = heading.textContent.replace('#', '').trim();
+                        item.appendChild(link);
+                        indexList.appendChild(item);
+                    });
                 }
             } catch (error) {
                 failedCount += 1;
@@ -358,8 +405,9 @@
                     DOMPurify.sanitize(ebookContainer, {
                         IN_PLACE: true,
                         USE_PROFILES: { html: true, svg: true, svgFilters: true },
+                        ADD_TAGS: ['style'],
                         ADD_ATTR: [
-                            'id', 'class', 'href', 'aria-label', 'align', 'role', 'aria-labelledby',
+                            'id', 'class', 'style', 'href', 'aria-label', 'align', 'role', 'aria-labelledby',
                             'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
                         ]
                     });
@@ -387,6 +435,7 @@
                 status.style.borderColor = '#86efac';
                 status.style.color = '#166534';
             }
+            renderIndexFromHeadings();
         } catch (error) {
             status.textContent = `Render failed: ${error?.message || 'unexpected error'}`;
             status.style.background = '#fee2e2';

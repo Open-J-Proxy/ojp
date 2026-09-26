@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Open-J-Proxy E-Book</title>
     <style>
-        :root { color-scheme: light dark; }
         body {
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
@@ -296,6 +295,32 @@
         }
     });
 
+    function getMermaidDiagramName(node, index, source) {
+        let heading = '';
+        let cursor = node.previousElementSibling;
+        while (cursor) {
+            if (/^H[1-6]$/.test(cursor.tagName || '')) {
+                heading = cursor.textContent.trim();
+                break;
+            }
+            cursor = cursor.previousElementSibling;
+        }
+        if (!heading) {
+            heading = node.closest('section, article, div, main')?.querySelector?.('h1, h2, h3')?.textContent?.trim() || '';
+        }
+        if (heading) {
+            return heading;
+        }
+        const firstLine = (source || '').split('\n').find((line) => line.trim().length > 0) || '';
+        const compact = firstLine.trim().slice(0, 80);
+        return compact ? `diagram-${index + 1}: ${compact}` : `diagram-${index + 1}`;
+    }
+
+    function normalizeMermaidSourceForRetry(source) {
+        return source
+            .replace(/note\s+right\s+of\s+\[\*\]/g, 'note right of PENDING_CLOSE');
+    }
+
     async function renderMermaidDiagrams(root) {
         const diagrams = Array.from(root.querySelectorAll('.mermaid'));
         let failedCount = 0;
@@ -306,16 +331,27 @@
             const source = node.textContent || '';
             const diagramId = `mermaid-diagram-${index}-${Date.now()}`;
             try {
-                const { svg, bindFunctions } = await window.mermaid.render(diagramId, source);
+                let rendered;
+                try {
+                    rendered = await window.mermaid.render(diagramId, source);
+                } catch (firstError) {
+                    const retriedSource = normalizeMermaidSourceForRetry(source);
+                    if (retriedSource === source) {
+                        throw firstError;
+                    }
+                    rendered = await window.mermaid.render(`${diagramId}-retry`, retriedSource);
+                }
+                const { svg, bindFunctions } = rendered;
                 const container = document.createElement('div');
                 container.className = 'mermaid';
                 const svgFragment = DOMPurify.sanitize(svg, {
                     RETURN_DOM_FRAGMENT: true,
-                    USE_PROFILES: { svg: true, svgFilters: true },
-                    ADD_TAGS: ['style'],
+                    USE_PROFILES: { html: true, svg: true, svgFilters: true },
+                    ADD_TAGS: ['style', 'foreignObject'],
                     ADD_ATTR: [
                         'id', 'class', 'style', 'role', 'aria-labelledby',
-                        'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
+                        'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex',
+                        'xmlns', 'x', 'y', 'width', 'height', 'requiredFeatures', 'requiredExtensions'
                     ]
                 });
                 container.replaceChildren(svgFragment);
@@ -326,14 +362,17 @@
 
             } catch (error) {
                 failedCount += 1;
-                const heading = node.closest('section, article, div, main')?.querySelector?.('h1, h2, h3')?.textContent?.trim();
-                failedNames.push(heading || `diagram-${index + 1}`);
+                const diagramName = getMermaidDiagramName(node, index, source);
+                failedNames.push(diagramName);
+                const nameLine = document.createElement('p');
+                nameLine.className = 'muted';
+                nameLine.textContent = `Failed Mermaid: ${diagramName}`;
                 const pre = document.createElement('pre');
                 const code = document.createElement('code');
                 code.className = 'language-mermaid';
                 code.textContent = source;
                 pre.appendChild(code);
-                node.replaceWith(pre);
+                node.replaceWith(nameLine, pre);
             }
         }
 
@@ -425,7 +464,6 @@
                     startOnLoad: false,
                     securityLevel: 'strict',
                     theme: 'default',
-                    flowchart: { htmlLabels: false },
                     themeVariables: {
                         primaryTextColor: '#1f2937',
                         secondaryTextColor: '#1f2937',
@@ -457,10 +495,11 @@
                     DOMPurify.sanitize(ebookContainer, {
                         IN_PLACE: true,
                         USE_PROFILES: { html: true, svg: true, svgFilters: true },
-                        ADD_TAGS: ['style'],
+                        ADD_TAGS: ['style', 'foreignObject'],
                         ADD_ATTR: [
                             'id', 'class', 'style', 'href', 'aria-label', 'align', 'role', 'aria-labelledby',
-                            'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
+                            'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex',
+                            'xmlns', 'x', 'y', 'width', 'height', 'requiredFeatures', 'requiredExtensions'
                         ]
                     });
                     if (failedCount > 0) {

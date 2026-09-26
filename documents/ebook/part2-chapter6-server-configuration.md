@@ -373,6 +373,69 @@ graph TD
     Q --> R[Adjust Classification]
 ```
 
+### Statement Eager-Close Mode (executeUpdate)
+
+OJP can optimize eligible non-transactional write operations (`INSERT`, `UPDATE`, `DELETE`, `MERGE`) with
+**statement eager-close mode**.
+
+When this mode is used, the server:
+1. borrows a pooled connection,
+2. creates and executes a JDBC statement,
+3. closes the statement,
+4. closes the JDBC connection handle (returns it to the pool),
+5. returns the update result.
+
+No long-lived server session is kept for that operation.
+
+#### Why this can help
+- Lower connection/statement retention time for short writes
+- Less session-management overhead
+- Better throughput for high-frequency auto-commit DML workloads
+- More efficient server-side pool usage by returning connections faster
+
+#### Safety conditions (fallback to standard path when violated)
+Eager-close is bypassed when:
+- a server session is already open for the connection
+- the operation is inside an active transaction
+- batch execution is requested
+- generated keys tracking is requested
+- an existing server-side statement handle is reused
+- SQL requires session affinity
+- request contains LOB/stream params
+- SQL is not plain `INSERT`/`UPDATE`/`DELETE`/`MERGE`
+
+#### Practical implication: resource reuse
+This mode closes both the JDBC statement and the JDBC connection handle right after execution.
+
+For pooled datasources, this means the connection is returned to the pool (not permanently destroyed), but the
+specific statement handle is gone. So a later statement execution will allocate/create resources again as needed.
+
+#### Multi-statement workloads: recommended approach
+If a client needs fast execution of many statements in one logical run, use a transaction (or another
+session-continuity flow) so the server keeps the session/connection context for that sequence.
+
+Without that continuity, each statement can pass through admission queueing and connection re-borrow, which may
+increase end-to-end latency for multi-statement bursts.
+
+If you do not want one transaction around all statements, an operational workaround is to run a small query
+such as `SELECT 1` first on the same JDBC connection. This creates a server session so the next updates on that
+connection use the session-based path instead of eager-close.
+
+For workloads that are consistently multi-statement and latency-sensitive, consider a per-datasource override from
+the client side to disable eager-close for that datasource.
+
+Tradeoff: keeping session/connection context improves continuity for that client flow, but it also reduces the
+connection turnover gains that eager-close provides.
+
+#### Configuration
+```bash
+# Global server default (enabled by default)
+-Dojp.statement.eagerClose.enabled=true
+```
+
+Per-datasource override is also supported through **client-side datasource properties** (see
+[OJP JDBC Configuration](../configuration/ojp-jdbc-configuration.md)), so different pools can use different settings:
+
 ## 6.8 Client Throttling Signals
 
 While client-side throttling is configured on the **driver side** (see

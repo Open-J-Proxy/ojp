@@ -13,16 +13,21 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.Parameter;
+import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.LobDataBlocksInputStream;
 import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.cache.QueryCacheHelper;
 import org.openjproxy.grpc.server.sql.SqlSessionAffinityDetector;
+import org.openjproxy.grpc.server.statement.EagerCloseHelper;
 import org.openjproxy.grpc.server.statement.ParameterHandler;
 import org.openjproxy.grpc.server.statement.StatementFactory;
 import org.openjproxy.grpc.server.utils.StatementRequestValidator;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -97,12 +102,13 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
      */
     @SuppressWarnings("java:S2095")
     private OpResult executeUpdateInternal(ActionContext actionContext, StatementRequest request) throws SQLException {
-        int updated = 0;
-        ConnectionSessionDTO dto = null;
+        OpResult eagerResult = tryExecuteUpdateEagerClose(actionContext, request);
+        if (eagerResult != null) {
+            return eagerResult;
+        }
 
-        Statement stmt = null;
-        String psUUID = "";
-        String generatedKeysUuid = "";
+        ConnectionSessionDTO dto = null;
+        UpdateExecutionResult executionResult = new UpdateExecutionResult();
 
         var sessionManager = actionContext.getSessionManager();
 
@@ -123,26 +129,10 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
                     : null;
 
-            if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys) {
-                if (!request.getStatementUUID().isEmpty() && ps != null) {
-                    bindLobsAndParameters(sessionManager, dto, ps, params);
-                } else {
-                    ps = StatementFactory.createPreparedStatement(sessionManager, dto, request.getSql(), params,
-                            request);
-                    generatedKeysUuid = registerForGeneratedKeys(sessionManager, dto, request, ps);
-                }
-                if (StatementRequestValidator.isAddBatchOperation(request)) {
-                    psUUID = addBatchAndGetStatementUUID(sessionManager, dto, ps, request);
-                } else {
-                    updated = ps.executeUpdate();
-                }
-                stmt = ps;
-            } else {
-                stmt = StatementFactory.createStatement(sessionManager, dto.getConnection(), request);
-                updated = stmt.executeUpdate(request.getSql());
-            }
+            executeSqlAndCaptureOutcome(sessionManager, dto, request, params, ps, requiresGeneratedKeys, executionResult);
 
-            OpResult result = buildOpResult(request, dto.getSession(), psUUID, updated, generatedKeysUuid, actionContext);
+            OpResult result = buildOpResult(request, dto.getSession(), executionResult.psUUID, executionResult.updated,
+                    executionResult.generatedKeysUuid, actionContext);
 
             // Phase 9: Cache Invalidation (after successful update)
             org.openjproxy.grpc.server.cache.QueryCacheHelper.invalidateCacheIfEnabled(actionContext, dto.getSession(), request.getSql());
@@ -153,8 +143,54 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
 
             return result;
         } finally {
-            closeStatementAndConnectionIfNoSession(dto, stmt);
+            closeStatementAndConnectionIfNoSession(dto, executionResult.statement);
         }
+    }
+
+    private OpResult tryExecuteUpdateEagerClose(ActionContext actionContext, StatementRequest request) throws SQLException {
+        if (!isEagerCloseEnabledForRequest(actionContext, request)) {
+            return null;
+        }
+        if (!EagerCloseHelper.canEagerCloseExecuteUpdate(request, request.getSession())) {
+            return null;
+        }
+        log.debug("Attempting eager-close path for executeUpdate");
+        return executeUpdateEagerClose(actionContext, request);
+    }
+
+    private boolean isEagerCloseEnabledForRequest(ActionContext actionContext, StatementRequest request) {
+        if (request.getSession() == null) {
+            return actionContext.getServerConfiguration().isStatementEagerCloseEnabled();
+        }
+        String connHash = request.getSession().getConnHash();
+        return actionContext.getStatementEagerCloseEnabledByConnHash()
+                .getOrDefault(connHash, actionContext.getServerConfiguration().isStatementEagerCloseEnabled());
+    }
+
+    private void executeSqlAndCaptureOutcome(SessionManager sessionManager, ConnectionSessionDTO dto,
+                                             StatementRequest request, List<Parameter> params,
+                                             PreparedStatement existingPreparedStatement,
+                                             boolean requiresGeneratedKeys,
+                                             UpdateExecutionResult result) throws SQLException {
+        PreparedStatement ps = existingPreparedStatement;
+        if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys) {
+            if (!request.getStatementUUID().isEmpty() && ps != null) {
+                bindLobsAndParameters(sessionManager, dto, ps, params);
+            } else {
+                ps = StatementFactory.createPreparedStatement(sessionManager, dto, request.getSql(), params,
+                        request);
+                result.generatedKeysUuid = registerForGeneratedKeys(sessionManager, dto, request, ps);
+            }
+            if (StatementRequestValidator.isAddBatchOperation(request)) {
+                result.psUUID = addBatchAndGetStatementUUID(sessionManager, dto, ps, request);
+            } else {
+                result.updated = ps.executeUpdate();
+            }
+            result.statement = ps;
+            return;
+        }
+        result.statement = StatementFactory.createStatement(sessionManager, dto.getConnection(), request);
+        result.updated = result.statement.executeUpdate(request.getSql());
     }
 
     /**
@@ -257,6 +293,55 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
     }
 
     /**
+     * Executes a non-transactional DML update using the eager-close path.
+     *
+     * <p>Acquires a physical connection, executes the update, and immediately
+     * releases all JDBC resources using try-with-resources. No server-side session
+     * is created or modified.
+     *
+     * <p>Returns {@code null} when the pooled DataSource is unavailable for the
+     * given connection hash, signalling the caller to fall back to the standard path.
+     *
+     * @param actionContext the action context
+     * @param request       the statement request
+     * @return the operation result, or {@code null} if the standard path should be used
+     * @throws SQLException if the update fails
+     */
+    private OpResult executeUpdateEagerClose(ActionContext actionContext, StatementRequest request)
+            throws SQLException {
+        String connHash = request.getSession().getConnHash();
+        DataSource dataSource = actionContext.getDatasourceMap().get(connHash);
+        if (dataSource == null) {
+            // Not a pooled connection — fall through to the standard path
+            return null;
+        }
+
+        List<Parameter> params = ProtoConverter.fromProtoList(request.getParametersList());
+        int updated;
+
+        try (Connection conn = ConnectionAcquisitionManager.acquireConnection(dataSource, connHash)) {
+            if (CollectionUtils.isNotEmpty(params)) {
+                try (PreparedStatement ps = conn.prepareStatement(request.getSql())) {
+                    ParameterHandler.addParametersPreparedStatement(
+                            actionContext.getSessionManager(), request.getSession(), ps, params);
+                    updated = ps.executeUpdate();
+                }
+            } else {
+                try (Statement stmt = conn.createStatement()) {
+                    updated = stmt.executeUpdate(request.getSql());
+                }
+            }
+        }
+
+        QueryCacheHelper.invalidateCacheIfEnabled(actionContext, request.getSession(), request.getSql());
+        return OpResult.newBuilder()
+                .setType(ResultType.INTEGER)
+                .setSession(request.getSession())
+                .setIntValue(updated)
+                .build();
+    }
+
+    /**
      * Closes the statement and its connection when there is no session (stateless
      * execution). This must be done when the connection was obtained without a
      * session, as it would otherwise be left open.
@@ -299,5 +384,12 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             registry.markWrite(primaryName);
             log.debug("Read/write splitting: sticky session marked for primary '{}' after write", primaryName);
         }
+    }
+
+    private static final class UpdateExecutionResult {
+        private int updated;
+        private String psUUID = "";
+        private String generatedKeysUuid = "";
+        private Statement statement;
     }
 }

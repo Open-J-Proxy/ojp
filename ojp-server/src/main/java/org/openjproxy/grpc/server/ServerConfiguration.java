@@ -67,6 +67,7 @@ public class ServerConfiguration {
     private static final String XA_STATEMENT_CACHE_SQL_LIMIT_KEY = CommonConstants.XA_STATEMENT_CACHE_SQL_LIMIT_PROPERTY;
     private static final String XA_STATEMENT_CACHE_SERVER_PREPARE_KEY = CommonConstants.XA_STATEMENT_CACHE_SERVER_PREPARE_PROPERTY;
     private static final String XA_STATEMENT_CACHE_PREPARE_THRESHOLD_KEY = CommonConstants.XA_STATEMENT_CACHE_PREPARE_THRESHOLD_PROPERTY;
+    private static final String STATEMENT_EAGER_CLOSE_ENABLED_KEY = "ojp.statement.eagerClose.enabled";
     private static final String RESULTSET_ROWS_PER_BLOCK_KEY = CommonConstants.RESULTSET_ROWS_PER_BLOCK_PROPERTY;
 
     // Schema loader configuration keys
@@ -191,6 +192,9 @@ public class ServerConfiguration {
     public static final long DEFAULT_XA_IDLE_TIMEOUT_MINUTES = 10;
     public static final long DEFAULT_XA_MAX_LIFETIME_MINUTES = 30;
 
+    // Statement eager close default values
+    public static final boolean DEFAULT_STATEMENT_EAGER_CLOSE_ENABLED = true; // Enabled by default
+
     // ResultSet streaming default values
     public static final int DEFAULT_RESULTSET_ROWS_PER_BLOCK = CommonConstants.DEFAULT_RESULTSET_ROWS_PER_BLOCK; // 100 rows per streaming block
     public static final int MIN_RESULTSET_ROWS_PER_BLOCK = 1;
@@ -281,6 +285,9 @@ public class ServerConfiguration {
     private final String tlsKeystoreType;
     private final String tlsTruststoreType;
     private final boolean tlsClientAuthRequired;
+
+    // Statement eager close configuration
+    private final boolean statementEagerCloseEnabled;
 
     // ResultSet streaming configuration
     private final int resultsetRowsPerBlock;
@@ -380,6 +387,9 @@ public class ServerConfiguration {
         this.telemetryPoolMetricsEnabled = getBooleanProperty(TELEMETRY_POOL_METRICS_ENABLED_KEY, DEFAULT_TELEMETRY_POOL_METRICS_ENABLED);
         this.telemetryCacheMetricsEnabled = getBooleanProperty(TELEMETRY_CACHE_METRICS_ENABLED_KEY, DEFAULT_TELEMETRY_CACHE_METRICS_ENABLED);
         this.telemetryCircuitBreakerMetricsEnabled = getBooleanProperty(TELEMETRY_CIRCUIT_BREAKER_ENABLED_KEY, DEFAULT_TELEMETRY_CIRCUIT_BREAKER_ENABLED);
+
+        // Statement eager close configuration
+        this.statementEagerCloseEnabled = getBooleanProperty(STATEMENT_EAGER_CLOSE_ENABLED_KEY, DEFAULT_STATEMENT_EAGER_CLOSE_ENABLED);
 
         // ResultSet streaming configuration
         this.resultsetRowsPerBlock = getBoundedIntProperty(RESULTSET_ROWS_PER_BLOCK_KEY, DEFAULT_RESULTSET_ROWS_PER_BLOCK,
@@ -627,6 +637,7 @@ public class ServerConfiguration {
             logger.info("  Tracing Service Name: {}", tracingServiceName);
             logger.info("  Tracing Sample Rate: {}", tracingSampleRate);
         }
+        logger.info("  Statement Eager Close Enabled: {}", statementEagerCloseEnabled);
         logger.info("ResultSet Streaming Configuration:");
         logger.info("  ResultSet Rows Per Block: {}", resultsetRowsPerBlock);
     }
@@ -953,6 +964,10 @@ public class ServerConfiguration {
 
     public boolean isTelemetryCacheMetricsEnabled() {
         return telemetryCacheMetricsEnabled;
+    }
+
+    public boolean isStatementEagerCloseEnabled() {
+        return statementEagerCloseEnabled;
     }
 
     public int getResultsetRowsPerBlock() {

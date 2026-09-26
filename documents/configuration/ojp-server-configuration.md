@@ -180,6 +180,66 @@ Controls how the server batches rows into gRPC streaming messages when returning
 - The default of 100 matches the historical behaviour and is a safe starting point for most workloads.
 - Values below 1 or above 10000 are rejected and the default is used instead.
 
+### Statement Eager-Close Settings
+
+Controls whether eligible non-transactional DML operations (`INSERT`, `UPDATE`, `DELETE`, `MERGE`) run in
+**eager-close mode**.
+
+In eager-close mode, OJP:
+- borrows a physical JDBC connection from the pool,
+- executes the statement,
+- closes the JDBC `Statement`/`PreparedStatement`,
+- and closes the JDBC `Connection` handle (returning it to the pool),
+all in the same request, without creating a long-lived server session.
+
+| Property                            | Environment Variable                | Type    | Default | Description                                                                                       | Since |
+|-------------------------------------|-------------------------------------|---------|---------|---------------------------------------------------------------------------------------------------|-------|
+| `ojp.statement.eagerClose.enabled`  | `OJP_STATEMENT_EAGERCLOSE_ENABLED`  | boolean | `true`  | Enables eager-close fast path for eligible `executeUpdate` requests                               | 0.4.15-SNAPSHOT |
+
+#### Advantages
+- Lower resource retention for short write statements.
+- Better pool turnover in write-heavy auto-commit workloads.
+- Avoids unnecessary session lifecycle overhead for simple updates.
+- Improves overall server-side connection utilization by returning pooled connections quickly.
+
+#### Conditions required to use eager-close
+The request falls back to the standard session path when any of the following is true:
+- a server session is already open for the connection
+- the operation is inside an active transaction
+- batch mode requested
+- generated keys tracking requested
+- an existing server-side statement handle is being reused
+- session-affinity SQL (`SET`, temp-table/session-state style SQL, etc.)
+- LOB/stream parameters (BLOB/CLOB/ASCII_STREAM/UNICODE_STREAM/BINARY_STREAM)
+- SQL is not plain `INSERT`/`UPDATE`/`DELETE`/`MERGE`
+
+#### Important lifecycle implication
+- Eager-close closes the JDBC `Statement`/`PreparedStatement` **and** closes the JDBC `Connection` handle
+  immediately after execution.
+- For pooled datasources, closing the connection returns it to the pool (it is not a physical socket teardown).
+- Because resources are closed immediately, callers cannot reuse that same server-side statement handle afterward.
+
+#### What happens on subsequent statements?
+If the caller sends another `executeUpdate`/`prepare` after a prior eager-close operation:
+- a new pooled connection can be borrowed (not necessarily the same physical connection),
+- a new JDBC statement is created,
+- and execution proceeds normally.
+
+If the caller needs statement/session continuity across calls, the standard session-based path is used
+(for example, with explicit session/transaction context).
+
+#### Multi-statement performance guidance
+For clients that need fast execution of multiple statements in sequence, prefer running those statements in a
+transaction (or otherwise keeping one server session open for the sequence). This avoids re-entering admission
+queueing and repeated borrow/release cycles for every statement.
+
+If a transaction is not desired, a practical workaround is to run the statements in batch mode. That creates a server session, so subsequent updates on that same connection
+follow the session-based path and do not use eager-close.
+
+#### Per-datasource configuration
+Yes. You can set this per datasource through **client-side datasource properties**, so different pools can have different behavior.
+See the client configuration guide: [`documents/configuration/ojp-jdbc-configuration.md`](./ojp-jdbc-configuration.md).
+
 ### Connection Pool Settings
 
 | Property                                       | Environment Variable                           | Type | Default | Description                                       | Since |

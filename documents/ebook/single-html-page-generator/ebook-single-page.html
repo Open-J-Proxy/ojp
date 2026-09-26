@@ -308,6 +308,7 @@
         if (!heading) {
             heading = node.closest('section, article, div, main')?.querySelector?.('h1, h2, h3')?.textContent?.trim() || '';
         }
+        heading = heading.replace(/\s*#\s*$/, '').trim();
         if (heading) {
             return heading;
         }
@@ -319,6 +320,11 @@
     function normalizeMermaidSourceForRetry(source) {
         return source
             .replace(/note\s+right\s+of\s+\[\*\]/g, 'note right of PENDING_CLOSE');
+    }
+
+    function normalizeMermaidSourceForSecondRetry(source) {
+        return source
+            .replace(/^.*note\s+right\s+of\s+\[\*\].*$/gim, '');
     }
 
     async function renderMermaidDiagrams(root) {
@@ -336,25 +342,30 @@
                     rendered = await window.mermaid.render(diagramId, source);
                 } catch (firstError) {
                     const retriedSource = normalizeMermaidSourceForRetry(source);
-                    if (retriedSource === source) {
-                        throw firstError;
+                    if (retriedSource !== source) {
+                        try {
+                            rendered = await window.mermaid.render(`${diagramId}-retry`, retriedSource);
+                        } catch (secondError) {
+                            const secondRetriedSource = normalizeMermaidSourceForSecondRetry(source);
+                            if (secondRetriedSource !== source) {
+                                rendered = await window.mermaid.render(`${diagramId}-retry2`, secondRetriedSource);
+                            } else {
+                                throw secondError;
+                            }
+                        }
+                    } else {
+                        const secondRetriedSource = normalizeMermaidSourceForSecondRetry(source);
+                        if (secondRetriedSource !== source) {
+                            rendered = await window.mermaid.render(`${diagramId}-retry2`, secondRetriedSource);
+                        } else {
+                            throw firstError;
+                        }
                     }
-                    rendered = await window.mermaid.render(`${diagramId}-retry`, retriedSource);
                 }
                 const { svg, bindFunctions } = rendered;
                 const container = document.createElement('div');
                 container.className = 'mermaid';
-                const svgFragment = DOMPurify.sanitize(svg, {
-                    RETURN_DOM_FRAGMENT: true,
-                    USE_PROFILES: { html: true, svg: true, svgFilters: true },
-                    ADD_TAGS: ['style', 'foreignObject'],
-                    ADD_ATTR: [
-                        'id', 'class', 'style', 'role', 'aria-labelledby',
-                        'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex',
-                        'xmlns', 'x', 'y', 'width', 'height', 'requiredFeatures', 'requiredExtensions'
-                    ]
-                });
-                container.replaceChildren(svgFragment);
+                container.innerHTML = svg;
                 node.replaceWith(container);
                 if (typeof bindFunctions === 'function') {
                     bindFunctions(container);
@@ -492,16 +503,6 @@
             if (hasMermaid) {
                 try {
                     const { failedCount, failedNames } = await renderMermaidDiagrams(ebookContainer);
-                    DOMPurify.sanitize(ebookContainer, {
-                        IN_PLACE: true,
-                        USE_PROFILES: { html: true, svg: true, svgFilters: true },
-                        ADD_TAGS: ['style', 'foreignObject'],
-                        ADD_ATTR: [
-                            'id', 'class', 'style', 'href', 'aria-label', 'align', 'role', 'aria-labelledby',
-                            'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex',
-                            'xmlns', 'x', 'y', 'width', 'height', 'requiredFeatures', 'requiredExtensions'
-                        ]
-                    });
                     if (failedCount > 0) {
                         mermaidError = `${failedCount} Mermaid diagram(s) failed: ${failedNames.join(', ')}`;
                     }

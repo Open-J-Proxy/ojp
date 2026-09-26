@@ -1,0 +1,37 @@
+{
+  "name": "@ojp/node-driver",
+  "version": "1.0.0",
+  "description": "Node.js/TypeScript driver for OJP (Open J Proxy) via gRPC.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "prebuild": "node scripts/verify-proto-types.js",
+    "build": "tsc",
+    "verify-types": "node scripts/verify-proto-types.js",
+    "pretest": "node scripts/verify-proto-types.js",
+    "test": "jest test/valueMapper.test.ts test/connectionString.test.ts test/xa.test.ts",
+    "test:integration": "jest test/integration.ojpServer.test.ts",
+    "test:lob-h2": "jest test/integration.lob.h2.test.ts",
+    "test:sqlserver-ag": "jest test/integration.sqlServerAg.test.ts",
+    "test:multinode-failover": "jest test/integration.multinode.test.ts",
+    "test:xa": "jest test/integration.xa.postgres.test.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "1.10.9",
+    "@grpc/proto-loader": "0.7.13",
+    "@ojp/grpc-contract": "file:../ojp-grpc-contract",
+    "google-proto-files": "1.1.1",
+    "protobufjs": "7.6.6"
+  },
+  "devDependencies": {
+    "@types/jest": "29.5.12",
+    "@types/node": "20.14.10",
+    "jest": "29.7.0",
+    "ts-jest": "29.1.5",
+    "typescript": "5.5.3"
+  },
+  "private": true
+}

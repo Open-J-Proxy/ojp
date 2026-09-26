@@ -1,0 +1,32 @@
+{
+  "name": "@ojp/typeorm-driver",
+  "version": "0.1.0",
+  "description": "TypeORM driver adapter for OJP (Open J Proxy), usable directly from NestJS.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "jest test/sqlTranslate.test.ts test/OjpPgPool.test.ts test/mssqlSqlTranslate.test.ts test/OjpMssqlPool.test.ts test/rowShaping.test.ts",
+    "test:integration": "jest test/integration.postgres.test.ts",
+    "test:integration:mssql": "jest test/integration.mssql.test.ts"
+  },
+  "dependencies": {
+    "@ojp/node-driver": "file:../ojp-node-driver"
+  },
+  "peerDependencies": {
+    "typeorm": "^0.3.20"
+  },
+  "devDependencies": {
+    "@types/jest": "29.5.12",
+    "@types/node": "20.14.10",
+    "jest": "29.7.0",
+    "reflect-metadata": "0.2.2",
+    "ts-jest": "29.1.5",
+    "typeorm": "0.3.20",
+    "typescript": "5.5.3"
+  },
+  "private": true
+}

@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
 
-    private static final String TABLE_NAME = "ojp_eager_close_benchmark";
+    private static final String TABLE_NAME_PREFIX = "ojp_eager_close_benchmark_";
     private static final int CONCURRENT_THREADS = 100;
     private static final int WARMUP_OPERATIONS = 100;
     private static final int MEASURED_OPERATIONS = 1000;
@@ -46,8 +46,9 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
 
-        ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false);
-        ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true);
+        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_";
+        ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
+        ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
 
         logScenario("disabled", eagerCloseDisabled);
         logScenario("enabled", eagerCloseEnabled);
@@ -68,12 +69,13 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
      * Note for reliability runs: restarting the PostgreSQL container between scenarios is acceptable.
      * Each scenario re-creates and re-seeds the table, then runs warmup and measured operations independently.
      */
-    private ScenarioResult runScenario(String url, String user, String password, boolean eagerCloseEnabled) throws Exception {
+    private ScenarioResult runScenario(
+            String url, String user, String password, boolean eagerCloseEnabled, String tableName) throws Exception {
         Properties connectionProperties = createConnectionProperties(user, password, eagerCloseEnabled);
-        prepareBenchmarkTable(url, connectionProperties);
+        prepareBenchmarkTable(url, connectionProperties, tableName);
 
-        executeConcurrentMixedDml(url, connectionProperties, WARMUP_OPERATIONS);
-        return executeConcurrentMixedDml(url, connectionProperties, MEASURED_OPERATIONS);
+        executeConcurrentMixedDml(url, connectionProperties, WARMUP_OPERATIONS, tableName);
+        return executeConcurrentMixedDml(url, connectionProperties, MEASURED_OPERATIONS, tableName);
     }
 
     private Properties createConnectionProperties(String user, String password, boolean eagerCloseEnabled) {
@@ -86,32 +88,26 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
         return properties;
     }
 
-    private void prepareBenchmarkTable(String url, Properties properties) throws SQLException {
+    private void prepareBenchmarkTable(String url, Properties properties, String tableName) throws SQLException {
         try (Connection connection = DriverManager.getConnection(url, properties);
                 Statement statement = connection.createStatement()) {
-            statement.execute("DROP TABLE IF EXISTS " + TABLE_NAME);
+            statement.execute("DROP TABLE IF EXISTS " + tableName);
             statement.execute(
-                    "CREATE TABLE " + TABLE_NAME + " ("
+                    "CREATE TABLE " + tableName + " ("
                             + "id BIGINT PRIMARY KEY, "
                             + "payload VARCHAR(120), "
                             + "updated_at TIMESTAMP DEFAULT NOW()"
                             + ")"
             );
-        }
-
-        try (Connection connection = DriverManager.getConnection(url, properties);
-                PreparedStatement insertStatement = connection.prepareStatement(
-                        "INSERT INTO " + TABLE_NAME + " (id, payload) VALUES (?, ?)")) {
-            for (int id = 1; id <= SEED_ROWS; id++) {
-                insertStatement.setLong(1, id);
-                insertStatement.setString(2, "seed-" + id);
-                insertStatement.addBatch();
-            }
-            insertStatement.executeBatch();
+            statement.executeUpdate(
+                    "INSERT INTO " + tableName + " (id, payload) "
+                            + "SELECT g, 'seed-' || g FROM generate_series(1, " + SEED_ROWS + ") g"
+            );
         }
     }
 
-    private ScenarioResult executeConcurrentMixedDml(String url, Properties properties, int operationCount) throws Exception {
+    private ScenarioResult executeConcurrentMixedDml(
+            String url, Properties properties, int operationCount, String tableName) throws Exception {
         ExecutorService executorService = Executors.newFixedThreadPool(CONCURRENT_THREADS);
         CountDownLatch startLatch = new CountDownLatch(1);
 
@@ -126,7 +122,7 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
                 startLatch.await();
                 long start = System.nanoTime();
                 try {
-                    executeSingleOperation(url, properties, currentIndex, insertIds);
+                    executeSingleOperation(url, properties, currentIndex, insertIds, tableName);
                     successes.incrementAndGet();
                 } catch (SQLException e) {
                     failures.incrementAndGet();
@@ -148,41 +144,42 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
         return new ScenarioResult(successes.get(), failures.get(), p95Latency);
     }
 
-    private void executeSingleOperation(String url, Properties properties, int operationIndex, AtomicInteger insertIds)
+    private void executeSingleOperation(
+            String url, Properties properties, int operationIndex, AtomicInteger insertIds, String tableName)
             throws SQLException {
         int operationType = operationIndex % 3;
         try (Connection connection = DriverManager.getConnection(url, properties)) {
             if (operationType == 0) {
-                executeInsert(connection, insertIds.incrementAndGet());
+                executeInsert(connection, insertIds.incrementAndGet(), tableName);
             } else if (operationType == 1) {
-                executeUpdate(connection, (operationIndex % SEED_ROWS) + 1);
+                executeUpdate(connection, (operationIndex % SEED_ROWS) + 1, tableName);
             } else {
-                executeDelete(connection, (operationIndex % SEED_ROWS) + 1);
+                executeDelete(connection, (operationIndex % SEED_ROWS) + 1, tableName);
             }
         }
     }
 
-    private void executeInsert(Connection connection, int id) throws SQLException {
+    private void executeInsert(Connection connection, int id, String tableName) throws SQLException {
         try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "INSERT INTO " + TABLE_NAME + " (id, payload) VALUES (?, ?)")) {
+                "INSERT INTO " + tableName + " (id, payload) VALUES (?, ?)")) {
             preparedStatement.setInt(1, id);
             preparedStatement.setString(2, "payload-" + id);
             preparedStatement.executeUpdate();
         }
     }
 
-    private void executeUpdate(Connection connection, int id) throws SQLException {
+    private void executeUpdate(Connection connection, int id, String tableName) throws SQLException {
         try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "UPDATE " + TABLE_NAME + " SET payload = ?, updated_at = NOW() WHERE id = ?")) {
+                "UPDATE " + tableName + " SET payload = ?, updated_at = NOW() WHERE id = ?")) {
             preparedStatement.setString(1, "updated-" + id);
             preparedStatement.setInt(2, id);
             preparedStatement.executeUpdate();
         }
     }
 
-    private void executeDelete(Connection connection, int id) throws SQLException {
+    private void executeDelete(Connection connection, int id, String tableName) throws SQLException {
         try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "DELETE FROM " + TABLE_NAME + " WHERE id = ?")) {
+                "DELETE FROM " + tableName + " WHERE id = ?")) {
             preparedStatement.setInt(1, id);
             preparedStatement.executeUpdate();
         }

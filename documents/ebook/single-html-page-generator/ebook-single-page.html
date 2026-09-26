@@ -31,8 +31,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(145deg, #0f172a 0%, #1e293b 45%, #0b3b66 100%);
-            color: #f8fafc;
+            color: #1f2937;
             text-align: center;
         }
         .cover h1 {
@@ -44,10 +43,9 @@
         .cover .labs {
             margin-top: 18px;
             display: inline-block;
-            border: 1px solid #38bdf8;
             border-radius: 999px;
             padding: 6px 14px;
-            color: #bae6fd;
+            color: #1f2937;
             font-weight: 600;
         }
         .toc h2 { margin-top: 0; }
@@ -63,6 +61,15 @@
             margin-bottom: 16px;
             font-size: 0.95rem;
             border: 1px solid #bae6fd;
+        }
+        .status button {
+            margin-left: 10px;
+            border: 1px solid #94a3b8;
+            border-radius: 6px;
+            background: #ffffff;
+            color: #1f2937;
+            cursor: pointer;
+            padding: 4px 8px;
         }
         pre {
             background: #0b1020;
@@ -105,7 +112,10 @@
         <h2>Index</h2>
         <ol id="index-list"></ol>
     </section>
-    <div id="status" class="status">Loading chapters...</div>
+    <div id="status" class="status">
+        <span id="status-text">Loading chapters...</span>
+        <button id="status-dismiss" type="button" style="display:none;">Dismiss</button>
+    </div>
     <main id="ebook" class="page"></main>
     <p class="muted">Note: image prompts and image/logo embeds are intentionally removed.</p>
 </div>
@@ -203,6 +213,10 @@
 
     function sanitizeMarkdown(markdown) {
         let cleaned = stripImagePromptBlocks(markdown);
+        cleaned = cleaned
+            .split('\n')
+            .filter((line) => !/\[\s*(?:AI\s+)?IMAGE[_\s-]*PROMPT/i.test(line) && !/\bIMAGE_PROMPT_[A-Z0-9_]+/i.test(line))
+            .join('\n');
         cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
         return cleaned.trim() + '\n';
     }
@@ -285,6 +299,7 @@
     async function renderMermaidDiagrams(root) {
         const diagrams = Array.from(root.querySelectorAll('.mermaid'));
         let failedCount = 0;
+        const failedNames = [];
 
         for (let index = 0; index < diagrams.length; index += 1) {
             const node = diagrams[index];
@@ -311,6 +326,8 @@
 
             } catch (error) {
                 failedCount += 1;
+                const heading = node.closest('section, article, div, main')?.querySelector?.('h1, h2, h3')?.textContent?.trim();
+                failedNames.push(heading || `diagram-${index + 1}`);
                 const pre = document.createElement('pre');
                 const code = document.createElement('code');
                 code.className = 'language-mermaid';
@@ -320,13 +337,38 @@
             }
         }
 
-        return failedCount;
+        return { failedCount, failedNames };
     }
 
     function renderIndexFromHeadings() {
         const indexList = document.getElementById('index-list');
         if (!indexList) {
             return;
+        }
+
+        function setStatus(statusText, level = 'info', withDismiss = false) {
+            const status = document.getElementById('status');
+            const text = document.getElementById('status-text');
+            const dismiss = document.getElementById('status-dismiss');
+            text.textContent = statusText;
+            dismiss.style.display = withDismiss ? 'inline-block' : 'none';
+            if (level === 'error') {
+                status.style.background = '#fee2e2';
+                status.style.borderColor = '#fca5a5';
+                status.style.color = '#991b1b';
+            } else if (level === 'warning') {
+                status.style.background = '#fff7ed';
+                status.style.borderColor = '#fed7aa';
+                status.style.color = '#9a3412';
+            } else if (level === 'success') {
+                status.style.background = '#ecfdf5';
+                status.style.borderColor = '#86efac';
+                status.style.color = '#166534';
+            } else {
+                status.style.background = '#e0f2fe';
+                status.style.borderColor = '#bae6fd';
+                status.style.color = '#0c4a6e';
+            }
         }
         indexList.innerHTML = '';
         const chapterHeadings = Array.from(document.querySelectorAll('#ebook h1[id]'));
@@ -369,7 +411,6 @@
     }
 
     async function render() {
-        const status = document.getElementById('status');
         const ebookContainer = document.getElementById('ebook');
         try {
             marked.setOptions({
@@ -383,7 +424,16 @@
                 window.mermaid.initialize({
                     startOnLoad: false,
                     securityLevel: 'strict',
-                    theme: 'default'
+                    theme: 'default',
+                    themeVariables: {
+                        primaryTextColor: '#1f2937',
+                        secondaryTextColor: '#1f2937',
+                        tertiaryTextColor: '#1f2937',
+                        textColor: '#1f2937',
+                        lineColor: '#334155',
+                        clusterBkg: '#ffffff',
+                        clusterBorder: '#94a3b8'
+                    }
                 });
             } else {
                 mermaidError = 'Mermaid library unavailable; diagrams are shown as code blocks.';
@@ -402,7 +452,7 @@
             convertMermaidCodeBlocks(ebookContainer);
             if (hasMermaid) {
                 try {
-                    const failedMermaidDiagrams = await renderMermaidDiagrams(ebookContainer);
+                    const { failedCount, failedNames } = await renderMermaidDiagrams(ebookContainer);
                     DOMPurify.sanitize(ebookContainer, {
                         IN_PLACE: true,
                         USE_PROFILES: { html: true, svg: true, svgFilters: true },
@@ -412,8 +462,8 @@
                             'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
                         ]
                     });
-                    if (failedMermaidDiagrams > 0) {
-                        mermaidError = `${failedMermaidDiagrams} Mermaid diagram(s) failed and were left as code blocks`;
+                    if (failedCount > 0) {
+                        mermaidError = `${failedCount} Mermaid diagram(s) failed: ${failedNames.join(', ')}`;
                     }
                 } catch (error) {
                     mermaidError = error?.message || 'one or more Mermaid diagrams failed to render';
@@ -421,29 +471,22 @@
             }
 
             if (failures.length > 0) {
-                status.textContent = `Loaded ${loadedCount} section(s) with ${failures.length} missing file(s): ${failures.join(', ')}${mermaidError ? `. Mermaid warning: ${mermaidError}` : ''}`;
-                status.style.background = '#fff7ed';
-                status.style.borderColor = '#fed7aa';
-                status.style.color = '#9a3412';
+                setStatus(`Loaded ${loadedCount} section(s) with ${failures.length} missing file(s): ${failures.join(', ')}${mermaidError ? `. Mermaid warning: ${mermaidError}` : ''}`, 'warning', true);
             } else if (mermaidError) {
-                status.textContent = `Loaded ${loadedCount} sections. Mermaid warning: ${mermaidError}`;
-                status.style.background = '#fff7ed';
-                status.style.borderColor = '#fed7aa';
-                status.style.color = '#9a3412';
+                setStatus(`Loaded ${loadedCount} sections. Mermaid warning: ${mermaidError}`, 'warning', true);
             } else {
-                status.textContent = `Loaded ${loadedCount} sections successfully.`;
-                status.style.background = '#ecfdf5';
-                status.style.borderColor = '#86efac';
-                status.style.color = '#166534';
+                setStatus(`Loaded ${loadedCount} sections successfully.`, 'success', false);
             }
             renderIndexFromHeadings();
         } catch (error) {
-            status.textContent = `Render failed: ${error?.message || 'unexpected error'}`;
-            status.style.background = '#fee2e2';
-            status.style.borderColor = '#fca5a5';
-            status.style.color = '#991b1b';
+            setStatus(`Render failed: ${error?.message || 'unexpected error'}`, 'error', true);
         }
     }
+
+    document.getElementById('status-dismiss')?.addEventListener('click', () => {
+        const status = document.getElementById('status');
+        status.style.display = 'none';
+    });
 
     render();
 </script>

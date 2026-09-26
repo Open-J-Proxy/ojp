@@ -122,7 +122,6 @@
 <script src="./vendor/marked.umd.js"></script>
 <script src="./vendor/purify.min.js"></script>
 <script src="./vendor/mermaid.min.js"></script>
-<script src="./ebook-single-page-content.js"></script>
 <script>
     const EBOOK_FILES = [
         'part1-chapter1-introduction.md',
@@ -441,14 +440,8 @@
     async function loadMarkdownFiles() {
         const failures = [];
         const chunks = [];
-        const bundledMarkdown = window.EBOOK_MARKDOWN || {};
 
         for (const file of EBOOK_FILES) {
-            if (typeof bundledMarkdown[file] === 'string') {
-                const sanitized = sanitizeMarkdown(bundledMarkdown[file]);
-                chunks.push(`<!-- ${file} -->\n${sanitized}`);
-                continue;
-            }
             try {
                 const response = await fetch(`../${file}`, { cache: 'no-store' });
                 if (!response.ok) {

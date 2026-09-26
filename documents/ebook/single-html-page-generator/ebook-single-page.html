@@ -522,7 +522,7 @@
             } else if (mermaidError) {
                 setStatus(`Loaded ${loadedCount} sections. Mermaid warning: ${mermaidError}`, 'warning', true);
             } else {
-                setStatus(`Loaded ${loadedCount} sections successfully.`, 'success', true);
+                document.getElementById('status').style.display = 'none';
             }
             renderIndexFromHeadings();
         } catch (error) {

@@ -217,7 +217,6 @@
     const usedHeadingIds = new Map();
     const slugifyHeading = (value) => {
         const plainText = String(value || '')
-            .replace(/<[^>]*>/g, '')
             .normalize('NFKD')
             .replace(/\p{Diacritic}/gu, '');
         return plainText
@@ -225,6 +224,17 @@
             .replace(/[^\p{L}\p{N}\s-]/gu, '')
             .trim()
             .replace(/\s+/g, '-');
+    };
+    const extractTokenText = (tokens = []) => {
+        return tokens.map((token) => {
+            if (token.type === 'text' || token.type === 'codespan' || token.type === 'escape') {
+                return token.text || '';
+            }
+            if (token.type === 'link' || token.type === 'em' || token.type === 'strong' || token.type === 'del') {
+                return extractTokenText(token.tokens || []);
+            }
+            return token.raw || token.text || '';
+        }).join('');
     };
     const getHeadingId = (rawText) => {
         const base = slugifyHeading(rawText) || 'section';
@@ -237,7 +247,7 @@
         renderer: {
             heading(token) {
                 const text = this.parser.parseInline(token.tokens);
-                const id = getHeadingId(text);
+                const id = getHeadingId(extractTokenText(token.tokens));
                 return `<h${token.depth} id="${id}">${text}<a class="heading-anchor" href="#${id}" aria-label="Link to this section"><span aria-hidden="true">#</span></a></h${token.depth}>`;
             }
         }
@@ -255,7 +265,15 @@
                 const { svg, bindFunctions } = await window.mermaid.render(diagramId, source);
                 const container = document.createElement('div');
                 container.className = 'mermaid';
-                container.innerHTML = svg;
+                const svgFragment = DOMPurify.sanitize(svg, {
+                    RETURN_DOM_FRAGMENT: true,
+                    USE_PROFILES: { svg: true, svgFilters: true },
+                    ADD_ATTR: [
+                        'id', 'class', 'role', 'aria-labelledby',
+                        'aria-hidden', 'aria-roledescription', 'focusable', 'tabindex'
+                    ]
+                });
+                container.replaceChildren(svgFragment);
                 node.replaceWith(container);
                 if (typeof bindFunctions === 'function') {
                     bindFunctions(container);
@@ -286,7 +304,7 @@
                 continue;
             }
             try {
-                const response = await fetch(file, { cache: 'no-store' });
+                const response = await fetch(`../${file}`, { cache: 'no-store' });
                 if (!response.ok) {
                     failures.push(`${file} (${response.status})`);
                     continue;

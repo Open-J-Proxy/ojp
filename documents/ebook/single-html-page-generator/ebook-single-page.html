@@ -122,6 +122,7 @@
 <script src="./vendor/marked.umd.js"></script>
 <script src="./vendor/purify.min.js"></script>
 <script src="./vendor/mermaid.min.js"></script>
+<script src="./ebook-single-page-content.js"></script>
 <script>
     const EBOOK_FILES = [
         'part1-chapter1-introduction.md',
@@ -440,20 +441,33 @@
     async function loadMarkdownFiles() {
         const failures = [];
         const chunks = [];
+        const bundledMarkdown = window.EBOOK_MARKDOWN || {};
 
         for (const file of EBOOK_FILES) {
+            let markdown = null;
+            let loadError = 'Failed to fetch';
             try {
                 const response = await fetch(`../${file}`, { cache: 'no-store' });
-                if (!response.ok) {
-                    failures.push(`${file} (${response.status})`);
-                    continue;
+                if (response.ok) {
+                    markdown = await response.text();
+                } else {
+                    loadError = `${response.status}`;
                 }
-                const markdown = await response.text();
-                const sanitized = sanitizeMarkdown(markdown);
-                chunks.push(`<!-- ${file} -->\n${sanitized}`);
             } catch (error) {
-                failures.push(`${file} (${error?.message || 'request failed'})`);
+                loadError = error?.message || 'request failed';
             }
+
+            if (markdown === null && typeof bundledMarkdown[file] === 'string') {
+                markdown = bundledMarkdown[file];
+            }
+
+            if (markdown === null) {
+                failures.push(`${file} (${loadError})`);
+                continue;
+            }
+
+            const sanitized = sanitizeMarkdown(markdown);
+            chunks.push(`<!-- ${file} -->\n${sanitized}`);
         }
 
         return { combinedMarkdown: chunks.join('\n\n---\n\n'), failures, loadedCount: chunks.length };

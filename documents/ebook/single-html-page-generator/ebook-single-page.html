@@ -309,22 +309,6 @@
                     bindFunctions(container);
                 }
 
-                function renderIndexFromHeadings() {
-                    const indexList = document.getElementById('index-list');
-                    if (!indexList) {
-                        return;
-                    }
-                    indexList.innerHTML = '';
-                    const chapterHeadings = Array.from(document.querySelectorAll('#ebook h1[id]'));
-                    chapterHeadings.forEach((heading) => {
-                        const item = document.createElement('li');
-                        const link = document.createElement('a');
-                        link.href = `#${heading.id}`;
-                        link.textContent = heading.textContent.replace('#', '').trim();
-                        item.appendChild(link);
-                        indexList.appendChild(item);
-                    });
-                }
             } catch (error) {
                 failedCount += 1;
                 const pre = document.createElement('pre');
@@ -337,6 +321,23 @@
         }
 
         return failedCount;
+    }
+
+    function renderIndexFromHeadings() {
+        const indexList = document.getElementById('index-list');
+        if (!indexList) {
+            return;
+        }
+        indexList.innerHTML = '';
+        const chapterHeadings = Array.from(document.querySelectorAll('#ebook h1[id]'));
+        chapterHeadings.forEach((heading) => {
+            const item = document.createElement('li');
+            const link = document.createElement('a');
+            link.href = `#${heading.id}`;
+            link.textContent = heading.textContent.replace('#', '').trim();
+            item.appendChild(link);
+            indexList.appendChild(item);
+        });
     }
 
     async function loadMarkdownFiles() {

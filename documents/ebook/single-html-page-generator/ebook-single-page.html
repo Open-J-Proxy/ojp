@@ -104,7 +104,7 @@
         <div>
             <h1>Open-J-Proxy E-Book</h1>
             <p>Comprehensive guide to architecture, configuration, operations, and contribution.</p>
-            <div class="labs">Open J Proxy Labs</div>
+            <div id="cover-labs" class="labs">Open J Proxy Labs</div>
         </div>
     </section>
     <section class="page toc">
@@ -432,6 +432,12 @@
         }
     }
 
+    function setCoverDate() {
+        const coverLabs = document.getElementById('cover-labs');
+        const monthYear = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' }).format(new Date());
+        coverLabs.textContent = `Open J Proxy Labs - ${monthYear}`;
+    }
+
     async function loadMarkdownFiles() {
         const failures = [];
         const chunks = [];
@@ -529,6 +535,7 @@
         status.style.display = 'none';
     });
 
+    setCoverDate();
     render();
 </script>
 </body>

@@ -426,10 +426,12 @@ Before adopting OJP, it's essential to understand whether it fits your use case.
 ```mermaid
 block-beta
 columns 5
-  H0["Workload"] H1["Connection Efficiency"] H2["Latency Fit (with OJP)"] H3["Transaction Patterns"] H4["Scale Elasticity"]
-  OLTP["OLTP"] OLTP_1["Excellent"] OLTP_2["Good"] OLTP_3["Excellent"] OLTP_4["Excellent"]
-  MIX["Mixed"] MIX_1["Excellent"] MIX_2["Mixed"] MIX_3["Good"] MIX_4["Excellent"]
-  BAT["Batch"] BAT_1["Mixed"] BAT_2["Good"] BAT_3["Poor"] BAT_4["Good"]
+  H0["Workload"] H1["Connection Control"] H2["Latency Fit (with OJP)"] H3["Visibility / Gatekeeper Value"] H4["Ops Simplification"]
+  OLTP["OLTP"] OLTP_1["Excellent"] OLTP_2["Good"] OLTP_3["Good"] OLTP_4["Excellent"]
+  MIX["Mixed OLTP / Reporting"] MIX_1["Excellent"] MIX_2["Mixed"] MIX_3["Excellent"] MIX_4["Excellent"]
+  REP["Operational Reporting / BI"] REP_1["Good"] REP_2["Mixed"] REP_3["Excellent"] REP_4["Good"]
+  BAT["Batch / ETL"] BAT_1["Good"] BAT_2["Mixed"] BAT_3["Excellent"] BAT_4["Good"]
+  MON["Monolith with Shared DB Risk"] MON_1["Mixed"] MON_2["Good"] MON_3["Excellent"] MON_4["Good"]
 
   style H0 fill:#e0e0e0,stroke:#9e9e9e,color:#000
   style H1 fill:#e0e0e0,stroke:#9e9e9e,color:#000
@@ -438,7 +440,9 @@ columns 5
   style H4 fill:#e0e0e0,stroke:#9e9e9e,color:#000
   style OLTP fill:#e0e0e0,stroke:#9e9e9e,color:#000
   style MIX fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style REP fill:#e0e0e0,stroke:#9e9e9e,color:#000
   style BAT fill:#e0e0e0,stroke:#9e9e9e,color:#000
+  style MON fill:#e0e0e0,stroke:#9e9e9e,color:#000
 
   style OLTP_1 fill:#4caf50,color:#fff
   style OLTP_2 fill:#ffc107,color:#000
@@ -447,16 +451,28 @@ columns 5
 
   style MIX_1 fill:#4caf50,color:#fff
   style MIX_2 fill:#ff7043,color:#fff
-  style MIX_3 fill:#ffc107,color:#000
+  style MIX_3 fill:#4caf50,color:#fff
   style MIX_4 fill:#4caf50,color:#fff
 
+  style REP_1 fill:#ffc107,color:#000
+  style REP_2 fill:#ff7043,color:#fff
+  style REP_3 fill:#4caf50,color:#fff
+  style REP_4 fill:#ffc107,color:#000
+
   style BAT_1 fill:#ffc107,color:#000
-  style BAT_2 fill:#4caf50,color:#fff
-  style BAT_3 fill:#ff5252,color:#fff
+  style BAT_2 fill:#ff7043,color:#fff
+  style BAT_3 fill:#4caf50,color:#fff
   style BAT_4 fill:#4caf50,color:#fff
+
+  style MON_1 fill:#ffc107,color:#000
+  style MON_2 fill:#4caf50,color:#fff
+  style MON_3 fill:#4caf50,color:#fff
+  style MON_4 fill:#ffc107,color:#000
 ```
 
-OJP excels in specific architectural patterns and workload types:
+OJP is not only a scale-out tool. It is also a database gatekeeper, a visibility layer, and an operational control point. The best fit is any environment where controlling concurrency, protecting sensitive databases, and seeing who is putting pressure on the data tier matter more than shaving every last millisecond.
+
+OJP excels in these patterns:
 
 #### ✅ Online Transaction Processing (OLTP)
 **Strong Fit (when 1-3ms added hop is acceptable)** - OJP is designed for OLTP workloads characterized by:
@@ -482,33 +498,57 @@ OJP excels in specific architectural patterns and workload types:
 **Example**: 30 microservices, each with 3-10 instances, all needing access to shared or separate databases without overwhelming connection limits.
 
 #### ✅ Mixed OLTP/Analytics (Operational Reporting)
-**Good Fit** - Suitable for workloads combining transactional and analytical queries:
+**Excellent Fit** - Especially valuable when transactional and reporting workloads share the same production database:
 - Primary traffic is OLTP
 - Periodic or on-demand analytical queries run alongside
 - Slow queries shouldn't block fast queries
+- Operators need to see which workload is consuming capacity
 
-**Why It Works**: Slow query segregation (Chapter 8) isolates analytical queries, preventing connection starvation for OLTP traffic.
+**Why It Works**: Slow query segregation (Chapter 8) isolates analytical queries, preventing connection starvation for OLTP traffic. OJP also gives a single control point for admission, throttling, and telemetry when reporting activity spikes.
 
 **Example**: SaaS application where users run real-time dashboards and reports while the system handles high-volume transactional operations.
 
-#### ⚠️ Batch Processing
-**Conditional Fit** - Works for specific batch patterns:
-- **Good**: Parallel batch jobs with many workers needing connection sharing
-- **Good**: Event-driven batch processing with variable load
-- **Poor**: Single-threaded batch ETL with one long-running connection
+#### ✅ Reporting, BI, and Desktop Query Tools Against Sensitive Databases
+**Strong Fit** - A good choice when analysts, BI tools, scripts, or local desktop clients can hit the same database as production traffic:
+- Heavy reports must not starve core application queries
+- You need to restrict how many expensive reports can run at once
+- You want better visibility into which client or workload is causing pressure
+- You need a gatekeeper in front of a production or otherwise sensitive database
 
-**Why It May Work**: If batch workload benefits from connection pooling across parallel workers or elastic scaling.
+**Why It Works**: OJP can cap concurrency, enforce backpressure, and expose telemetry across all clients using it. This is useful even when the workload is analytical, as long as the main problem is protecting a shared operational database rather than maximizing raw warehouse throughput.
 
-**Why It May Not**: Overhead from gRPC and virtualization adds latency to each query; single long-running connections gain no benefit from pooling.
+**Example**: Morning reporting bursts, ad hoc analyst queries, or local desktop tools connecting to the same production database used by customer-facing systems.
 
-### Workloads NOT Recommended for OJP
+#### ⚠️ Batch Processing and ETL
+**Conditional Fit** - Works well for some batch patterns and poorly for others:
+- **Good**: Parallel ETL or batch workers competing for the same operational database
+- **Good**: Pipelines that need rate-limiting so they do not overwhelm production
+- **Good**: Shared platforms where many jobs hit multiple databases and operators want one control plane
+- **Poor**: Single dedicated ETL flow holding one long-lived connection into an isolated analytics system
+
+**Why It May Work**: OJP helps when the real need is admission control, fairness, and observability across many jobs or many databases.
+
+**Why It May Not**: Overhead from gRPC and virtualization adds latency to each query, and a single long-running connection gains little from pooling or connection virtualization.
+
+#### ✅ Monoliths That Need Control, Visibility, or Policy Enforcement
+**Conditional to Strong Fit** - A monolith can still benefit when one or more of these are true:
+- The database is sensitive and needs a gatekeeper in front of it
+- Reporting, ETL, admin scripts, or desktop tools also touch the same database
+- You need better observability into pool pressure, slow queries, and admission decisions
+- You want one operational model across several databases instead of per-driver tuning everywhere
+
+**Why It Works**: OJP's value is not limited to horizontal scale. It can centralize visibility, enforce database access policy, and standardize operational controls even when the application itself is a monolith.
+
+**Example**: A single large business application with predictable app traffic but unpredictable report jobs, support scripts, and external tools hitting the same relational databases.
+
+### Cases Where OJP Usually Adds More Cost Than Value
 
 ```mermaid
 block-beta
 columns 2
   AP1["Ultra-Low Latency<br/>microseconds<br/>1-3ms gRPC hop kills the SLA"]
-  AP2["Data Warehousing<br/>long analytical queries<br/>pooling adds no value"]
-  AP3["Single Monolithic App<br/>one instance, stable load<br/>nothing to centralize"]
+  AP2["Dedicated Warehouse / Bulk Export<br/>hours-long scans<br/>little gatekeeper value"]
+  AP3["Tiny Low-Risk Direct App<br/>one app, one DB, stable load<br/>no control-plane need"]
   AP4["Embedded / IoT<br/>edge devices<br/>no room for an extra server"]
 
   style AP1 fill:#ff5252,color:#fff,stroke:#c62828,stroke-width:2px
@@ -529,25 +569,26 @@ Understanding when NOT to use OJP is as important as knowing when to use it:
 
 **Alternative**: Use in-process connection pooling (HikariCP, DBCP) with direct database connections.
 
-#### ❌ Pure Analytics / Data Warehousing
-**Do NOT Use** for analytics-only workloads:
-- Long-running analytical queries (minutes to hours)
-- Few concurrent users
-- Large result set transfers (GB of data)
-- Scan-heavy workloads on columnar databases
+#### ❌ Dedicated Analytics / Data Warehousing With No Shared-Database Protection Need
+**Usually Do NOT Use** when all of these are true:
+- Long-running analytical queries dominate the workload
+- Large result set transfers (GB of data) are normal
+- The warehouse is already isolated from operational traffic
+- You do not need OJP as a gatekeeper, concurrency limiter, or observability layer
 
-**Why Not**: OJP's strength is connection management, not query optimization. Long-running queries don't benefit from pooling, and streaming large results through gRPC adds overhead. Connection virtualization provides no value when connections are held for hours.
+**Why Not**: OJP's strength is connection management and workload protection, not query optimization. If the system is already an isolated warehouse, long-lived scans gain little from connection virtualization and may pay unnecessary transport overhead.
 
 **Alternative**: Direct connections to analytical databases (Redshift, BigQuery, Snowflake) or dedicated query engines.
 
-#### ❌ Single Monolithic Application
+#### ❌ Very Simple, Low-Risk Direct-Connection Setups
 **Limited Value** if you have:
 - One application instance
 - Predictable, constant load
-- No elastic scaling requirements
+- No external reporting, ETL, or desktop-query pressure
+- No need for centralized observability or policy enforcement
 - Already using efficient in-process pooling
 
-**Why Not**: OJP's benefits emerge from managing connections across multiple instances. A single instance with stable load gains little from centralized pooling and pays overhead for network hops.
+**Why Not**: If you do not need a control plane, adding one may just increase moving parts. In this narrow case, direct JDBC with a good in-process pool is simpler.
 
 **Alternative**: Stick with in-process connection pooling unless preparing for future scale-out.
 
@@ -568,9 +609,9 @@ block-beta
 columns 2
   GH["What You Gain"] AH["What You Accept"]
   G1["Elastic Scalability"] A1["1-3ms Latency Overhead"]
-  G2["Centralized Management"] A2["Added Architectural Complexity"]
+  G2["Gatekeeper & Visibility"] A2["Added Architectural Complexity"]
   G3["Backpressure & Resilience"] A3["Dependency on OJP Server"]
-  G4["Multi-Database Support"] A4["JDBC Edge-Case Differences"]
+  G4["Multi-Database Ops"] A4["JDBC Edge-Case Differences"]
 
   style GH fill:#2e7d32,color:#fff,stroke:#1b5e20,stroke-width:2px
   style AH fill:#ef6c00,color:#fff,stroke:#bf360c,stroke-width:2px
@@ -590,9 +631,10 @@ OJP makes intentional trade-offs that may not suit every use case:
 
 #### ✅ What OJP Provides
 - **Connection Scalability**: Applications can scale elastically without proportional database connection growth
-- **Centralized Management**: Single point of control for monitoring, configuration, and troubleshooting
+- **Gatekeeper Controls**: Single point of control for admission, throttling, and concurrency limits
+- **Operational Observability**: One place to monitor pressure, slow queries, and who is consuming database capacity
 - **Backpressure & Resilience**: Protection against connection storms and cascading failures
-- **Multi-Database Support**: Manage connections to multiple databases from one server
+- **Multi-Database Support**: Manage connections to multiple databases from one server and reuse one operational model across them
 
 #### ⚠️ What OJP Does NOT Guarantee
 - **Strict JDBC Equivalence**: While OJP implements JDBC interfaces, some edge cases may behave differently (see Appendix E for compatibility matrix)
@@ -707,23 +749,24 @@ Understanding new failure modes helps you prepare mitigation strategies:
 ```mermaid
 graph TB
     START[Considering OJP?]
-    Q1{Multiple app<br/>instances?}
-    Q2{OLTP workload?}
-    Q3{Can accept<br/>1-3ms latency?}
-    Q4{Need elastic<br/>scaling?}
+    Q1{Can you accept<br/>1-3ms latency?}
+    Q2{Need a gatekeeper,<br/>shared limits, or backpressure?}
+    Q3{Need more visibility,<br/>workload isolation, or safer ops?}
+    Q4{Is this a very simple<br/>low-risk direct-JDBC setup?}
 
     GOOD[OJP is a good fit]
+    MAYBE[Pilot first and validate]
     BAD[Consider alternatives<br/>HikariCP, direct connections, etc.]
 
     START --> Q1
-    Q1 -->|Yes| Q2
     Q1 -->|No| BAD
-    Q2 -->|Yes| Q3
-    Q2 -->|No| BAD
-    Q3 -->|Yes| Q4
-    Q3 -->|No| BAD
-    Q4 -->|Yes| GOOD
-    Q4 -->|No| BAD
+    Q1 -->|Yes| Q2
+    Q2 -->|Yes| GOOD
+    Q2 -->|No| Q3
+    Q3 -->|Yes| GOOD
+    Q3 -->|No| Q4
+    Q4 -->|Yes| BAD
+    Q4 -->|No| MAYBE
 
     style START fill:#37474f,color:#fff,stroke:#263238,stroke-width:2px
     style Q1 fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
@@ -731,31 +774,33 @@ graph TB
     style Q3 fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
     style Q4 fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
     style GOOD fill:#4caf50,color:#fff,stroke:#1b5e20,stroke-width:2px
+    style MAYBE fill:#ffb74d,color:#000,stroke:#ef6c00,stroke-width:2px
     style BAD fill:#ff5252,color:#fff,stroke:#c62828,stroke-width:2px
 
     linkStyle 0 stroke:#9e9e9e,stroke-width:2px
-    linkStyle 1,3,5,7 stroke:#4caf50,stroke-width:2px
-    linkStyle 2,4,6,8 stroke:#ff5252,stroke-width:2px
+    linkStyle 1,2,4 stroke:#ff5252,stroke-width:2px
+    linkStyle 3,5 stroke:#4caf50,stroke-width:2px
+    linkStyle 6,7 stroke:#ffb74d,stroke-width:2px
 ```
 
 Use this framework to assess whether OJP reduces net risk for your team:
 
 #### ✅ Strong Fit Indicators
 Answer "Yes" to most of these questions:
-1. Do you have multiple application instances accessing the same database?
-2. Is your workload primarily OLTP (short queries, high concurrency)?
-3. Can you accept 1-3ms additional latency per operation?
-4. Do you need elastic scaling without proportional database connection growth?
-5. Do you deploy frequently and worry about connection storms?
-6. Are you using or planning microservices architecture?
-7. Is your database connection limit a current or anticipated bottleneck?
+1. Can you accept 1-3ms additional latency per operation?
+2. Do multiple workloads or client types hit the same database?
+3. Do you need a gatekeeper in front of a production or sensitive database?
+4. Do you want to limit how many heavy reports, ETL jobs, or ad hoc tools run simultaneously?
+5. Is your database connection limit a current or anticipated bottleneck?
+6. Do you need better visibility into who is creating pressure on the data tier?
+7. Do you want one operational model across several databases?
 8. Do you have operational capacity to deploy and monitor a middleware server?
 
 #### ⚠️ Proceed with Caution
 Answer "Yes" to several of these questions:
 1. Do you have strict latency SLAs in single-digit milliseconds?
-2. Is your workload primarily analytical with long-running queries?
-3. Do you only have one or two application instances?
+2. Is your workload mostly large-result analytics against an already isolated warehouse?
+3. Is your setup so simple that direct JDBC plus local pooling already solves the problem?
 4. Is your infrastructure resource-constrained (embedded systems, edge)?
 5. Do you lack ability to deploy and maintain a separate server component?
 6. Do you require 100% JDBC API fidelity for every edge case?

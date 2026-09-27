@@ -237,7 +237,7 @@ public class Connection implements java.sql.Connection {
         log.debug("close called");
         // Always call terminateSession to ensure server-side resources are released
         // This is critical for multinode scenarios where connect() may have been called on multiple servers
-        if (this.session != null) {
+        if (this.session != null && !this.session.getSessionUUID().isEmpty()) {
             // Capture before nulling to ensure async termination uses the original session reference.
             SessionInfo sessionToTerminate = this.session;
             if (this.closeSynchronously) {

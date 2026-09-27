@@ -65,6 +65,22 @@ class ConnectionCloseBehaviorTest {
         assertThrows(SQLException.class, connection::close);
     }
 
+    @Test
+    void shouldNotCallTerminateSessionWhenServerSessionWasNotCreated() throws SQLException {
+        AtomicInteger terminateCalls = new AtomicInteger();
+        StatementService statementService = createStatementServiceWithCounter(terminateCalls, session -> {
+        });
+        SessionInfo noServerSession = SessionInfo.newBuilder()
+                .setConnHash("conn-hash")
+                .build();
+        Connection connection = new Connection(noServerSession, statementService, DbName.POSTGRES);
+
+        connection.close();
+
+        assertEquals(0, terminateCalls.get());
+        assertTrue(connection.isClosed());
+    }
+
     private SessionInfo buildSessionInfo() {
         return SessionInfo.newBuilder()
                 .setSessionUUID("session-1")
@@ -73,7 +89,10 @@ class ConnectionCloseBehaviorTest {
     }
 
     private StatementService createStatementService(TerminateSessionBehavior behavior) {
-        AtomicInteger calls = new AtomicInteger();
+        return createStatementServiceWithCounter(new AtomicInteger(), behavior);
+    }
+
+    private StatementService createStatementServiceWithCounter(AtomicInteger calls, TerminateSessionBehavior behavior) {
         return (StatementService) Proxy.newProxyInstance(
                 StatementService.class.getClassLoader(),
                 new Class<?>[]{StatementService.class},

@@ -49,6 +49,7 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
     void shouldShowBetterP95LatencyWithEagerCloseForConcurrentMixedDml(
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
+        assumeFalse(url.contains(":10593]"), "Benchmark is scoped to the default PostgreSQL OJP endpoint");
 
         try (ToxiproxyOjpUrlBridge toxiproxy = ToxiproxyOjpUrlBridge.withRequestLatency(url, TOXIPROXY_REQUEST_LATENCY_MS)) {
             String proxiedUrl = toxiproxy.proxiedJdbcUrl();

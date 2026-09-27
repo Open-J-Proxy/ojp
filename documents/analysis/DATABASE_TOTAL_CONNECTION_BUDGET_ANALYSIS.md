@@ -87,7 +87,7 @@ If every `getConnection()` call has to pass through a second shared gate for
 "all pools of database X", OJP would add another point of contention exactly
 where performance matters most.
 
-My opinion: **do not solve this with another request-time semaphore or queue**.
+Recommendation: **do not solve this with another request-time semaphore or queue**.
 
 ---
 
@@ -180,7 +180,7 @@ Cons:
 - explicit group name when configured
 - fallback to normalized JDBC target otherwise
 
-My opinion: **hybrid is best**, but the explicit server-side group should be the
+Recommendation: **a hybrid approach is the best fit**, but the explicit server-side group should be the
 recommended production path.
 
 ---
@@ -246,7 +246,7 @@ Allocation:
 
 This is simple, understandable, and maps well to existing OJP behavior.
 
-### My opinion
+### Recommendation
 
 If OJP wants a first implementation with good value and lower risk,
 **prioritizing by database username should come first**.
@@ -301,7 +301,7 @@ Cons:
 - likely needs shared request-time coordination
 - higher performance risk
 
-### My opinion
+### Recommendation
 
 If client-name priority is required, OJP should first treat it as a
 **classification input for pool budgeting**, not as per-request scheduling.
@@ -401,7 +401,7 @@ So the model is:
 
 This is still much better than having independent pools with no total budget.
 
-### My opinion
+### Recommendation
 
 This is acceptable if OJP keeps a little headroom and documents the behavior
 clearly.
@@ -454,7 +454,7 @@ Cons:
 - much more complex
 - introduces coordination and failure-mode questions
 
-### My opinion
+### Recommendation
 
 OJP should likely phase this:
 
@@ -621,4 +621,3 @@ The main uncertainty is how far OJP wants to go on:
 
 - client-name priority
 - cluster-wide total enforcement
-

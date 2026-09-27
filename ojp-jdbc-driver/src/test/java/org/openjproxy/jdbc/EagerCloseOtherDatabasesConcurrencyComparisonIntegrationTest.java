@@ -32,7 +32,7 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     private static final int MEASURED_OPERATIONS = 1000;
     private static final int POOL_SIZE = 20;
     private static final int SEED_ROWS = 2000;
-    private static final int TOXIPROXY_REQUEST_LATENCY_MS = 5;
+    private static final int TOXIPROXY_REQUEST_LATENCY_MS = 10;
     private static final String TABLE_PREFIX = "OJP_EC_";
 
     private static boolean isH2TestEnabled;

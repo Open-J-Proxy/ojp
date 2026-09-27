@@ -73,9 +73,10 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String url, String user, String password, boolean eagerCloseEnabled, String tableName) throws Exception {
         Properties connectionProperties = createConnectionProperties(user, password, eagerCloseEnabled);
         prepareBenchmarkTable(url, connectionProperties, tableName);
+        AtomicInteger insertIds = new AtomicInteger(SEED_ROWS + 1);
 
-        executeConcurrentMixedDml(url, connectionProperties, WARMUP_OPERATIONS, tableName);
-        return executeConcurrentMixedDml(url, connectionProperties, MEASURED_OPERATIONS, tableName);
+        executeConcurrentMixedDml(url, connectionProperties, WARMUP_OPERATIONS, tableName, insertIds);
+        return executeConcurrentMixedDml(url, connectionProperties, MEASURED_OPERATIONS, tableName, insertIds);
     }
 
     private Properties createConnectionProperties(String user, String password, boolean eagerCloseEnabled) {
@@ -107,14 +108,14 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
     }
 
     private ScenarioResult executeConcurrentMixedDml(
-            String url, Properties properties, int operationCount, String tableName) throws Exception {
+            String url, Properties properties, int operationCount, String tableName, AtomicInteger insertIds)
+            throws Exception {
         ExecutorService executorService = Executors.newFixedThreadPool(CONCURRENT_THREADS);
         CountDownLatch startLatch = new CountDownLatch(1);
 
         List<Long> latencies = Collections.synchronizedList(new ArrayList<>(operationCount));
         AtomicInteger successes = new AtomicInteger(0);
         AtomicInteger failures = new AtomicInteger(0);
-        AtomicInteger insertIds = new AtomicInteger(SEED_ROWS + 1);
 
         for (int operationIndex = 0; operationIndex < operationCount; operationIndex++) {
             final int currentIndex = operationIndex;

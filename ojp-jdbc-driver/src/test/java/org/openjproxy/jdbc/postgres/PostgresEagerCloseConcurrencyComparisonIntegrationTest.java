@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 import org.openjproxy.jdbc.PerformanceMetrics;
+import org.openjproxy.jdbc.testutil.ToxiproxyOjpUrlBridge;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -34,6 +35,7 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
     private static final int MEASURED_OPERATIONS = 1000;
     private static final int POOL_SIZE = 20;
     private static final int SEED_ROWS = 2000;
+    private static final int TOXIPROXY_REQUEST_LATENCY_MS = 5;
 
     private static boolean isTestEnabled;
 
@@ -48,24 +50,27 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
 
-        String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
-        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + uniqueSuffix + "_";
-        ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
-        ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
+        try (ToxiproxyOjpUrlBridge toxiproxy = ToxiproxyOjpUrlBridge.withRequestLatency(url, TOXIPROXY_REQUEST_LATENCY_MS)) {
+            String proxiedUrl = toxiproxy.proxiedJdbcUrl();
+            String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
+            String tablePrefix = TABLE_NAME_PREFIX + Math.abs(proxiedUrl.hashCode()) + "_" + uniqueSuffix + "_";
+            ScenarioResult eagerCloseDisabled = runScenario(proxiedUrl, user, password, false, tablePrefix + "off");
+            ScenarioResult eagerCloseEnabled = runScenario(proxiedUrl, user, password, true, tablePrefix + "on");
 
-        assertScenarioOperationAccounting(eagerCloseDisabled, "Baseline run");
-        assertScenarioOperationAccounting(eagerCloseEnabled, "Eager-close run");
-        logScenario("disabled", eagerCloseDisabled);
-        logScenario("enabled", eagerCloseEnabled);
+            assertScenarioOperationAccounting(eagerCloseDisabled, "Baseline run");
+            assertScenarioOperationAccounting(eagerCloseEnabled, "Eager-close run");
+            logScenario("disabled", eagerCloseDisabled);
+            logScenario("enabled", eagerCloseEnabled);
 
-        assertTrue(
-                eagerCloseEnabled.p95LatencyNanos() < eagerCloseDisabled.p95LatencyNanos(),
-                "Expected eager-close p95 latency to be better. baseline="
-                        + toMillis(eagerCloseDisabled.p95LatencyNanos())
-                        + " ms, enabled="
-                        + toMillis(eagerCloseEnabled.p95LatencyNanos())
-                        + " ms"
-        );
+            assertTrue(
+                    eagerCloseEnabled.p95LatencyNanos() < eagerCloseDisabled.p95LatencyNanos(),
+                    "Expected eager-close p95 latency to be better. baseline="
+                            + toMillis(eagerCloseDisabled.p95LatencyNanos())
+                            + " ms, enabled="
+                            + toMillis(eagerCloseEnabled.p95LatencyNanos())
+                            + " ms"
+            );
+        }
     }
 
     /**

@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
 
     private static final String TABLE_NAME_PREFIX = "ojp_eager_close_benchmark_";
+    private static final String BENCHMARK_APP_NAME = "ojp_eager_close_benchmark";
     private static final int CONCURRENT_THREADS = 100;
     private static final int WARMUP_OPERATIONS = 100;
     private static final int MEASURED_OPERATIONS = 1000;
@@ -92,12 +93,13 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
      */
     private ScenarioResult runScenario(
             String url, String user, String password, boolean eagerCloseEnabled, String tableName) throws Exception {
+        String benchmarkUrl = appendBenchmarkApplicationName(url);
         Properties connectionProperties = createConnectionProperties(user, password, eagerCloseEnabled);
-        prepareBenchmarkTable(url, connectionProperties, tableName);
+        prepareBenchmarkTable(benchmarkUrl, connectionProperties, tableName);
         AtomicInteger insertIds = new AtomicInteger(SEED_ROWS + 1);
 
-        executeConcurrentMixedDml(url, connectionProperties, WARMUP_OPERATIONS, tableName, insertIds);
-        return executeConcurrentMixedDml(url, connectionProperties, MEASURED_OPERATIONS, tableName, insertIds);
+        executeConcurrentMixedDml(benchmarkUrl, connectionProperties, WARMUP_OPERATIONS, tableName, insertIds);
+        return executeConcurrentMixedDml(benchmarkUrl, connectionProperties, MEASURED_OPERATIONS, tableName, insertIds);
     }
 
     private Properties createConnectionProperties(String user, String password, boolean eagerCloseEnabled) {
@@ -239,6 +241,15 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
         List<Long> sorted = new ArrayList<>(latencies);
         Collections.sort(sorted);
         return sorted.get(sorted.size() / 2);
+    }
+
+    private String appendBenchmarkApplicationName(String url) {
+        String appNameKey = "ApplicationName=";
+        if (url.contains(appNameKey)) {
+            return url;
+        }
+        String separator = url.contains("?") ? "&" : "?";
+        return url + separator + appNameKey + BENCHMARK_APP_NAME;
     }
 
     private static final class ScenarioResult {

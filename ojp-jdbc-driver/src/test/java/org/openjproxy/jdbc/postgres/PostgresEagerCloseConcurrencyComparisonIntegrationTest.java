@@ -33,7 +33,7 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
     private static final int MEASURED_OPERATIONS = 1000;
     private static final int POOL_SIZE = 20;
     private static final int SEED_ROWS = 2000;
-    private static final double MAX_ALLOWED_P95_REGRESSION_FACTOR = 2.0D;
+    private static final int MEASUREMENT_ROUNDS = 3;
 
     private static boolean isTestEnabled;
 
@@ -48,31 +48,40 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
 
-        String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
-        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + uniqueSuffix + "_";
-        ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
-        ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
+        List<Long> disabledP95Latencies = new ArrayList<>(MEASUREMENT_ROUNDS);
+        List<Long> enabledP95Latencies = new ArrayList<>(MEASUREMENT_ROUNDS);
 
-        logScenario("disabled", eagerCloseDisabled);
-        logScenario("enabled", eagerCloseEnabled);
+        for (int round = 1; round <= MEASUREMENT_ROUNDS; round++) {
+            String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
+            String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + uniqueSuffix + "_";
 
-        assertEquals(
-                MEASURED_OPERATIONS,
-                eagerCloseDisabled.successes() + eagerCloseDisabled.failures(),
-                "Baseline run should report all measured operations"
+            ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
+            ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
+
+            assertScenarioOperationAccounting(eagerCloseDisabled, "Baseline run round " + round);
+            assertScenarioOperationAccounting(eagerCloseEnabled, "Eager-close run round " + round);
+
+            logScenario("disabled_round_" + round, eagerCloseDisabled);
+            logScenario("enabled_round_" + round, eagerCloseEnabled);
+
+            disabledP95Latencies.add(eagerCloseDisabled.p95LatencyNanos());
+            enabledP95Latencies.add(eagerCloseEnabled.p95LatencyNanos());
+        }
+
+        long baselineMedianP95 = medianLatencyNanos(disabledP95Latencies);
+        long eagerCloseMedianP95 = medianLatencyNanos(enabledP95Latencies);
+
+        System.out.println(
+                "eagerClose_comparison, baselineMedianP95Ms=" + toMillis(baselineMedianP95)
+                        + ", eagerMedianP95Ms=" + toMillis(eagerCloseMedianP95)
         );
-        assertEquals(
-                MEASURED_OPERATIONS,
-                eagerCloseEnabled.successes() + eagerCloseEnabled.failures(),
-                "Eager-close run should report all measured operations"
-        );
+
         assertTrue(
-                eagerCloseEnabled.p95LatencyNanos()
-                        <= (long) (eagerCloseDisabled.p95LatencyNanos() * MAX_ALLOWED_P95_REGRESSION_FACTOR),
-                "Eager-close p95 latency regressed too much under contention. disabled="
-                        + toMillis(eagerCloseDisabled.p95LatencyNanos())
+                eagerCloseMedianP95 < baselineMedianP95,
+                "Expected eager-close p95 latency to be better. baselineMedian="
+                        + toMillis(baselineMedianP95)
                         + " ms, enabled="
-                        + toMillis(eagerCloseEnabled.p95LatencyNanos())
+                        + toMillis(eagerCloseMedianP95)
                         + " ms"
         );
     }
@@ -216,6 +225,20 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
 
     private double failureRate(ScenarioResult result) {
         return (double) result.failures() / MEASURED_OPERATIONS;
+    }
+
+    private void assertScenarioOperationAccounting(ScenarioResult result, String scenarioLabel) {
+        assertEquals(
+                MEASURED_OPERATIONS,
+                result.successes() + result.failures(),
+                scenarioLabel + " should report all measured operations"
+        );
+    }
+
+    private long medianLatencyNanos(List<Long> latencies) {
+        List<Long> sorted = new ArrayList<>(latencies);
+        Collections.sort(sorted);
+        return sorted.get(sorted.size() / 2);
     }
 
     private static final class ScenarioResult {

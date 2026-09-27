@@ -35,6 +35,7 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     private static final int TOXIPROXY_REQUEST_LATENCY_MS = 5;
     private static final String TABLE_PREFIX = "OJP_EC_";
 
+    private static boolean isH2TestEnabled;
     private static boolean isMySQLTestEnabled;
     private static boolean isMariaDBTestEnabled;
     private static boolean isOracleTestEnabled;
@@ -43,6 +44,7 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
 
     @BeforeAll
     static void checkTestConfiguration() {
+        isH2TestEnabled = Boolean.parseBoolean(System.getProperty("enableH2Tests", "false"));
         isMySQLTestEnabled = Boolean.parseBoolean(System.getProperty("enableMySQLTests", "false"));
         isMariaDBTestEnabled = Boolean.parseBoolean(System.getProperty("enableMariaDBTests", "false"));
         isOracleTestEnabled = Boolean.parseBoolean(System.getProperty("enableOracleTests", "false"));
@@ -82,6 +84,9 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     }
 
     private boolean isScenarioEnabled(String url) {
+        if (url.contains("_h2:")) {
+            return isH2TestEnabled;
+        }
         if (url.contains("_mysql:")) {
             return isMySQLTestEnabled;
         }

@@ -1,12 +1,75 @@
-# Database Total Connection Budget Control on OJP Server
+# OJP Server Total Database Connection Budget - Detailed Design Analysis
 
-## Question
+**Date:** September 27, 2026  
+**Status:** 📋 **Design Proposal**  
+**Scope:** OJP server-side control of the total number of physical database
+connections across multiple pools targeting the same real database, while
+avoiding additional hot-path queues or semaphores
 
-How can OJP Server guarantee that the **total number of database connections**
-to one real database does not exceed a configured limit, even when OJP creates
-multiple pools for that same database?
+---
 
-Extra constraints:
+## Executive Summary
+
+This document analyzes how OJP Server can enforce a **single total connection
+budget per real database** even when OJP creates multiple separate pools for
+that same target.
+
+The key problem is that OJP currently protects **each pool independently**, but
+multiple pools can still oversubscribe one physical database when their maximum
+sizes are summed together.
+
+**Recommendation:** enforce the total at the **pool budget layer**, not at the
+request-time borrow path.
+
+More specifically:
+
+1. Group multiple pools under a shared **database budget key**
+2. Give that key one **hard total connection budget**
+3. Split that budget across pools using configured **weights/priorities**
+4. Resize pools in the background as demand changes
+5. Keep request-time behavior fail-fast and avoid adding another blocking gate
+
+**Recommended first implementation:**
+
+- support **priority by database username** first
+- treat **client-name priority** as a later classification/budgeting feature
+- keep **cluster-wide enforcement** as a separate follow-up concern
+
+This direction fits OJP's current architecture much better than adding another
+shared request-time semaphore or queue in front of pooled connection borrowing.
+
+---
+
+## Table of Contents
+
+1. [Problem Statement](#1-problem-statement)
+2. [Current-State Observations](#2-current-state-observations)
+3. [Design Goals](#3-design-goals)
+4. [Why an Extra Hot-Path Gate Is a Poor Fit](#4-why-an-extra-hot-path-gate-is-a-poor-fit)
+5. [Recommended Model: Database Budget Controller](#5-recommended-model-database-budget-controller)
+6. [Database Budget Key Options](#6-database-budget-key-options)
+7. [Pool-Level Allocation Model](#7-pool-level-allocation-model)
+8. [Priority by Database Username](#8-priority-by-database-username)
+9. [Priority by Client Name](#9-priority-by-client-name)
+10. [Suggested Server Configuration Shape](#10-suggested-server-configuration-shape)
+11. [Strictness vs Elasticity Tradeoff](#11-strictness-vs-elasticity-tradeoff)
+12. [Multi-Node Concerns](#12-multi-node-concerns)
+13. [Phased Rollout Recommendation](#13-phased-rollout-recommendation)
+14. [Risks and Mitigations](#14-risks-and-mitigations)
+15. [Open Questions](#15-open-questions)
+16. [Final Recommendation](#16-final-recommendation)
+
+---
+
+## 1. Problem Statement
+
+The goal is to answer this question:
+
+> How can OJP Server guarantee that the **total number of physical database
+> connections** to one real database does not exceed a configured limit, even
+> when OJP creates multiple pools against that same target?
+
+Additional constraints from the request:
 
 - avoid adding new queues in the hot path
 - avoid adding new semaphores in the hot path
@@ -14,54 +77,40 @@ Extra constraints:
 - priority may be based on **client name** or **database username**
 - configuration should live on **OJP Server**
 
----
-
-## Short Answer
-
-The best direction is to control this at the **pool budget level**, not at the
-**per-request borrow path**.
-
-In simple terms:
-
-1. group several pools under one **database budget**
-2. give that budget a hard total connection limit
-3. split that budget across pools using weights/priorities
-4. resize pools in the background when needed
-5. keep request-time behavior simple and fail-fast
-
-This avoids putting another blocking control in front of every SQL request.
+This is intentionally an **analysis/design-only** document, not an
+implementation task.
 
 ---
 
-## What OJP Does Today
+## 2. Current-State Observations
 
-Today OJP already has strong **per-pool** controls:
+### 2.1 What OJP Already Does Well
+
+OJP already has strong **per-pool** protection:
 
 - each datasource/pool gets its own `AdmissionControlManager`
 - each datasource/pool gets its own `SlotManager`
 - connection acquisition fails fast when the pool is exhausted
-- slow-query segregation can split a pool into fast and slow lanes
+- slow-query segregation can isolate fast and slow workloads inside one pool
 
-But those controls are keyed per **connection hash**, not per **real database**.
+These mechanisms are good at protecting a single pool from overload.
 
-Current connection hash behavior is important:
+### 2.2 The Missing Protection
 
-- OJP hashes together:
-  - JDBC URL
-  - database username
-  - password
-  - datasource name
+The missing protection is **database-wide**, not **pool-wide**.
 
-So OJP can create different pools for:
+OJP pool identity is based on a connection hash that includes:
 
-- the same database with different users
-- the same database with different datasource names
-- the same database with different credentials
+- JDBC URL
+- database username
+- password
+- datasource name
 
-That is useful, but it also means OJP can accidentally exceed a database-wide
-connection target if all of those pools grow independently.
+That means one real database can end up with multiple separate pools.
 
-### Simple example
+### 2.3 Why This Matters
+
+Example:
 
 - Real database safe limit: **80**
 - Pool A max: **40**
@@ -70,54 +119,102 @@ connection target if all of those pools grow independently.
 
 Each pool looks valid by itself, but together they can reach **100**.
 
-That is the gap this analysis is addressing.
+So the current model can protect each pool individually while still allowing
+the real database to be oversubscribed.
+
+### 2.4 Architecture Fit Observation
+
+This feature is not primarily about SQL execution fairness. It is mainly about
+**capacity budgeting across multiple pools**. That strongly suggests the
+solution should live near:
+
+- datasource identity
+- pool creation
+- pool sizing
+- runtime resizing
+
+and not in the per-request statement execution path.
 
 ---
 
-## Why Not Add Another Hot-Path Gate?
+## 3. Design Goals
 
-Because that would likely repeat the same problem already observed in the past:
+### 3.1 Functional Goals
 
-- more contention
-- more waiting
-- more tail latency
-- more complexity in the hottest code path
+- Enforce a single total OJP-managed connection budget per real database
+- Support multiple pools under that one budget
+- Allow higher-priority consumers to receive a larger share of the budget
+- Support server-side configuration of the budgeting rules
 
-If every `getConnection()` call has to pass through a second shared gate for
-"all pools of database X", OJP would add another point of contention exactly
-where performance matters most.
+### 3.2 Non-Functional Goals
 
-Recommendation: **do not solve this with another request-time semaphore or queue**.
+- Avoid introducing another blocking queue in the hot path
+- Avoid introducing another shared semaphore in the hot path
+- Keep the request/borrow path simple and fast
+- Reuse current OJP pool-management patterns where possible
+- Keep the model understandable for operators
 
 ---
 
-## Recommended Model: Database Budget Controller
+## 4. Why an Extra Hot-Path Gate Is a Poor Fit
+
+One obvious idea would be:
+
+> add a second shared gate in front of `DataSource.getConnection()` so that all
+> pools targeting the same database compete for one global permit set
+
+This is not the recommended direction.
+
+### 4.1 Problems with a Shared Request-Time Gate
+
+- adds more contention to the hottest path
+- increases waiting behavior
+- risks worse tail latency
+- introduces another concurrency structure to debug and tune
+- overlaps awkwardly with the existing per-pool admission controls
+
+### 4.2 Operational Drawback
+
+This would shift a pool-sizing problem into a request-time coordination problem.
+That is usually the more expensive place to solve it.
+
+### 4.3 Design Conclusion
+
+The better fit is:
+
+- decide total allowed capacity **before or outside** request execution
+- apply that decision by controlling **pool maxima**
+- keep request-time behavior mostly unchanged
+
+---
+
+## 5. Recommended Model: Database Budget Controller
 
 Introduce a new OJP Server concept:
 
 - **database budget key**
 
-This key represents the **real database target being protected**.
+This key represents the real database target being protected.
 
 Multiple pools may map to the same database budget key.
 
-Each key gets one configured total budget, for example:
+Each key gets:
 
-- `orders-prod` → max total OJP connections = **80**
+- one total connection budget
+- optional reserve/headroom
+- priority weights
+- optional borrowing rules
 
-Then OJP Server allocates that total budget across the pools registered under
-that database key.
+### 5.1 Core Model
 
-### Core idea
+1. A connection request arrives
+2. OJP resolves the normal pool identity (`connHash`)
+3. OJP also resolves a **database budget key**
+4. The pool registers under that budget key
+5. A budget controller decides the pool's allowed maximum
+6. OJP creates or resizes the pool using that maximum
 
-- keep current per-pool admission control
-- add one **background budget allocator**
-- let the allocator decide the max size of each pool
-- enforce the total by controlling pool sizes, not by adding another hot-path gate
-
----
-
-## High-Level Architecture
+### 5.2 High-Level Flow
 
 ```mermaid
 flowchart TD
@@ -131,66 +228,77 @@ flowchart TD
     H[Background rebalance] --> E
 ```
 
+### 5.3 Why This Fits OJP Better
+
+- OJP already creates pools centrally on the server
+- OJP already manages pool sizes and runtime resizing
+- OJP already uses fail-fast admission behavior inside each pool
+- this model avoids adding another cross-pool wait path
+
 ---
 
-## How the Budget Key Should Work
+## 6. Database Budget Key Options
 
-This is a critical design decision.
+This is one of the most important design choices.
 
 OJP needs a stable way to say:
 
-> "these different pools are all hitting the same real database budget"
+> "these different pools all count against the same real database budget"
 
-### Possible ways to define the key
+### 6.1 Option A - Explicit Server-Side Group Name
 
-#### Option A - explicit server-side group name
-
-Example:
+Examples:
 
 - `orders-prod`
 - `reporting-prod`
 
-Pros:
+**Pros:**
 
-- very clear
-- avoids JDBC URL parsing surprises
-- easiest for operators to reason about
+- very clear for operators
+- no JDBC parsing ambiguity
+- easy to document and reason about
 
-Cons:
+**Cons:**
 
-- needs explicit config
+- needs explicit configuration
 
-#### Option B - normalized JDBC target
+### 6.2 Option B - Normalized JDBC Target
 
-Example:
+Example normalization inputs:
 
-- database type + host + port + database name
+- database type
+- host
+- port
+- database name / service / SID
 
-Pros:
+**Pros:**
 
 - more automatic
 
-Cons:
+**Cons:**
 
-- parsing rules differ by database
-- aliases, VIPs, proxies, and connection parameters may make this unreliable
+- different databases need different parsing rules
+- aliases, proxies, VIPs, and URL options may hide true identity
+- risk of grouping incorrectly
 
-#### Option C - hybrid
+### 6.3 Option C - Hybrid
 
-- explicit group name when configured
-- fallback to normalized JDBC target otherwise
+- use explicit server-side group name when configured
+- fall back to normalized JDBC target otherwise
 
-Recommendation: **a hybrid approach is the best fit**, but the explicit server-side group should be the
-recommended production path.
+### 6.4 Recommendation
+
+The best fit is a **hybrid approach**, but the explicit server-side group should
+be the recommended production path because it is the least ambiguous.
 
 ---
 
-## Pool-Level Budgeting
+## 7. Pool-Level Allocation Model
 
-Once pools are grouped under one database budget key, OJP can assign each pool
-an allowed maximum.
+Once pools are grouped under one database budget key, OJP can allocate portions
+of the total budget to individual pools.
 
-### Example
+### 7.1 Simple Example
 
 Database budget:
 
@@ -210,7 +318,9 @@ Possible allocation:
 
 Then OJP creates or resizes the pools to those limits.
 
-If Pool B is idle later, the controller may rebalance:
+### 7.2 Rebalance Example
+
+If Pool B is mostly idle later, the budget controller may rebalance:
 
 - Pool A = **45**
 - Pool B = **5**
@@ -218,112 +328,7 @@ If Pool B is idle later, the controller may rebalance:
 
 Still total = **60**
 
----
-
-## Priority by Database Username
-
-This is the cleanest first version.
-
-Why:
-
-- username already naturally separates pools
-- username is already available at connection time
-- the current connection hash already includes it
-
-### Example
-
-Total budget = **60**
-
-Weights:
-
-- `app_rw` = 4
-- `reporting_ro` = 1
-
-Allocation:
-
-- `app_rw` gets about **48**
-- `reporting_ro` gets about **12**
-
-This is simple, understandable, and maps well to existing OJP behavior.
-
-### Recommendation
-
-If OJP wants a first implementation with good value and lower risk,
-**prioritizing by database username should come first**.
-
----
-
-## Priority by Client Name
-
-This is more complicated.
-
-Why:
-
-- today OJP tracks `clientUUID` for fair-share counting
-- `clientUUID` is not the same as a business-level client name
-- many clients may share one pool
-
-That means one shared pool might contain:
-
-- high-priority client traffic
-- low-priority client traffic
-
-If both are inside the same pool, pool sizing alone cannot guarantee that the
-high-priority client gets better treatment.
-
-### Two ways to support client-name priority
-
-#### Option 1 - classify clients into separate pool classes
-
-Example:
-
-- `payments-service` traffic goes to one logical pool class
-- `reporting-service` traffic goes to another
-
-Pros:
-
-- keeps fairness mostly outside the hot path
-- easier to reason about
-
-Cons:
-
-- may increase the number of pools
-
-#### Option 2 - keep one pool and do per-request priority admission
-
-Pros:
-
-- more precise fairness
-
-Cons:
-
-- pushes more logic into the hot path
-- likely needs shared request-time coordination
-- higher performance risk
-
-### Recommendation
-
-If client-name priority is required, OJP should first treat it as a
-**classification input for pool budgeting**, not as per-request scheduling.
-
-In simple words:
-
-> prefer "different client classes get different budgeted pool slices"
-> over "every request competes in one smart global priority queue"
-
----
-
-## Why Background Rebalancing Fits Better
-
-Hikari already supports dynamic pool resizing.
-
-That makes OJP's likely best model:
-
-- decide caps in a background controller
-- apply cap changes to the existing pools
-- let normal request-time borrowing stay simple
-
-### Rebalance loop idea
+### 7.3 Background Rebalance Loop
 
 ```mermaid
 flowchart LR
@@ -341,131 +346,120 @@ This loop can run:
 - on config reload
 - on a short periodic timer
 
-This avoids doing heavy fairness decisions on every request.
+This keeps allocation logic mostly off the hot path.
+
+### 7.4 Suggested Allocation Inputs
+
+The budget controller should support:
+
+1. hard total budget per database
+2. optional reserved headroom
+3. weights per username or client class
+4. minimum floor per class
+5. maximum ceiling per class
+6. optional borrowing of unused capacity
 
 ---
 
-## Suggested Allocation Rules
+## 8. Priority by Database Username
 
-OJP Server could support these rules:
+This is the cleanest first implementation.
 
-1. **hard total budget per database**
-2. **optional reserved headroom**
-3. **weights per username or client class**
-4. **minimum floor per class**
-5. **maximum ceiling per class**
-6. **temporary borrowing of unused capacity**
+### 8.1 Why It Fits Well
 
-### Example
+- username is already available at connection time
+- username already affects pool identity
+- username-based pools are easy to reason about operationally
 
-- database safe limit = **100**
-- reserve for non-OJP/admin usage = **20**
-- OJP usable budget = **80**
+### 8.2 Example
 
-Classes:
+Total budget = **60**
 
-- `payments` weight 5
-- `etl` weight 2
-- `reporting` weight 1
+Weights:
 
-Result:
+- `app_rw` = 4
+- `reporting_ro` = 1
 
-- payments ≈ **50**
-- etl ≈ **20**
-- reporting ≈ **10**
+Allocation:
 
----
+- `app_rw` gets about **48**
+- `reporting_ro` gets about **12**
 
-## Important Tradeoff: Strictness vs Elasticity
+### 8.3 Recommendation
 
-There is a real tradeoff here.
+If OJP wants a first implementation with good value and lower risk,
+**priority by database username should come first**.
 
-### If OJP wants strict safety
-
-Then:
-
-- the sum of all pool maximums must stay within the configured database budget
-
-That works well.
-
-### But shrinking is not instant
-
-If a pool is already using many active connections, reducing its configured max
-does not instantly close active connections. It mainly stops future growth and
-lets the pool shrink as connections become idle.
-
-So the model is:
-
-- strict for **configured maxima**
-- eventually consistent for **live active usage during a rebalance**
-
-This is still much better than having independent pools with no total budget.
-
-### Recommendation
-
-This is acceptable if OJP keeps a little headroom and documents the behavior
-clearly.
+It aligns naturally with current OJP pool identity behavior and does not require
+fine-grained per-request fairness logic.
 
 ---
 
-## Multi-Node Concern
+## 9. Priority by Client Name
 
-This is one of the biggest concerns.
+This is more complex than username-based priority.
 
-If several OJP Server nodes connect to the same database:
+### 9.1 Why It Is Harder
 
-- each node can control its own local pools
-- but local-only control does **not** guarantee the total across the cluster
+Today OJP tracks `clientUUID` for counting connected clients, but that is not
+the same as a stable business-level client name such as:
 
-### Example
+- `payments-service`
+- `reporting-service`
+- `etl-runner`
 
-- Node A budget thinks it may use **40**
-- Node B budget thinks it may use **40**
-- real database target is **60**
+Also, multiple client names may share one pool.
 
-Together they can still reach **80**
+If high-priority and low-priority clients share the same pool, pool sizing alone
+cannot guarantee that the high-priority client gets better request-time
+treatment.
 
-### Options
+### 9.2 Two Main Approaches
 
-#### Option 1 - static per-node split
+#### Approach A - Separate Pool Classes by Client Classification
 
-Example:
+Examples:
 
-- global target 60
-- 3 nodes
-- each node gets 20
+- payments traffic goes to one logical pool class
+- reporting traffic goes to another
 
-Pros:
+**Pros:**
 
-- simple
+- keeps most fairness at the budgeting layer
+- avoids more request-time coordination
 
-Cons:
+**Cons:**
 
-- wastes capacity when nodes are unevenly loaded
+- may increase the number of pools
 
-#### Option 2 - shared distributed budget state
+#### Approach B - One Shared Pool with Request-Time Priority Scheduling
 
-Pros:
+**Pros:**
 
-- strongest cluster-wide control
+- more precise fairness
 
-Cons:
+**Cons:**
 
-- much more complex
-- introduces coordination and failure-mode questions
+- pushes more logic into the hot path
+- likely requires shared request-time coordination
+- higher performance risk
 
-### Recommendation
+### 9.3 Recommendation
 
-OJP should likely phase this:
+If client-name priority is required, OJP should first treat it as a
+**classification input for budgeting/grouping**, not as a per-request scheduling
+problem.
 
-1. first support **single-node/local enforcement**
-2. then add **cluster-wide coordination** only if needed
+In simple terms:
+
+> prefer "different client classes get different budgeted pool slices" over
+> "all requests compete in one smart global priority queue"
 
 ---
 
-## Suggested Server Configuration Shape
+## 10. Suggested Server Configuration Shape
 
-Below is an example of the kind of configuration OJP Server could expose.
+Below is an example of the kind of configuration OJP Server could expose:
 
 ```properties
 # Database budget group
@@ -487,78 +481,144 @@ ojp.server.databaseBudgets.ordersProd.rebalanceIntervalMs=5000
 ojp.server.databaseBudgets.ordersProd.allowBorrowing=true
 ```
 
-This is only an example, not a final property naming decision.
+This is only an example shape, not a final property naming decision.
 
 ---
 
-## Recommended Phasing
+## 11. Strictness vs Elasticity Tradeoff
 
-### Phase 1 - server-side database budgeting
+This area needs to be called out clearly.
 
-- add database budget key/grouping
+### 11.1 Strict Safety Goal
+
+To keep OJP within the configured database budget, the sum of the configured
+pool maxima should stay within that budget.
+
+That is the core enforcement mechanism.
+
+### 11.2 Runtime Reality
+
+Shrinking a live pool is not instantaneous.
+
+If a pool is currently using many active connections, lowering its configured
+maximum:
+
+- stops future growth quickly
+- does not instantly terminate active work
+- allows the pool to shrink as connections become idle
+
+### 11.3 Practical Conclusion
+
+This model is:
+
+- strict at the **configured-capacity** level
+- eventually consistent at the **live active-usage** level during rebalance
+
+That is still a much better operational position than having multiple
+independent pools with no shared total budget.
+
+---
+
+## 12. Multi-Node Concerns
+
+This is one of the largest open concerns.
+
+If several OJP Server nodes connect to the same real database:
+
+- each node can control its own local pools
+- local-only control does **not** guarantee a cluster-wide total
+
+### 12.1 Example
+
+- Node A allows **40**
+- Node B allows **40**
+- real database target is **60**
+
+Combined, they can still reach **80**.
+
+### 12.2 Main Options
+
+#### Option A - Static Per-Node Split
+
+Example:
+
+- global target = 60
+- 3 nodes
+- each node receives 20
+
+**Pros:**
+
+- simple
+
+**Cons:**
+
+- wastes capacity when load is uneven
+
+#### Option B - Shared Distributed Budget State
+
+Examples:
+
+- lease/reservation model
+- central coordinator
+- shared consensus-backed state
+
+**Pros:**
+
+- stronger cluster-wide control
+
+**Cons:**
+
+- significantly more complex
+- introduces extra coordination and failure modes
+
+### 12.3 Recommendation
+
+Phase this concern separately:
+
+1. support **single-node/local enforcement** first
+2. add **cluster-wide coordination** only if required by deployment needs
+
+---
+
+## 13. Phased Rollout Recommendation
+
+### Phase 1 - Server-Side Database Budgeting
+
+- add database budget grouping
 - add hard total budget per database group
 - allocate pool maxima from that budget
 - support priority by **database username**
 - rebalance in the background
 
-### Phase 2 - client classification
+### Phase 2 - Client Classification
 
-- add optional **client name / client class** sent to OJP Server
+- add optional **client name / client class** input
 - use it for budgeting/grouping
-- prefer separate pool classes or slices over per-request priority
+- prefer separate pool classes or slices over request-time priority scheduling
 
-### Phase 3 - cluster-wide enforcement
+### Phase 3 - Cluster-Wide Enforcement
 
 - shared state across OJP nodes
-- lease/reservation model or other coordinator
+- lease/reservation model or another distributed coordination approach
 
 ---
 
-## What I Would Not Recommend
+## 14. Risks and Mitigations
 
-I would not recommend:
-
-- adding a second global semaphore in front of every pool borrow
-- adding a central queue for all pools of the same database
-- making version 1 depend on per-request weighted scheduling
-- using only the global server concurrency cap for this problem
-
-Why not the global concurrency cap?
-
-Because it protects the **OJP JVM**, not the **database connection total**.
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Budget key groups unrelated databases together | Wrong capacity enforcement | Prefer explicit server-side group names in production |
+| Budget key fails to group equivalent targets | Oversubscription remains possible | Support explicit grouping and document it as preferred |
+| Rebalance reacts too slowly | Temporary imbalance | Rebalance on pool create/close plus periodic timer |
+| Rebalance reacts too aggressively | Pool churn and operator confusion | Use minimum floors, ceilings, and damped resize rules |
+| Client-name priority increases pool count too much | Operational complexity | Start with username priority; add client classes only where justified |
+| Local-only enforcement in multi-node setup gives false confidence | Cluster oversubscription | Document the scope clearly and treat cluster-wide control as a separate phase |
 
 ---
 
-## Example Comparison
+## 15. Open Questions
 
-```mermaid
-flowchart TD
-    subgraph Today
-        A1[Pool A max 40]
-        B1[Pool B max 30]
-        C1[Pool C max 30]
-        D1[Same real database]
-        A1 --> D1
-        B1 --> D1
-        C1 --> D1
-    end
-
-    subgraph Recommended
-        E1[Database budget = 60]
-        F1[Pool A cap 40]
-        G1[Pool B cap 10]
-        H1[Pool C cap 10]
-        F1 --> E1
-        G1 --> E1
-        H1 --> E1
-    end
-```
-
----
-
-## Concerns and Open Questions
-
-These are the questions I think OJP should answer before implementation:
+These questions should be answered before implementation:
 
 1. Does the limit need to be strict for:
    - one OJP node only, or
@@ -569,55 +629,51 @@ These are the questions I think OJP should answer before implementation:
    - normalized JDBC target
    - both
 
-3. What exactly is "client name"?
+3. What exactly should "client name" mean?
    - application name
    - datasource name
    - service name
-   - something else
+   - another explicit client-class property
 
 4. Is fast rejection acceptable for low-priority traffic?
 
-5. Should unused low-priority capacity be borrowable by high-priority classes?
+5. Should unused low-priority capacity be borrowable by higher-priority classes?
 
-6. Do operators need to reserve headroom for:
+6. Does OJP need reserved headroom for:
    - admin sessions
    - migrations
    - non-OJP consumers
 
-7. Is it acceptable that rebalancing is not instant for already-active connections?
+7. Is eventual consistency during live rebalancing acceptable?
 
 ---
 
-## Final Recommendation
+## 16. Final Recommendation
 
-My recommendation is:
+The recommended direction is:
 
 1. implement **database budget control on OJP Server**
 2. enforce the total budget by **controlling pool sizes**
 3. **do not** add another hot-path queue or semaphore
 4. support **database username priority first**
 5. treat **client-name priority** as a later classification/budgeting feature
-6. phase cluster-wide enforcement separately
+6. handle **cluster-wide enforcement** as a separate follow-up concern
 
 In simple language:
 
-> Keep the borrow path fast.  
-> Move the intelligence to pool sizing and background rebalancing.  
-> Start with username priority because it fits the current OJP model better.
+> keep the borrow path fast  
+> move the intelligence to pool sizing and background rebalancing  
+> start with username-based priority because it fits current OJP behavior better
 
----
+### Confidence
 
-## Confidence
+**Confidence:** High (about 85%)
 
-**Confidence: High (about 85%)**
+Reasoning:
 
-Reason:
+- the approach fits OJP's current per-pool architecture well
+- it directly addresses the oversubscription gap
+- it respects the requirement to avoid extra hot-path coordination
+- the largest unknowns are around product choices and multi-node scope, not
+  basic feasibility
 
-- this direction fits OJP's current per-pool architecture
-- it respects the requirement to avoid extra hot-path waiting logic
-- the biggest unknowns are product choices, not core feasibility
-
-The main uncertainty is how far OJP wants to go on:
-
-- client-name priority
-- cluster-wide total enforcement

@@ -119,8 +119,8 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     private Properties createConnectionProperties(
             String user, String password, boolean eagerCloseEnabled, String uniqueBase) {
         Properties properties = new Properties();
-        properties.setProperty("user", user);
-        properties.setProperty("password", password);
+        properties.setProperty("user", user == null ? "" : user);
+        properties.setProperty("password", password == null ? "" : password);
         properties.setProperty("ojp.statement.eagerClose.enabled", String.valueOf(eagerCloseEnabled));
         properties.setProperty("ojp.connection.pool.maximumPoolSize", String.valueOf(POOL_SIZE));
         properties.setProperty("ojp.connection.pool.minimumIdle", "2");

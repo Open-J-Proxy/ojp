@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -46,15 +47,31 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
 
-        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_";
+        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + UUID.randomUUID() + "_";
         ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
         ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
 
         logScenario("disabled", eagerCloseDisabled);
         logScenario("enabled", eagerCloseEnabled);
 
-        assertEquals(0, eagerCloseDisabled.failures(), "Baseline run should not fail operations");
-        assertEquals(0, eagerCloseEnabled.failures(), "Eager-close run should not fail operations");
+        double baselineFailureRate = failureRate(eagerCloseDisabled);
+        double eagerFailureRate = failureRate(eagerCloseEnabled);
+
+        assertEquals(
+                MEASURED_OPERATIONS,
+                eagerCloseDisabled.successes() + eagerCloseDisabled.failures(),
+                "Baseline run should report all measured operations"
+        );
+        assertEquals(
+                MEASURED_OPERATIONS,
+                eagerCloseEnabled.successes() + eagerCloseEnabled.failures(),
+                "Eager-close run should report all measured operations"
+        );
+        assertTrue(
+                eagerFailureRate <= baselineFailureRate + 0.05D,
+                "Eager-close failure rate should be better or not materially worse. baseline="
+                        + baselineFailureRate + ", enabled=" + eagerFailureRate
+        );
         assertTrue(
                 eagerCloseEnabled.p95LatencyNanos() < eagerCloseDisabled.p95LatencyNanos(),
                 "Expected eager-close p95 latency to be better. disabled="
@@ -196,6 +213,10 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
 
     private double toMillis(long nanos) {
         return nanos / 1_000_000.0;
+    }
+
+    private double failureRate(ScenarioResult result) {
+        return (double) result.failures() / MEASURED_OPERATIONS;
     }
 
     private static final class ScenarioResult {

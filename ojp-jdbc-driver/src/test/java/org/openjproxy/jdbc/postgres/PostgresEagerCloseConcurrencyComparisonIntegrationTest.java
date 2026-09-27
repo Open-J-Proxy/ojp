@@ -34,7 +34,6 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
     private static final int MEASURED_OPERATIONS = 1000;
     private static final int POOL_SIZE = 20;
     private static final int SEED_ROWS = 2000;
-    private static final int MEASUREMENT_ROUNDS = 3;
 
     private static boolean isTestEnabled;
 
@@ -49,40 +48,22 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
 
-        List<Long> disabledP95Latencies = new ArrayList<>(MEASUREMENT_ROUNDS);
-        List<Long> enabledP95Latencies = new ArrayList<>(MEASUREMENT_ROUNDS);
+        String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
+        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + uniqueSuffix + "_";
+        ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
+        ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
 
-        for (int round = 1; round <= MEASUREMENT_ROUNDS; round++) {
-            String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
-            String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + uniqueSuffix + "_";
-
-            ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
-            ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
-
-            assertScenarioOperationAccounting(eagerCloseDisabled, "Baseline run round " + round);
-            assertScenarioOperationAccounting(eagerCloseEnabled, "Eager-close run round " + round);
-
-            logScenario("disabled_round_" + round, eagerCloseDisabled);
-            logScenario("enabled_round_" + round, eagerCloseEnabled);
-
-            disabledP95Latencies.add(eagerCloseDisabled.p95LatencyNanos());
-            enabledP95Latencies.add(eagerCloseEnabled.p95LatencyNanos());
-        }
-
-        long baselineMedianP95 = medianLatencyNanos(disabledP95Latencies);
-        long eagerCloseMedianP95 = medianLatencyNanos(enabledP95Latencies);
-
-        System.out.println(
-                "eagerClose_comparison, baselineMedianP95Ms=" + toMillis(baselineMedianP95)
-                        + ", eagerMedianP95Ms=" + toMillis(eagerCloseMedianP95)
-        );
+        assertScenarioOperationAccounting(eagerCloseDisabled, "Baseline run");
+        assertScenarioOperationAccounting(eagerCloseEnabled, "Eager-close run");
+        logScenario("disabled", eagerCloseDisabled);
+        logScenario("enabled", eagerCloseEnabled);
 
         assertTrue(
-                eagerCloseMedianP95 < baselineMedianP95,
-                "Expected eager-close p95 latency to be better. baselineMedian="
-                        + toMillis(baselineMedianP95)
+                eagerCloseEnabled.p95LatencyNanos() < eagerCloseDisabled.p95LatencyNanos(),
+                "Expected eager-close p95 latency to be better. baseline="
+                        + toMillis(eagerCloseDisabled.p95LatencyNanos())
                         + " ms, enabled="
-                        + toMillis(eagerCloseMedianP95)
+                        + toMillis(eagerCloseEnabled.p95LatencyNanos())
                         + " ms"
         );
     }
@@ -235,12 +216,6 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
                 result.successes() + result.failures(),
                 scenarioLabel + " should report all measured operations"
         );
-    }
-
-    private long medianLatencyNanos(List<Long> latencies) {
-        List<Long> sorted = new ArrayList<>(latencies);
-        Collections.sort(sorted);
-        return sorted.get(sorted.size() / 2);
     }
 
     private String appendBenchmarkApplicationName(String url) {

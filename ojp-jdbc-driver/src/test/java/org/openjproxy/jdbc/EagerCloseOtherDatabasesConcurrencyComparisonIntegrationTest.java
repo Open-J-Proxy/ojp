@@ -63,9 +63,13 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
             String uniqueBase = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
             String tableNameOff = TABLE_PREFIX + uniqueBase + "_O";
             String tableNameOn = TABLE_PREFIX + uniqueBase + "_N";
+            String dataSourceNameOff = "ojp_ec_" + uniqueBase + "_off";
+            String dataSourceNameOn = "ojp_ec_" + uniqueBase + "_on";
 
-            ScenarioResult eagerCloseDisabled = runScenario(proxiedUrl, user, password, false, tableNameOff, uniqueBase);
-            ScenarioResult eagerCloseEnabled = runScenario(proxiedUrl, user, password, true, tableNameOn, uniqueBase);
+            ScenarioResult eagerCloseDisabled = runScenario(
+                    proxiedUrl, user, password, false, tableNameOff, dataSourceNameOff);
+            ScenarioResult eagerCloseEnabled = runScenario(
+                    proxiedUrl, user, password, true, tableNameOn, dataSourceNameOn);
 
             assertScenarioOperationAccounting(eagerCloseDisabled, "Baseline run");
             assertScenarioOperationAccounting(eagerCloseEnabled, "Eager-close run");
@@ -106,9 +110,9 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     }
 
     private ScenarioResult runScenario(
-            String url, String user, String password, boolean eagerCloseEnabled, String tableName, String uniqueBase)
+            String url, String user, String password, boolean eagerCloseEnabled, String tableName, String dataSourceName)
             throws Exception {
-        Properties connectionProperties = createConnectionProperties(user, password, eagerCloseEnabled, uniqueBase);
+        Properties connectionProperties = createConnectionProperties(user, password, eagerCloseEnabled, dataSourceName);
         prepareBenchmarkTable(url, connectionProperties, tableName);
         AtomicInteger insertIds = new AtomicInteger(SEED_ROWS + 1);
 
@@ -117,14 +121,14 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     }
 
     private Properties createConnectionProperties(
-            String user, String password, boolean eagerCloseEnabled, String uniqueBase) {
+            String user, String password, boolean eagerCloseEnabled, String dataSourceName) {
         Properties properties = new Properties();
         properties.setProperty("user", user == null ? "" : user);
         properties.setProperty("password", password == null ? "" : password);
         properties.setProperty("ojp.statement.eagerClose.enabled", String.valueOf(eagerCloseEnabled));
         properties.setProperty("ojp.connection.pool.maximumPoolSize", String.valueOf(POOL_SIZE));
         properties.setProperty("ojp.connection.pool.minimumIdle", "2");
-        properties.setProperty("ojp.datasource.name", "ojp_ec_" + uniqueBase);
+        properties.setProperty("ojp.datasource.name", dataSourceName);
         return properties;
     }
 

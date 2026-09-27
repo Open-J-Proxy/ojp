@@ -47,7 +47,8 @@ class PostgresEagerCloseConcurrencyComparisonIntegrationTest {
             String driverClass, String url, String user, String password) throws Exception {
         assumeFalse(!isTestEnabled, "Postgres tests are disabled");
 
-        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + UUID.randomUUID() + "_";
+        String uniqueSuffix = UUID.randomUUID().toString().replace("-", "");
+        String tablePrefix = TABLE_NAME_PREFIX + Math.abs(url.hashCode()) + "_" + uniqueSuffix + "_";
         ScenarioResult eagerCloseDisabled = runScenario(url, user, password, false, tablePrefix + "off");
         ScenarioResult eagerCloseEnabled = runScenario(url, user, password, true, tablePrefix + "on");
 

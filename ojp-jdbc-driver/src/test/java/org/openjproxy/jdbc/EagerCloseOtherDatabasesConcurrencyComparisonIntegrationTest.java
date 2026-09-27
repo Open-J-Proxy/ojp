@@ -134,9 +134,8 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
             dropTableIfPresent(statement, tableName);
             statement.execute(
                     "CREATE TABLE " + tableName + " ("
-                            + "id BIGINT PRIMARY KEY, "
-                            + "payload VARCHAR(120), "
-                            + "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                            + "id INTEGER PRIMARY KEY, "
+                            + "payload VARCHAR(120)"
                             + ")"
             );
 
@@ -223,7 +222,7 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
 
     private void executeUpdate(Connection connection, int id, String tableName) throws SQLException {
         try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "UPDATE " + tableName + " SET payload = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")) {
+                "UPDATE " + tableName + " SET payload = ? WHERE id = ?")) {
             preparedStatement.setString(1, "updated-" + id);
             preparedStatement.setInt(2, id);
             preparedStatement.executeUpdate();

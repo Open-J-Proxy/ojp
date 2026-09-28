@@ -2,18 +2,25 @@
 
 # Open J Proxy
 
-![Release](https://img.shields.io/github/v/release/Open-J-Proxy/ojp?include_prereleases) [![Main CI](https://github.com/Open-J-Proxy/ojp/actions/workflows/main.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp/actions/workflows/main.yml) [![Spring Boot/Micronaut/Quarkus Integration](https://github.com/Open-J-Proxy/ojp-framework-integration/actions/workflows/main.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp-framework-integration/actions/workflows/main.yml) [![License](https://img.shields.io/github/license/Open-J-Proxy/ojp.svg)](https://raw.githubusercontent.com/Open-J-Proxy/ojp/master/LICENSE)
+![Release](https://img.shields.io/github/v/release/Open-J-Proxy/ojp?include_prereleases)
+[![Main CI](https://github.com/Open-J-Proxy/ojp/actions/workflows/main.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp/actions/workflows/main.yml)
+[![Spring Boot/Micronaut/Quarkus Integration](https://github.com/Open-J-Proxy/ojp-framework-integration/actions/workflows/main.yml/badge.svg)](https://github.com/Open-J-Proxy/ojp-framework-integration/actions/workflows/main.yml)
+[![License](https://img.shields.io/github/license/Open-J-Proxy/ojp.svg)](https://raw.githubusercontent.com/Open-J-Proxy/ojp/master/LICENSE)
 
-[![security status](https:&#x2F;&#x2F;www.meterian.com/badge/gh/Open-J-Proxy/ojp/security?branch=main)](https:&#x2F;&#x2F;www.meterian.com/report/gh/Open-J-Proxy/ojp) [![stability status](https:&#x2F;&#x2F;www.meterian.com/badge/gh/Open-J-Proxy/ojp/stability?branch=main)](https:&#x2F;&#x2F;www.meterian.com/report/gh/Open-J-Proxy/ojp)
+[![security status](https://www.meterian.com/badge/gh/Open-J-Proxy/ojp/security?branch=main)](https://www.meterian.com/report/gh/Open-J-Proxy/ojp)
+[![stability status](https://www.meterian.com/badge/gh/Open-J-Proxy/ojp/stability?branch=main)](https://www.meterian.com/report/gh/Open-J-Proxy/ojp)
 
-### Free Open J Proxy eBook
-Architecture, deployment patterns, production guidance, and practical examples.
+---
 
-**[Download your free copy →](https://openjproxy.com/register-to-ojp-email-list.html)**
+## 📘 Free Open J Proxy eBook
 
-Follow us on LinkedIn 👉 [Open J Proxy](https://www.linkedin.com/company/open-j-proxy)
+Learn how Open J Proxy works, how to deploy it, and how to use it in production.
 
-Visit our Website 👉 [openjproxy.com](https://openjproxy.com)  
+**[Download the free Open J Proxy eBook →](https://openjproxy.com/register-to-ojp-email-list.html)**
+
+---
+
+**Community:** [Website](https://openjproxy.com) · [LinkedIn](https://www.linkedin.com/company/open-j-proxy) · [Discord](https://discord.gg/J5DdHpaUzu)
 
 [![Discord](https://img.shields.io/discord/1385189361565433927?label=Discord&logo=discord)](https://discord.gg/J5DdHpaUzu)
 

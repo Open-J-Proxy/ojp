@@ -218,28 +218,24 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     }
 
     private void executeInsert(Connection connection, int id, String tableName) throws SQLException {
-        try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "INSERT INTO " + tableName + " (id, payload) VALUES (?, ?)")) {
-            preparedStatement.setInt(1, id);
-            preparedStatement.setString(2, "payload-" + id);
-            preparedStatement.executeUpdate();
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate(
+                    "INSERT INTO " + tableName + " (id, payload) VALUES (" + id + ", 'payload-" + id + "')"
+            );
         }
     }
 
     private void executeUpdate(Connection connection, int id, String tableName) throws SQLException {
-        try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "UPDATE " + tableName + " SET payload = ? WHERE id = ?")) {
-            preparedStatement.setString(1, "updated-" + id);
-            preparedStatement.setInt(2, id);
-            preparedStatement.executeUpdate();
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate(
+                    "UPDATE " + tableName + " SET payload = 'updated-" + id + "' WHERE id = " + id
+            );
         }
     }
 
     private void executeDelete(Connection connection, int id, String tableName) throws SQLException {
-        try (PreparedStatement preparedStatement = connection.prepareStatement(
-                "DELETE FROM " + tableName + " WHERE id = ?")) {
-            preparedStatement.setInt(1, id);
-            preparedStatement.executeUpdate();
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM " + tableName + " WHERE id = " + id);
         }
     }
 

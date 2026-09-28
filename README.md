@@ -6,9 +6,14 @@
 
 [![security status](https:&#x2F;&#x2F;www.meterian.com/badge/gh/Open-J-Proxy/ojp/security?branch=main)](https:&#x2F;&#x2F;www.meterian.com/report/gh/Open-J-Proxy/ojp) [![stability status](https:&#x2F;&#x2F;www.meterian.com/badge/gh/Open-J-Proxy/ojp/stability?branch=main)](https:&#x2F;&#x2F;www.meterian.com/report/gh/Open-J-Proxy/ojp)
 
-Website 👉 [openjproxy.com](https://openjproxy.com) 
+### Free Open J Proxy eBook
+Architecture, deployment patterns, production guidance, and practical examples.
 
-Follow us on LinkedIn 👉 [Open J Proxy](https://www.linkedin.com/company/open-j-proxy) 
+**[Download your free copy →](https://openjproxy.com/register-to-ojp-email-list.html)**
+
+Follow us on LinkedIn 👉 [Open J Proxy](https://www.linkedin.com/company/open-j-proxy)
+
+Visit our Website 👉 [openjproxy.com](https://openjproxy.com)  
 
 [![Discord](https://img.shields.io/discord/1385189361565433927?label=Discord&logo=discord)](https://discord.gg/J5DdHpaUzu)
 

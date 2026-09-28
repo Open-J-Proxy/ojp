@@ -22,8 +22,6 @@ Learn how Open J Proxy works, how to deploy it, and how to use it in production.
 
 **Community:** [Website](https://openjproxy.com) · [LinkedIn](https://www.linkedin.com/company/open-j-proxy) · [Discord](https://discord.gg/J5DdHpaUzu)
 
-[![Discord](https://img.shields.io/discord/1385189361565433927?label=Discord&logo=discord)](https://discord.gg/J5DdHpaUzu)
-
 ---
 
 **A smart, open-source database control plane** — delivered as a Type 3 JDBC driver and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover — all behind a standard JDBC API and with a roadmap for non-Java clients.

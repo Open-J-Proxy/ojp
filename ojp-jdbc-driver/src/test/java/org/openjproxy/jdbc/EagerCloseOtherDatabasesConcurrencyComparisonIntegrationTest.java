@@ -31,8 +31,9 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
     private static final int WARMUP_OPERATIONS = 100;
     private static final int MEASURED_OPERATIONS = 1000;
     private static final int POOL_SIZE = 20;
+    private static final int POOL_CONNECTION_TIMEOUT_MS = 5_000;
     private static final int SEED_ROWS = 2000;
-    private static final int TOXIPROXY_REQUEST_LATENCY_MS = 15;
+    private static final int TOXIPROXY_REQUEST_LATENCY_MS = 20;
     private static final String TABLE_PREFIX = "OJP_EC_";
 
     private static boolean isH2TestEnabled;
@@ -128,6 +129,7 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
         properties.setProperty("ojp.statement.eagerClose.enabled", String.valueOf(eagerCloseEnabled));
         properties.setProperty("ojp.connection.pool.maximumPoolSize", String.valueOf(POOL_SIZE));
         properties.setProperty("ojp.connection.pool.minimumIdle", "2");
+        properties.setProperty("ojp.connection.pool.connectionTimeout", String.valueOf(POOL_CONNECTION_TIMEOUT_MS));
         properties.setProperty("ojp.datasource.name", dataSourceName);
         return properties;
     }
@@ -138,7 +140,7 @@ class EagerCloseOtherDatabasesConcurrencyComparisonIntegrationTest {
             dropTableIfPresent(statement, tableName);
             statement.execute(
                     "CREATE TABLE " + tableName + " ("
-                            + "id INTEGER PRIMARY KEY, "
+                            + "id INTEGER, "
                             + "payload VARCHAR(120)"
                             + ")"
             );

@@ -8,11 +8,11 @@ This directory contains technical analysis documents for various OJP features an
 
 **Question:** Is Slow Query Segregation currently configurable per datasource, and what would be required to support it?
 
-**Quick Answer:** Enablement and tuning are server-wide today, but each connection hash already has an isolated admission/SQS manager and query-performance monitor. Add server-owned datasource policy overrides resolved at pool creation; retain global settings as defaults.
+**Quick Answer:** Enablement and tuning are server-wide today, but each connection hash already has an isolated admission/SQS manager and query-performance monitor. Add client-supplied SQS connection properties, resolve them before manager creation, and retain global settings as compatibility fallbacks.
 
 **Document:** [SLOW_QUERY_SEGREGATION_PER_DATASOURCE_ANALYSIS.md](./SLOW_QUERY_SEGREGATION_PER_DATASOURCE_ANALYSIS.md)
   - Current configuration scope versus per-pool runtime isolation
-  - Recommended override and precedence model
+  - Client connection-property model and precedence
   - Compatibility, lifecycle, observability, and validation considerations
 
 ---

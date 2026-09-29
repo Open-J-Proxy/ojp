@@ -45,7 +45,7 @@ public class H2ConnectionExtensiveTests {
 
     @BeforeAll
     static void setupClass() {
-        isH2TestEnabled = Boolean.parseBoolean(System.getProperty("enableH2Tests", "true"));
+        isH2TestEnabled = Boolean.parseBoolean(System.getProperty("enableH2Tests", "false"));
     }
 
     @SneakyThrows

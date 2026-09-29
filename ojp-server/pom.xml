@@ -31,11 +31,11 @@
                 <artifactId>guava</artifactId>
                 <version>32.1.0-jre</version>
             </dependency>
-            <!-- Force the entire Jackson ecosystem to 2.22.1 -->
+            <!-- Force the entire Jackson ecosystem to 2.22.3 -->
             <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
-                <version>2.22.1</version>
+                <version>2.22.3</version>
                 <scope>import</scope>
                 <type>pom</type>
             </dependency>

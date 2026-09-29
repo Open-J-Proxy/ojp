@@ -25,3 +25,9 @@ ojp-server/target/empty-libs/
 
 # macOS hidden files
 **/.DS_Store
+
+# Node.js driver modules (ojp-node-driver, ojp-typeorm-driver, ojp-grpc-contract)
+node_modules/
+/ojp-node-driver/dist/
+/ojp-typeorm-driver/dist/
+/ojp-grpc-contract/dist/

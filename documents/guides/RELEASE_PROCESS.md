@@ -203,8 +203,8 @@ From `1.0.0` onwards, release versions are plain semver with no suffix:
 | `main` | `1.0.0-SNAPSHOT` | _(none)_ | `1.0.0` | `1.1.0-SNAPSHOT` ¹ |
 | `main` | `1.1.0-SNAPSHOT` | _(none)_ | `1.1.0` | `1.2.0-SNAPSHOT` ¹ |
 | `main` | `1.1.1-SNAPSHOT` | _(none)_ | `1.1.1` | `1.1.2-SNAPSHOT` |
-| `lts/1.0` | `1.0.1-SNAPSHOT` | _(none)_ | `1.0.1` | `1.0.2-SNAPSHOT` |
-| `lts/1.0` | `1.0.8-SNAPSHOT` | _(none)_ | `1.0.8` | `1.0.9-SNAPSHOT` |
+| `lts/1.0` | `1.0.1-SNAPSHOT` | _(none)_ | `1.0.1` ³ | `1.0.2-SNAPSHOT` |
+| `lts/1.0` | `1.0.8-SNAPSHOT` | _(none)_ | `1.0.8` ³ | `1.0.9-SNAPSHOT` |
 | `main` | `1.0.0-SNAPSHOT` | `1.0.0-RC1` | `1.0.0-RC1` ² | _(unchanged)_ |
 | `main` | `1.0.0-SNAPSHOT` | `1.0.0-RC2` | `1.0.0-RC2` ² | _(unchanged)_ |
 | `main` | `1.0.0-SNAPSHOT` | `1.0.0-SNAPSHOT1` | `1.0.0-SNAPSHOT1` ² | _(unchanged)_ |
@@ -219,6 +219,10 @@ From `1.0.0` onwards, release versions are plain semver with no suffix:
 > current SNAPSHOT version. The Docker image is not tagged as `latest`.
 > The GitHub Release is created as a pre-release. After validation, trigger the workflow again
 > with no override to publish the final GA version.
+>
+> ³ **LTS releases** (from an `lts/X.Y` branch): the Docker image is **not** tagged as `latest`
+> and the GitHub Release is **not** marked as "Latest". Both markers track the newest line
+> released from `main`, so an LTS maintenance release must never move them backwards.
 
 See [`documents/VERSIONING.md`](../VERSIONING.md) for full version attribution rules
 and [`documents/guides/LTS_BRANCHING.md`](guides/LTS_BRANCHING.md) for LTS branch creation.

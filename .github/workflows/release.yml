@@ -111,6 +111,14 @@ jobs:
       group: release
       cancel-in-progress: false
 
+    # All GitHub API / git operations in this job (creating tags, publishing
+    # releases, updating .github/workflows/main.yml) authenticate with the
+    # RELEASE_TOKEN PAT so they run as the token owner (who is on the ruleset
+    # bypass list) instead of github-actions[bot].  Falls back to GITHUB_TOKEN
+    # when RELEASE_TOKEN is not configured.
+    env:
+      GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
     steps:
 
       # -----------------------------------------------------------------------
@@ -285,12 +293,14 @@ jobs:
           echo "Release version : ${RELEASE}"
           echo "Next dev version: ${NEXT}"
           echo "Is pre-release  : ${IS_PRERELEASE}"
+          echo "Is LTS branch   : ${LTS_BRANCH}"
 
           echo "current=${CURRENT}"            >> "$GITHUB_OUTPUT"
           echo "release=${RELEASE}"            >> "$GITHUB_OUTPUT"
           echo "next=${NEXT}"                  >> "$GITHUB_OUTPUT"
           echo "branch=${BRANCH}"              >> "$GITHUB_OUTPUT"
           echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "is_lts=${LTS_BRANCH}"          >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
       # 6. Set release version in all pom.xml files
@@ -348,8 +358,11 @@ jobs:
           IMAGE="rrobetti/ojp:${{ steps.versions.outputs.release }}"
           docker build -t "$IMAGE" ojp-server/
           docker push "$IMAGE"
-          # Only tag as 'latest' for GA releases, not pre-releases (RC, SNAPSHOT-numbered, etc.)
-          if [[ "${{ steps.versions.outputs.is_prerelease }}" != "true" ]]; then
+          # Only tag as 'latest' for GA releases from non-LTS branches.
+          # Pre-releases (RC, SNAPSHOT-numbered, etc.) and LTS maintenance
+          # releases must never move 'latest', which tracks the newest line.
+          if [[ "${{ steps.versions.outputs.is_prerelease }}" != "true" \
+                && "${{ steps.versions.outputs.is_lts }}" != "true" ]]; then
             docker tag "$IMAGE" rrobetti/ojp:latest
             docker push rrobetti/ojp:latest
           fi
@@ -427,6 +440,8 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         uses: actions/github-script@v7
         with:
+          # Use the PAT so the release is published by the token owner.
+          github-token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const tag   = 'v${{ steps.versions.outputs.release }}';
             const owner = context.repo.owner;
@@ -452,6 +467,9 @@ jobs:
             ].join('\n');
 
             const isPrerelease = '${{ steps.versions.outputs.is_prerelease }}' === 'true';
+            // LTS maintenance releases must not become the "Latest" release,
+            // which tracks the newest line released from main.
+            const isLts = '${{ steps.versions.outputs.is_lts }}' === 'true';
 
             await github.rest.repos.createRelease({
               owner,
@@ -461,7 +479,7 @@ jobs:
               body:        generated.body + artifactsFooter,
               draft:       false,
               prerelease:  isPrerelease,
-              make_latest: isPrerelease ? 'false' : 'true',
+              make_latest: (isPrerelease || isLts) ? 'false' : 'true',
             });
 
       # -----------------------------------------------------------------------

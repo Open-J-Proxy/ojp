@@ -130,6 +130,8 @@ Implement datasource-scoped **server-side policy overrides**, while retaining gl
 
 Before implementation, settle the global-enable precedence and datasource-key syntax. Keep all datasource overrides server-controlled, preserve always-on admission control when SQS is off, and treat dynamic reload and connection-hash-level overrides as out of scope unless separately required.
 
+**Confidence: High (95%)** that enablement and tuning are currently global while runtime admission/SQS state is per connection hash. This is directly supported by the server configuration fields, manager creation branches, manager map key, and statement execution lookup. The proposed configuration shape is a recommendation rather than an existing project convention; its final syntax and global-enable precedence still need an explicit product decision.
+
 ## Implementation References
 
 - [Server configuration](../../ojp-server/src/main/java/org/openjproxy/grpc/server/ServerConfiguration.java)

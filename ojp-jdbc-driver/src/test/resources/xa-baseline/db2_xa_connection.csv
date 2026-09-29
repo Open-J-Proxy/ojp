@@ -1,0 +1,1 @@
+com.ibm.db2.jcc.DB2XADataSource,jdbc:db2://localhost:50000/testdb,db2inst1,testpass

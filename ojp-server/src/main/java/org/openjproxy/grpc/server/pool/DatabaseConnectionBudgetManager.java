@@ -140,6 +140,12 @@ public final class DatabaseConnectionBudgetManager {
         Map<Pool, Integer> allocations = allocate(members, capacity, budget);
         for (Pool pool : members) {
             int target = allocations.get(pool);
+            if (pool.resizer != null && !pool.resizable && target > pool.allocatedMax) {
+                allocations.put(pool, pool.allocatedMax);
+            }
+        }
+        for (Pool pool : members) {
+            int target = allocations.get(pool);
             if (target != pool.allocatedMax && pool.resizer != null && !pool.resizable) {
                 throw new IllegalStateException("Pool '" + pool.registration.poolId
                         + "' cannot be resized to enforce database budget '" + budget.name + "'");

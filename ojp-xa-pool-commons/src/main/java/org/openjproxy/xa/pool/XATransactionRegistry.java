@@ -51,8 +51,8 @@ public class XATransactionRegistry {
     private final XAConnectionPoolProvider poolProvider;
     private final Object poolDataSource; // XADataSource instance from provider
     private final String serverEndpointsHash; // Hash of serverEndpoints used to create this registry
-    private final int maxPoolSize; // Max pool size used to create backend pool
-    private final int minIdle; // Min idle connections used to create backend pool
+    private volatile int maxPoolSize; // Max pool size currently configured for backend pool
+    private volatile int minIdle; // Min idle connections currently configured for backend pool
 
     /**
      * Creates a new XA transaction registry.
@@ -154,7 +154,20 @@ public class XATransactionRegistry {
 
             // Log diagnostics AFTER resize
             commonsPool.logPoolDiagnostics("AFTER resize");
+            this.maxPoolSize = newMaxPoolSize;
+            this.minIdle = newMinIdle;
 
+        } else if (poolProvider.supportsDynamicResizing()) {
+            try {
+                if (poolProvider.resizePool(poolDataSource, newMaxPoolSize, newMinIdle)) {
+                    this.maxPoolSize = newMaxPoolSize;
+                    this.minIdle = newMinIdle;
+                } else {
+                    log.warn("XA pool provider '{}' did not apply the requested resize", poolProvider.id());
+                }
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to resize XA backend pool", e);
+            }
         } else {
             log.warn("Cannot resize XA backend pool: poolDataSource is not CommonsPool2XADataSource");
         }

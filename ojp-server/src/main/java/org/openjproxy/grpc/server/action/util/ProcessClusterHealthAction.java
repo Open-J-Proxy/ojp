@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
+import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.xa.pool.XATransactionRegistry;
 
 import javax.sql.DataSource;
@@ -95,6 +96,10 @@ public class ProcessClusterHealthAction {
 
             int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
             int newMinIdle = allocation.getCurrentMinIdle();
+            DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+            newMaxPoolSize = budgetManager.getMaximumPoolSize("xa:" + connHash, newMaxPoolSize);
+            newMinIdle = Math.min(newMinIdle, budgetManager.getMinimumIdle("xa:" + connHash, newMinIdle));
+            newMinIdle = Math.min(newMinIdle, newMaxPoolSize);
 
             log.debug("[XA-REBALANCE-DEBUG] Resizing XA backend pool for {}: maxPoolSize={}, minIdle={}",
                     connHash, newMaxPoolSize, newMinIdle);

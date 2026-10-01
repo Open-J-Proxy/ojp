@@ -163,6 +163,11 @@ public class ConnectionPoolConfigurer {
 
         int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
         int newMinIdle = allocation.getCurrentMinIdle();
+        DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+        newMaxPoolSize = budgetManager.getMaximumPoolSize("regular:" + connHash, newMaxPoolSize);
+        newMinIdle = Math.min(newMinIdle,
+                budgetManager.getMinimumIdle("regular:" + connHash, newMinIdle));
+        newMinIdle = Math.min(newMinIdle, newMaxPoolSize);
 
         // Get current sizes for logging
         int currentMaxPoolSize = dataSource.getMaximumPoolSize();

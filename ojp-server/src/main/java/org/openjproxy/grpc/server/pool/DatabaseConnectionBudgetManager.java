@@ -24,18 +24,20 @@ public final class DatabaseConnectionBudgetManager {
     private static final String USER_PRIORITY_SUFFIX = ".priorities.username.";
     private static final String WEIGHT_SUFFIX = ".weight";
 
-    private static final DatabaseConnectionBudgetManager INSTANCE =
-            new DatabaseConnectionBudgetManager(System.getProperties());
+    private static DatabaseConnectionBudgetManager instance;
 
     private final List<Budget> budgets;
     private final Map<String, Pool> pools = new HashMap<>();
 
     public DatabaseConnectionBudgetManager(Properties properties) {
-        this.budgets = parseBudgets(properties);
+        this.budgets = parseBudgets(properties == null ? new Properties() : properties);
     }
 
-    public static DatabaseConnectionBudgetManager getInstance() {
-        return INSTANCE;
+    public static synchronized DatabaseConnectionBudgetManager getInstance() {
+        if (instance == null) {
+            instance = new DatabaseConnectionBudgetManager(System.getProperties());
+        }
+        return instance;
     }
 
     public synchronized Registration registerPool(String poolId, String jdbcUrl, String username,
@@ -58,6 +60,7 @@ public final class DatabaseConnectionBudgetManager {
         pools.put(poolId, pool);
         try {
             rebalance(budget);
+            log.info("Database budget '{}' assigned pool '{}' maxPoolSize={}", budget.name, poolId, pool.allocatedMax);
             return registration;
         } catch (RuntimeException e) {
             pools.remove(poolId);
@@ -70,7 +73,8 @@ public final class DatabaseConnectionBudgetManager {
         }
     }
 
-    public synchronized void attachPool(Registration registration, PoolResizer resizer) {
+    public synchronized void attachPool(Registration registration, PoolResizer resizer,
+                                        int configuredMaximum, int configuredMinimum) {
         if (registration == null || registration.budget == null) {
             return;
         }
@@ -82,17 +86,37 @@ public final class DatabaseConnectionBudgetManager {
             throw new IllegalArgumentException("A pool resizer is required for a budgeted pool");
         }
         pool.resizer = resizer;
-        resize(pool, pool.allocatedMax, pool.allocatedMin);
+        if (configuredMaximum != pool.allocatedMax || configuredMinimum != pool.allocatedMin) {
+            if (!pool.resizable) {
+                throw new IllegalStateException("Pool '" + registration.poolId
+                        + "' changed allocation before creation and its provider cannot resize it");
+            }
+            resize(pool, pool.allocatedMax, pool.allocatedMin);
+        }
     }
 
     public synchronized void unregisterPool(Registration registration) {
         if (registration == null || registration.budget == null) {
             return;
         }
-        Pool removed = pools.remove(registration.poolId);
+        unregisterPool(registration.poolId);
+    }
+
+    public synchronized void unregisterPool(String poolId) {
+        Pool removed = pools.remove(poolId);
         if (removed != null) {
             rebalance(removed.registration.budget);
         }
+    }
+
+    public synchronized int getMaximumPoolSize(String poolId, int defaultValue) {
+        Pool pool = pools.get(poolId);
+        return pool == null ? defaultValue : pool.allocatedMax;
+    }
+
+    public synchronized int getMinimumIdle(String poolId, int defaultValue) {
+        Pool pool = pools.get(poolId);
+        return pool == null ? defaultValue : pool.allocatedMin;
     }
 
     private void rebalance(Budget budget) {
@@ -116,7 +140,7 @@ public final class DatabaseConnectionBudgetManager {
         Map<Pool, Integer> allocations = allocate(members, capacity, budget);
         for (Pool pool : members) {
             int target = allocations.get(pool);
-            if (target != pool.allocatedMax && !pool.resizable) {
+            if (target != pool.allocatedMax && pool.resizer != null && !pool.resizable) {
                 throw new IllegalStateException("Pool '" + pool.registration.poolId
                         + "' cannot be resized to enforce database budget '" + budget.name + "'");
             }
@@ -125,13 +149,19 @@ public final class DatabaseConnectionBudgetManager {
         for (Pool pool : members) {
             int target = allocations.get(pool);
             if (target < pool.allocatedMax && pool.resizer != null) {
-                resize(pool, target, Math.min(pool.registration.requestedMin, target));
+                int targetMin = Math.min(pool.registration.requestedMin, target);
+                resize(pool, target, targetMin);
+                pool.allocatedMax = target;
+                pool.allocatedMin = targetMin;
             }
         }
         for (Pool pool : members) {
             int target = allocations.get(pool);
             if (target > pool.allocatedMax && pool.resizer != null) {
-                resize(pool, target, Math.min(pool.registration.requestedMin, target));
+                int targetMin = Math.min(pool.registration.requestedMin, target);
+                resize(pool, target, targetMin);
+                pool.allocatedMax = target;
+                pool.allocatedMin = targetMin;
             }
         }
         for (Pool pool : members) {
@@ -157,7 +187,7 @@ public final class DatabaseConnectionBudgetManager {
         long totalRequested = 0;
         for (Pool pool : members) {
             totalRequested += pool.registration.requestedMax;
-            allocations.put(pool, 1);
+            allocations.put(pool, 0);
         }
         if (totalRequested <= capacity) {
             for (Pool pool : members) {
@@ -166,21 +196,23 @@ public final class DatabaseConnectionBudgetManager {
             return allocations;
         }
 
-        int remaining = capacity - members.size();
+        int remaining = capacity;
         Map<Pool, Integer> demands = new HashMap<>();
-        Map<String, Integer> poolsByUsername = new HashMap<>();
         for (Pool pool : members) {
-            poolsByUsername.merge(pool.username, 1, Integer::sum);
-            demands.put(pool, pool.registration.requestedMax - 1);
+            demands.put(pool, pool.registration.requestedMax);
         }
 
         List<Pool> eligible = new ArrayList<>(members);
         while (remaining > 0 && !eligible.isEmpty()) {
             double totalWeight = 0;
             Map<Pool, Double> weights = new HashMap<>();
+            Map<String, Integer> eligiblePoolsByUsername = new HashMap<>();
+            for (Pool pool : eligible) {
+                eligiblePoolsByUsername.merge(pool.username, 1, Integer::sum);
+            }
             for (Pool pool : eligible) {
                 double weight = budget.usernameWeights.getOrDefault(pool.username, 1.0)
-                        / poolsByUsername.get(pool.username);
+                        / eligiblePoolsByUsername.get(pool.username);
                 weights.put(pool, weight);
                 totalWeight += weight;
             }
@@ -223,6 +255,17 @@ public final class DatabaseConnectionBudgetManager {
                 }
             }
             break;
+        }
+        for (Pool pool : members) {
+            if (allocations.get(pool) == 0) {
+                Pool donor = members.stream()
+                        .filter(candidate -> allocations.get(candidate) > 1)
+                        .max(Comparator.<Pool>comparingInt(allocations::get)
+                                .thenComparing(candidate -> candidate.registration.poolId, Comparator.reverseOrder()))
+                        .orElseThrow(() -> new IllegalStateException("Unable to assign one connection to each pool"));
+                allocations.put(donor, allocations.get(donor) - 1);
+                allocations.put(pool, 1);
+            }
         }
         return allocations;
     }

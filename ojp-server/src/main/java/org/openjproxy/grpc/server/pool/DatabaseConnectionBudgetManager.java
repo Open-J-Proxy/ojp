@@ -3,6 +3,10 @@ package org.openjproxy.grpc.server.pool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -25,6 +29,7 @@ public final class DatabaseConnectionBudgetManager {
     private static final String RESERVE_CONNECTIONS_SUFFIX = ".reserveConnections";
     private static final String USER_PRIORITY_SUFFIX = ".priorities.username.";
     private static final String WEIGHT_SUFFIX = ".weight";
+    private static final String CONFIG_FILE_NAME = "ojp.properties";
 
     private static DatabaseConnectionBudgetManager instance;
 
@@ -37,9 +42,34 @@ public final class DatabaseConnectionBudgetManager {
 
     public static synchronized DatabaseConnectionBudgetManager getInstance() {
         if (instance == null) {
-            instance = new DatabaseConnectionBudgetManager(System.getProperties());
+            instance = new DatabaseConnectionBudgetManager(loadBudgetProperties(
+                    Path.of("."), DatabaseConnectionBudgetManager.class.getClassLoader(), System.getProperties()));
         }
         return instance;
+    }
+
+    static Properties loadBudgetProperties(Path serverDirectory, ClassLoader classLoader, Properties systemProperties) {
+        Properties properties = new Properties();
+        Path configFile = serverDirectory.resolve(CONFIG_FILE_NAME);
+        if (Files.isRegularFile(configFile)) {
+            loadProperties(properties, () -> Files.newInputStream(configFile), configFile.toString());
+        } else {
+            InputStream resource = classLoader.getResourceAsStream(CONFIG_FILE_NAME);
+            if (resource != null) {
+                loadProperties(properties, () -> resource, "classpath:" + CONFIG_FILE_NAME);
+            }
+        }
+        properties.putAll(systemProperties);
+        return properties;
+    }
+
+    private static void loadProperties(Properties properties, InputStreamSupplier inputStreamSupplier, String source) {
+        try (InputStream inputStream = inputStreamSupplier.get()) {
+            properties.load(inputStream);
+            log.info("Loaded database budget properties from {}", source);
+        } catch (IOException e) {
+            log.warn("Could not load database budget properties from {}", source, e);
+        }
     }
 
     public synchronized Registration registerPool(String poolId, String jdbcUrl, String username,
@@ -481,6 +511,11 @@ public final class DatabaseConnectionBudgetManager {
     @FunctionalInterface
     public interface PoolResizer {
         void resize(int maximumPoolSize, int minimumIdle) throws SQLException;
+    }
+
+    @FunctionalInterface
+    private interface InputStreamSupplier {
+        InputStream get() throws IOException;
     }
 
     private static final class Budget {

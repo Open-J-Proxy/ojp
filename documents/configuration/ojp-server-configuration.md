@@ -32,7 +32,7 @@ Because the global cap is shared across all datasources and clients, tripping it
 
 ### Database Connection Budgets
 
-Use a database connection budget when several OJP pools connect to the same database. It caps the pools' **combined maximum**, rather than giving every pool a separate full limit. Set these JVM properties on the OJP server; restart the server after changing them.
+Use a database connection budget when several OJP pools connect to the same database. It caps the pools' **combined maximum**, rather than giving every pool a separate full limit. Set these properties in the server's `ojp.properties` file or as JVM properties; restart the server after changing them. The server looks for `ojp.properties` in its working directory, then on its classpath if no working-directory file exists. JVM properties override values in the file.
 
 Each budget has a name you choose (shown as `<group>` below):
 
@@ -44,6 +44,17 @@ Each budget has a name you choose (shown as `<group>` below):
 | `ojp.server.databaseBudgets.<group>.priorities.username.<username>.weight` | Gives that database username a larger or smaller share (optional; defaults to `1`). |
 
 For example, suppose two pools match the URL below. Their requested maxima are 8 for `app_rw` and 8 for `reporting_ro`. Set the budget to 10 and weights to 2:1. OJP assigns about 7 connections to `app_rw` and 3 to `reporting_ro`; together, the pool maxima stay at 10.
+
+Put the following in the OJP server's `ojp.properties` file:
+
+```properties
+ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db1:5432/orders*
+ojp.server.databaseBudgets.orders.maxTotalConnections=10
+ojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2
+ojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1
+```
+
+You can use the same keys as JVM options instead. For example, `-Dojp.server.databaseBudgets.orders.maxTotalConnections=10` overrides the file's value. This server-side file is separate from the JDBC driver's `ojp.properties`; a file in the client application's classpath does not configure the server.
 
 ```bash
 java -Duser.timezone=UTC \

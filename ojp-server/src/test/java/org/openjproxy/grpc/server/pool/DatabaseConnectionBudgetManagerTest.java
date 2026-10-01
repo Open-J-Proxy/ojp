@@ -1,13 +1,34 @@
 package org.openjproxy.grpc.server.pool;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class DatabaseConnectionBudgetManagerTest {
+
+    @Test
+    void shouldLoadServerPropertiesFileAndPreferSystemProperties(@TempDir Path directory) throws IOException {
+        Files.writeString(directory.resolve("ojp.properties"),
+                "ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db/*\n"
+                        + "ojp.server.databaseBudgets.orders.maxTotalConnections=10\n");
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("ojp.server.databaseBudgets.orders.maxTotalConnections", "6");
+
+        Properties properties = DatabaseConnectionBudgetManager.loadBudgetProperties(
+                directory, getClass().getClassLoader(), systemProperties);
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(properties);
+        DatabaseConnectionBudgetManager.Registration registration = manager.registerPool(
+                "pool-a", "jdbc:postgresql://db/orders", "user-a", 20, 0, true);
+
+        assertEquals(6, registration.getMaximumPoolSize());
+    }
 
     @Test
     void shouldAllocateWeightedPoolCapsWhenBudgetIsOversubscribed() {

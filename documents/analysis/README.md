@@ -4,6 +4,23 @@ This directory contains technical analysis documents for various OJP features an
 
 ## Latest Analysis (September 2026)
 
+### 🆕 Database Total Connection Budget Control
+
+**Question:** How can OJP Server enforce a hard total connection budget for one real database, even when multiple pools are created against that same database, without adding more hot-path queues or semaphores?
+
+**Quick Answer:** Add a server-side database budget controller that groups multiple pools under one database budget key, allocates weighted pool caps from one total connection budget, and rebalances pool sizes in the background. Start with priority by database username; treat client-name priority as a later classification feature.
+
+**Document:**
+- [DATABASE_TOTAL_CONNECTION_BUDGET_ANALYSIS.md](./DATABASE_TOTAL_CONNECTION_BUDGET_ANALYSIS.md)
+  - Current OJP behavior and the gap in per-database protection
+  - Why pool-budget control is a better fit than another hot-path gate
+  - Username vs client-name priority tradeoffs
+  - Cluster-wide concerns, open questions, and recommended phasing
+
+**Key Takeaway:** The safest low-overhead direction is to enforce a per-database total by controlling pool maxima and background rebalancing, not by adding another request-time blocking layer.
+
+---
+
 ### 🆕 Generic OJP Messaging Protocol (server-to-server and server-to-client)
 
 **Question:** How should OJP servers exchange messages with each other (e.g.

@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.transaction.xa.XAException;
 import javax.transaction.xa.XAResource;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -132,8 +133,9 @@ public class XATransactionRegistry {
                     currentMaxTotal, currentMinIdle, newMaxPoolSize, newMinIdle,
                     commonsPool.getNumActive(), commonsPool.getNumIdle());
 
-            // Log diagnostics BEFORE resize
-            commonsPool.logPoolDiagnostics("BEFORE resize");
+            if (log.isDebugEnabled()) {
+                commonsPool.logPoolDiagnostics("BEFORE resize");
+            }
 
             // Determine resize direction
             boolean isDecreasing = (newMaxPoolSize < currentMaxTotal) || (newMinIdle < currentMinIdle);
@@ -152,8 +154,9 @@ public class XATransactionRegistry {
                         newMaxPoolSize, newMinIdle);
             }
 
-            // Log diagnostics AFTER resize
-            commonsPool.logPoolDiagnostics("AFTER resize");
+            if (log.isDebugEnabled()) {
+                commonsPool.logPoolDiagnostics("AFTER resize");
+            }
             this.maxPoolSize = newMaxPoolSize;
             this.minIdle = newMinIdle;
 
@@ -165,7 +168,7 @@ public class XATransactionRegistry {
                 } else {
                     log.warn("XA pool provider '{}' did not apply the requested resize", poolProvider.id());
                 }
-            } catch (Exception e) {
+            } catch (SQLException e) {
                 throw new IllegalStateException("Failed to resize XA backend pool", e);
             }
         } else {

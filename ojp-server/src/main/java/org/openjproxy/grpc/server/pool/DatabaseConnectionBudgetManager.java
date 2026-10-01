@@ -3,6 +3,7 @@ package org.openjproxy.grpc.server.pool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Allocates server-configured database connection budgets across local pools.
@@ -120,30 +122,41 @@ public final class DatabaseConnectionBudgetManager {
     }
 
     private void rebalance(Budget budget) {
-        List<Pool> members = new ArrayList<>();
-        for (Pool pool : pools.values()) {
-            if (pool.registration.budget == budget) {
-                members.add(pool);
-            }
-        }
-        members.sort(Comparator.comparing(pool -> pool.registration.poolId));
+        List<Pool> members = pools.values().stream()
+                .filter(pool -> pool.registration.budget == budget)
+                .sorted(Comparator.comparing(pool -> pool.registration.poolId))
+                .collect(Collectors.toList());
         if (members.isEmpty()) {
             return;
         }
 
         int capacity = budget.maxConnections - budget.reserveConnections;
-        if (capacity < members.size()) {
-            throw new IllegalStateException("Database budget '" + budget.name + "' has " + capacity
-                    + " usable connections for " + members.size() + " pools; each pool requires at least one");
-        }
-
+        validatePoolCapacity(budget, capacity, members.size());
         Map<Pool, Integer> allocations = allocate(members, capacity, budget);
+        keepFixedPoolsAtCurrentAllocation(members, allocations);
+        validateFixedPoolAllocations(budget, members, allocations);
+        resizePools(members, allocations, false);
+        resizePools(members, allocations, true);
+        updatePoolAllocations(members, allocations);
+    }
+
+    private void validatePoolCapacity(Budget budget, int capacity, int poolCount) {
+        if (capacity < poolCount) {
+            throw new IllegalStateException("Database budget '" + budget.name + "' has " + capacity
+                    + " usable connections for " + poolCount + " pools; each pool requires at least one");
+        }
+    }
+
+    private void keepFixedPoolsAtCurrentAllocation(List<Pool> members, Map<Pool, Integer> allocations) {
         for (Pool pool : members) {
             int target = allocations.get(pool);
             if (pool.resizer != null && !pool.resizable && target > pool.allocatedMax) {
                 allocations.put(pool, pool.allocatedMax);
             }
         }
+    }
+
+    private void validateFixedPoolAllocations(Budget budget, List<Pool> members, Map<Pool, Integer> allocations) {
         for (Pool pool : members) {
             int target = allocations.get(pool);
             if (target != pool.allocatedMax && pool.resizer != null && !pool.resizable) {
@@ -151,27 +164,23 @@ public final class DatabaseConnectionBudgetManager {
                         + "' cannot be resized to enforce database budget '" + budget.name + "'");
             }
         }
+    }
 
+    private void resizePools(List<Pool> members, Map<Pool, Integer> allocations, boolean increasing) {
         for (Pool pool : members) {
             int target = allocations.get(pool);
-            if (target < pool.allocatedMax && pool.resizer != null) {
-                int targetMin = Math.min(pool.registration.requestedMin, target);
-                resize(pool, target, targetMin);
-                pool.allocatedMax = target;
-                pool.allocatedMin = targetMin;
+            boolean needsResize = increasing
+                    ? target > pool.allocatedMax
+                    : target < pool.allocatedMax;
+            if (needsResize && pool.resizer != null) {
+                resize(pool, target, Math.min(pool.registration.requestedMin, target));
             }
         }
+    }
+
+    private void updatePoolAllocations(List<Pool> members, Map<Pool, Integer> allocations) {
         for (Pool pool : members) {
-            int target = allocations.get(pool);
-            if (target > pool.allocatedMax && pool.resizer != null) {
-                int targetMin = Math.min(pool.registration.requestedMin, target);
-                resize(pool, target, targetMin);
-                pool.allocatedMax = target;
-                pool.allocatedMin = targetMin;
-            }
-        }
-        for (Pool pool : members) {
-            pool.allocatedMax = allocations.get(pool);
+            pool.allocatedMax = Math.min(pool.registration.requestedMax, allocations.get(pool));
             pool.allocatedMin = Math.min(pool.registration.requestedMin, pool.allocatedMax);
         }
     }
@@ -182,7 +191,7 @@ public final class DatabaseConnectionBudgetManager {
         }
         try {
             pool.resizer.resize(max, min);
-        } catch (Exception e) {
+        } catch (SQLException e) {
             throw new IllegalStateException("Failed to resize pool '" + pool.registration.poolId
                     + "' to max=" + max + ", min=" + min, e);
         }
@@ -190,78 +199,107 @@ public final class DatabaseConnectionBudgetManager {
 
     private Map<Pool, Integer> allocate(List<Pool> members, int capacity, Budget budget) {
         Map<Pool, Integer> allocations = new LinkedHashMap<>();
-        long totalRequested = 0;
         for (Pool pool : members) {
-            totalRequested += pool.registration.requestedMax;
             allocations.put(pool, 0);
         }
-        if (totalRequested <= capacity) {
-            for (Pool pool : members) {
-                allocations.put(pool, pool.registration.requestedMax);
-            }
-            return allocations;
+        if (totalRequested(members) <= capacity) {
+            return allocateRequestedMaximums(members);
         }
 
-        int remaining = capacity;
+        allocateWeightedCapacity(members, capacity, budget, allocations);
+        ensureMinimumPoolAllocation(members, allocations);
+        return allocations;
+    }
+
+    private long totalRequested(List<Pool> members) {
+        return members.stream().mapToLong(pool -> pool.registration.requestedMax).sum();
+    }
+
+    private Map<Pool, Integer> allocateRequestedMaximums(List<Pool> members) {
+        Map<Pool, Integer> allocations = new LinkedHashMap<>();
+        for (Pool pool : members) {
+            allocations.put(pool, pool.registration.requestedMax);
+        }
+        return allocations;
+    }
+
+    private void allocateWeightedCapacity(List<Pool> members, int capacity, Budget budget,
+                                          Map<Pool, Integer> allocations) {
         Map<Pool, Integer> demands = new HashMap<>();
         for (Pool pool : members) {
             demands.put(pool, pool.registration.requestedMax);
         }
-
         List<Pool> eligible = new ArrayList<>(members);
+        int remaining = capacity;
         while (remaining > 0 && !eligible.isEmpty()) {
-            double totalWeight = 0;
-            Map<Pool, Double> weights = new HashMap<>();
-            Map<String, Integer> eligiblePoolsByUsername = new HashMap<>();
-            for (Pool pool : eligible) {
-                eligiblePoolsByUsername.merge(pool.username, 1, Integer::sum);
-            }
-            for (Pool pool : eligible) {
-                double weight = budget.usernameWeights.getOrDefault(pool.username, 1.0)
-                        / eligiblePoolsByUsername.get(pool.username);
-                weights.put(pool, weight);
-                totalWeight += weight;
-            }
-
-            double allocationLevel = remaining / totalWeight;
-            Pool saturated = null;
-            for (Pool pool : eligible) {
-                if (demands.get(pool) <= allocationLevel * weights.get(pool)) {
-                    saturated = pool;
-                    break;
-                }
-            }
+            Map<Pool, Double> weights = calculatePoolWeights(eligible, budget);
+            Pool saturated = findSaturatedPool(eligible, demands, weights, remaining);
             if (saturated != null) {
-                int demand = demands.remove(saturated);
-                allocations.put(saturated, allocations.get(saturated) + demand);
-                remaining -= demand;
-                eligible.remove(saturated);
-                continue;
+                remaining = allocateSaturatedPool(saturated, eligible, demands, allocations, remaining);
+            } else {
+                allocateFractionalShares(eligible, demands, weights, allocations, remaining);
+                remaining = 0;
             }
-
-            Map<Pool, Double> fractional = new HashMap<>();
-            int assigned = 0;
-            for (Pool pool : eligible) {
-                double share = allocationLevel * weights.get(pool);
-                int whole = (int) Math.floor(share);
-                allocations.put(pool, allocations.get(pool) + whole);
-                fractional.put(pool, share - whole);
-                assigned += whole;
-            }
-            remaining -= assigned;
-            eligible.sort(Comparator.<Pool>comparingDouble(fractional::get).reversed()
-                    .thenComparing(pool -> pool.registration.poolId));
-            for (Pool pool : eligible) {
-                if (remaining == 0) {
-                    break;
-                }
-                if (allocations.get(pool) < pool.registration.requestedMax) {
-                    allocations.put(pool, allocations.get(pool) + 1);
-                    remaining--;
-                }
-            }
-            break;
         }
+    }
+
+    private Map<Pool, Double> calculatePoolWeights(List<Pool> eligible, Budget budget) {
+        Map<String, Integer> eligiblePoolsByUsername = new HashMap<>();
+        for (Pool pool : eligible) {
+            eligiblePoolsByUsername.merge(pool.username, 1, Integer::sum);
+        }
+        Map<Pool, Double> weights = new HashMap<>();
+        for (Pool pool : eligible) {
+            weights.put(pool, budget.usernameWeights.getOrDefault(pool.username, 1.0)
+                    / eligiblePoolsByUsername.get(pool.username));
+        }
+        return weights;
+    }
+
+    private Pool findSaturatedPool(List<Pool> eligible, Map<Pool, Integer> demands,
+                                   Map<Pool, Double> weights, int remaining) {
+        double totalWeight = weights.values().stream().mapToDouble(Double::doubleValue).sum();
+        double allocationLevel = remaining / totalWeight;
+        return eligible.stream()
+                .filter(pool -> demands.get(pool) <= allocationLevel * weights.get(pool))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private int allocateSaturatedPool(Pool pool, List<Pool> eligible, Map<Pool, Integer> demands,
+                                      Map<Pool, Integer> allocations, int remaining) {
+        int demand = demands.remove(pool);
+        allocations.put(pool, allocations.get(pool) + demand);
+        eligible.remove(pool);
+        return remaining - demand;
+    }
+
+    private void allocateFractionalShares(List<Pool> eligible, Map<Pool, Integer> demands,
+                                          Map<Pool, Double> weights, Map<Pool, Integer> allocations,
+                                          int remaining) {
+        double totalWeight = weights.values().stream().mapToDouble(Double::doubleValue).sum();
+        double allocationLevel = remaining / totalWeight;
+        Map<Pool, Double> fractional = new HashMap<>();
+        int assigned = 0;
+        for (Pool pool : eligible) {
+            double share = allocationLevel * weights.get(pool);
+            int whole = (int) Math.floor(share);
+            allocations.put(pool, allocations.get(pool) + whole);
+            fractional.put(pool, share - whole);
+            assigned += whole;
+        }
+        int remainder = remaining - assigned;
+        eligible.sort(Comparator.<Pool>comparingDouble(fractional::get).reversed()
+                .thenComparing(pool -> pool.registration.poolId));
+        for (Pool pool : eligible) {
+            if (remainder > 0 && allocations.get(pool) < demands.get(pool)) {
+                allocations.put(pool, allocations.get(pool) + 1);
+                remainder--;
+            }
+        }
+    }
+
+    private void ensureMinimumPoolAllocation(List<Pool> members, Map<Pool, Integer> allocations) {
         for (Pool pool : members) {
             if (allocations.get(pool) == 0) {
                 Pool donor = members.stream()
@@ -273,7 +311,6 @@ public final class DatabaseConnectionBudgetManager {
                 allocations.put(pool, 1);
             }
         }
-        return allocations;
     }
 
     private Budget findBudget(String jdbcUrl) {
@@ -291,6 +328,16 @@ public final class DatabaseConnectionBudgetManager {
     }
 
     private static List<Budget> parseBudgets(Properties properties) {
+        Map<String, Map<String, String>> valuesByName = groupBudgetProperties(properties);
+        List<Budget> result = new ArrayList<>();
+        for (Map.Entry<String, Map<String, String>> entry : valuesByName.entrySet()) {
+            result.add(parseBudget(entry.getKey(), entry.getValue()));
+        }
+        result.sort(Comparator.comparing(budget -> budget.name));
+        return result;
+    }
+
+    private static Map<String, Map<String, String>> groupBudgetProperties(Properties properties) {
         Map<String, Map<String, String>> valuesByName = new HashMap<>();
         for (String property : properties.stringPropertyNames()) {
             if (!property.startsWith(PROPERTY_PREFIX)) {
@@ -303,52 +350,70 @@ public final class DatabaseConnectionBudgetManager {
                         .put(remaining.substring(separator), properties.getProperty(property));
             }
         }
+        return valuesByName;
+    }
 
-        List<Budget> result = new ArrayList<>();
-        for (Map.Entry<String, Map<String, String>> entry : valuesByName.entrySet()) {
-            String name = entry.getKey();
-            Map<String, String> values = entry.getValue();
-            String patternText = values.get(JDBC_URL_PATTERN_SUFFIX);
-            String maxText = values.get(MAX_CONNECTIONS_SUFFIX);
-            if (patternText == null || patternText.isBlank() || maxText == null) {
-                throw new IllegalArgumentException("Database budget '" + name
-                        + "' requires match.jdbcUrlPattern and maxTotalConnections");
-            }
-
-            int maxConnections = parsePositiveInt(name, MAX_CONNECTIONS_SUFFIX, maxText);
-            int reserve = values.containsKey(RESERVE_CONNECTIONS_SUFFIX)
-                    ? parseNonNegativeInt(name, RESERVE_CONNECTIONS_SUFFIX, values.get(RESERVE_CONNECTIONS_SUFFIX))
-                    : 0;
-            if (reserve >= maxConnections) {
-                throw new IllegalArgumentException("Database budget '" + name
-                        + "' reserveConnections must be less than maxTotalConnections");
-            }
-
-            Map<String, Double> weights = new HashMap<>();
-            for (Map.Entry<String, String> value : values.entrySet()) {
-                if (value.getKey().startsWith(USER_PRIORITY_SUFFIX) && value.getKey().endsWith(WEIGHT_SUFFIX)) {
-                    String username = value.getKey().substring(USER_PRIORITY_SUFFIX.length(),
-                            value.getKey().length() - WEIGHT_SUFFIX.length());
-                    if (username.isEmpty()) {
-                        throw new IllegalArgumentException("Database budget '" + name + "' has an empty username priority");
-                    }
-                    try {
-                        double weight = Double.parseDouble(value.getValue());
-                        if (!Double.isFinite(weight) || weight <= 0) {
-                            throw new NumberFormatException("weight must be finite and positive");
-                        }
-                        weights.put(username, weight);
-                    } catch (NumberFormatException e) {
-                        throw new IllegalArgumentException("Invalid username weight for database budget '"
-                                + name + "': " + value.getKey(), e);
-                    }
-                }
-            }
-
-            result.add(new Budget(name, globPattern(patternText), maxConnections, reserve, weights));
+    private static Budget parseBudget(String name, Map<String, String> values) {
+        String patternText = values.get(JDBC_URL_PATTERN_SUFFIX);
+        String maxText = values.get(MAX_CONNECTIONS_SUFFIX);
+        if (patternText == null || patternText.isBlank() || maxText == null) {
+            throw new IllegalArgumentException("Database budget '" + name
+                    + "' requires match.jdbcUrlPattern and maxTotalConnections");
         }
-        result.sort(Comparator.comparing(budget -> budget.name));
-        return result;
+
+        int maxConnections = parsePositiveInt(name, MAX_CONNECTIONS_SUFFIX, maxText);
+        int reserve = parseReserve(name, values, maxConnections);
+        Map<String, Double> weights = parseUsernameWeights(name, values);
+        return new Budget(name, globPattern(patternText), maxConnections, reserve, weights);
+    }
+
+    private static int parseReserve(String name, Map<String, String> values, int maxConnections) {
+        String reserveValue = values.get(RESERVE_CONNECTIONS_SUFFIX);
+        int reserve = reserveValue == null ? 0
+                : parseNonNegativeInt(name, RESERVE_CONNECTIONS_SUFFIX, reserveValue);
+        if (reserve >= maxConnections) {
+            throw new IllegalArgumentException("Database budget '" + name
+                    + "' reserveConnections must be less than maxTotalConnections");
+        }
+        return reserve;
+    }
+
+    private static Map<String, Double> parseUsernameWeights(String name, Map<String, String> values) {
+        Map<String, Double> weights = new HashMap<>();
+        for (Map.Entry<String, String> value : values.entrySet()) {
+            if (isUsernameWeight(value.getKey())) {
+                String username = extractUsername(value.getKey());
+                double weight = parseWeight(name, value.getKey(), value.getValue());
+                weights.put(username, weight);
+            }
+        }
+        return weights;
+    }
+
+    private static boolean isUsernameWeight(String propertyName) {
+        return propertyName.startsWith(USER_PRIORITY_SUFFIX) && propertyName.endsWith(WEIGHT_SUFFIX);
+    }
+
+    private static String extractUsername(String propertyName) {
+        String username = propertyName.substring(USER_PRIORITY_SUFFIX.length(),
+                propertyName.length() - WEIGHT_SUFFIX.length());
+        if (username.isEmpty()) {
+            throw new IllegalArgumentException("Database budget has an empty username priority");
+        }
+        return username;
+    }
+
+    private static double parseWeight(String budgetName, String propertyName, String value) {
+        try {
+            double weight = Double.parseDouble(value);
+            if (!Double.isFinite(weight) || weight <= 0) {
+                throw new NumberFormatException("weight must be finite and positive");
+            }
+            return weight;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid username weight for database budget '"
+                    + budgetName + "': " + propertyName, e);
+        }
     }
 
     private static Pattern globPattern(String glob) {
@@ -415,7 +480,7 @@ public final class DatabaseConnectionBudgetManager {
 
     @FunctionalInterface
     public interface PoolResizer {
-        void resize(int maximumPoolSize, int minimumIdle) throws Exception;
+        void resize(int maximumPoolSize, int minimumIdle) throws SQLException;
     }
 
     private static final class Budget {

@@ -32,30 +32,31 @@ Because the global cap is shared across all datasources and clients, tripping it
 
 ### Database Connection Budgets
 
-Database connection budgets limit the combined configured maximum of OJP-managed pools whose JDBC URLs match the same server-side pattern. Configure budgets as JVM system properties; they are read when the budget manager is initialized and require a server restart to change.
+Use a database connection budget when several OJP pools connect to the same database. It caps the pools' **combined maximum**, rather than giving every pool a separate full limit. Set these JVM properties on the OJP server; restart the server after changing them.
 
-| Property | Required | Description |
-|----------|----------|-------------|
-| `ojp.server.databaseBudgets.<group>.match.jdbcUrlPattern` | Yes | JDBC URL glob used to group pools; `*` matches any sequence of characters. |
-| `ojp.server.databaseBudgets.<group>.maxTotalConnections` | Yes | Maximum connections assigned across matching pools. |
-| `ojp.server.databaseBudgets.<group>.reserveConnections` | No | Connections held out of OJP pool allocations (default `0`). Must be less than the total. |
-| `ojp.server.databaseBudgets.<group>.priorities.username.<username>.weight` | No | Relative allocation weight for a database username (default `1`). Must be finite and positive. |
+Each budget has a name you choose (shown as `<group>` below):
 
-For example:
+| Property | What it does |
+|----------|--------------|
+| `ojp.server.databaseBudgets.<group>.match.jdbcUrlPattern` | Selects pools by JDBC URL. `*` matches any text. |
+| `ojp.server.databaseBudgets.<group>.maxTotalConnections` | Sets the total connection limit for all matching pools. |
+| `ojp.server.databaseBudgets.<group>.reserveConnections` | Leaves connections unused by OJP (optional; defaults to `0`). |
+| `ojp.server.databaseBudgets.<group>.priorities.username.<username>.weight` | Gives that database username a larger or smaller share (optional; defaults to `1`). |
+
+For example, suppose two pools match the URL below. Their requested maxima are 8 for `app_rw` and 8 for `reporting_ro`. Set the budget to 10 and weights to 2:1. OJP assigns about 7 connections to `app_rw` and 3 to `reporting_ro`; together, the pool maxima stay at 10.
 
 ```bash
 java -Duser.timezone=UTC \
-  -Dojp.server.databaseBudgets.ordersProd.match.jdbcUrlPattern='jdbc:postgresql://db1:5432/orders*' \
-  -Dojp.server.databaseBudgets.ordersProd.maxTotalConnections=80 \
-  -Dojp.server.databaseBudgets.ordersProd.reserveConnections=10 \
-  -Dojp.server.databaseBudgets.ordersProd.priorities.username.app_rw.weight=5 \
-  -Dojp.server.databaseBudgets.ordersProd.priorities.username.reporting_ro.weight=1 \
+  -Dojp.server.databaseBudgets.orders.match.jdbcUrlPattern='jdbc:postgresql://db1:5432/orders*' \
+  -Dojp.server.databaseBudgets.orders.maxTotalConnections=10 \
+  -Dojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2 \
+  -Dojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1 \
   -jar ojp-server.jar
 ```
 
-Pools are assigned at least one connection each, then remaining capacity is divided by username weight. Pools for the same username share that username's weight. If all requested maxima fit within the budget, their configured sizes are unchanged; when they do not fit, OJP recalculates pool maxima when a matching pool is created and dynamically resizes existing pools. The borrow path gains no shared semaphore or queue. Built-in HikariCP, DBCP, and Commons Pool 2 XA providers support dynamic resizing; a custom provider must implement its resizing capability to participate in a rebalance.
+The weights are shares, not connection counts: `2:1` means the first username gets about twice the share of the second when the budget is tight. Pools using the same username share that username's weight. If the requested pool maxima already fit, OJP leaves them unchanged. When a matching pool is created or removed, OJP recalculates the maxima and resizes supported pools. Each matching pool is assigned at least one connection, so the budget must have at least one available connection per pool. A reserve reduces the capacity available to OJP; for example, a total of 10 with a reserve of 2 leaves 8 for OJP's pools.
 
-The limit covers OJP-managed **pooled** primary, XA, and read/write replica pools on one OJP server. Unpooled connections and connections opened by other applications are outside the budget. This is per-server enforcement, not a cluster-wide limit; configure a safe per-node share when multiple OJP servers target the same database. When a live pool is reduced, active connections are not forcibly terminated, so actual open connections can take time to fall under the new configured maximum.
+The budget applies to OJP-managed pooled primary, XA, and read/write replica connections on **one server**. It does not include unpooled connections, connections from other applications, or pools on other OJP servers. When OJP reduces a live pool, it does not terminate active work; the actual number of open connections may take time to fall to the new limit. No shared queue or semaphore is added to connection borrowing.
 
 
 > **Note on `ojp.server.virtualThreads.enabled`:** Virtual threads are disabled by default because, during heavy-concurrency testing with the current OJP code, they proved less efficient than platform threads. This may change as the OJP code evolves — further investigation is needed to determine whether future improvements could make virtual threads beneficial. You can still opt in by setting this property to `true`.

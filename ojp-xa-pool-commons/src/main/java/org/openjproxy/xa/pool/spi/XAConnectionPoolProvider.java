@@ -125,9 +125,9 @@ public interface XAConnectionPoolProvider {
      * @param maximumPoolSize the new maximum pool size
      * @param minimumIdle the new minimum idle size
      * @return true if the resize was applied
-     * @throws Exception if resizing fails
+     * @throws SQLException if resizing fails
      */
-    default boolean resizePool(Object pooledDataSource, int maximumPoolSize, int minimumIdle) throws Exception {
+    default boolean resizePool(Object pooledDataSource, int maximumPoolSize, int minimumIdle) throws SQLException {
         return false;
     }
 

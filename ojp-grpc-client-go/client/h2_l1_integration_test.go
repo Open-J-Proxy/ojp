@@ -121,6 +121,9 @@ func TestH2L1Integration(t *testing.T) {
 	_, err = connection.ExecuteUpdate(ctx, "THIS IS NOT VALID SQL")
 	assertH2SQLError(t, err, "42001")
 
+	_, err = connection.Query(ctx, "SELECT FROM "+table)
+	assertH2SQLError(t, err, "42001")
+
 	deleteCount, err := connection.ExecuteUpdate(ctx, fmt.Sprintf("DELETE FROM %s WHERE id=1", table))
 	if err != nil {
 		t.Fatalf("delete row: %v", err)

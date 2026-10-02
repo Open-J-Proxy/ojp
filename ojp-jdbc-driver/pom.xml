@@ -151,13 +151,6 @@
             <scope>test</scope>
         </dependency>
 
-        <dependency>
-            <groupId>org.openjproxy</groupId>
-            <artifactId>ojp-server</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
         <!-- plexus-utils was previously available as a transitive dep via ojp-grpc-commons;
              declared explicitly here for test code that uses ExceptionUtils; version managed by parent BOM -->
         <dependency>

@@ -189,13 +189,12 @@ func (c *Connection) Query(ctx context.Context, sql string) (*Result, error) {
 		return nil, ErrClientClosed
 	}
 
-	var trailer metadata.MD
-	stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
+stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
 		Session: cloneSession(c.session),
 		Sql:     sql,
-	}, grpc.Trailer(&trailer))
+	})
 	if err != nil {
-		return nil, grpcError(ctx, err, trailer)
+		return nil, grpcError(ctx, err, nil)
 	}
 
 	result := &Result{}
@@ -205,7 +204,7 @@ func (c *Connection) Query(ctx context.Context, sql string) (*Result, error) {
 			return result, nil
 		}
 		if recvErr != nil {
-			return nil, grpcError(ctx, recvErr, trailer)
+			return nil, grpcError(ctx, recvErr, stream.Trailer())
 		}
 		c.applySession(message.GetSession())
 		queryResult := message.GetQueryResult()

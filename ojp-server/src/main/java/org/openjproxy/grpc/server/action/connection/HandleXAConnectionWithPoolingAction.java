@@ -6,6 +6,7 @@ import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.server.AdmissionControlManager;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.Session;
 import org.openjproxy.grpc.server.action.ActionContext;
@@ -284,13 +285,19 @@ public class HandleXAConnectionWithPoolingAction {
                 log.info("[XA-POOL-INIT] Initializing XA pool with minIdle={} connections for connHash={}", minIdle, connHash);
                 registry.resizeBackendPool(maxPoolSize, minIdle);
                 XATransactionRegistry createdRegistry = registry;
-                budgetManager.attachPool(budgetRegistration, (newMaximum, newMinimum) ->
-                        createdRegistry.resizeBackendPool(newMaximum, newMinimum),
+                budgetManager.attachPool(budgetRegistration, (newMaximum, newMinimum) -> {
+                    createdRegistry.resizeBackendPool(newMaximum, newMinimum);
+                    AdmissionControlManager admissionControlManager =
+                            context.getAdmissionControlManagers().get(connHash);
+                    if (admissionControlManager != null) {
+                        admissionControlManager.resizeCapacity(newMaximum);
+                    }
+                },
                         maxPoolSize, minIdle);
 
                 // Create slow query segregation manager for XA
                 CreateSlowQuerySegregationManagerAction.getInstance().execute(
-                        context, connHash, actualMaxXaTransactions, true, xaConfig.getConnectionTimeout());
+                        context, connHash, maxPoolSize, true, xaConfig.getConnectionTimeout());
                 context.getXaRegistries().put(connHash, registry);
 
                 log.info("[XA-POOL-CREATE] Successfully created XA pool for connHash={} - maxPoolSize={}, minIdle={}, multinode={}, poolObject={}",

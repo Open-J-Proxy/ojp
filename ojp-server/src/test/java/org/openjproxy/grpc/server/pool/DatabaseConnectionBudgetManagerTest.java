@@ -10,6 +10,7 @@ import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatabaseConnectionBudgetManagerTest {
 
@@ -48,6 +49,28 @@ class DatabaseConnectionBudgetManagerTest {
         assertEquals(48, applicationResizer.maximumPoolSize);
         assertEquals(10, application.getMinimumIdle());
         assertEquals(10, reporting.getMinimumIdle());
+    }
+
+    @Test
+    void shouldRebalanceWhenCoordinatorChangesRequestedPoolSizes() {
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(20, 0));
+        DatabaseConnectionBudgetManager.Registration first = manager.registerPool(
+                "pool-a", "jdbc:postgresql://db/orders", "user-a", 5, 2, true);
+        RecordingPoolResizer firstResizer = new RecordingPoolResizer();
+        manager.attachPool(first, firstResizer, first.getMaximumPoolSize(), first.getMinimumIdle());
+        DatabaseConnectionBudgetManager.Registration second = manager.registerPool(
+                "pool-b", "jdbc:postgresql://db/orders", "user-b", 20, 2, true);
+        RecordingPoolResizer secondResizer = new RecordingPoolResizer();
+        manager.attachPool(second, secondResizer, second.getMaximumPoolSize(), second.getMinimumIdle());
+
+        assertTrue(manager.updatePoolRequest("pool-a", 30, 4));
+
+        assertEquals(10, first.getMaximumPoolSize());
+        assertEquals(10, second.getMaximumPoolSize());
+        assertEquals(10, firstResizer.maximumPoolSize);
+        assertEquals(10, secondResizer.maximumPoolSize);
+        assertEquals(4, firstResizer.minimumIdle);
+        assertEquals(2, secondResizer.minimumIdle);
     }
 
     @Test
@@ -144,10 +167,12 @@ class DatabaseConnectionBudgetManagerTest {
 
     private static final class RecordingPoolResizer implements DatabaseConnectionBudgetManager.PoolResizer {
         private int maximumPoolSize;
+        private int minimumIdle;
 
         @Override
-        public void resize(int newMaximumPoolSize, int minimumIdle) {
+        public void resize(int newMaximumPoolSize, int newMinimumIdle) {
             maximumPoolSize = newMaximumPoolSize;
+            minimumIdle = newMinimumIdle;
         }
     }
 }

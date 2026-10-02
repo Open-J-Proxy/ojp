@@ -245,8 +245,14 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                         DataSource createdDataSource = ds;
                         ConnectionPoolProvider selectedPoolProvider = poolProvider;
                         DatabaseConnectionBudgetManager.Registration attachedRegistration = budgetRegistration;
-                        budgetManager.attachPool(attachedRegistration, (newMaximum, newMinimum) ->
-                                selectedPoolProvider.resizeDataSource(createdDataSource, newMaximum, newMinimum),
+                        budgetManager.attachPool(attachedRegistration, (newMaximum, newMinimum) -> {
+                            selectedPoolProvider.resizeDataSource(createdDataSource, newMaximum, newMinimum);
+                            AdmissionControlManager admissionControlManager =
+                                    context.getAdmissionControlManagers().get(connHash);
+                            if (admissionControlManager != null) {
+                                admissionControlManager.resizeCapacity(newMaximum);
+                            }
+                        },
                                 maxPoolSize, minIdle);
                         log.info("Created DataSource with transaction isolation level: {}", defaultTransactionIsolation);
 

@@ -173,7 +173,8 @@ public class XATransactionRegistry {
                 this.maxPoolSize = newMaxPoolSize;
                 this.minIdle = newMinIdle;
             } else {
-                log.warn("XA pool provider '{}' did not apply the requested resize", poolProvider.id());
+                throw new IllegalStateException("XA pool provider '" + poolProvider.id()
+                        + "' did not apply the requested resize");
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to resize XA backend pool", e);

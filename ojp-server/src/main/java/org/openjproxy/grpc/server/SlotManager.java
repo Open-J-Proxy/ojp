@@ -23,15 +23,16 @@ public class SlotManager {
     // AIMD: additive-increase period = totalSlots * this multiplier releases.
     private static final int AIMD_RECOVERY_PERIOD_MULTIPLIER = 2;
 
-    private final int totalSlots;
-    private final int slowSlots;
-    private final int fastSlots;
+    private volatile int totalSlots;
+    private volatile int slowSlots;
+    private volatile int fastSlots;
+    private final int slowSlotPercentage;
     private final long idleTimeoutMs;
     private final int maxWaitQueueDepth;
 
     // Semaphores for slot management
-    private final Semaphore slowOperationSemaphore;
-    private final Semaphore fastOperationSemaphore;
+    private final ResizableSemaphore slowOperationSemaphore;
+    private final ResizableSemaphore fastOperationSemaphore;
 
     // Tracking for active operations
     private final AtomicInteger activeSlowOperations = new AtomicInteger(0);
@@ -86,6 +87,7 @@ public class SlotManager {
         }
 
         this.totalSlots = totalSlots;
+        this.slowSlotPercentage = slowSlotPercentage;
         this.idleTimeoutMs = idleTimeoutMs;
         this.maxWaitQueueDepth = maxWaitQueueDepth == 0 ? totalSlots * 2 : maxWaitQueueDepth;
 
@@ -95,8 +97,8 @@ public class SlotManager {
         this.fastSlots = totalSlots - this.slowSlots;
 
         // Initialize semaphores
-        this.slowOperationSemaphore = new Semaphore(this.slowSlots, true);
-        this.fastOperationSemaphore = new Semaphore(this.fastSlots, true);
+        this.slowOperationSemaphore = new ResizableSemaphore(this.slowSlots);
+        this.fastOperationSemaphore = new ResizableSemaphore(this.fastSlots);
 
         log.info("SlotManager initialized with {} total slots: {} slow, {} fast, idle timeout {}ms, max wait queue depth {}",
                 totalSlots, this.slowSlots, this.fastSlots, idleTimeoutMs, this.maxWaitQueueDepth);
@@ -200,6 +202,33 @@ public class SlotManager {
         log.debug("Failed to acquire fast slot within {}ms timeout", timeoutMs);
         recordAdmissionTimeout();
         return false;
+    }
+
+    public synchronized void resizeCapacity(int newTotalSlots) {
+        if (newTotalSlots <= 0) {
+            throw new IllegalArgumentException("Total slots must be positive");
+        }
+        int newSlowSlots = slowSlotPercentage == 0
+                ? 0 : Math.max(1, (newTotalSlots * slowSlotPercentage) / 100);
+        int newFastSlots = newTotalSlots - newSlowSlots;
+
+        resizeSemaphore(slowOperationSemaphore, slowSlots, newSlowSlots, false);
+        resizeSemaphore(fastOperationSemaphore, fastSlots, newFastSlots, false);
+        resizeSemaphore(slowOperationSemaphore, slowSlots, newSlowSlots, true);
+        resizeSemaphore(fastOperationSemaphore, fastSlots, newFastSlots, true);
+
+        totalSlots = newTotalSlots;
+        slowSlots = newSlowSlots;
+        fastSlots = newFastSlots;
+        observedPeak.updateAndGet(peak -> peak == 0 ? 0 : Math.min(peak, newTotalSlots));
+    }
+
+    private void resizeSemaphore(ResizableSemaphore semaphore, int currentCapacity,
+                                 int newCapacity, boolean increasing) {
+        int capacityChange = newCapacity - currentCapacity;
+        if ((capacityChange > 0) == increasing && capacityChange != 0) {
+            semaphore.adjustPermits(capacityChange);
+        }
     }
 
     /**
@@ -382,5 +411,21 @@ public class SlotManager {
      */
     public int getEffectiveMaxAdmission() {
         return totalSlots;
+    }
+
+    private static final class ResizableSemaphore extends Semaphore {
+        private static final long serialVersionUID = 1L;
+
+        private ResizableSemaphore(int permits) {
+            super(permits, true);
+        }
+
+        private void adjustPermits(int change) {
+            if (change > 0) {
+                release(change);
+            } else {
+                reducePermits(-change);
+            }
+        }
     }
 }

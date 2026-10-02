@@ -114,6 +114,31 @@ class DbcpConnectionPoolProviderTest {
     }
 
     @Test
+    @DisplayName("resizeDataSource should grow and shrink pool sizes")
+    void testDynamicPoolResizing() throws SQLException {
+        PoolConfig config = PoolConfig.builder()
+                .url("jdbc:h2:mem:poolresize;DB_CLOSE_DELAY=-1")
+                .username("sa")
+                .password("")
+                .maxPoolSize(10)
+                .minIdle(5)
+                .build();
+
+        createdDataSource = provider.createDataSource(config);
+        BasicDataSource basicDataSource = (BasicDataSource) createdDataSource;
+
+        provider.resizeDataSource(createdDataSource, 3, 1);
+        assertEquals(3, basicDataSource.getMaxTotal());
+        assertEquals(3, basicDataSource.getMaxIdle());
+        assertEquals(1, basicDataSource.getMinIdle());
+
+        provider.resizeDataSource(createdDataSource, 12, 4);
+        assertEquals(12, basicDataSource.getMaxTotal());
+        assertEquals(12, basicDataSource.getMaxIdle());
+        assertEquals(4, basicDataSource.getMinIdle());
+    }
+
+    @Test
     @DisplayName("createDataSource should configure timeouts correctly")
     void testTimeouts() throws SQLException {
         PoolConfig config = PoolConfig.builder()

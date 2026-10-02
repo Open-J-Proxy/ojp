@@ -151,6 +151,35 @@ public final class DatabaseConnectionBudgetManager {
         return pool == null ? defaultValue : pool.allocatedMin;
     }
 
+    public synchronized boolean updatePoolRequest(String poolId, int requestedMax, int requestedMin) {
+        Pool pool = pools.get(poolId);
+        if (pool == null) {
+            return false;
+        }
+        if (requestedMax < 1 || requestedMin < 0) {
+            throw new IllegalArgumentException("Valid requested pool sizes are required");
+        }
+
+        Registration registration = pool.registration;
+        int previousMax = registration.requestedMax;
+        int previousMin = registration.requestedMin;
+        registration.requestedMax = requestedMax;
+        registration.requestedMin = Math.min(requestedMin, requestedMax);
+        try {
+            rebalance(registration.budget);
+            return true;
+        } catch (RuntimeException e) {
+            registration.requestedMax = previousMax;
+            registration.requestedMin = previousMin;
+            try {
+                rebalance(registration.budget);
+            } catch (RuntimeException rollbackFailure) {
+                e.addSuppressed(rollbackFailure);
+            }
+            throw e;
+        }
+    }
+
     private void rebalance(Budget budget) {
         List<Pool> members = pools.values().stream()
                 .filter(pool -> pool.registration.budget == budget)
@@ -199,11 +228,13 @@ public final class DatabaseConnectionBudgetManager {
     private void resizePools(List<Pool> members, Map<Pool, Integer> allocations, boolean increasing) {
         for (Pool pool : members) {
             int target = allocations.get(pool);
-            boolean needsResize = increasing
-                    ? target > pool.allocatedMax
-                    : target < pool.allocatedMax;
+            int targetMin = Math.min(pool.registration.requestedMin, target);
+            boolean resizeIncreases = target > pool.allocatedMax
+                    || (target == pool.allocatedMax && targetMin > pool.allocatedMin);
+            boolean needsResize = (target != pool.allocatedMax || targetMin != pool.allocatedMin)
+                    && resizeIncreases == increasing;
             if (needsResize && pool.resizer != null) {
-                resize(pool, target, Math.min(pool.registration.requestedMin, target));
+                resize(pool, target, targetMin);
             }
         }
     }
@@ -482,8 +513,8 @@ public final class DatabaseConnectionBudgetManager {
     public final class Registration {
         private final String poolId;
         private final Budget budget;
-        private final int requestedMax;
-        private final int requestedMin;
+        private int requestedMax;
+        private int requestedMin;
 
         private Registration(String poolId, Budget budget, int requestedMax, int requestedMin) {
             this.poolId = poolId;

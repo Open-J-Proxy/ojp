@@ -4,6 +4,7 @@ import com.openjproxy.grpc.SessionInfo;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
+import org.openjproxy.grpc.server.ShutdownCoordinator;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
 import org.openjproxy.xa.pool.XATransactionRegistry;
@@ -48,6 +49,14 @@ public class ProcessClusterHealthAction {
             log.debug("[XA-REBALANCE-DEBUG] Skipping cluster health processing: clusterHealth={}, connHash={}",
                     clusterHealth.isEmpty() ? "empty" : "present",
                     connHash.isEmpty() ? "empty" : "present");
+            return;
+        }
+
+        // While draining, the driver reports this server as DOWN but its bound sessions keep
+        // sending requests here. Resizing on that health string would grow this server's own
+        // pools at the moment the other servers grow theirs, exceeding the database budget.
+        if (!ShutdownCoordinator.getInstance().isAcceptingNewSessions()) {
+            log.debug("Skipping cluster health processing for {}: server is shutting down", connHash);
             return;
         }
 

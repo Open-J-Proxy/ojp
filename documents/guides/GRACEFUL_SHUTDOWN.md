@@ -18,6 +18,7 @@ When the JVM receives `SIGTERM`, the shutdown hook runs these steps in order:
    - Requests that would open a new session (statements without a session, `startTransaction`, new XA connections, LOB creation without a session) are rejected.
    - The rejection uses gRPC status `UNAVAILABLE`, the description `OJP server draining` and the trailer `ojp-server-draining: true`.
    - Requests that belong to an **existing session** keep working: statements, `commit`, `rollback`, fetching more rows, reading LOBs, XA `end`/`prepare`/`commit`/`rollback`.
+   - The draining server also stops resizing its own pools from the cluster health sent by drivers, so it does not grow its pools while the other servers grow theirs.
 2. The gRPC health service status for the OJP server is set to `NOT_SERVING`, so Kubernetes gRPC probes and load balancers stop sending traffic.
 3. The server waits until there are **no open sessions**, or until `ojp.server.gracefulShutdown.drainTimeoutSeconds` (default 20 s) has passed.
 4. **TERMINATING** – `server.shutdown()` is called. In-flight gRPC calls get up to `ojp.server.gracefulShutdown.terminationTimeoutSeconds` (default 5 s) to finish, then `shutdownNow()` cancels the rest.

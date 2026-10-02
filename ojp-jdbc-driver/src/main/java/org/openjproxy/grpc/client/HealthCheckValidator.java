@@ -14,6 +14,18 @@ public class HealthCheckValidator {
 
     private static final Logger log = LoggerFactory.getLogger(HealthCheckValidator.class);
 
+    /**
+     * Outcome of a heartbeat health check.
+     */
+    public enum Result {
+        /** The server answered the heartbeat. */
+        HEALTHY,
+        /** The server answered but rejected the heartbeat because it is draining (graceful shutdown). */
+        DRAINING,
+        /** The server did not answer (down, unreachable, timeout, ...). */
+        UNREACHABLE
+    }
+
     private final HealthCheckConfig config;
     private final MultinodeConnectionManager connectionManager;
 
@@ -42,30 +54,41 @@ public class HealthCheckValidator {
             StringUtils.isBlank(connectionDetails.getUser()) &&
             StringUtils.isBlank(connectionDetails.getPassword())) {
             log.debug("Using heartbeat health check for {}", endpoint.getAddress());
-
-            try {
-                // Attempt to get channel and stub for this server
-                MultinodeConnectionManager.ChannelAndStub channelAndStub =
-                    connectionManager.getChannelAndStub(endpoint);
-
-                if (channelAndStub == null) {
-                    log.debug("No channel available for {}, attempting to create", endpoint.getAddress());
-                    channelAndStub = connectionManager.createChannelAndStubForEndpoint(endpoint);
-                }
-
-                // Try heartbeat connection
-                log.debug("Attempting heartbeat connection to {}", endpoint.getAddress());
-                SessionInfo sessionInfo = channelAndStub.blockingStub.connect(connectionDetails);
-
-                log.info("Server {} heartbeat health check PASSED", endpoint.getAddress());
-                return true;
-
-            } catch (Exception e) {
-                log.debug("Server {} heartbeat health check FAILED: {}", endpoint.getAddress(), e.getMessage());
-                return false;
-            }
+            return heartbeat(endpoint, connectionDetails) == Result.HEALTHY;
         }
 
+        return validateWithCredentials(endpoint, connectionDetails);
+    }
+
+    private Result heartbeat(ServerEndpoint endpoint, ConnectionDetails connectionDetails) {
+        try {
+            // Attempt to get channel and stub for this server
+            MultinodeConnectionManager.ChannelAndStub channelAndStub =
+                connectionManager.getChannelAndStub(endpoint);
+
+            if (channelAndStub == null) {
+                log.debug("No channel available for {}, attempting to create", endpoint.getAddress());
+                channelAndStub = connectionManager.createChannelAndStubForEndpoint(endpoint);
+            }
+
+            // Try heartbeat connection
+            log.debug("Attempting heartbeat connection to {}", endpoint.getAddress());
+            SessionInfo sessionInfo = channelAndStub.blockingStub.connect(connectionDetails);
+
+            log.info("Server {} heartbeat health check PASSED", endpoint.getAddress());
+            return Result.HEALTHY;
+
+        } catch (Exception e) {
+            if (GrpcExceptionHandler.isServerDrainingError(e)) {
+                log.debug("Server {} heartbeat health check: server is draining", endpoint.getAddress());
+                return Result.DRAINING;
+            }
+            log.debug("Server {} heartbeat health check FAILED: {}", endpoint.getAddress(), e.getMessage());
+            return Result.UNREACHABLE;
+        }
+    }
+
+    private boolean validateWithCredentials(ServerEndpoint endpoint, ConnectionDetails connectionDetails) {
         // Full connection test with actual credentials
         try {
             // Attempt to get channel and stub for this server
@@ -117,6 +140,19 @@ public class HealthCheckValidator {
      * @return true if the server is reachable, false otherwise
      */
     public boolean validateServer(ServerEndpoint endpoint) {
+        return checkServer(endpoint) == Result.HEALTHY;
+    }
+
+    /**
+     * Runs a lightweight heartbeat and reports whether the server is healthy, draining or unreachable.
+     *
+     * @param endpoint The server endpoint to check
+     * @return the heartbeat result
+     */
+    public Result checkServer(ServerEndpoint endpoint) {
+        if (endpoint == null) {
+            return Result.UNREACHABLE;
+        }
         // Create minimal connection details for health check
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
             .setUrl("") // Empty URL for health check
@@ -124,6 +160,6 @@ public class HealthCheckValidator {
             .setPassword("")
             .build();
 
-        return validateServer(endpoint, connectionDetails);
+        return heartbeat(endpoint, connectionDetails);
     }
 }

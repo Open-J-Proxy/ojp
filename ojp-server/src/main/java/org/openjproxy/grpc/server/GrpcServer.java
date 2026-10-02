@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit;
 
 public class GrpcServer {
     private static final Logger logger = LoggerFactory.getLogger(GrpcServer.class);
-    private static final long EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS = 30;
 
     public static void main(String[] args) throws IOException, InterruptedException {
         // Initialize health status manager
@@ -167,48 +166,10 @@ public class GrpcServer {
         OjpHealthManager.setServiceStatus(OjpHealthManager.Services.OJP_SERVER,
                 HealthCheckResponse.ServingStatus.SERVING);
 
-        // Add shutdown hook
-        ScheduledExecutorService finalSessionCleanupExecutor = sessionCleanupExecutor;
-        ExecutorService finalGrpcExecutor = grpcExecutor;
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutting down OJP gRPC Server...");
-
-            // Shutdown SQL enhancer engine first
-            logger.info("Shutting down SQL enhancer engine...");
-            statementService.shutdown();
-
-            // Shutdown session cleanup task
-            if (finalSessionCleanupExecutor != null) {
-                logger.info("Shutting down session cleanup executor...");
-                finalSessionCleanupExecutor.shutdown();
-                try {
-                    if (!finalSessionCleanupExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                        logger.warn("Session cleanup executor did not terminate gracefully");
-                        finalSessionCleanupExecutor.shutdownNow();
-                    }
-                } catch (InterruptedException e) {
-                    logger.warn("Interrupted while waiting for session cleanup shutdown");
-                    finalSessionCleanupExecutor.shutdownNow();
-                    Thread.currentThread().interrupt();
-                }
-            }
-
-            server.shutdown();
-
-            try {
-                if (!server.awaitTermination(30, TimeUnit.SECONDS)) {
-                    logger.warn("Server did not terminate gracefully, forcing shutdown");
-                    server.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                logger.warn("Interrupted while waiting for server shutdown");
-                server.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-
-            shutdownExecutor(finalGrpcExecutor, "gRPC server executor");
-            logger.info("OJP gRPC Server shutdown complete");
-        }));
+        // Add shutdown hook: drain sessions, stop gRPC, close pools, stop executors
+        Runtime.getRuntime().addShutdownHook(new Thread(new GracefulShutdownHandler(
+                config, server, statementService, sessionManager, sessionCleanupExecutor, grpcExecutor),
+                "ojp-shutdown"));
 
         logger.info("OJP gRPC Server started successfully and awaiting termination");
         server.awaitTermination();
@@ -222,24 +183,6 @@ public class GrpcServer {
 
         logger.info("Using platform threads with fixed thread pool for gRPC request handling");
         return Executors.newFixedThreadPool(config.getThreadPoolSize());
-    }
-
-    private static void shutdownExecutor(ExecutorService executor, String executorName) {
-        if (executor == null) {
-            return;
-        }
-
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                logger.warn("{} did not terminate gracefully, forcing shutdown", executorName);
-                executor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            logger.warn("Interrupted while shutting down {}", executorName);
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
     }
 
     /**

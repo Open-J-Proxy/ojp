@@ -239,6 +239,13 @@ public class MultinodeStatementService implements StatementService {
     private OpResult executeOpResultWithSessionStickinessAndBinding(SessionInfo requestSessionInfo,
                                                                       ThrowingFunction<StatementServiceGrpcClient, OpResult> operation)
             throws SQLException {
+        return retryOnServerDraining(requestSessionInfo,
+                () -> executeOpResultWithSessionStickinessAndBindingOnce(requestSessionInfo, operation));
+    }
+
+    private OpResult executeOpResultWithSessionStickinessAndBindingOnce(SessionInfo requestSessionInfo,
+                                                                          ThrowingFunction<StatementServiceGrpcClient, OpResult> operation)
+            throws SQLException {
         // Get the appropriate server based on session binding or round-robin
         String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty())
                 ? requestSessionInfo.getSessionUUID() : null;
@@ -327,6 +334,7 @@ public class MultinodeStatementService implements StatementService {
 
             throw sqlEx;
         } catch (SQLException e) {
+            markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             throw new SQLException("Unexpected error executing operation: " + e.getMessage(), e);
@@ -348,6 +356,13 @@ public class MultinodeStatementService implements StatementService {
      */
     private Iterator<OpResult> executeIteratorWithSessionStickinessAndBinding(SessionInfo requestSessionInfo,
                                                                                 ThrowingFunction<StatementServiceGrpcClient, Iterator<OpResult>> operation)
+            throws SQLException {
+        return retryOnServerDraining(requestSessionInfo,
+                () -> executeIteratorWithSessionStickinessAndBindingOnce(requestSessionInfo, operation));
+    }
+
+    private Iterator<OpResult> executeIteratorWithSessionStickinessAndBindingOnce(SessionInfo requestSessionInfo,
+                                                                                    ThrowingFunction<StatementServiceGrpcClient, Iterator<OpResult>> operation)
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
         String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty())
@@ -422,6 +437,7 @@ public class MultinodeStatementService implements StatementService {
 
             throw sqlEx;
         } catch (SQLException e) {
+            markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             throw new SQLException("Unexpected error executing operation: " + e.getMessage(), e);
@@ -437,7 +453,15 @@ public class MultinodeStatementService implements StatementService {
             StatementServiceGrpcClient client,
             ThrowingFunction<StatementServiceGrpcClient, Iterator<OpResult>> operation) throws Exception {
         try {
-            return operation.apply(client);
+            Iterator<OpResult> iterator = operation.apply(client);
+            if (iterator != null && (requestSessionInfo == null || requestSessionInfo.getSessionUUID().isEmpty())) {
+                // Server-streaming errors only surface when the stream is read. For requests
+                // without a session, read the first response now so that retryable rejections
+                // (pool not found, server draining) are handled here instead of in the ResultSet.
+                // hasNext() buffers the element, so the caller still sees the full stream.
+                iterator.hasNext();
+            }
+            return iterator;
         } catch (StatusRuntimeException e) {
             if (GrpcExceptionHandler.isPoolNotFoundException(e)
                     && (requestSessionInfo == null || requestSessionInfo.getSessionUUID().isEmpty())) {
@@ -464,6 +488,13 @@ public class MultinodeStatementService implements StatementService {
      */
     private SessionInfo executeWithSessionStickinessAndBinding(SessionInfo requestSessionInfo,
                                                                 ThrowingFunction<StatementServiceGrpcClient, SessionInfo> operation)
+            throws SQLException {
+        return retryOnServerDraining(requestSessionInfo,
+                () -> executeWithSessionStickinessAndBindingOnce(requestSessionInfo, operation));
+    }
+
+    private SessionInfo executeWithSessionStickinessAndBindingOnce(SessionInfo requestSessionInfo,
+                                                                    ThrowingFunction<StatementServiceGrpcClient, SessionInfo> operation)
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
         String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty())
@@ -515,6 +546,7 @@ public class MultinodeStatementService implements StatementService {
             throw sqlEx;
 
         } catch (SQLException e) {
+            markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             throw new SQLException("Unexpected error executing operation on server " +
@@ -612,6 +644,7 @@ public class MultinodeStatementService implements StatementService {
 
             throw sqlEx;
         } catch (SQLException e) {
+            markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             throw new SQLException("Unexpected error creating LOB on server " +
@@ -742,6 +775,14 @@ public class MultinodeStatementService implements StatementService {
             SessionInfo requestSessionInfo,
             ThrowingFunction<StatementServiceGrpcClient, CallResourceResponse> operation)
             throws SQLException {
+        return retryOnServerDraining(requestSessionInfo,
+                () -> executeCallResourceWithSessionStickinessAndBindingOnce(requestSessionInfo, operation));
+    }
+
+    private CallResourceResponse executeCallResourceWithSessionStickinessAndBindingOnce(
+            SessionInfo requestSessionInfo,
+            ThrowingFunction<StatementServiceGrpcClient, CallResourceResponse> operation)
+            throws SQLException {
         String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null
                 && !requestSessionInfo.getSessionUUID().isEmpty())
                 ? requestSessionInfo.getSessionUUID() : null;
@@ -789,6 +830,7 @@ public class MultinodeStatementService implements StatementService {
 
             throw sqlEx;
         } catch (SQLException e) {
+            markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             throw new SQLException("Unexpected error executing operation on server " +
@@ -981,6 +1023,7 @@ public class MultinodeStatementService implements StatementService {
             }
         } catch (SQLException e) {
             // Already a SQLException, just throw it
+            markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             // Unexpected exception
@@ -1001,6 +1044,47 @@ public class MultinodeStatementService implements StatementService {
         } else {
             log.debug("Database-level error on server {}: {}", server.getAddress(), e.getMessage());
         }
+    }
+
+    /**
+     * Runs {@code call}; if it fails because the server is draining (graceful shutdown) and the
+     * request has no session yet, retries it on another healthy server. Draining rejections happen
+     * before any SQL runs on the server, so a retry can never execute a statement twice.
+     * Requests that belong to an existing session are never retried: they stay on their server.
+     */
+    private <T> T retryOnServerDraining(SessionInfo requestSessionInfo, ThrowingSupplier<T> call)
+            throws SQLException {
+        boolean hasSession = requestSessionInfo != null
+                && requestSessionInfo.getSessionUUID() != null
+                && !requestSessionInfo.getSessionUUID().isEmpty();
+        int maxAttempts = Math.max(1, connectionManager.getServerEndpoints().size());
+        int attempt = 1;
+        while (true) {
+            try {
+                return call.get();
+            } catch (SQLException e) {
+                if (hasSession || attempt >= maxAttempts || !GrpcExceptionHandler.isServerDrainingError(e)) {
+                    throw e;
+                }
+                attempt++;
+                log.info("Server draining; retrying request without session on another server (attempt {}/{})",
+                        attempt, maxAttempts);
+            }
+        }
+    }
+
+    private void markDrainingIfServerDraining(ServerEndpoint server, Exception e) {
+        if (server != null && GrpcExceptionHandler.isServerDrainingError(e)) {
+            connectionManager.markDraining(server);
+        }
+    }
+
+    /**
+     * Supplier that may throw SQLException.
+     */
+    @FunctionalInterface
+    private interface ThrowingSupplier<T> {
+        T get() throws SQLException;
     }
 
     /**

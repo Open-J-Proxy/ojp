@@ -1,16 +1,25 @@
 package org.openjproxy.grpc.server.pool;
 
-import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.grpc.Server;
+import io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.Test;
+import org.openjproxy.grpc.server.CircuitBreakerRegistry;
+import org.openjproxy.grpc.server.ServerConfiguration;
+import org.openjproxy.grpc.server.SessionManagerImpl;
+import org.openjproxy.grpc.server.StatementServiceImpl;
+import org.h2.Driver;
 
+import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -20,83 +29,112 @@ class DatabaseConnectionBudgetIntegrationTest {
     private static final long POLL_INTERVAL_MILLIS = 100L;
 
     @Test
-    void shouldOpenExactlyTheConfiguredGroupLimitAcrossWeightedPools() throws Exception {
+    void shouldOpenExactlyTheConfiguredGroupLimitThroughOjpJdbcDriver() throws Exception {
         String databaseName = "budget_" + UUID.randomUUID().toString().replace("-", "");
         String jdbcUrl = "jdbc:h2:mem:" + databaseName + ";DB_CLOSE_DELAY=-1";
-        createUsers(jdbcUrl);
+        Properties originalProperties = setBudgetSystemProperties(jdbcUrl);
+        DatabaseConnectionBudgetManager previousManager = replaceBudgetManager();
+        Server server = null;
+        StatementServiceImpl statementService = null;
+        try {
+            createUsers(jdbcUrl);
+            ServerConfiguration configuration = new ServerConfiguration();
+            Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheConfigurations =
+                    new ConcurrentHashMap<>();
+            statementService = new StatementServiceImpl(new SessionManagerImpl(cacheConfigurations),
+                    new CircuitBreakerRegistry(configuration.getCircuitBreakerTimeout(),
+                            configuration.getCircuitBreakerThreshold()),
+                    configuration, cacheConfigurations);
+            server = NettyServerBuilder.forPort(0).addService(statementService).build().start();
+            DriverManager.registerDriver(new org.openjproxy.jdbc.Driver());
 
-        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(jdbcUrl));
-        DatabaseConnectionBudgetManager.Registration application = manager.registerPool(
-                "application", jdbcUrl, "app_rw", 8, 8, true);
-
-        try (HikariDataSource applicationPool = createPool(
-                jdbcUrl, "app_rw", "app_secret", application.getMaximumPoolSize())) {
-            manager.attachPool(application, (maximum, minimum) -> resizePool(applicationPool, maximum, minimum),
-                    applicationPool.getMaximumPoolSize(), applicationPool.getMinimumIdle());
-
-            DatabaseConnectionBudgetManager.Registration reporting = manager.registerPool(
-                    "reporting", jdbcUrl, "reporting_ro", 8, 8, true);
-            assertEquals(7, application.getMaximumPoolSize());
-            assertEquals(3, reporting.getMaximumPoolSize());
-
-            try (HikariDataSource reportingPool = createPool(
-                    jdbcUrl, "reporting_ro", "reporting_secret", reporting.getMaximumPoolSize())) {
-                manager.attachPool(reporting,
-                        (maximum, minimum) -> resizePool(reportingPool, maximum, minimum),
-                        reportingPool.getMaximumPoolSize(), reportingPool.getMinimumIdle());
-
-                assertEquals(GROUP_LIMIT, applicationPool.getMaximumPoolSize() + reportingPool.getMaximumPoolSize());
-                assertEquals(GROUP_LIMIT, applicationPool.getMinimumIdle() + reportingPool.getMinimumIdle());
-                assertEquals(GROUP_LIMIT, awaitBackendSessionCount(applicationPool),
-                        "H2 should report exactly the group limit as open backend sessions");
+            String ojpUrl = "jdbc:ojp[localhost:" + server.getPort() + "]_"
+                    + jdbcUrl.substring("jdbc:".length());
+            try (Connection application = DriverManager.getConnection(
+                    ojpUrl, poolProperties("app_rw", "app_secret", "application"));
+                 Connection reporting = DriverManager.getConnection(
+                         ojpUrl, poolProperties("reporting_ro", "reporting_secret", "reporting"))) {
+                assertEquals(GROUP_LIMIT, awaitBackendSessionCount(jdbcUrl),
+                        "H2 should report exactly the group limit of backend sessions opened through OJP");
             }
+        } finally {
+            if (server != null) {
+                server.shutdownNow();
+                server.awaitTermination();
+            }
+            if (statementService != null) {
+                statementService.shutdown();
+            }
+            restoreBudgetManager(previousManager);
+            restoreBudgetSystemProperties(originalProperties);
         }
     }
 
+    private Properties setBudgetSystemProperties(String jdbcUrl) {
+        Properties originals = new Properties();
+        String prefix = "ojp.server.databaseBudgets.orders.";
+        setSystemProperty(originals, prefix + "match.jdbcUrlPattern", jdbcUrl + "*");
+        setSystemProperty(originals, prefix + "maxTotalConnections", String.valueOf(GROUP_LIMIT));
+        setSystemProperty(originals, prefix + "priorities.username.app_rw.weight", "2");
+        setSystemProperty(originals, prefix + "priorities.username.reporting_ro.weight", "1");
+        return originals;
+    }
+
+    private void setSystemProperty(Properties originals, String key, String value) {
+        String original = System.getProperty(key);
+        if (original != null) {
+            originals.setProperty(key, original);
+        }
+        System.setProperty(key, value);
+    }
+
+    private void restoreBudgetSystemProperties(Properties originals) {
+        String prefix = "ojp.server.databaseBudgets.orders.";
+        System.clearProperty(prefix + "match.jdbcUrlPattern");
+        System.clearProperty(prefix + "maxTotalConnections");
+        System.clearProperty(prefix + "priorities.username.app_rw.weight");
+        System.clearProperty(prefix + "priorities.username.reporting_ro.weight");
+        originals.forEach((key, value) -> System.setProperty((String) key, (String) value));
+    }
+
+    private DatabaseConnectionBudgetManager replaceBudgetManager() throws ReflectiveOperationException {
+        Field instanceField = DatabaseConnectionBudgetManager.class.getDeclaredField("instance");
+        instanceField.setAccessible(true);
+        DatabaseConnectionBudgetManager previousManager = (DatabaseConnectionBudgetManager) instanceField.get(null);
+        instanceField.set(null, null);
+        return previousManager;
+    }
+
+    private void restoreBudgetManager(DatabaseConnectionBudgetManager previousManager)
+            throws ReflectiveOperationException {
+        Field instanceField = DatabaseConnectionBudgetManager.class.getDeclaredField("instance");
+        instanceField.setAccessible(true);
+        instanceField.set(null, previousManager);
+    }
+
     private void createUsers(String jdbcUrl) throws SQLException {
-        try (Connection connection = DriverManager.getConnection(jdbcUrl, "sa", "");
+        try (Connection connection = getDirectH2Connection(jdbcUrl);
              Statement statement = connection.createStatement()) {
             statement.execute("CREATE USER app_rw PASSWORD 'app_secret' ADMIN");
             statement.execute("CREATE USER reporting_ro PASSWORD 'reporting_secret' ADMIN");
         }
     }
 
-    private Properties budgetProperties(String jdbcUrl) {
+    private Properties poolProperties(String username, String password, String dataSourceName) {
         Properties properties = new Properties();
-        String prefix = "ojp.server.databaseBudgets.orders.";
-        properties.setProperty(prefix + "match.jdbcUrlPattern", jdbcUrl + "*");
-        properties.setProperty(prefix + "maxTotalConnections", String.valueOf(GROUP_LIMIT));
-        properties.setProperty(prefix + "priorities.username.app_rw.weight", "2");
-        properties.setProperty(prefix + "priorities.username.reporting_ro.weight", "1");
+        properties.setProperty("user", username);
+        properties.setProperty("password", password);
+        properties.setProperty("ojp.datasource.name", dataSourceName);
+        properties.setProperty("ojp.connection.pool.maximumPoolSize", "8");
+        properties.setProperty("ojp.connection.pool.minimumIdle", "8");
         return properties;
     }
 
-    private HikariDataSource createPool(String jdbcUrl, String username, String password, int poolSize) {
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(jdbcUrl);
-        config.setUsername(username);
-        config.setPassword(password);
-        config.setMaximumPoolSize(poolSize);
-        config.setMinimumIdle(poolSize);
-        config.setPoolName("budget-" + username);
-        return new HikariDataSource(config);
-    }
-
-    private void resizePool(HikariDataSource pool, int maximum, int minimum) {
-        if (maximum < pool.getMaximumPoolSize()) {
-            pool.setMinimumIdle(minimum);
-            pool.setMaximumPoolSize(maximum);
-        } else {
-            pool.setMaximumPoolSize(maximum);
-            pool.setMinimumIdle(minimum);
-        }
-    }
-
-    private int awaitBackendSessionCount(HikariDataSource pool) throws SQLException, InterruptedException {
+    private int awaitBackendSessionCount(String jdbcUrl) throws SQLException, InterruptedException {
         long deadline = System.nanoTime() + WAIT_TIMEOUT_MILLIS * 1_000_000L;
         int sessionCount = 0;
         while (System.nanoTime() < deadline && sessionCount != GROUP_LIMIT) {
-            try (Connection connection = pool.getConnection();
+            try (Connection connection = getDirectH2Connection(jdbcUrl);
                  Statement statement = connection.createStatement();
                  ResultSet resultSet = statement.executeQuery(
                          "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SESSIONS "
@@ -109,5 +147,12 @@ class DatabaseConnectionBudgetIntegrationTest {
             }
         }
         return sessionCount;
+    }
+
+    private Connection getDirectH2Connection(String jdbcUrl) throws SQLException {
+        Properties properties = new Properties();
+        properties.setProperty("user", "sa");
+        properties.setProperty("password", "");
+        return new Driver().connect(jdbcUrl, properties);
     }
 }

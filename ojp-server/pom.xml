@@ -93,6 +93,13 @@
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>org.openjproxy</groupId>
+            <artifactId>ojp-jdbc-driver</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- PROPRIETARY DATABASE DRIVERS PLACEHOLDER -->
         <!-- CI workflows dynamically add Oracle, SQL Server, and DB2 drivers here -->
         <!-- Do not commit proprietary drivers to this pom.xml -->

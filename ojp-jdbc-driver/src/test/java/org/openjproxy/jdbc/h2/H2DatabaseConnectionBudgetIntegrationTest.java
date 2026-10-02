@@ -1,14 +1,15 @@
-package org.openjproxy.grpc.server.pool;
+package org.openjproxy.jdbc.h2;
 
-import com.zaxxer.hikari.HikariDataSource;
 import io.grpc.Server;
 import io.grpc.netty.NettyServerBuilder;
+import org.h2.Driver;
 import org.junit.jupiter.api.Test;
 import org.openjproxy.grpc.server.CircuitBreakerRegistry;
 import org.openjproxy.grpc.server.ServerConfiguration;
 import org.openjproxy.grpc.server.SessionManagerImpl;
 import org.openjproxy.grpc.server.StatementServiceImpl;
-import org.h2.Driver;
+import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
+import org.openjproxy.grpc.server.cache.CacheConfiguration;
 
 import java.lang.reflect.Field;
 import java.sql.Connection;
@@ -23,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class DatabaseConnectionBudgetIntegrationTest {
+class H2DatabaseConnectionBudgetIntegrationTest {
     private static final int GROUP_LIMIT = 10;
     private static final long WAIT_TIMEOUT_MILLIS = 10_000L;
     private static final long POLL_INTERVAL_MILLIS = 100L;
@@ -39,8 +40,7 @@ class DatabaseConnectionBudgetIntegrationTest {
         try {
             createUsers(jdbcUrl);
             ServerConfiguration configuration = new ServerConfiguration();
-            Map<String, org.openjproxy.grpc.server.cache.CacheConfiguration> cacheConfigurations =
-                    new ConcurrentHashMap<>();
+            Map<String, CacheConfiguration> cacheConfigurations = new ConcurrentHashMap<>();
             statementService = new StatementServiceImpl(new SessionManagerImpl(cacheConfigurations),
                     new CircuitBreakerRegistry(configuration.getCircuitBreakerTimeout(),
                             configuration.getCircuitBreakerThreshold()),

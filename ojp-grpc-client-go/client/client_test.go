@@ -20,6 +20,7 @@ import (
 
 func TestConnectionShouldApplyServerSessionUpdatesAndRejectUseAfterClose(t *testing.T) {
 	closeCalls := 0
+	terminateCalls := 0
 	rpc := &stubStatementService{
 		connect: func(_ context.Context, details *pb.ConnectionDetails, _ ...grpc.CallOption) (*pb.SessionInfo, error) {
 			if details.GetClientUUID() == "" {
@@ -58,6 +59,7 @@ func TestConnectionShouldApplyServerSessionUpdatesAndRejectUseAfterClose(t *test
 			}}}, nil
 		},
 		terminate: func(_ context.Context, _ *pb.SessionInfo, _ ...grpc.CallOption) (*pb.SessionTerminationStatus, error) {
+			terminateCalls++
 			return &pb.SessionTerminationStatus{Terminated: true}, nil
 		},
 	}
@@ -98,6 +100,12 @@ func TestConnectionShouldApplyServerSessionUpdatesAndRejectUseAfterClose(t *test
 	}
 	if err := connection.Close(context.Background()); err != nil {
 		t.Fatalf("second Close should be idempotent: %v", err)
+	}
+	if !connection.State().Closed {
+		t.Fatal("connection state did not report termination")
+	}
+	if terminateCalls != 1 {
+		t.Fatalf("expected one remote termination, got %d", terminateCalls)
 	}
 	if _, err := connection.Query(context.Background(), "SELECT 1"); !errors.Is(err, ErrConnectionClosed) {
 		t.Fatalf("expected closed-connection error, got %v", err)
@@ -204,6 +212,11 @@ func TestGrpcErrorShouldDecodeSQLTrailerAndPreserveContextErrors(t *testing.T) {
 	}
 	if !errors.Is(got, cause) {
 		t.Fatalf("expected the underlying gRPC error to be retained: %v", got)
+	}
+
+	transportErr := status.Error(codes.Unavailable, "server is unavailable")
+	if got := grpcError(context.Background(), transportErr, nil); !errors.Is(got, transportErr) {
+		t.Fatalf("expected transport error to be preserved, got %v", got)
 	}
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))

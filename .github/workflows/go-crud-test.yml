@@ -46,6 +46,15 @@ jobs:
       - name: Build (ojp-server)
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.14'
+
+      - name: Check Go protobuf generation
+        run: ./generate-proto.sh --check
+        working-directory: ojp-grpc-client-go
+
       - name: Start OJP server (background)
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
@@ -65,17 +74,31 @@ jobs:
           echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
           exit 1
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - name: Run Go CRUD test against H2
+      - name: Run Go unit and H2 L1 integration tests
         env:
-          OJP_JDBC_LINE: 'jdbc:ojp[localhost:1059]_h2:~/test,sa,'
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+          OJP_TEST_H2_JDBC_URL: 'jdbc:h2:mem:ojp_go_h2_l1;DB_CLOSE_DELAY=-1'
+          OJP_TEST_H2_USER: 'sa'
+        run: go test -count=1 -json ./... | tee /tmp/go-h2-l1-test.json
+        working-directory: ojp-grpc-client-go
+
+      - name: Run Go CRUD CLI smoke test
+        env:
+          OJP_JDBC_LINE: 'jdbc:ojp[localhost:1059]_h2:mem:ojp_go_h2_l1;DB_CLOSE_DELAY=-1,sa,'
         run: go run ./cmd/ojp-grpc-client
         working-directory: ojp-grpc-client-go
 
       - name: Show ojp-server.log
         if: always()
         run: cat /tmp/ojp-server.log
+
+      - name: Save H2 L1 test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: go-h2-l1-test-results
+          path: |
+            /tmp/go-h2-l1-test.json
+            /tmp/ojp-server.log
+          retention-days: 7

@@ -53,6 +53,7 @@ type SessionState struct {
 	TargetServer      string
 	TransactionUUID   string
 	TransactionStatus string
+	Closed            bool
 }
 
 type Result struct {
@@ -169,7 +170,11 @@ func (c *Connection) ExecuteUpdate(ctx context.Context, sql string) (int64, erro
 	if result.GetType() != pb.ResultType_INTEGER {
 		return 0, fmt.Errorf("unexpected update result type %s", result.GetType())
 	}
-	return int64(result.GetIntValue()), nil
+	updateCount, ok := result.GetResult().(*pb.OpResult_IntValue)
+	if !ok {
+		return 0, errors.New("OJP server returned an update result without an affected-row count")
+	}
+	return int64(updateCount.IntValue), nil
 }
 
 func (c *Connection) Query(ctx context.Context, sql string) (*Result, error) {
@@ -231,6 +236,7 @@ func (c *Connection) State() SessionState {
 		ConnHash:     c.session.GetConnHash(),
 		SessionUUID:  c.session.GetSessionUUID(),
 		TargetServer: c.session.GetTargetServer(),
+		Closed:       c.closed,
 	}
 	if transaction := c.session.GetTransactionInfo(); transaction != nil {
 		state.TransactionUUID = transaction.GetTransactionUUID()
@@ -298,7 +304,7 @@ func grpcError(ctx context.Context, err error, trailer metadata.MD) error {
 	}
 	const trailerName = "com.openjproxy.grpc.sqlerrorresponse-bin"
 	for key, values := range trailer {
-		if strings.EqualFold(key, trailerName) || strings.HasSuffix(strings.ToLower(key), ".sqlerrorresponse-bin") {
+		if strings.EqualFold(key, trailerName) || strings.HasSuffix(strings.ToLower(key), "sqlerrorresponse-bin") {
 			for _, value := range values {
 				response := new(pb.SqlErrorResponse)
 				if proto.Unmarshal([]byte(value), response) == nil &&

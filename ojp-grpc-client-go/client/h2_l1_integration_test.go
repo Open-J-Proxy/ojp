@@ -1,4 +1,4 @@
-package client
+package client_test
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	ojpclient "github.com/open-j-proxy/ojp-client/client"
 )
 
 func TestH2L1Integration(t *testing.T) {
@@ -29,7 +31,7 @@ func TestH2L1Integration(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	client, err := NewClient(endpoint)
+	client, err := ojpclient.NewClient(endpoint)
 	if err != nil {
 		t.Fatalf("create OJP client: %v", err)
 	}
@@ -39,7 +41,7 @@ func TestH2L1Integration(t *testing.T) {
 		}
 	})
 
-	connection, err := client.Connect(ctx, Config{
+	connection, err := client.Connect(ctx, ojpclient.Config{
 		URL:      jdbcURL,
 		User:     os.Getenv("OJP_TEST_H2_USER"),
 		Password: os.Getenv("OJP_TEST_H2_PASSWORD"),
@@ -77,6 +79,14 @@ func TestH2L1Integration(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("create isolated table: %v", err)
 	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := connection.ExecuteUpdate(cleanupCtx, "DROP TABLE IF EXISTS "+table); err != nil &&
+			!errors.Is(err, ojpclient.ErrConnectionClosed) {
+			t.Errorf("drop isolated table: %v", err)
+		}
+	})
 
 	insertCount, err := connection.ExecuteUpdate(ctx, fmt.Sprintf(
 		"INSERT INTO %s (id, name) VALUES (1, 'before')",
@@ -109,7 +119,7 @@ func TestH2L1Integration(t *testing.T) {
 	assertH2SQLError(t, err, "23505")
 
 	_, err = connection.ExecuteUpdate(ctx, "THIS IS NOT VALID SQL")
-	assertH2SQLError(t, err, "42000")
+	assertH2SQLError(t, err, "42001")
 
 	deleteCount, err := connection.ExecuteUpdate(ctx, fmt.Sprintf("DELETE FROM %s WHERE id=1", table))
 	if err != nil {
@@ -132,6 +142,9 @@ func TestH2L1Integration(t *testing.T) {
 		t.Fatalf("expected context deadline error, got %v", err)
 	}
 
+	if _, err := connection.ExecuteUpdate(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+		t.Fatalf("drop isolated table: %v", err)
+	}
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := connection.Close(closeCtx); err != nil {
 		closeCancel()
@@ -141,15 +154,15 @@ func TestH2L1Integration(t *testing.T) {
 	if err := connection.Close(context.Background()); err != nil {
 		t.Fatalf("second close should be idempotent: %v", err)
 	}
-	if _, err := connection.Query(ctx, "SELECT 1"); !errors.Is(err, ErrConnectionClosed) {
+	if _, err := connection.Query(ctx, "SELECT 1"); !errors.Is(err, ojpclient.ErrConnectionClosed) {
 		t.Fatalf("expected closed-session rejection, got %v", err)
 	}
-	if _, err := connection.ExecuteUpdate(ctx, "DELETE FROM "+table); !errors.Is(err, ErrConnectionClosed) {
+	if _, err := connection.ExecuteUpdate(ctx, "DELETE FROM "+table); !errors.Is(err, ojpclient.ErrConnectionClosed) {
 		t.Fatalf("expected closed-session update rejection, got %v", err)
 	}
 }
 
-func assertH2Row(t *testing.T, ctx context.Context, connection *Connection, sql string, id int32, name string) {
+func assertH2Row(t *testing.T, ctx context.Context, connection *ojpclient.Connection, sql string, id int32, name string) {
 	t.Helper()
 	result, err := connection.Query(ctx, sql)
 	if err != nil {
@@ -163,7 +176,7 @@ func assertH2Row(t *testing.T, ctx context.Context, connection *Connection, sql 
 
 func assertH2SQLError(t *testing.T, err error, expectedSQLState string) {
 	t.Helper()
-	var sqlErr *SQLError
+	var sqlErr *ojpclient.SQLError
 	if !errors.As(err, &sqlErr) {
 		t.Fatalf("expected SQL error with trailer, got %T: %v", err, err)
 	}

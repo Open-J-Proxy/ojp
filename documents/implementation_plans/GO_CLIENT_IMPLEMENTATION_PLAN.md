@@ -27,11 +27,11 @@ Use the proto and current server behavior when the written specs differ. Record 
 
 ## 2. Current state
 
-The Go README reports basic L1 code, but no proven level for any individual database. The H2 workflow runs the example against a real server; it is not yet a full level test suite.
+The Go client now has a public single-endpoint L1 API and an opt-in H2 real-server integration suite. The H2 suite passes locally against one real OJP server and H2; CI confirmation is pending. Java coverage does not establish Go coverage.
 
 | Level | What exists | What is missing |
 |---|---|---|
-| L1: Connect and CRUD | Connect, query, update, and close calls; H2 CLI smoke test. | Repeatable integration tests, exact value/update-count checks, session updates, cleanup, and a public API. |
+| L1: Connect and CRUD | Public API; generated process UUID; session response updates; H2 L1 integration suite and CLI smoke test. | H2 CI confirmation is pending; other database families still need their own suites. |
 | L2: Types and statements | Generated parameter and statement messages. | Typed binding, reusable statements, generated keys, and metadata APIs. |
 | L3: Results and cursors | Query messages are read until EOF into a slice. | Incremental reads, pagination, cursor operations, and cleanup tests. |
 | L4: Local transactions | Start/commit/rollback calls and CLI examples. | Savepoints, isolation/reset tests, and consistent session handling. |

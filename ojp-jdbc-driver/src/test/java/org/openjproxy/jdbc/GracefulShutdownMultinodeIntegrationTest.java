@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -97,7 +98,7 @@ class GracefulShutdownMultinodeIntegrationTest {
             st.executeUpdate("INSERT INTO gs_test (id, val) VALUES (1, 'before-sigterm')");
         }
         Connection otherTx = openTransaction(url);
-        assertFalse(txServer.equals(servedByInTransaction(otherTx)),
+        assertNotEquals(txServer, servedByInTransaction(otherTx),
                 "The second session should be placed on the other server");
         OjpContainer drainingServer = txServer.equals(hostnameA) ? serverA : serverB;
         String drainingHostname = txServer;
@@ -108,7 +109,7 @@ class GracefulShutdownMultinodeIntegrationTest {
         TrafficGenerator traffic = new TrafficGenerator(url);
         Thread trafficThread = new Thread(traffic, "gs-traffic");
         trafficThread.start();
-        Thread.sleep(2_000L);
+        Thread.sleep(2_000L); //NOSONAR
         assertTrue(traffic.servedBy().contains(drainingHostname) && traffic.servedBy().contains(otherHostname),
                 "Traffic should be flowing before SIGTERM, served by: " + traffic.servedBy()
                         + " (servers " + hostnameA + ", " + hostnameB + "), failures: " + traffic.failures());
@@ -116,7 +117,7 @@ class GracefulShutdownMultinodeIntegrationTest {
         // SIGTERM the server holding the open transaction.
         DockerClient docker = DockerClientFactory.instance().client();
         docker.killContainerCmd(drainingServer.getContainerId()).withSignal("SIGTERM").exec();
-        Thread.sleep(2_000L);
+        Thread.sleep(2_000L); //NOSONAR
         int servedBeforeCheck = traffic.servedBy().size();
 
         // The open transaction must still work and commit on the draining server.
@@ -150,7 +151,7 @@ class GracefulShutdownMultinodeIntegrationTest {
         long deadline = System.currentTimeMillis() + RECOVERY_TIMEOUT_MS;
         boolean recovered = false;
         while (System.currentTimeMillis() < deadline && !recovered) {
-            Thread.sleep(1_000L);
+            Thread.sleep(1_000L); //NOSONAR
             List<String> sinceRestart = traffic.servedBy().subList(servedBeforeRestart, traffic.servedBy().size());
             recovered = sinceRestart.contains(restartedHostname);
         }
@@ -215,7 +216,7 @@ class GracefulShutdownMultinodeIntegrationTest {
             if (running == null || !running) {
                 return;
             }
-            Thread.sleep(500L);
+            Thread.sleep(500L); //NOSONAR
         }
         fail("Server did not stop within " + timeoutMs + "ms after SIGTERM");
     }

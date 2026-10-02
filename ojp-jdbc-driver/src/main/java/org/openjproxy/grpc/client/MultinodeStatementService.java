@@ -247,37 +247,13 @@ public class MultinodeStatementService implements StatementService {
                                                                           ThrowingFunction<StatementServiceGrpcClient, OpResult> operation)
             throws SQLException {
         // Get the appropriate server based on session binding or round-robin
-        String sessionKey = (requestSessionInfo != null && requestSessionInfo.getSessionUUID() != null && !requestSessionInfo.getSessionUUID().isEmpty())
-                ? requestSessionInfo.getSessionUUID() : null;
-        ServerEndpoint server = connectionManager.affinityServer(sessionKey);
+        ServerEndpoint server = connectionManager.affinityServer(sessionKeyOf(requestSessionInfo));
 
         log.debug("executeOpResultWithSessionStickinessAndBinding: session={}, server={}",
-            requestSessionInfo != null ? requestSessionInfo.getSessionUUID() : "null",
-            server != null ? server.getAddress() : "null");
+            sessionKeyOf(requestSessionInfo), addressOf(server));
 
         try {
-            // Get the channel and stub for the selected server
-            MultinodeConnectionManager.ChannelAndStub channelAndStub =
-                    connectionManager.getChannelAndStub(server);
-
-            if (channelAndStub == null) {
-                throw new SQLException("Unable to get channel for server: " + server.getAddress());
-            }
-
-            // Get or create the client for this endpoint
-            StatementServiceGrpcClient client = getClient(server);
-
-            // Execute the operation
-            OpResult result = operation.apply(client);
-
-            // Check if result contains a session and bind it
-            if (result != null && result.hasSession()) {
-                SessionInfo responseSessionInfo = result.getSession();
-                checkAndBindSession(requestSessionInfo, responseSessionInfo, server);
-            }
-
-            return result;
-
+            return applyAndBindOpResult(server, requestSessionInfo, operation);
         } catch (StatusRuntimeException e) {
             // Pool-not-found: the server restarted and lost pool state.
             // Reconnect (recreates the pool) and retry the operation once.
@@ -286,59 +262,97 @@ public class MultinodeStatementService implements StatementService {
             // application must handle that itself.
             if (GrpcExceptionHandler.isPoolNotFoundException(e)
                     && (requestSessionInfo == null || requestSessionInfo.getSessionUUID().isEmpty())) {
-                log.warn("NOT_FOUND from server {} – pool lost, reconnecting and retrying", server.getAddress());
-                String connHash = requestSessionInfo != null ? requestSessionInfo.getConnHash() : null;
-                if (connHash != null) {
-                    connectionManager.invalidateConnHash(connHash);
-                    connectionManager.reconnectForConnHash(connHash);
-                }
-                // Retry once after reconnect (let any exception from retry propagate naturally)
-                try {
-                    StatementServiceGrpcClient retryClient = getClient(server);
-                    OpResult result = operation.apply(retryClient);
-                    if (result != null && result.hasSession()) {
-                        checkAndBindSession(requestSessionInfo, result.getSession(), server);
-                    }
-                    return result;
-                } catch (StatusRuntimeException retryEx) {
-                    SQLException sqlEx;
-                    try {
-                        throw GrpcExceptionHandler.handle(retryEx);
-                    } catch (SQLException ex) {
-                        sqlEx = ex;
-                    }
-                    throw sqlEx;
-                } catch (SQLException retryEx) {
-                    throw retryEx;
-                } catch (Exception retryEx) {
-                    throw new SQLException("Retry after reconnect failed: " + retryEx.getMessage(), retryEx);
-                }
+                return retryOpResultAfterPoolLost(server, requestSessionInfo, operation);
             }
-
-            // Let GrpcExceptionHandler convert the exception
-            SQLException sqlEx;
-            try {
-                throw GrpcExceptionHandler.handle(e);
-            } catch (SQLException ex) {
-                sqlEx = ex;
-            }
-
-            // Only mark server unhealthy for connection-level errors
-            if (connectionManager.isConnectionLevelError(e)) {
-                log.warn("Connection-level error on server {}: {}", server.getAddress(), sqlEx.getMessage());
-                // Notify connection manager to mark server unhealthy and invalidate sessions/connections
-                connectionManager.handleServerFailure(server, e);
-            } else {
-                log.debug("Database-level error on server {}: {}", server.getAddress(), sqlEx.getMessage());
-            }
-
-            throw sqlEx;
+            throw handleStatusError(server, e);
         } catch (SQLException e) {
             markDrainingIfServerDraining(server, e);
             throw e;
         } catch (Exception e) {
             throw new SQLException("Unexpected error executing operation: " + e.getMessage(), e);
         }
+    }
+
+    private OpResult applyAndBindOpResult(ServerEndpoint server, SessionInfo requestSessionInfo,
+                                          ThrowingFunction<StatementServiceGrpcClient, OpResult> operation)
+            throws Exception {
+        // Get the channel and stub for the selected server
+        MultinodeConnectionManager.ChannelAndStub channelAndStub = connectionManager.getChannelAndStub(server);
+        if (channelAndStub == null) {
+            throw new SQLException("Unable to get channel for server: " + server.getAddress());
+        }
+
+        OpResult result = operation.apply(getClient(server));
+        bindSessionFromResult(requestSessionInfo, result, server);
+        return result;
+    }
+
+    private OpResult retryOpResultAfterPoolLost(ServerEndpoint server, SessionInfo requestSessionInfo,
+                                                ThrowingFunction<StatementServiceGrpcClient, OpResult> operation)
+            throws SQLException {
+        log.warn("NOT_FOUND from server {} – pool lost, reconnecting and retrying", server.getAddress());
+        String connHash = requestSessionInfo != null ? requestSessionInfo.getConnHash() : null;
+        if (connHash != null) {
+            connectionManager.invalidateConnHash(connHash);
+            connectionManager.reconnectForConnHash(connHash);
+        }
+        // Retry once after reconnect (let any exception from retry propagate naturally)
+        try {
+            OpResult result = operation.apply(getClient(server));
+            bindSessionFromResult(requestSessionInfo, result, server);
+            return result;
+        } catch (StatusRuntimeException retryEx) {
+            throw toSqlException(retryEx);
+        } catch (SQLException retryEx) {
+            throw retryEx;
+        } catch (Exception retryEx) {
+            throw new SQLException("Retry after reconnect failed: " + retryEx.getMessage(), retryEx);
+        }
+    }
+
+    private void bindSessionFromResult(SessionInfo requestSessionInfo, OpResult result, ServerEndpoint server) {
+        if (result != null && result.hasSession()) {
+            checkAndBindSession(requestSessionInfo, result.getSession(), server);
+        }
+    }
+
+    /**
+     * Converts a gRPC error to a SQLException and, for connection-level errors only,
+     * lets the connection manager mark the server unhealthy (or draining).
+     */
+    private SQLException handleStatusError(ServerEndpoint server, StatusRuntimeException e) {
+        SQLException sqlEx = toSqlException(e);
+        if (connectionManager.isConnectionLevelError(e)) {
+            log.warn("Connection-level error on server {}: {}", server.getAddress(), sqlEx.getMessage());
+            // Notify connection manager to mark server unhealthy and invalidate sessions/connections
+            connectionManager.handleServerFailure(server, e);
+        } else {
+            log.debug("Database-level error on server {}: {}", server.getAddress(), sqlEx.getMessage());
+        }
+        return sqlEx;
+    }
+
+    /**
+     * Lets {@link GrpcExceptionHandler} convert the gRPC error. If the handler returns the original
+     * {@link StatusRuntimeException} instead of a SQLException, that exception is thrown as-is.
+     */
+    private static SQLException toSqlException(StatusRuntimeException e) {
+        try {
+            throw GrpcExceptionHandler.handle(e);
+        } catch (SQLException ex) {
+            return ex;
+        }
+    }
+
+    private static String sessionKeyOf(SessionInfo sessionInfo) {
+        if (sessionInfo == null || sessionInfo.getSessionUUID() == null || sessionInfo.getSessionUUID().isEmpty()) {
+            return null;
+        }
+        return sessionInfo.getSessionUUID();
+    }
+
+    private static String addressOf(ServerEndpoint server) {
+        return server != null ? server.getAddress() : "null";
     }
 
     /**

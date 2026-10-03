@@ -82,6 +82,18 @@ public class ReadWriteDataSourceRegistry {
     }
 
     /**
+     * Gets every registered replica datasource across all primaries.
+     * Used during server shutdown to close replica pools.
+     *
+     * @return a snapshot list of all replica datasources
+     */
+    public List<DataSource> getAllReplicas() {
+        List<DataSource> all = new ArrayList<>();
+        replicaMap.values().forEach(all::addAll);
+        return all;
+    }
+
+    /**
      * Gets the primary datasource name for a given connection hash.
      *
      * @param connectionHash the connection hash

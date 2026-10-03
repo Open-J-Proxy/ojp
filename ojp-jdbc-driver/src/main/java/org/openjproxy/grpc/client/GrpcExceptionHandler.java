@@ -6,6 +6,7 @@ import io.grpc.Metadata;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.protobuf.ProtoUtils;
+import org.openjproxy.constants.CommonConstants;
 
 import java.sql.SQLDataException;
 import java.sql.SQLException;
@@ -13,6 +14,13 @@ import java.sql.SQLTransientConnectionException;
 
 public class GrpcExceptionHandler {
     private static final String SQLSTATE_CONNECTION_FAILURE = "08001";
+    private static final int MAX_CAUSE_DEPTH = 10;
+
+    /**
+     * Trailer key the server sets when it rejects a request because it is draining.
+     */
+    public static final Metadata.Key<String> SERVER_DRAINING_KEY =
+            Metadata.Key.of(CommonConstants.SERVER_DRAINING_TRAILER_KEY, Metadata.ASCII_STRING_MARSHALLER);
 
     /**
      * Handler for StatusRuntimeException, converting it to a SQLException when SQL metadata returned.
@@ -78,6 +86,38 @@ public class GrpcExceptionHandler {
         if (exception instanceof StatusRuntimeException) {
             StatusRuntimeException sre = (StatusRuntimeException) exception;
             return sre.getStatus().getCode() == Status.Code.NOT_FOUND;
+        }
+        return false;
+    }
+
+    /**
+     * Determines if an exception was caused by the server rejecting the request because it is
+     * draining (graceful shutdown in progress).
+     *
+     * <p>The server answers with {@code Status.UNAVAILABLE} plus the
+     * {@value CommonConstants#SERVER_DRAINING_TRAILER_KEY} trailer. The request was never executed,
+     * so it is always safe to retry it on another server. The cause chain is inspected because
+     * {@link #handle(StatusRuntimeException)} wraps the original gRPC exception in a
+     * {@link SQLTransientConnectionException}.</p>
+     *
+     * @param exception the exception to inspect
+     * @return {@code true} if this is a draining rejection
+     */
+    public static boolean isServerDrainingError(Throwable exception) {
+        Throwable current = exception;
+        int depth = 0;
+        while (current != null && depth < MAX_CAUSE_DEPTH) {
+            if (current instanceof StatusRuntimeException) {
+                StatusRuntimeException sre = (StatusRuntimeException) current;
+                if (sre.getStatus().getCode() == Status.Code.UNAVAILABLE) {
+                    Metadata trailers = sre.getTrailers();
+                    if (trailers != null && trailers.containsKey(SERVER_DRAINING_KEY)) {
+                        return true;
+                    }
+                }
+            }
+            current = current.getCause();
+            depth++;
         }
         return false;
     }

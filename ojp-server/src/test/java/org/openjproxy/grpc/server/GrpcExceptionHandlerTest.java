@@ -33,6 +33,30 @@ class GrpcExceptionHandlerTest {
     }
 
     @Test
+    void shouldSendUnavailableWithDrainingTrailerWhenServerDraining() {
+        CapturingObserver<Object> observer = new CapturingObserver<>();
+
+        GrpcExceptionHandler.sendSQLExceptionMetadata(new ServerDrainingException(), observer);
+
+        StatusRuntimeException sre = assertInstanceOf(StatusRuntimeException.class, observer.error);
+        assertEquals(Status.Code.UNAVAILABLE, sre.getStatus().getCode());
+        assertTrue(sre.getStatus().getDescription().contains("OJP server draining"));
+        assertEquals("true", sre.getTrailers().get(GrpcExceptionHandler.SERVER_DRAINING_KEY));
+    }
+
+    @Test
+    void shouldSendUnavailableWithDrainingTrailerWhenDrainingIsTheCause() {
+        CapturingObserver<Object> observer = new CapturingObserver<>();
+        SQLException wrapped = new SQLException("wrapper", new ServerDrainingException());
+
+        GrpcExceptionHandler.sendSQLExceptionMetadata(wrapped, observer);
+
+        StatusRuntimeException sre = assertInstanceOf(StatusRuntimeException.class, observer.error);
+        assertEquals(Status.Code.UNAVAILABLE, sre.getStatus().getCode());
+        assertEquals("true", sre.getTrailers().get(GrpcExceptionHandler.SERVER_DRAINING_KEY));
+    }
+
+    @Test
     void shouldIncludeLaneMetadataOnSlowLaneOverload() {
         CapturingObserver<Object> observer = new CapturingObserver<>();
         ServerOverloadException exception = new ServerOverloadException(

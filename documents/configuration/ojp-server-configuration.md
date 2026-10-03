@@ -166,6 +166,18 @@ For full integration examples including Docker Compose setups, see the **[Teleme
 | `ojp.server.circuitBreakerTimeout`   | `OJP_SERVER_CIRCUITBREAKERTIMEOUT`   | long | 60000   | Circuit breaker timeout once open in milliseconds | 0.2.0-beta |
 | `ojp.server.circuitBreakerThreshold` | `OJP_SERVER_CIRCUITBREAKERTHRESHOLD` | int  | 3       | Circuit breaker failure threshold                 | 0.2.0-beta |
 
+### Graceful Shutdown Settings
+
+Controls what the server does when it receives `SIGTERM` (for example `docker stop` or a Kubernetes pod deletion). See the **[Graceful Shutdown Guide](../guides/GRACEFUL_SHUTDOWN.md)** for the full sequence, Kubernetes settings and limits.
+
+| Property                                              | Environment Variable                                 | Type | Default | Description | Since |
+|-------------------------------------------------------|------------------------------------------------------|------|---------|-------------|-------|
+| `ojp.server.gracefulShutdown.enabled`                 | `OJP_SERVER_GRACEFULSHUTDOWN_ENABLED`                | boolean | true | When `true`, the server drains before stopping: it rejects new sessions and `connect()` calls with `UNAVAILABLE` + the `ojp-server-draining` trailer, and lets existing sessions finish. When `false`, it stops right away as in older versions. | 1.1.0 |
+| `ojp.server.gracefulShutdown.drainTimeoutSeconds`     | `OJP_SERVER_GRACEFULSHUTDOWN_DRAINTIMEOUTSECONDS`    | long | 20 | Maximum time to wait for open sessions to finish. Sessions still open after this time are rolled back and closed. | 1.1.0 |
+| `ojp.server.gracefulShutdown.terminationTimeoutSeconds` | `OJP_SERVER_GRACEFULSHUTDOWN_TERMINATIONTIMEOUTSECONDS` | long | 5 | After the drain, how long `server.shutdown()` waits for in-flight gRPC calls before forcing `shutdownNow()`. | 1.1.0 |
+
+The defaults (20 s + 5 s) fit inside the Kubernetes default `terminationGracePeriodSeconds` of 30 s. If you raise them, raise `terminationGracePeriodSeconds` too.
+
 ### ResultSet Streaming Settings
 
 Controls how the server batches rows into gRPC streaming messages when returning `executeQuery` results.

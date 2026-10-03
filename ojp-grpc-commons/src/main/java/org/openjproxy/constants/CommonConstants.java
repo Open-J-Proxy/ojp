@@ -26,6 +26,15 @@ public class CommonConstants {
     public static final String OJP_CLOB_PREFIX = "OJP_CLOB_PREFIX:";
     public static final String OJP_RELAYED_PGOBJECT_MARKER = "OJP_RELAYED_PGOBJECT";
 
+    /**
+     * gRPC trailer key set by the OJP server when it rejects a request because it is draining
+     * (graceful shutdown in progress). Sent together with {@code Status.UNAVAILABLE}.
+     * Drivers that understand this key stop routing new sessions to that server while keeping
+     * already-bound sessions on it; older drivers simply see {@code UNAVAILABLE}.
+     */
+    public static final String SERVER_DRAINING_TRAILER_KEY = "ojp-server-draining";
+    public static final String SERVER_DRAINING_DESCRIPTION = "OJP server draining";
+
     // Configuration property keys
     public static final String DATASOURCE_NAME_PROPERTY = "ojp.datasource.name";
     public static final String RESULTSET_ROWS_PER_BLOCK_PROPERTY = "ojp.resultset.rowsPerBlock";

@@ -80,6 +80,13 @@ public class ServerConfiguration {
     private static final String SESSION_TIMEOUT_MINUTES_KEY = "ojp.server.sessionCleanup.timeoutMinutes";
     private static final String SESSION_CLEANUP_INTERVAL_MINUTES_KEY = "ojp.server.sessionCleanup.intervalMinutes";
 
+    // Graceful shutdown configuration keys
+    private static final String GRACEFUL_SHUTDOWN_ENABLED_KEY = "ojp.server.gracefulShutdown.enabled";
+    private static final String GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT_SECONDS_KEY =
+            "ojp.server.gracefulShutdown.drainTimeoutSeconds";
+    private static final String GRACEFUL_SHUTDOWN_TERMINATION_TIMEOUT_SECONDS_KEY =
+            "ojp.server.gracefulShutdown.terminationTimeoutSeconds";
+
     // Tracing configuration keys
     private static final String TRACING_ENABLED_KEY = "ojp.tracing.enabled";
     private static final String TRACING_ENDPOINT_KEY = "ojp.tracing.endpoint";
@@ -165,6 +172,12 @@ public class ServerConfiguration {
     public static final boolean DEFAULT_SESSION_CLEANUP_ENABLED = true; // Enable session cleanup by default
     public static final long DEFAULT_SESSION_TIMEOUT_MINUTES = 30; // 30 minutes session timeout
     public static final long DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES = 5; // Run cleanup every 5 minutes
+
+    // Graceful shutdown default values
+    public static final boolean DEFAULT_GRACEFUL_SHUTDOWN_ENABLED = true;
+    // Drain + termination must fit inside Kubernetes' default 30s terminationGracePeriodSeconds
+    public static final long DEFAULT_GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 20;
+    public static final long DEFAULT_GRACEFUL_SHUTDOWN_TERMINATION_TIMEOUT_SECONDS = 5;
 
     // Tracing default values
     public static final boolean DEFAULT_TRACING_ENABLED = false; // Disabled by default, opt-in
@@ -258,6 +271,11 @@ public class ServerConfiguration {
     private final boolean sessionCleanupEnabled;
     private final long sessionTimeoutMinutes;
     private final long sessionCleanupIntervalMinutes;
+
+    // Graceful shutdown configuration
+    private final boolean gracefulShutdownEnabled;
+    private final long gracefulShutdownDrainTimeoutSeconds;
+    private final long gracefulShutdownTerminationTimeoutSeconds;
 
     // Tracing configuration
     private final boolean tracingEnabled;
@@ -357,6 +375,15 @@ public class ServerConfiguration {
         this.sessionCleanupEnabled = getBooleanProperty(SESSION_CLEANUP_ENABLED_KEY, DEFAULT_SESSION_CLEANUP_ENABLED);
         this.sessionTimeoutMinutes = getLongProperty(SESSION_TIMEOUT_MINUTES_KEY, DEFAULT_SESSION_TIMEOUT_MINUTES);
         this.sessionCleanupIntervalMinutes = getLongProperty(SESSION_CLEANUP_INTERVAL_MINUTES_KEY, DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES);
+
+        // Graceful shutdown configuration
+        this.gracefulShutdownEnabled = getBooleanProperty(GRACEFUL_SHUTDOWN_ENABLED_KEY,
+                DEFAULT_GRACEFUL_SHUTDOWN_ENABLED);
+        this.gracefulShutdownDrainTimeoutSeconds = Math.max(0L, getLongProperty(
+                GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT_SECONDS_KEY, DEFAULT_GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT_SECONDS));
+        this.gracefulShutdownTerminationTimeoutSeconds = Math.max(0L, getLongProperty(
+                GRACEFUL_SHUTDOWN_TERMINATION_TIMEOUT_SECONDS_KEY,
+                DEFAULT_GRACEFUL_SHUTDOWN_TERMINATION_TIMEOUT_SECONDS));
 
         // TLS configuration
         this.tlsEnabled = getBooleanProperty(TLS_ENABLED_KEY, DEFAULT_TLS_ENABLED);
@@ -608,6 +635,10 @@ public class ServerConfiguration {
         logger.info("  Session Cleanup Enabled: {}", sessionCleanupEnabled);
         logger.info("  Session Timeout: {} minutes", sessionTimeoutMinutes);
         logger.info("  Cleanup Interval: {} minutes", sessionCleanupIntervalMinutes);
+        logger.info("Graceful Shutdown Configuration:");
+        logger.info("  Graceful Shutdown Enabled: {}", gracefulShutdownEnabled);
+        logger.info("  Drain Timeout: {} seconds", gracefulShutdownDrainTimeoutSeconds);
+        logger.info("  Termination Timeout: {} seconds", gracefulShutdownTerminationTimeoutSeconds);
         logger.info("TLS Configuration:");
         logger.info("  TLS Enabled: {}", tlsEnabled);
         if (tlsEnabled) {
@@ -885,6 +916,18 @@ public class ServerConfiguration {
 
     public long getSessionCleanupIntervalMinutes() {
         return sessionCleanupIntervalMinutes;
+    }
+
+    public boolean isGracefulShutdownEnabled() {
+        return gracefulShutdownEnabled;
+    }
+
+    public long getGracefulShutdownDrainTimeoutSeconds() {
+        return gracefulShutdownDrainTimeoutSeconds;
+    }
+
+    public long getGracefulShutdownTerminationTimeoutSeconds() {
+        return gracefulShutdownTerminationTimeoutSeconds;
     }
 
     public boolean isTlsEnabled() {

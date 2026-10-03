@@ -114,6 +114,8 @@ Located in [targeted-problem/](targeted-problem/):
 ### Design Documents
 
 Located in [designs/](designs/):
+- [Main Flow Documentation Method](designs/MAIN_FLOWS.md) - Conventions and scope for concise component-level flow diagrams
+- [executeQuery Flow](designs/EXECUTE_QUERY_FLOW.md) - Query execution, row streaming, and result closure in 12 steps
 - [Slow Query Segregation](designs/SLOW_QUERY_SEGREGATION.md) (strongly recommended for mixed fast+slow workloads; usually unnecessary for pure OLTP or pure OLAP)
 - [StatementServiceImpl Action Pattern Migration](designs/STATEMENTSERVICE_ACTION_PATTERN_MIGRATION.md)
 

@@ -27,3 +27,15 @@ Simplified Flow Diagrams help developers understand what happens across componen
 | [Call Proxy](CALL_PROXY_FLOW.md) | A JDBC operation needs remote access → server invokes it and returns the result |
 
 Call Proxy is the shared remote-call path used by many operations, including metadata, statement settings, and cursor operations. Keep optional features and failure recovery in short notes or separate flows when they would obscure the main path.
+
+## Main XA flows
+
+The transaction manager coordinates distributed transactions; OJP relays each participant's XA operations. These diagrams separate that protocol from regular JDBC transactions.
+
+| Flow | Useful boundary |
+|---|---|
+| [XA connection setup](XA_CONNECT_FLOW.md) | Obtain an XA handle → server-bound session ready for enlistment |
+| [XA branch work](XA_BRANCH_FLOW.md) | Start a branch → execute SQL → end its work |
+| [XA prepare / commit / rollback](XA_COMPLETION_FLOW.md) | Prepare and vote → coordinator decision → branch completion |
+| [XA connection closure](XA_CLOSE_FLOW.md) | Close after completion → completed backend returned and session removed |
+| [XA recovery scan](XA_RECOVERY_FLOW.md) | Request a scan → return recoverable branch identifiers |

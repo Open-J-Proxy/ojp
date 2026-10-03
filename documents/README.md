@@ -121,6 +121,11 @@ Located in [designs/](designs/):
 - [Commit / rollback — Simplified Flow Diagram](designs/TRANSACTION_FLOW.md) - Transaction completion
 - [Close connection — Simplified Flow Diagram](designs/CLOSE_CONNECTION_FLOW.md) - Session cleanup and resource release
 - [Call Proxy — Simplified Flow Diagram](designs/CALL_PROXY_FLOW.md) - Shared remote JDBC operations
+- [XA connection setup — Simplified Flow Diagram](designs/XA_CONNECT_FLOW.md) - Server binding and backend borrowing
+- [XA branch work — Simplified Flow Diagram](designs/XA_BRANCH_FLOW.md) - Enlistment, SQL work, and branch end
+- [XA prepare / commit / rollback — Simplified Flow Diagram](designs/XA_COMPLETION_FLOW.md) - Coordinator-controlled completion
+- [XA connection closure — Simplified Flow Diagram](designs/XA_CLOSE_FLOW.md) - Logical closure and pooled backend return
+- [XA recovery scan — Simplified Flow Diagram](designs/XA_RECOVERY_FLOW.md) - Recoverable branch discovery and its limits
 - [Slow Query Segregation](designs/SLOW_QUERY_SEGREGATION.md) (strongly recommended for mixed fast+slow workloads; usually unnecessary for pure OLTP or pure OLAP)
 - [StatementServiceImpl Action Pattern Migration](designs/STATEMENTSERVICE_ACTION_PATTERN_MIGRATION.md)
 

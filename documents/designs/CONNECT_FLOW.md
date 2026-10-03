@@ -31,7 +31,7 @@ flowchart TD
 - **3:** Supplied `ojp.*` options override file-based defaults forwarded to the server.
 - **4:** The driver uses the same routing infrastructure for one or several endpoints. In multinode mode it attempts connection setup on the configured servers; an available server is sufficient to proceed. Later connects with a cached datasource identity can skip the server request and build connection information locally.
 - **5–6:** Pool identity includes database URL, credentials, and datasource name. Repeated connects reuse the matching pool; pool initialization may open physical database connections.
-- **7–9:** The returned information has no session identifier yet. Later SQL, transaction, or [Call Proxy](CALL_PROXY_FLOW.md) work creates a session or borrows a temporary connection as needed. Unpooled mode records connection settings instead of creating a pool; XA has a separate lifecycle.
+- **7–9:** The returned information has no session identifier yet. Later SQL, transaction, or [Call Proxy](CALL_PROXY_FLOW.md) work creates a session or borrows a temporary connection as needed. Unpooled mode records connection settings instead of creating a pool; see [XA connection setup](XA_CONNECT_FLOW.md) for the separate XA lifecycle.
 
 ## Source checkpoints
 

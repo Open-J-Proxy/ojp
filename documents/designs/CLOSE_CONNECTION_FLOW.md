@@ -29,7 +29,7 @@ flowchart TD
 - **2, 8:** Closure is asynchronous by default: the driver schedules termination and marks the connection closed **before** server cleanup finishes. The diagram's response order describes synchronous closure; asynchronous closure runs steps 3–7 in the background.
 - **3:** If no session was created, or it has already ended, server termination has no session resources to release.
 - **4–6:** Cleanup uses the physical connection's automatic-commit state to decide rollback. Acquired replica connections are closed before the primary. Pooled connection closure returns them for reuse; unpooled connections are physically closed.
-- **5–8:** The shared server pools and gRPC channels stay open for other connections. Closing only a statement or result through [Call Proxy](CALL_PROXY_FLOW.md) does not perform this session cleanup. XA pooling follows a separate lifecycle.
+- **5–8:** The shared server pools and gRPC channels stay open for other connections. Closing only a statement or result through [Call Proxy](CALL_PROXY_FLOW.md) does not perform this session cleanup. See [XA connection closure](XA_CLOSE_FLOW.md) for the separate XA pooling lifecycle.
 
 ## Source checkpoints
 

@@ -32,7 +32,7 @@ flowchart TD
 - **2:** Disabling automatic commit starts a server-side transaction and establishes a session. With automatic commit enabled, the driver's explicit commit/rollback calls do not send these requests.
 - **5–8:** Neither operation returns the session's connection to the pool or restores automatic commit. The session and admission permit remain available for further work.
 - **5:** Switching automatic commit back on is a [Call Proxy](CALL_PROXY_FLOW.md) operation; the database JDBC driver commits pending work while changing the mode. Rolling back to a savepoint also uses Call Proxy and is distinct from a full rollback.
-- **1–8:** Distributed XA transactions use their own transaction-coordinator protocol; they are not this flow.
+- **1–8:** Distributed XA transactions use [XA branch work](XA_BRANCH_FLOW.md) and [XA completion](XA_COMPLETION_FLOW.md), not this flow.
 
 ## Source checkpoints
 

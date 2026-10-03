@@ -37,6 +37,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
     }
 
     @Test
+    void shouldResizeCapacityWithoutLosingActivePermits() throws InterruptedException {
+        SlotManager manager = new SlotManager(2, 0, 0);
+        assertTrue(manager.acquireFastSlot(0));
+        assertTrue(manager.acquireFastSlot(0));
+
+        manager.resizeCapacity(1);
+        manager.releaseFastSlot();
+        manager.releaseFastSlot();
+
+        assertEquals(1, manager.getTotalSlots());
+        assertTrue(manager.acquireFastSlot(0));
+        assertFalse(manager.acquireFastSlot(0));
+        manager.releaseFastSlot();
+
+        manager.resizeCapacity(3);
+        assertTrue(manager.acquireFastSlot(0));
+        assertTrue(manager.acquireFastSlot(0));
+        assertTrue(manager.acquireFastSlot(0));
+        assertFalse(manager.acquireFastSlot(0));
+    }
+
+    @Test
      void testInvalidConfigurationHandling() {
         // Test invalid total slots
         assertThrows(IllegalArgumentException.class, () -> new SlotManager(0, 20, 100));

@@ -30,6 +30,44 @@ OJP uses a layered concurrency model:
 
 Because the global cap is shared across all datasources and clients, tripping it rejects requests indiscriminately and can cause unrelated clients to throttle. Size it generously — a rule of thumb is **sum of per-datasource `(poolSize + maxQueueDepth)` × 1.5** — so the per-datasource caps reject first under expected load. Treat the global cap as JVM self-protection, not workload shaping; if you find yourself tuning it to shape traffic, tune the per-datasource limits instead.
 
+### Database Connection Budgets
+
+Use a database connection budget when several OJP pools connect to the same database. It caps the pools' **combined maximum**, rather than giving every pool a separate full limit. Set these properties in the server's `ojp.properties` file or as JVM properties; restart the server after changing them. The server looks for `ojp.properties` in its working directory, then on its classpath if no working-directory file exists. JVM properties override values in the file.
+
+Each budget has a name you choose (shown as `<group>` below):
+
+| Property | What it does |
+|----------|--------------|
+| `ojp.server.databaseBudgets.<group>.match.jdbcUrlPattern` | Selects pools by JDBC URL. `*` matches any text. |
+| `ojp.server.databaseBudgets.<group>.maxTotalConnections` | Sets the total connection limit for all matching pools. |
+| `ojp.server.databaseBudgets.<group>.reserveConnections` | Leaves connections unused by OJP (optional; defaults to `0`). |
+| `ojp.server.databaseBudgets.<group>.priorities.username.<username>.weight` | Gives that database username a larger or smaller share (optional; defaults to `1`). |
+
+For example, suppose two pools match the URL below. Their requested maxima are 8 for `app_rw` and 8 for `reporting_ro`. Set the budget to 10 and weights to 2:1. OJP assigns about 7 connections to `app_rw` and 3 to `reporting_ro`; together, the pool maxima stay at 10.
+
+Put the following in the OJP server's `ojp.properties` file:
+
+```properties
+ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db1:5432/orders*
+ojp.server.databaseBudgets.orders.maxTotalConnections=10
+ojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2
+ojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1
+```
+
+You can use the same keys as JVM options instead. For example, `-Dojp.server.databaseBudgets.orders.maxTotalConnections=10` overrides the file's value. This server-side file is separate from the JDBC driver's `ojp.properties`; a file in the client application's classpath does not configure the server.
+
+```bash
+java -Duser.timezone=UTC \
+  -Dojp.server.databaseBudgets.orders.match.jdbcUrlPattern='jdbc:postgresql://db1:5432/orders*' \
+  -Dojp.server.databaseBudgets.orders.maxTotalConnections=10 \
+  -Dojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2 \
+  -Dojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1 \
+  -jar ojp-server.jar
+```
+
+The weights are shares, not connection counts: `2:1` means the first username gets about twice the share of the second when the budget is tight. Pools using the same username share that username's weight. If the requested pool maxima already fit, OJP leaves them unchanged. When a matching pool is created or removed, OJP recalculates the maxima and resizes supported pools. Each matching pool is assigned at least one connection, so the budget must have at least one available connection per pool. A reserve reduces the capacity available to OJP; for example, a total of 10 with a reserve of 2 leaves 8 for OJP's pools.
+
+The budget applies to OJP-managed pooled primary, XA, and read/write replica connections on **one server**. It does not include unpooled connections, connections from other applications, or pools on other OJP servers. When OJP reduces a live pool, it does not terminate active work; the actual number of open connections may take time to fall to the new limit. No shared queue or semaphore is added to connection borrowing.
 
 
 > **Note on `ojp.server.virtualThreads.enabled`:** Virtual threads are disabled by default because, during heavy-concurrency testing with the current OJP code, they proved less efficient than platform threads. This may change as the OJP code evolves — further investigation is needed to determine whether future improvements could make virtual threads beneficial. You can still opt in by setting this property to `true`.

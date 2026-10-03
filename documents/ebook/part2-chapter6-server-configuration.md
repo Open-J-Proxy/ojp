@@ -4,9 +4,9 @@ Configuring the OJP server is straightforward yet powerful. The server gives you
 
 ## 6.1 Understanding Configuration Hierarchy
 
-Before diving into specific settings, it's important to understand how OJP handles configuration. The server supports two primary configuration methods that work together in a well-defined hierarchy. JVM system properties always take precedence over environment variables, giving you the flexibility to override environment-level settings when needed. This design allows you to set baseline configurations through environment variables while making targeted overrides for specific scenarios using system properties.
+Before diving into specific settings, it's important to understand how OJP handles configuration. For standard server settings, JVM system properties take precedence over environment variables. Database connection budgets also support a server-side `ojp.properties` file: JVM system properties override values in that file. This lets you keep a budget with the server deployment while still making targeted overrides at startup.
 
-This hierarchy becomes particularly valuable in containerized environments. You might set production defaults through environment variables in your Docker or Kubernetes configuration, then override specific settings for troubleshooting or testing without modifying your deployment files. The server reads both configuration sources at startup and merges them intelligently, ensuring you always get the behavior you expect.
+For standard settings, this hierarchy is particularly valuable in containerized environments. You might set production defaults through environment variables in your Docker or Kubernetes configuration, then override specific settings for troubleshooting or testing without modifying your deployment files. The server reads these sources at startup and applies JVM values before environment values.
 
 **[IMAGE PROMPT: Create a layered diagram showing configuration hierarchy with three levels: "JVM System Properties" at the top (highest priority, shown in bold color), "Environment Variables" in the middle (medium priority), and "Default Values" at the bottom (lowest priority, shown in faded color). Use arrows flowing upward labeled "Overrides" to show precedence. Include example values at each level like `-Dojp.server.port=9059`, `OJP_SERVER_PORT=1059`, and `default: 1059`. Style: Clean, hierarchical infographic with color-coded priority levels.]**
 
@@ -88,6 +88,23 @@ sequenceDiagram
     Note over Client,Server: Idle for 30s
     Server->>Client: Close Idle Connection
 ```
+
+### Database Connection Budgets
+
+If two or more OJP pools connect to the same database, each pool's own maximum can add up to more connections than the database can safely handle. A database budget sets one combined maximum for matching pools.
+
+For example, if the `app_rw` and `reporting_ro` pools can each grow to 8 connections, a budget of 10 with weights `2:1` gives them about 7 and 3 connections when both need capacity. Add this to `ojp.properties` on the OJP server:
+
+```properties
+ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db1:5432/orders*
+ojp.server.databaseBudgets.orders.maxTotalConnections=10
+ojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2
+ojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1
+```
+
+The server reads `ojp.properties` from its working directory, or from the classpath if there is no file in the working directory. You can also pass these settings as JVM properties; JVM values override file values. Restart the server after changing the budget. This is a server configuration file, not the client application's `ojp.properties` described in Chapter 5.
+
+The budget applies to pooled primary, XA, and read/write replica connections on this OJP server. It does not count unpooled connections or pools on other OJP servers. When a budget reduces a pool's maximum, active work is allowed to finish, so the number of open database connections may take time to decrease.
 
 ## 6.3 Security Configuration
 

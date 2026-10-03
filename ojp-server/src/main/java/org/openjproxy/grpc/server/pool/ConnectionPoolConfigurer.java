@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
+import org.openjproxy.grpc.server.action.ActionContext;
 
 import java.util.List;
 import java.util.Map;
@@ -131,11 +132,12 @@ public class ConnectionPoolConfigurer {
             // Use the returned allocation to avoid a race condition where a concurrent
             // calculatePoolSizes() call could overwrite the map entry before applyPoolSizeChanges
             // reads it back via getPoolAllocation().
-            POOL_COORDINATOR.updateHealthyServers(connHash, healthyServerCount);
+            MultinodePoolCoordinator.PoolAllocation allocation =
+                    POOL_COORDINATOR.updateHealthyServers(connHash, healthyServerCount);
 
             // Apply new pool sizes to existing HikariDataSource if provided
             if (dataSource != null) {
-                applyPoolSizeChanges(connHash, dataSource);
+                applyPoolSizeChanges(connHash, dataSource, allocation, null);
             }
         }
     }
@@ -154,15 +156,31 @@ public class ConnectionPoolConfigurer {
      * @param dataSource HikariDataSource to update
      */
     public static void applyPoolSizeChanges(String connHash, com.zaxxer.hikari.HikariDataSource dataSource) {
-        MultinodePoolCoordinator.PoolAllocation allocation = POOL_COORDINATOR.getPoolAllocation(connHash);
+        applyPoolSizeChanges(connHash, dataSource, POOL_COORDINATOR.getPoolAllocation(connHash), null);
+    }
+
+    public static void applyPoolSizeChanges(String connHash, com.zaxxer.hikari.HikariDataSource dataSource,
+                                            MultinodePoolCoordinator.PoolAllocation allocation,
+                                            ActionContext context) {
 
         if (allocation == null) {
             log.debug("No pool allocation found for {}, skipping pool resize", connHash);
             return;
         }
 
-        int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
-        int newMinIdle = allocation.getCurrentMinIdle();
+        int requestedMaxPoolSize = allocation.getCurrentMaxPoolSize();
+        int requestedMinIdle = allocation.getCurrentMinIdle();
+        DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+        if (budgetManager.updatePoolRequest("regular:" + connHash, requestedMaxPoolSize, requestedMinIdle)) {
+            return;
+        }
+
+        int newMaxPoolSize = requestedMaxPoolSize;
+        int newMinIdle = requestedMinIdle;
+        newMaxPoolSize = budgetManager.getMaximumPoolSize("regular:" + connHash, newMaxPoolSize);
+        newMinIdle = Math.min(newMinIdle,
+                budgetManager.getMinimumIdle("regular:" + connHash, newMinIdle));
+        newMinIdle = Math.min(newMinIdle, newMaxPoolSize);
 
         // Get current sizes for logging
         int currentMaxPoolSize = dataSource.getMaximumPoolSize();
@@ -205,6 +223,14 @@ public class ConnectionPoolConfigurer {
             }
         } else {
             log.debug("Pool sizes unchanged for {}, no resize needed", connHash);
+        }
+
+        if (context != null) {
+            org.openjproxy.grpc.server.AdmissionControlManager admissionControlManager =
+                    context.getAdmissionControlManagers().get(connHash);
+            if (admissionControlManager != null) {
+                admissionControlManager.resizeCapacity(newMaxPoolSize);
+            }
         }
     }
 

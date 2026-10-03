@@ -6,11 +6,13 @@ import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.server.AdmissionControlManager;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.Session;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
+import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.grpc.server.pool.DataSourceConfigurationManager;
 import org.openjproxy.grpc.server.pool.PreparedStatementCachePropertyTranslator;
 import org.openjproxy.grpc.server.utils.UrlParser;
@@ -135,6 +137,9 @@ public class HandleXAConnectionWithPoolingAction {
                 expectedMaxPoolSize = (int) Math.ceil((double) expectedMaxPoolSize / totalServers);
                 expectedMinIdle = (int) Math.ceil((double) expectedMinIdle / totalServers);
             }
+            DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+            expectedMaxPoolSize = budgetManager.getMaximumPoolSize("xa:" + connHash, expectedMaxPoolSize);
+            expectedMinIdle = budgetManager.getMinimumIdle("xa:" + connHash, expectedMinIdle);
         } catch (Exception e) {
             log.warn("Failed to calculate expected pool sizes, will skip validation: {}", e.getMessage());
             expectedMaxPoolSize = -1;
@@ -174,6 +179,7 @@ public class HandleXAConnectionWithPoolingAction {
                 } catch (Exception e) {
                     log.warn("Failed to close old XA registry during recreation: {}", e.getMessage());
                 }
+                DatabaseConnectionBudgetManager.getInstance().unregisterPool("xa:" + connHash);
                 context.getXaRegistries().remove(connHash);
                 registry = null;
                 // Reset health tracker so the next processClusterHealth() call will re-evaluate
@@ -195,6 +201,8 @@ public class HandleXAConnectionWithPoolingAction {
                 return null;
             }
 
+            DatabaseConnectionBudgetManager.Registration budgetRegistration = null;
+            Object pooledXaDataSource = null;
             try {
                 // Parse URL to remove OJP-specific prefix (same as non-XA path)
                 String parsedUrl = UrlParser.parseUrl(connectionDetails.getUrl());
@@ -233,6 +241,13 @@ public class HandleXAConnectionWithPoolingAction {
                     log.info("XA multinode coordination SKIPPED for {}: serverEndpoints null or empty", connHash);
                 }
 
+                DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+                budgetRegistration = budgetManager.registerPool("xa:" + connHash, parsedUrl,
+                        connectionDetails.getUser(), maxPoolSize, minIdle,
+                        context.getXaPoolProvider().supportsDynamicResizing());
+                maxPoolSize = budgetRegistration.getMaximumPoolSize();
+                minIdle = budgetRegistration.getMinimumIdle();
+
                 log.info("XA pool AFTER multinode coordination for {}: final max={}, min={}",
                         connHash, maxPoolSize, minIdle);
 
@@ -260,26 +275,44 @@ public class HandleXAConnectionWithPoolingAction {
                 // Create pooled XA DataSource via provider
                 log.info("[XA-POOL-CREATE] Creating XA pool for connHash={}, serverEndpointsHash={}, config=(max={}, min={})",
                         connHash, currentEndpointsHash, maxPoolSize, minIdle);
-                Object pooledXADataSource = context.getXaPoolProvider().createXADataSource(xaPoolConfig);
+                pooledXaDataSource = context.getXaPoolProvider().createXADataSource(xaPoolConfig);
 
                 // Create XA Transaction Registry with serverEndpoints hash and pool sizes for validation
-                registry = new XATransactionRegistry(context.getXaPoolProvider(), pooledXADataSource, currentEndpointsHash, maxPoolSize, minIdle);
-                context.getXaRegistries().put(connHash, registry);
+                registry = new XATransactionRegistry(context.getXaPoolProvider(), pooledXaDataSource, currentEndpointsHash, maxPoolSize, minIdle);
 
                 // Initialize pool with minIdle connections immediately after creation
                 // Without this, the pool starts empty and only creates connections on demand
                 log.info("[XA-POOL-INIT] Initializing XA pool with minIdle={} connections for connHash={}", minIdle, connHash);
                 registry.resizeBackendPool(maxPoolSize, minIdle);
+                XATransactionRegistry createdRegistry = registry;
+                budgetManager.attachPool(budgetRegistration, (newMaximum, newMinimum) -> {
+                    createdRegistry.resizeBackendPool(newMaximum, newMinimum);
+                    AdmissionControlManager admissionControlManager =
+                            context.getAdmissionControlManagers().get(connHash);
+                    if (admissionControlManager != null) {
+                        admissionControlManager.resizeCapacity(newMaximum);
+                    }
+                },
+                        maxPoolSize, minIdle);
 
                 // Create slow query segregation manager for XA
                 CreateSlowQuerySegregationManagerAction.getInstance().execute(
-                        context, connHash, actualMaxXaTransactions, true, xaConfig.getConnectionTimeout());
+                        context, connHash, maxPoolSize, true, xaConfig.getConnectionTimeout());
+                context.getXaRegistries().put(connHash, registry);
 
                 log.info("[XA-POOL-CREATE] Successfully created XA pool for connHash={} - maxPoolSize={}, minIdle={}, multinode={}, poolObject={}",
                         connHash, maxPoolSize, minIdle, serverEndpoints != null && !serverEndpoints.isEmpty(),
-                        pooledXADataSource.getClass().getSimpleName());
+                        pooledXaDataSource.getClass().getSimpleName());
 
             } catch (Exception e) {
+                DatabaseConnectionBudgetManager.getInstance().unregisterPool(budgetRegistration);
+                if (pooledXaDataSource instanceof javax.sql.XADataSource) {
+                    try {
+                        context.getXaPoolProvider().closeXADataSource((javax.sql.XADataSource) pooledXaDataSource);
+                    } catch (Exception closeFailure) {
+                        e.addSuppressed(closeFailure);
+                    }
+                }
                 log.error("[XA-POOL-CREATE] FAILED to create XA Pool Provider registry for connHash={}, serverEndpointsHash={}: {}",
                         connHash, currentEndpointsHash, e.getMessage(), e);
                 SQLException sqlException = new SQLException("Failed to create XA pool: " + e.getMessage(), e);

@@ -132,7 +132,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.server.databaseBudgets.jdbcTest.match.jdbcUrlPattern=jdbc:h2:mem:ojp_budget_test* -Dojp.server.databaseBudgets.jdbcTest.maxTotalConnections=10 -Dojp.server.databaseBudgets.jdbcTest.priorities.username.sa.weight=1" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start

@@ -15,7 +15,7 @@ flowchart TD
     end
     subgraph server["ojp-server"]
         s3["3. Find the branch's backend transaction resource"]
-        s5["5. Record prepared state and return the vote"]
+        s5["5. Return the database's prepare vote"]
         s8["8. Resolve the same branch and request commit"]
         s10["10. Mark completion and reset backend transaction state"]
     end
@@ -34,6 +34,7 @@ flowchart TD
 ## Essential notes
 
 - **4–6:** A prepared vote keeps the branch pending until the coordinator's decision. A read-only vote needs no second phase; the pooled registry immediately completes and releases that branch's backend.
+- **5:** OJP forwards prepare to the database; it does not write a durable XA transaction log. Pooled mode only updates the branch's in-memory state to prepared for lifecycle tracking. The database owns durable prepared state; the transaction manager owns the global decision.
 - **6–9:** For rollback, the coordinator sends rollback instead of commit and the database undoes the branch. Rollback can also occur without prepare. One-phase commit skips steps 1–5 and sends commit with the one-phase flag after branch work ends.
 - **10–11:** Normal pooled commit/rollback marks the branch complete and sanitizes its backend, but keeps it attached until [XA connection closure](XA_CLOSE_FLOW.md). Completion is not itself pool return.
 - **1–11:** OJP relays participant operations; it does not choose the global outcome. Failures and in-doubt branches require coordinator handling and [recovery](XA_RECOVERY_FLOW.md), not an assumption that all participants committed.

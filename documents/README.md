@@ -114,8 +114,13 @@ Located in [targeted-problem/](targeted-problem/):
 ### Design Documents
 
 Located in [designs/](designs/):
-- [Main Flow Documentation Method](designs/MAIN_FLOWS.md) - Conventions and scope for concise component-level flow diagrams
-- [executeQuery Flow](designs/EXECUTE_QUERY_FLOW.md) - Query execution, row streaming, and result closure in 12 steps
+- [Simplified Flow Diagrams](designs/MAIN_FLOWS.md) - Documentation method and main-flow index
+- [Connect — Simplified Flow Diagram](designs/CONNECT_FLOW.md) - Datasource setup and lazy sessions
+- [executeQuery — Simplified Flow Diagram](designs/EXECUTE_QUERY_FLOW.md) - Query execution, row streaming, and result closure
+- [executeUpdate — Simplified Flow Diagram](designs/EXECUTE_UPDATE_FLOW.md) - SQL changes and affected-row counts
+- [Commit / rollback — Simplified Flow Diagram](designs/TRANSACTION_FLOW.md) - Transaction completion
+- [Close connection — Simplified Flow Diagram](designs/CLOSE_CONNECTION_FLOW.md) - Session cleanup and resource release
+- [Call Proxy — Simplified Flow Diagram](designs/CALL_PROXY_FLOW.md) - Shared remote JDBC operations
 - [Slow Query Segregation](designs/SLOW_QUERY_SEGREGATION.md) (strongly recommended for mixed fast+slow workloads; usually unnecessary for pure OLTP or pure OLAP)
 - [StatementServiceImpl Action Pattern Migration](designs/STATEMENTSERVICE_ACTION_PATTERN_MIGRATION.md)
 

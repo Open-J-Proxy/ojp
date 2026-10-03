@@ -1,4 +1,4 @@
-# executeQuery flow
+# executeQuery — Simplified Flow Diagram
 
 An application requests rows through a statement or prepared statement on an already-open OJP connection. This successful path covers normal forward-only reading through result closure, using a server-managed pool, without query caching, read replicas, or SQL enhancement.
 
@@ -54,4 +54,4 @@ Optional features change the middle of the flow: a query-cache hit skips databas
 - [Server row streaming](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/session/ResultSetHelper.java) and [driver row reading](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/ResultSet.java).
 - [Driver remote cursor closure](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/RemoteProxyResultSet.java), [server resource calls](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/resource/CallResourceAction.java), and [session cleanup](../../ojp-server/src/main/java/org/openjproxy/grpc/server/Session.java).
 
-See the [flow-documentation method](MAIN_FLOWS.md) for the conventions used here.
+See [Simplified Flow Diagrams](MAIN_FLOWS.md) for the conventions and other main flows.

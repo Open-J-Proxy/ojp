@@ -1,6 +1,6 @@
-# Documenting OJP main flows
+# OJP Simplified Flow Diagrams
 
-These overviews help developers understand what happens across components without reading implementation details. Start with the [executeQuery example](EXECUTE_QUERY_FLOW.md).
+Simplified Flow Diagrams help developers understand what happens across components without reading implementation details. Start with the [executeQuery Simplified Flow Diagram](EXECUTE_QUERY_FLOW.md).
 
 ## Method
 
@@ -15,14 +15,15 @@ These overviews help developers understand what happens across components withou
 - After the diagram, add only essential numbered notes: configuration that changes behavior, important exceptions, or resource lifetime.
 - Finish with a few source links for verification. Keep implementation names there, not in the diagram.
 
-## Main flows to cover
+## Main flows
 
 | Flow | Useful boundary |
 |---|---|
-| Connect | Application requests a connection → driver can send database work |
-| executeQuery | Application requests rows → rows are read and the result is closed |
-| executeUpdate | Application sends a change → affected-row count is returned |
-| Commit / rollback | Application ends a transaction → server completes it at the database |
-| Close connection | Application closes its connection → server releases session resources |
+| [Connect](CONNECT_FLOW.md) | Application requests a connection → driver can send database work |
+| [executeQuery](EXECUTE_QUERY_FLOW.md) | Application requests rows → rows are read and the result is closed |
+| [executeUpdate](EXECUTE_UPDATE_FLOW.md) | Application sends a change → affected-row count is returned |
+| [Commit / rollback](TRANSACTION_FLOW.md) | Application ends a transaction → server completes it at the database |
+| [Close connection](CLOSE_CONNECTION_FLOW.md) | Application closes its connection → server releases session resources |
+| [Call Proxy](CALL_PROXY_FLOW.md) | A JDBC operation needs remote access → server invokes it and returns the result |
 
-Only **executeQuery** is illustrated here; the other entries identify follow-up overviews, not existing diagrams. Keep optional features and failure recovery in short notes or separate flows when they would obscure the main path.
+Call Proxy is the shared remote-call path used by many operations, including metadata, statement settings, and cursor operations. Keep optional features and failure recovery in short notes or separate flows when they would obscure the main path.

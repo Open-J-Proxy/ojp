@@ -166,8 +166,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [build-test]
-
     steps:
       - name: Git checkout
         uses: actions/checkout@v5

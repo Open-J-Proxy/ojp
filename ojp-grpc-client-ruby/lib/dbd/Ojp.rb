@@ -8,6 +8,12 @@ module DBI
         "Ojp"
       end
 
+      class NativeValue
+        def self.parse(value)
+          value
+        end
+      end
+
       class Driver < DBI::BaseDriver
         def initialize
           super(DBI::VERSION)
@@ -16,14 +22,15 @@ module DBI
         end
 
         def connect(dbname, user, auth, attributes)
-          fields = CSV.parse_line(dbname.to_s)
+          records = CSV.parse(dbname.to_s)
+          fields = records.first if records.length == 1
           unless fields && fields.length == 2 && fields.all? { |value| !value.to_s.strip.empty? }
             raise DBI::InterfaceError, "OJP DSN must contain endpoint and database URL as CSV fields"
           end
 
           endpoint = fields[0].strip
           url = fields[1].strip
-          client = Ojp::Client.new(
+          client = ::Ojp::Client.new(
             endpoint: endpoint,
             url: url,
             user: user,
@@ -32,6 +39,8 @@ module DBI
           database = Database.new(client, attributes, self)
           @mutex.synchronize { @connections << database }
           database
+        rescue CSV::MalformedCSVError => error
+          raise DBI::InterfaceError, "invalid OJP DSN CSV: #{error.message}"
         end
 
         def disconnect_all
@@ -40,7 +49,14 @@ module DBI
             @connections = []
             active
           end
-          connections.each(&:disconnect)
+          errors = connections.filter_map do |connection|
+            connection.disconnect
+            nil
+          rescue StandardError => error
+            error
+          end
+          raise errors.first unless errors.empty?
+
           true
         end
 
@@ -133,7 +149,13 @@ module DBI
 
         def column_info
           @columns.map do |name|
-            DBI::ColumnInfo.new(name: name, type_name: nil, precision: nil, scale: nil, nullable: true)
+            DBI::ColumnInfo.new(
+              name: name,
+              dbi_type: NativeValue,
+              precision: nil,
+              scale: nil,
+              nullable: true
+            )
           end
         end
       end

@@ -13,6 +13,7 @@ Higher levels are not implemented: broader parameter coverage, server result pag
 Add this module and its dependencies to the Ruby application's bundle. The DBI DSN contains two CSV fields: the OJP endpoint and the real JDBC URL. Username and password are passed through DBI's normal connection arguments.
 
 ```ruby
+require "csv"
 require "dbi"
 require "dbd/Ojp"
 
@@ -49,7 +50,6 @@ Start `ojp-server` with Java 25, `-Duser.timezone=UTC`, and the H2 JDBC driver a
 The generated Ruby stubs are checked in under `lib/`. Regenerate them with:
 
 ```bash
-bundle exec grpc_tools_ruby_protoc --version
 ./generate-proto.sh
 ./generate-proto.sh --check
 ```

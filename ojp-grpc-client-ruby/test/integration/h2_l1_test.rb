@@ -21,8 +21,6 @@ class H2L1IntegrationTest < Minitest::Test
     assert_equal [1, "before"], query_one(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 1)
     assert_equal 1, dbh.do("UPDATE #{table} SET name = ? WHERE id = ?", "after", 1)
     assert_equal [1, "after"], query_one(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 1)
-    assert_nil query_one(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 2)
-    assert_equal 1, dbh.do("DELETE FROM #{table} WHERE id = ?", 1)
 
     duplicate_error = assert_raises(Ojp::SqlError) do
       dbh.do("INSERT INTO #{table} (id, name) VALUES (1, 'duplicate')")
@@ -32,11 +30,22 @@ class H2L1IntegrationTest < Minitest::Test
     syntax_error = assert_raises(Ojp::SqlError) { dbh.execute("THIS IS NOT VALID SQL") }
     assert_equal "42001", syntax_error.sql_state
 
+    assert_empty_result(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 2)
+    assert_equal 1, dbh.do("DELETE FROM #{table} WHERE id = ?", 1)
+    assert_empty_result(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 1)
+
     assert_equal 0, dbh.do("DROP TABLE IF EXISTS #{table}")
+    table = nil
     assert dbh.disconnect
     assert_raises(DBI::Error) { dbh.ping }
   ensure
-    dbh&.disconnect if dbh&.connected?
+    if dbh&.connected?
+      begin
+        dbh.do("DROP TABLE IF EXISTS #{table}") if table
+      ensure
+        dbh.disconnect if dbh.connected?
+      end
+    end
   end
 
   def test_connection_fixture_has_one_h2_configuration
@@ -48,6 +57,13 @@ class H2L1IntegrationTest < Minitest::Test
   def query_one(dbh, sql, *parameters)
     dbh.execute(sql, *parameters) do |statement|
       statement.fetch
+    end
+  end
+
+  def assert_empty_result(dbh, sql, *parameters)
+    dbh.execute(sql, *parameters) do |statement|
+      assert_equal 2, statement.column_names.length
+      assert_nil statement.fetch
     end
   end
 

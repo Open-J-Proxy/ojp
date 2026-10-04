@@ -14,6 +14,7 @@ GEM
     dbi (0.4.5)
       deprecated (= 2.0.1)
     deprecated (2.0.1)
+    drb (2.2.3)
     google-protobuf (4.36.2-x86_64-linux-gnu)
       bigdecimal
       rake (~> 13.3)
@@ -23,6 +24,10 @@ GEM
       google-protobuf (>= 3.25, < 5.0)
       googleapis-common-protos-types (~> 1.0)
     grpc-tools (1.84.0)
+    minitest (6.0.6)
+      drb (~> 2.0)
+      prism (~> 1.5)
+    prism (1.9.0)
     rake (13.4.2)
 
 PLATFORMS
@@ -30,6 +35,7 @@ PLATFORMS
 
 DEPENDENCIES
   grpc-tools (~> 1.84)
+  minitest (~> 6.0)
   ojp-grpc-client!
 
 BUNDLED WITH

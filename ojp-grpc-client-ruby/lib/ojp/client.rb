@@ -27,6 +27,7 @@ module Ojp
       raise ArgumentError, "OJP endpoint is required" if endpoint.to_s.strip.empty?
       raise ArgumentError, "database URL is required" if url.to_s.strip.empty?
 
+      @endpoint = endpoint
       @url = url
       @user = user || ""
       @password = password || ""
@@ -37,7 +38,10 @@ module Ojp
         url: @url,
         user: @user,
         password: @password,
-        clientUUID: CLIENT_UUID
+        clientUUID: CLIENT_UUID,
+        serverEndpoints: [@endpoint],
+        clusterHealth: "",
+        isXA: false
       ))
       raise IOError, "OJP server returned an empty session" unless @session
     rescue GRPC::BadStatus => error
@@ -180,7 +184,9 @@ module Ojp
       when :bytes_value then value.bytes_value
       when :timestamp_value
         instant = value.timestamp_value.instant
-        Time.at(instant.seconds, instant.nanos, :nanosecond).utc
+        timestamp = Time.at(instant.seconds, instant.nanos, :nanosecond)
+        timezone = value.timestamp_value.timezone
+        timezone.match?(/\A(?:[+-]\d{2}:\d{2}|UTC)\z/) ? timestamp.getlocal(timezone) : timestamp.utc
       when :date_value
         Date.new(value.date_value.year, value.date_value.month, value.date_value.day)
       when :time_value

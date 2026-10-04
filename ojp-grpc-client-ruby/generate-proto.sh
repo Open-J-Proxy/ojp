@@ -28,7 +28,8 @@ if [[ "$mode" == "--check" ]]; then
   output_dir="$temporary_dir/generated"
 fi
 mkdir -p "$output_dir"
-grpc_tools_ruby_protoc "${includes[@]}" \
+compiler="$(bundle exec ruby -e 'print Gem.bin_path("grpc-tools", "grpc_tools_ruby_protoc")')"
+"$compiler" "${includes[@]}" \
   --ruby_out="$output_dir" \
   --grpc_out="$output_dir" \
   "$proto_dir/StatementService.proto" \

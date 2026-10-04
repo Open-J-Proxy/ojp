@@ -6,7 +6,7 @@ Gem::Specification.new do |spec|
   spec.authors = ["Open J Proxy contributors"]
   spec.license = "Apache-2.0"
   spec.required_ruby_version = ">= 3.2"
-  spec.files = Dir["lib/**/*.rb"]
+  spec.files = Dir["lib/**/*.rb", "README.md", "generate-proto.sh"]
   spec.require_paths = ["lib"]
 
   spec.add_dependency "dbi", "~> 0.4"
@@ -15,4 +15,5 @@ Gem::Specification.new do |spec|
   spec.add_dependency "grpc", "~> 1.84"
 
   spec.add_development_dependency "grpc-tools", "~> 1.84"
+  spec.add_development_dependency "minitest", "~> 6.0"
 end

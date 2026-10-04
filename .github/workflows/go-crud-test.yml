@@ -19,6 +19,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   go-crud-test:
     name: Go and Dart L1 CRUD Test against H2

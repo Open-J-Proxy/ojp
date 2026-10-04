@@ -21,42 +21,32 @@ import (
 )
 
 var (
-	ErrClientClosed     = errors.New("OJP client is closed")
-	ErrConnectionClosed = errors.New("OJP connection is closed")
+	errClientClosed     = errors.New("OJP client is closed")
+	errConnectionClosed = errors.New("OJP connection is closed")
 )
 
-type Config struct {
+type connectionConfig struct {
 	URL        string
 	User       string
 	Password   string
 	Properties map[string]string
 }
 
-type Client struct {
+type rpcClient struct {
 	rpc    pb.StatementServiceClient
 	closer func() error
 	mu     sync.RWMutex
 	closed bool
 }
 
-type Connection struct {
-	client  *Client
+type rpcConnection struct {
+	client  *rpcClient
 	session *pb.SessionInfo
 	mu      sync.Mutex
 	closed  bool
 }
 
-type SessionState struct {
-	ClientUUID        string
-	ConnHash          string
-	SessionUUID       string
-	TargetServer      string
-	TransactionUUID   string
-	TransactionStatus string
-	Closed            bool
-}
-
-type Result struct {
+type queryResult struct {
 	Columns []string
 	Rows    [][]any
 }
@@ -65,7 +55,7 @@ var processUUIDOnce sync.Once
 var processUUID string
 var processUUIDErr error
 
-func NewClient(endpoint string) (*Client, error) {
+func newRPCClient(endpoint string) (*rpcClient, error) {
 	endpoint = strings.TrimSpace(endpoint)
 	host, port, err := net.SplitHostPort(endpoint)
 	if err != nil || host == "" {
@@ -79,14 +69,14 @@ func NewClient(endpoint string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create OJP gRPC client: %w", err)
 	}
-	return newClient(pb.NewStatementServiceClient(conn), conn.Close), nil
+	return newRPCClientWithRPC(pb.NewStatementServiceClient(conn), conn.Close), nil
 }
 
-func newClient(rpc pb.StatementServiceClient, closer func() error) *Client {
-	return &Client{rpc: rpc, closer: closer}
+func newRPCClientWithRPC(rpc pb.StatementServiceClient, closer func() error) *rpcClient {
+	return &rpcClient{rpc: rpc, closer: closer}
 }
 
-func (c *Client) Connect(ctx context.Context, config Config) (*Connection, error) {
+func (c *rpcClient) connect(ctx context.Context, config connectionConfig) (*rpcConnection, error) {
 	if strings.TrimSpace(config.URL) == "" {
 		return nil, errors.New("database URL is required")
 	}
@@ -111,7 +101,7 @@ func (c *Client) Connect(ctx context.Context, config Config) (*Connection, error
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closed {
-		return nil, ErrClientClosed
+		return nil, errClientClosed
 	}
 	var trailer metadata.MD
 	session, err := c.rpc.Connect(ctx, &pb.ConnectionDetails{
@@ -127,10 +117,10 @@ func (c *Client) Connect(ctx context.Context, config Config) (*Connection, error
 	if session == nil {
 		return nil, errors.New("OJP server returned an empty session")
 	}
-	return &Connection{client: c, session: cloneSession(session)}, nil
+	return &rpcConnection{client: c, session: cloneSession(session)}, nil
 }
 
-func (c *Client) Close() error {
+func (c *rpcClient) close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -143,20 +133,16 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Connection) ExecuteUpdate(ctx context.Context, sql string) (int64, error) {
-	return c.executeUpdate(ctx, sql, nil)
-}
-
-func (c *Connection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
+func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return 0, ErrConnectionClosed
+		return 0, errConnectionClosed
 	}
 	c.client.mu.RLock()
 	defer c.client.mu.RUnlock()
 	if c.client.closed {
-		return 0, ErrClientClosed
+		return 0, errClientClosed
 	}
 
 	var trailer metadata.MD
@@ -182,20 +168,16 @@ func (c *Connection) executeUpdate(ctx context.Context, sql string, parameters [
 	return int64(updateCount.IntValue), nil
 }
 
-func (c *Connection) Query(ctx context.Context, sql string) (*Result, error) {
-	return c.query(ctx, sql, nil)
-}
-
-func (c *Connection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*Result, error) {
+func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, ErrConnectionClosed
+		return nil, errConnectionClosed
 	}
 	c.client.mu.RLock()
 	defer c.client.mu.RUnlock()
 	if c.client.closed {
-		return nil, ErrClientClosed
+		return nil, errClientClosed
 	}
 
 	stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
@@ -207,7 +189,7 @@ func (c *Connection) query(ctx context.Context, sql string, parameters []*pb.Par
 		return nil, grpcError(ctx, err, nil)
 	}
 
-	result := &Result{}
+	result := &queryResult{}
 	for {
 		message, recvErr := stream.Recv()
 		if errors.Is(recvErr, io.EOF) {
@@ -237,24 +219,7 @@ func (c *Connection) query(ctx context.Context, sql string, parameters []*pb.Par
 	}
 }
 
-func (c *Connection) State() SessionState {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	state := SessionState{
-		ClientUUID:   c.session.GetClientUUID(),
-		ConnHash:     c.session.GetConnHash(),
-		SessionUUID:  c.session.GetSessionUUID(),
-		TargetServer: c.session.GetTargetServer(),
-		Closed:       c.closed,
-	}
-	if transaction := c.session.GetTransactionInfo(); transaction != nil {
-		state.TransactionUUID = transaction.GetTransactionUUID()
-		state.TransactionStatus = transaction.GetTransactionStatus().String()
-	}
-	return state
-}
-
-func (c *Connection) Close(ctx context.Context) error {
+func (c *rpcConnection) close(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -263,7 +228,7 @@ func (c *Connection) Close(ctx context.Context) error {
 	c.client.mu.RLock()
 	defer c.client.mu.RUnlock()
 	if c.client.closed {
-		return ErrClientClosed
+		return errClientClosed
 	}
 
 	var trailer metadata.MD
@@ -280,7 +245,13 @@ func (c *Connection) Close(ctx context.Context) error {
 	return nil
 }
 
-func (c *Connection) applySession(session *pb.SessionInfo) {
+func (c *rpcConnection) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+func (c *rpcConnection) applySession(session *pb.SessionInfo) {
 	if session != nil {
 		c.session = cloneSession(session)
 	}

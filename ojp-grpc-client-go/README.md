@@ -29,10 +29,9 @@ Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATI
 
 ```text
 ojp-grpc-client-go/
-  client/                     # public single-endpoint API and H2 L1 integration tests
+  client/                      # database/sql driver and H2 L1 integration tests
   cmd/ojp-grpc-client/        # executable entrypoint (main package)
-  internal/client/            # client-side connection/load-balancing helpers
-  internal/gen/               # generated protobuf/gRPC Go stubs
+  internal/gen/                # generated protobuf/gRPC Go stubs
   generate-proto.sh           # regenerate or verify the Go protocol bindings
   go.mod
   go.sum
@@ -132,9 +131,7 @@ The data source name (DSN) is a CSV record containing the OJP JDBC URL, database
 
 `database/sql` manages OJP sessions and gRPC connections through its normal pool lifecycle. Positional parameters support nil, booleans, integers, floating-point values, strings, byte slices, and timestamps; named parameters and other driver values are not supported yet. `BeginTx`, `Commit`, and `Rollback` use OJP's transaction RPCs. SQL failures with OJP error trailers are returned as `*client.SQLError`.
 
-### Lower-level API
-
-The package also retains the direct `NewClient` / `Connect` API for callers that need OJP session state and RPC-oriented operations. The `database/sql` driver is the recommended API for ordinary database access.
+`database/sql` is the only supported Go database access API. The generated protocol bindings remain internal implementation details.
 
 ## Run the Client
 

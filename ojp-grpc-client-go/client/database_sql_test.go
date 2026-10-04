@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"io"
 	"strings"
 	"testing"
 
 	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 func TestSQLConnectorShouldParseOjpDataSourceName(t *testing.T) {
@@ -112,9 +114,9 @@ func TestDatabaseSQLDriverShouldExecuteQueryAndTransactions(t *testing.T) {
 	}
 	connector := &sqlConnector{
 		endpoint: "localhost:1059",
-		config:   Config{URL: "jdbc:h2:mem:test", User: "sa"},
-		clientFactory: func(string) (*Client, error) {
-			return newClient(rpc, func() error { return nil }), nil
+		config:   connectionConfig{URL: "jdbc:h2:mem:test", User: "sa"},
+		clientFactory: func(string) (*rpcClient, error) {
+			return newRPCClientWithRPC(rpc, func() error { return nil }), nil
 		},
 	}
 	db := sql.OpenDB(connector)
@@ -169,8 +171,8 @@ func TestDatabaseSQLDriverShouldExecuteQueryAndTransactions(t *testing.T) {
 }
 
 func TestDatabaseSQLDriverShouldRejectUnsupportedArgumentsAndOptions(t *testing.T) {
-	connection := &sqlConn{connection: &Connection{
-		client:  newClient(&stubStatementService{}, func() error { return nil }),
+	connection := &sqlConn{connection: &rpcConnection{
+		client:  newRPCClientWithRPC(&sqlTestRPC{}, func() error { return nil }),
 		session: &pb.SessionInfo{},
 	}}
 	if _, err := connection.ExecContext(context.Background(), "UPDATE sample SET id=:id", []driver.NamedValue{{Name: "id", Ordinal: 1, Value: int64(1)}}); err == nil {
@@ -225,3 +227,24 @@ func (s *sqlTestRPC) CommitTransaction(_ context.Context, session *pb.SessionInf
 func (s *sqlTestRPC) RollbackTransaction(_ context.Context, session *pb.SessionInfo, _ ...grpc.CallOption) (*pb.SessionInfo, error) {
 	return s.rollback(session)
 }
+
+type stubQueryStream struct {
+	results []*pb.OpResult
+	index   int
+}
+
+func (s *stubQueryStream) Recv() (*pb.OpResult, error) {
+	if s.index == len(s.results) {
+		return nil, io.EOF
+	}
+	result := s.results[s.index]
+	s.index++
+	return result, nil
+}
+
+func (*stubQueryStream) Header() (metadata.MD, error) { return metadata.MD{}, nil }
+func (*stubQueryStream) Trailer() metadata.MD         { return metadata.MD{} }
+func (*stubQueryStream) CloseSend() error             { return nil }
+func (*stubQueryStream) Context() context.Context     { return context.Background() }
+func (*stubQueryStream) SendMsg(any) error            { return nil }
+func (*stubQueryStream) RecvMsg(any) error            { return nil }

@@ -39,8 +39,8 @@ func (sqlDriver) OpenConnector(name string) (driver.Connector, error) {
 
 type sqlConnector struct {
 	endpoint      string
-	config        Config
-	clientFactory func(string) (*Client, error)
+	config        connectionConfig
+	clientFactory func(string) (*rpcClient, error)
 }
 
 func sqlConnectorFor(dataSourceName string) (*sqlConnector, error) {
@@ -86,7 +86,7 @@ func sqlConnectorFor(dataSourceName string) (*sqlConnector, error) {
 	}
 	return &sqlConnector{
 		endpoint: endpoint,
-		config: Config{
+		config: connectionConfig{
 			URL:      backendURL,
 			User:     strings.TrimSpace(record[1]),
 			Password: record[2],
@@ -97,15 +97,15 @@ func sqlConnectorFor(dataSourceName string) (*sqlConnector, error) {
 func (c *sqlConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	clientFactory := c.clientFactory
 	if clientFactory == nil {
-		clientFactory = NewClient
+		clientFactory = newRPCClient
 	}
 	client, err := clientFactory(c.endpoint)
 	if err != nil {
 		return nil, err
 	}
-	connection, err := client.Connect(ctx, c.config)
+	connection, err := client.connect(ctx, c.config)
 	if err != nil {
-		_ = client.Close()
+		_ = client.close()
 		return nil, err
 	}
 	return &sqlConn{client: client, connection: connection}, nil
@@ -116,8 +116,8 @@ func (c *sqlConnector) Driver() driver.Driver {
 }
 
 type sqlConn struct {
-	client     *Client
-	connection *Connection
+	client     *rpcClient
+	connection *rpcConnection
 }
 
 func (c *sqlConn) Prepare(query string) (driver.Stmt, error) {
@@ -128,8 +128,8 @@ func (c *sqlConn) Prepare(query string) (driver.Stmt, error) {
 }
 
 func (c *sqlConn) Close() error {
-	err := c.connection.Close(context.Background())
-	clientErr := c.client.Close()
+	err := c.connection.close(context.Background())
+	clientErr := c.client.close()
 	if err != nil {
 		return err
 	}
@@ -189,12 +189,12 @@ func (c *sqlConn) QueryContext(ctx context.Context, query string, args []driver.
 }
 
 func (c *sqlConn) Ping(ctx context.Context) error {
-	_, err := c.connection.Query(ctx, "SELECT 1")
+	_, err := c.connection.query(ctx, "SELECT 1", nil)
 	return err
 }
 
 func (c *sqlConn) IsValid() bool {
-	return !c.connection.State().Closed
+	return !c.connection.isClosed()
 }
 
 func (c *sqlConn) ResetSession(context.Context) error {
@@ -206,18 +206,18 @@ func (c *sqlConn) ResetSession(context.Context) error {
 
 func (c *sqlConn) checkOpen() error {
 	if c.connection.closed {
-		return ErrConnectionClosed
+		return errConnectionClosed
 	}
 	c.client.mu.RLock()
 	defer c.client.mu.RUnlock()
 	if c.client.closed {
-		return ErrClientClosed
+		return errClientClosed
 	}
 	return nil
 }
 
 type sqlStmt struct {
-	connection *Connection
+	connection *rpcConnection
 	query      string
 }
 
@@ -305,7 +305,7 @@ func (r sqlResult) RowsAffected() (int64, error) {
 }
 
 type sqlTx struct {
-	connection *Connection
+	connection *rpcConnection
 	done       bool
 }
 
@@ -327,10 +327,10 @@ func (t *sqlTx) finish(commit bool) error {
 	c.client.mu.RLock()
 	defer c.client.mu.RUnlock()
 	if c.client.closed {
-		return ErrClientClosed
+		return errClientClosed
 	}
 	if c.closed {
-		return ErrConnectionClosed
+		return errConnectionClosed
 	}
 	ctx := context.Background()
 	var trailer metadata.MD

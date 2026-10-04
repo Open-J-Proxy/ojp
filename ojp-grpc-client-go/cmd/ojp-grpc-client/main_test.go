@@ -1,15 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"io"
-	"os"
-	"strings"
 	"testing"
-
-	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
-	"google.golang.org/grpc/metadata"
 )
 
 func TestSelectCsvLineShouldReturnRequestedNonEmptyLine(t *testing.T) {
@@ -76,80 +68,4 @@ func TestParseOjpCsvLineShouldFailForInvalidPrefix(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid prefix, got nil")
 	}
-}
-
-func TestDrainQueryStreamShouldPrintAllRowsUntilEOF(t *testing.T) {
-	stream := &mockQueryStream{
-		msgs: []*pb.OpResult{
-			{Type: pb.ResultType_RESULT_SET_DATA, Uuid: "u1"},
-			{Type: pb.ResultType_RESULT_SET_DATA, Uuid: "u2"},
-		},
-	}
-
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe creation failed: %v", err)
-	}
-	os.Stdout = w
-
-	results, err := drainQueryStream(stream)
-	if err != nil {
-		t.Fatalf("drainQueryStream returned error: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-
-	_ = w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
-	out := buf.String()
-
-	if !strings.Contains(out, "uuid=u1") {
-		t.Fatalf("expected output to contain uuid=u1, got: %s", out)
-	}
-	if !strings.Contains(out, "uuid=u2") {
-		t.Fatalf("expected output to contain uuid=u2, got: %s", out)
-	}
-}
-
-type mockQueryStream struct {
-	msgs []*pb.OpResult
-	idx  int
-}
-
-func (m *mockQueryStream) Recv() (*pb.OpResult, error) {
-	if m.idx >= len(m.msgs) {
-		return nil, io.EOF
-	}
-	msg := m.msgs[m.idx]
-	m.idx++
-	return msg, nil
-}
-
-func (m *mockQueryStream) Header() (metadata.MD, error) {
-	return metadata.MD{}, nil
-}
-
-func (m *mockQueryStream) Trailer() metadata.MD {
-	return metadata.MD{}
-}
-
-func (m *mockQueryStream) CloseSend() error {
-	return nil
-}
-
-func (m *mockQueryStream) Context() context.Context {
-	return context.Background()
-}
-
-func (m *mockQueryStream) SendMsg(any) error {
-	return nil
-}
-
-func (m *mockQueryStream) RecvMsg(any) error {
-	return nil
 }

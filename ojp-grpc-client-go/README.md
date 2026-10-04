@@ -70,7 +70,9 @@ jdbc:ojp[localhost:1059]_postgresql://localhost:5432/defaultdb,testuser,testpass
 
 ## Using as a Library
 
-The primary Go API follows the standard `database/sql` package. Importing the client registers the `ojp` driver:
+The Go client uses `database/sql` because it is Go's standard-library API for accessing SQL databases. It gives Go applications a familiar, driver-independent interface for queries, transactions, and connection pooling, while the OJP driver handles communication with the server. This follows the [OJP multi-language client specification](https://github.com/Open-J-Proxy/ojp/blob/main/documents/multi-language-client-spec/CLIENT_SPEC.md), which identifies `database/sql` as Go's standard database-access API. See the [Go database access documentation](https://go.dev/doc/database/) for details.
+
+Importing the client registers the `ojp` driver:
 
 ### `database/sql` API
 

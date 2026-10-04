@@ -633,7 +633,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     if (is_query_sql(statement->sql)) {
         grpc::ClientContext context;
         context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-        auto reader = connection->stub->ExecuteQuery(&context, request);
+        auto reader = connection->stub->executeQuery(&context, request);
         OpResult result;
         while (reader->Read(&result)) {
             if (result.has_session()) {
@@ -671,7 +671,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     OpResult result;
-    const auto status = connection->stub->ExecuteUpdate(&context, request, &result);
+    const auto status = connection->stub->executeUpdate(&context, request, &result);
     if (!status.ok()) {
         return fail_grpc(statement, status, context);
     }
@@ -729,7 +729,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     SessionInfo session;
-    const auto status = connection->stub->Connect(&context, details, &session);
+    const auto status = connection->stub->connect(&context, details, &session);
     if (!status.ok()) {
         connection->stub.reset();
         connection->channel.reset();
@@ -752,7 +752,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     com::openjproxy::grpc::SessionTerminationStatus response;
-    const auto status = connection->stub->TerminateSession(&context, connection->session, &response);
+    const auto status = connection->stub->terminateSession(&context, connection->session, &response);
     if (!status.ok()) {
         return fail_grpc(connection, status, context);
     }
@@ -1253,9 +1253,10 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};
     if (function_id == SQL_API_ALL_FUNCTIONS) {
-        std::fill(supported, supported + SQL_API_ALL_FUNCTIONS_SIZE, SQL_FALSE);
+        constexpr SQLUSMALLINT function_count = 100;
+        std::fill(supported, supported + function_count, SQL_FALSE);
         for (const auto function : functions) {
-            if (function < SQL_API_ALL_FUNCTIONS_SIZE) {
+            if (function < function_count) {
                 supported[function] = SQL_TRUE;
             }
         }

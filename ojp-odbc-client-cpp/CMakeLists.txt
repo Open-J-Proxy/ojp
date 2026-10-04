@@ -41,17 +41,17 @@ add_custom_command(
     OUTPUT ${PROTO_SRCS} ${PROTO_HDRS}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${GENERATED_DIR}/google/type"
     COMMAND $<TARGET_FILE:protobuf::protoc>
-        --proto_path="${OJP_PROTO_DIR}"
-        --proto_path="${GOOGLEAPIS_PROTO_DIR}"
+        "--proto_path=${OJP_PROTO_DIR}"
+        "--proto_path=${GOOGLEAPIS_PROTO_DIR}"
         ${PROTO_INCLUDE_ARGS}
-        --cpp_out="${GENERATED_DIR}"
+        "--cpp_out=${GENERATED_DIR}"
         "${PROTO_FILE}" "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
     COMMAND $<TARGET_FILE:protobuf::protoc>
-        --proto_path="${OJP_PROTO_DIR}"
-        --proto_path="${GOOGLEAPIS_PROTO_DIR}"
+        "--proto_path=${OJP_PROTO_DIR}"
+        "--proto_path=${GOOGLEAPIS_PROTO_DIR}"
         ${PROTO_INCLUDE_ARGS}
-        --grpc_out="${GENERATED_DIR}"
-        --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+        "--grpc_out=${GENERATED_DIR}"
+        "--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
         "${PROTO_FILE}"
     DEPENDS "${PROTO_FILE}" "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
     VERBATIM)

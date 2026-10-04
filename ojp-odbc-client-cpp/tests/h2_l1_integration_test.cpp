@@ -156,7 +156,10 @@ void assert_h2_sql_error(SQLHSTMT statement, const std::string& sql, const char*
     if (std::string(reinterpret_cast<const char*>(actual_state)) != sql_state ||
         native_error == 0) {
         throw std::runtime_error("expected SQLSTATE " + std::string(sql_state) +
-                                 " and a vendor code in the ODBC diagnostic");
+                                 " with a vendor code, got " +
+                                 std::string(reinterpret_cast<const char*>(actual_state)) +
+                                 " and vendor code " + std::to_string(native_error) +
+                                 ": " + reinterpret_cast<const char*>(message));
     }
 }
 

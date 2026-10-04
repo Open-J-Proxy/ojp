@@ -97,6 +97,9 @@ The following table records the implemented target level and its real-server int
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-grpc-client-go/client/h2_l1_integration_test.go` |
+| **C++ ODBC** | H2 | **L1** | `ojp-odbc-client-cpp/tests/h2_l1_integration_test.cpp` |
 | **PHP (`PDO`-compatible)** | H2 | **L1** | `ojp-grpc-client-php/tests/h2_l1_integration.php` |
+| **Python (DB-API 2.0)** | H2 | **L1** | `ojp-grpc-client-python/tests/test_h2.py` |
+| **Ruby DBI** | H2 | **L1** | `ojp-grpc-client-ruby/test/integration/h2_l1_test.rb` |
 
 The PHP client currently exposes the L1 operations through a userland `PDO` subclass; it is not a native PDO driver. It targets a single OJP endpoint and does not implement L2+ behavior.

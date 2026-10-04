@@ -16,11 +16,13 @@
 # 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
 # 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
 # 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
-# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 (needs: build-test)
+# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 (independent)
 # 12. notify-integration: Triggers integration repo workflow (needs: build-test)
 #
 # SEQUENTIAL EXECUTION:
-# All specialized test jobs depend on build-test completing successfully.
+# Database-specific jobs depend on build-test completing successfully. The
+# native C++ ODBC H2 test job runs independently so it starts while the Java
+# matrix is running.
 # This ensures that expensive database setups only run if basic H2 tests pass,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
@@ -1913,7 +1915,6 @@ jobs:
   # ===========================================================================
   cpp-odbc-test:
     name: C++ ODBC H2 L1 Tests
-    needs: [build-test]
     runs-on: ubuntu-latest
     permissions:
       contents: read

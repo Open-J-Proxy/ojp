@@ -18,14 +18,17 @@
 # 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
 # 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
 # 11. notify-integration: Triggers integration repo workflow (needs: build-test)
+# 12. python-h2-l1: Independent Python DB-API unit and H2 integration tests
 #
 # SEQUENTIAL EXECUTION:
-# Java database-specific test jobs depend on build-test completing successfully.
+# Specialized Java test jobs depend on build-test completing successfully.
 # This ensures that expensive database setups only run if basic H2 tests pass,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
 # - Resource efficiency (avoids running expensive tests when basics fail)
 # - Cost savings (reduces CI minutes when tests would fail anyway)
+#
+# Python tests build their own server and run independently of the Java gate.
 #
 # This sequential execution works on ALL branches (PRs, main, feature branches)
 # because all jobs are defined in a single workflow file.
@@ -244,6 +247,92 @@ jobs:
           path: |
             /tmp/ruby-h2-l1-test.log
             /tmp/ojp-server.log
+          retention-days: 7
+
+  # ===========================================================================
+  # Python DB-API 2.0: all unit and real-server H2 integration tests
+  # ===========================================================================
+  python-h2-l1:
+    name: Python DB-API Tests against H2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Download JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Install Python client
+        working-directory: ojp-grpc-client-python
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check Python protobuf generation
+        working-directory: ojp-grpc-client-python
+        run: ojp-generate-proto --check
+
+      - name: Start OJP server
+        run: |
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*-shaded.jar' -print -quit)
+          test -n "$jar"
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" > /tmp/ojp-python-server.log 2>&1 &
+          echo "$!" > /tmp/ojp-python-server.pid
+          for i in $(seq 1 60); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-python-server.log; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/ojp-python-server.pid)" 2>/dev/null; then
+              cat /tmp/ojp-python-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/ojp-python-server.log
+          exit 1
+
+      - name: Run all Python unit and H2 integration tests
+        working-directory: ojp-grpc-client-python
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee /tmp/ojp-python-tests.log
+
+      - name: Stop OJP server
+        if: always()
+        run: |
+          if test -f /tmp/ojp-python-server.pid; then
+            kill "$(cat /tmp/ojp-python-server.pid)" || true
+          fi
+
+      - name: Save Python test results and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: python-h2-l1-test-results
+          path: |
+            /tmp/ojp-python-tests.log
+            /tmp/ojp-python-server.log
           retention-days: 7
 
   # ===========================================================================

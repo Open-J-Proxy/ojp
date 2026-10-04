@@ -75,4 +75,14 @@ class ClientTest < Minitest::Test
 
     assert_equal [12, "value"], row.to_a
   end
+
+  def test_dbi_bound_strings_are_not_sql_quoted
+    assert_equal ["before", 12, true, nil], DBI::Utils::ConvParam.conv_param(
+      DBI::DBD::Ojp.driver_name,
+      "before",
+      12,
+      true,
+      nil
+    )
+  end
 end

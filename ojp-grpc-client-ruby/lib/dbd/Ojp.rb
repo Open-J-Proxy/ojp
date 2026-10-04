@@ -4,6 +4,8 @@ require "ojp/client"
 module DBI
   module DBD
     module Ojp
+      DBI::TypeUtil.register_conversion("Ojp") { |value| [value, false] }
+
       def self.driver_name
         "Ojp"
       end

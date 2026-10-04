@@ -95,6 +95,12 @@ Located in [code-contributions/](code-contributions/):
 
 Located in [protocol/](protocol/):
 - [BigDecimal Wire Format](protocol/BIGDECIMAL_WIRE_FORMAT.md)
+- [Multi-language Client Specification](multi-language-client-spec/CLIENT_SPEC.md) - Protocol and client responsibilities for non-Java clients
+- [Client Implementation Levels](multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) - L1–L10 capabilities and test-proven implementation coverage
+
+Non-Java client modules:
+- [Go client](../ojp-grpc-client-go/README.md) (`database/sql`, H2 L1)
+- [PHP PDO-compatible client](../ojp-grpc-client-php/README.md) (H2 L1)
 
 ### Telemetry
 

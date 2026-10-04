@@ -164,6 +164,8 @@ jobs:
   dotnet-crud-test:
     name: .NET ADO.NET L1 Test against H2
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [build-test]
 
     steps:

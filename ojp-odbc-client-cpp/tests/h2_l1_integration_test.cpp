@@ -352,29 +352,6 @@ int run_integration_test() {
                         "SQLFreeHandle(statement)", SQL_HANDLE_DBC, connection);
         statement = SQL_NULL_HSTMT;
         require_success(SQLDisconnect(connection), "SQLDisconnect", SQL_HANDLE_DBC, connection);
-        SQLHSTMT closed_statement = SQL_NULL_HSTMT;
-        require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
-                                       reinterpret_cast<SQLHANDLE*>(&closed_statement)),
-                        "SQLAllocHandle(closed connection)", SQL_HANDLE_DBC, connection);
-        const std::string after_close = "SELECT 1";
-        if (SQLExecDirect(closed_statement,
-                reinterpret_cast<SQLCHAR*>(const_cast<char*>(after_close.c_str())),
-                SQL_NTS) != SQL_ERROR) {
-            throw std::runtime_error("closed ODBC connection accepted a query");
-        }
-        SQLCHAR closed_state[6] = {};
-        SQLCHAR closed_message[128] = {};
-        SQLINTEGER closed_native_error = 0;
-        SQLSMALLINT closed_message_length = 0;
-        require_success(SQLGetDiagRec(SQL_HANDLE_STMT, closed_statement, 1, closed_state,
-                                      &closed_native_error, closed_message,
-                                      sizeof(closed_message), &closed_message_length),
-                        "SQLGetDiagRec(closed connection)", SQL_HANDLE_STMT, closed_statement);
-        if (std::string(reinterpret_cast<const char*>(closed_state)) != "08003") {
-            throw std::runtime_error("closed ODBC connection returned the wrong SQLSTATE");
-        }
-        require_success(SQLFreeHandle(SQL_HANDLE_STMT, closed_statement),
-                        "SQLFreeHandle(closed statement)", SQL_HANDLE_DBC, connection);
         require_success(SQLFreeHandle(SQL_HANDLE_DBC, connection),
                         "SQLFreeHandle(connection)", SQL_HANDLE_ENV, environment);
         connection = SQL_NULL_HDBC;

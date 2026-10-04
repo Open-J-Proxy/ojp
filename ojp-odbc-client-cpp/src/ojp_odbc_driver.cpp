@@ -1235,6 +1235,64 @@ SQLRETURN SQL_API SQLGetDiagRec(SQLSMALLINT handle_type, SQLHANDLE handle,
     return copy_count < diagnostic.message.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 
+SQLRETURN SQL_API SQLGetDiagRecA(SQLSMALLINT handle_type, SQLHANDLE handle,
+                                 SQLSMALLINT record_number, SQLCHAR* sql_state,
+                                 SQLINTEGER* native_error, SQLCHAR* message_text,
+                                 SQLSMALLINT buffer_length, SQLSMALLINT* text_length) {
+    return SQLGetDiagRec(handle_type, handle, record_number, sql_state, native_error,
+                         message_text, buffer_length, text_length);
+}
+
+SQLRETURN SQL_API SQLGetDiagField(SQLSMALLINT handle_type, SQLHANDLE handle,
+                                  SQLSMALLINT record_number, SQLSMALLINT diagnostic_id,
+                                  SQLPOINTER diagnostic_info, SQLSMALLINT buffer_length,
+                                  SQLSMALLINT* string_length) {
+    if (handle == SQL_NULL_HANDLE ||
+        static_cast<HandleBase*>(handle)->type != handle_type) {
+        return SQL_INVALID_HANDLE;
+    }
+    const auto* base = static_cast<HandleBase*>(handle);
+    if (diagnostic_id == SQL_DIAG_NUMBER) {
+        if (diagnostic_info == nullptr) {
+            return SQL_ERROR;
+        }
+        *static_cast<SQLINTEGER*>(diagnostic_info) =
+            static_cast<SQLINTEGER>(base->diagnostics.size());
+        return SQL_SUCCESS;
+    }
+    if (record_number < 1 ||
+        static_cast<std::size_t>(record_number) > base->diagnostics.size()) {
+        return SQL_NO_DATA;
+    }
+    const auto& diagnostic = base->diagnostics[static_cast<std::size_t>(record_number - 1)];
+    if (diagnostic_id == SQL_DIAG_NATIVE) {
+        if (diagnostic_info == nullptr) {
+            return SQL_ERROR;
+        }
+        *static_cast<SQLINTEGER*>(diagnostic_info) = diagnostic.native_error;
+        return SQL_SUCCESS;
+    }
+    std::string text;
+    if (diagnostic_id == SQL_DIAG_SQLSTATE) {
+        text = diagnostic.state;
+    } else if (diagnostic_id == SQL_DIAG_MESSAGE_TEXT) {
+        text = diagnostic.message;
+    } else {
+        return SQL_ERROR;
+    }
+    if (string_length != nullptr) {
+        *string_length = static_cast<SQLSMALLINT>(text.size());
+    }
+    if (diagnostic_info == nullptr || buffer_length <= 0) {
+        return SQL_SUCCESS;
+    }
+    const auto copy_count = std::min<std::size_t>(
+        text.size(), static_cast<std::size_t>(buffer_length - 1));
+    std::memcpy(diagnostic_info, text.data(), copy_count);
+    static_cast<char*>(diagnostic_info)[copy_count] = '\0';
+    return copy_count < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
 SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
                                   SQLUSMALLINT* supported) {
     if (connection == SQL_NULL_HDBC ||
@@ -1250,7 +1308,7 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
-        SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETINFO,
+        SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};
     if (function_id == SQL_API_ALL_FUNCTIONS) {
         constexpr SQLUSMALLINT function_count = 100;

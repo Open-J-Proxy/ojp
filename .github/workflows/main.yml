@@ -7,7 +7,8 @@
 #
 # WORKFLOW STRUCTURE:
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
-# 1a. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
+# 1a. dotnet-crud-test: .NET ADO.NET H2 L1 tests (independent)
+# 1b. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
 # 2. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
 # 3. mysql-test: MySQL database tests (needs: build-test, resolve-version)
 # 4. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
@@ -23,7 +24,7 @@
 #
 # SEQUENTIAL EXECUTION:
 # Specialized Java database test jobs depend on build-test completing
-# successfully. Ruby, Python, and C++ client test jobs run independently.
+# successfully. .NET, Ruby, Python, and C++ client test jobs run independently.
 # This ensures that expensive database setups only run if basic H2 tests pass,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
@@ -162,6 +163,82 @@ jobs:
       - name: Show ojp-server.log
         if: always()  # ensures it runs even if previous steps fail
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
+
+  # ===========================================================================
+  # .NET ADO.NET H2 L1 Integration Tests
+  # ===========================================================================
+  dotnet-crud-test:
+    name: .NET ADO.NET L1 Test against H2
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Start OJP server
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" &>/tmp/ojp-server-dotnet.log &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server-dotnet.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"
+          cat /tmp/ojp-server-dotnet.log
+          exit 1
+
+      - name: Run all .NET tests with H2 L1 integration enabled
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: dotnet test ojp-grpc-client-dotnet/Ojp.Client.DotNet.sln --logger "trx;LogFileName=dotnet-h2-l1.trx" --results-directory ojp-grpc-client-dotnet/TestResults
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server-dotnet.log
+
+      - name: Save .NET H2 L1 test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: dotnet-h2-l1-test-results
+          path: |
+            ojp-grpc-client-dotnet/TestResults/
+            /tmp/ojp-server-dotnet.log
+          retention-days: 7
 
   # ===========================================================================
   # Ruby DBI Client Tests (H2)

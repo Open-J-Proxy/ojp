@@ -234,7 +234,8 @@ final class OjpConnection
             }
             foreach ((array) $values as $binaryValue) {
                 try {
-                    $error = \Com\Openjproxy\Grpc\SqlErrorResponse::decode($binaryValue);
+                    $error = new \Com\Openjproxy\Grpc\SqlErrorResponse();
+                    $error->mergeFromString($binaryValue);
                     if ($error->getSqlState() !== '' || $error->getReason() !== '') {
                         return [$error->getSqlState(), $error->getVendorCode(), $error->getReason()];
                     }

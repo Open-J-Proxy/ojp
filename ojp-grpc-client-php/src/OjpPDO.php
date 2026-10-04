@@ -126,6 +126,11 @@ final class OjpPDO extends PDO
         }
     }
 
+    public function isClosed(): bool
+    {
+        return $this->connection->isClosed();
+    }
+
     public function __destruct()
     {
         if (isset($this->connection) && !$this->connection->isClosed()) {

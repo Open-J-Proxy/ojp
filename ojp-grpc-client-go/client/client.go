@@ -144,6 +144,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Connection) ExecuteUpdate(ctx context.Context, sql string) (int64, error) {
+	return c.executeUpdate(ctx, sql, nil)
+}
+
+func (c *Connection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -157,8 +161,9 @@ func (c *Connection) ExecuteUpdate(ctx context.Context, sql string) (int64, erro
 
 	var trailer metadata.MD
 	result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
-		Session: cloneSession(c.session),
-		Sql:     sql,
+		Session:    cloneSession(c.session),
+		Sql:        sql,
+		Parameters: parameters,
 	}, grpc.Trailer(&trailer))
 	if err != nil {
 		return 0, grpcError(ctx, err, trailer)
@@ -178,6 +183,10 @@ func (c *Connection) ExecuteUpdate(ctx context.Context, sql string) (int64, erro
 }
 
 func (c *Connection) Query(ctx context.Context, sql string) (*Result, error) {
+	return c.query(ctx, sql, nil)
+}
+
+func (c *Connection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -189,9 +198,10 @@ func (c *Connection) Query(ctx context.Context, sql string) (*Result, error) {
 		return nil, ErrClientClosed
 	}
 
-stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
-		Session: cloneSession(c.session),
-		Sql:     sql,
+	stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
+		Session:    cloneSession(c.session),
+		Sql:        sql,
+		Parameters: parameters,
 	})
 	if err != nil {
 		return nil, grpcError(ctx, err, nil)

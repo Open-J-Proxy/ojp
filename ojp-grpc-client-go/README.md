@@ -14,7 +14,7 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
 | Database | Highest achieved level (current tests) | Evidence highlights |
 |---|---:|---|
-| **H2** | **L1** | `client_test.TestH2ConnectionShouldSupportL1CRUDAndLifecycle` passed twice locally: Go → one OJP server → H2; CI confirmation is pending. |
+| **H2** | **L1** | `client_test.TestH2DatabaseShouldSupportL1CRUDAndLifecycle` exercises Go `database/sql` → one OJP server → H2. |
 | **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
 | **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
 | **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
@@ -71,14 +71,14 @@ jdbc:ojp[localhost:1059]_postgresql://localhost:5432/defaultdb,testuser,testpass
 
 ## Using as a Library
 
-The Go client can be imported and used programmatically in another Go application:
+The primary Go API follows the standard `database/sql` package. Importing the client registers the `ojp` driver:
 
-### Public API
+### `database/sql` API
 
 ```go
 import (
     "context"
-    "fmt"
+    "database/sql"
     "log"
     "time"
 
@@ -89,55 +89,52 @@ func main() {
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
 
-    client, err := ojpclient.NewClient("127.0.0.1:1059")
+    db, err := sql.Open(ojpclient.DriverName,
+        "jdbc:ojp[127.0.0.1:1059]_jdbc:postgresql://postgres:5432/mydb,dbuser,")
     if err != nil {
         log.Fatal(err)
     }
-    defer client.Close()
+    defer db.Close()
 
-    conn, err := client.Connect(ctx, ojpclient.Config{
-        URL:  "jdbc:postgresql://postgres:5432/mydb",
-        User: "dbuser",
-    })
+    if err := db.PingContext(ctx); err != nil {
+        log.Fatal(err)
+    }
+
+    if _, err := db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS items(id INT PRIMARY KEY, label VARCHAR(100))"); err != nil {
+        log.Fatal(err)
+    }
+    if result, err := db.ExecContext(ctx, "INSERT INTO items(id, label) VALUES (1, 'example')"); err != nil {
+        log.Fatal(err)
+    } else if count, err := result.RowsAffected(); err != nil || count != 1 {
+        log.Fatalf("expected one inserted row, got %d (error %v)", count, err)
+    }
+
+    rows, err := db.QueryContext(ctx, "SELECT id, label FROM items ORDER BY id")
     if err != nil {
         log.Fatal(err)
     }
-    defer conn.Close(context.Background())
-
-    if _, err := conn.ExecuteUpdate(ctx, "CREATE TABLE IF NOT EXISTS items(id INT PRIMARY KEY, label VARCHAR(100))"); err != nil {
-        log.Fatal(err)
+    defer rows.Close()
+    for rows.Next() {
+        var id int64
+        var label string
+        if err := rows.Scan(&id, &label); err != nil {
+            log.Fatal(err)
+        }
+        log.Printf("id=%d label=%s", id, label)
     }
-    if count, err := conn.ExecuteUpdate(ctx, "INSERT INTO items(id, label) VALUES (1, 'example')"); err != nil {
+    if err := rows.Err(); err != nil {
         log.Fatal(err)
-    } else if count != 1 {
-        log.Fatalf("expected one inserted row, got %d", count)
-    }
-
-    result, err := conn.Query(ctx, "SELECT id, label FROM items ORDER BY id")
-    if err != nil {
-        log.Fatal(err)
-    }
-    for _, row := range result.Rows {
-        fmt.Printf("id=%v label=%v\n", row[0], row[1])
     }
 }
 ```
 
-### API Overview
+The data source name (DSN) is a CSV record containing the OJP JDBC URL, database username, and password. For credentials containing commas, use normal CSV quoting:
 
-| Method | Description |
-|---|---|
-| `NewClient(endpoint)` | Create a single-endpoint client |
-| `Connect(ctx, Config)` | Open a database session; the client generates one UUID for the process |
-| `Connection.ExecuteUpdate(ctx, sql)` | Execute DDL/DML and return the affected-row count |
-| `Connection.Query(ctx, sql)` | Read rows, column labels, and scalar values |
-| `Connection.State()` | Read the latest session state returned by the server |
-| `Connection.Close(ctx)` | Terminate the session; repeated close is safe |
-| `Client.Close()` | Close the shared gRPC channel |
+`database/sql` manages OJP sessions and gRPC connections through its normal pool lifecycle. Positional parameters support nil, booleans, integers, floating-point values, strings, byte slices, and timestamps; named parameters and other driver values are not supported yet. `BeginTx`, `Commit`, and `Rollback` use OJP's transaction RPCs. SQL failures with OJP error trailers are returned as `*client.SQLError`.
 
-SQL failures that include OJP SQL error trailers are returned as `*client.SQLError`, with SQLState and vendor code. Context cancellation and deadline errors are preserved. Generated protobuf messages remain internal to the module.
+### Lower-level API
 
-The public API currently implements the single-endpoint L1 surface. Transactions, typed parameter binding, cursors, LOBs, and multinode support are later levels.
+The package also retains the direct `NewClient` / `Connect` API for callers that need OJP session state and RPC-oriented operations. The `database/sql` driver is the recommended API for ordinary database access.
 
 ## Run the Client
 
@@ -174,9 +171,9 @@ The H2 suite runs Go through a real OJP gRPC server to an H2 database. Start the
 ```bash
 OJP_TEST_H2=true \
 OJP_TEST_H2_ADDR=localhost:1059 \
-go test -count=1 -v ./client -run '^TestH2ConnectionShouldSupportL1CRUDAndLifecycle$'
+go test -count=1 -v ./client -run '^TestH2DatabaseShouldSupportL1CRUDAndLifecycle$'
 ```
 
 When `OJP_TEST_H2` is enabled, missing connection configuration or an unavailable database fails the test; the suite never treats an unavailable H2 server as a skip.
 
-The test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv`. It uses a unique table per run, performs a protocol/database readiness query, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and session termination. Run the test repeatedly with `-count=2` to check for conflicts.
+The test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv` and exercises the standard `database/sql` API. It uses a unique table per run, performs a protocol/database readiness check, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and database close behavior. Run the test repeatedly with `-count=2` to check for conflicts.

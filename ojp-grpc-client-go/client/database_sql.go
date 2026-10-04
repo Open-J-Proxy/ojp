@@ -14,6 +14,7 @@ import (
 	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const DriverName = "ojp"
@@ -37,18 +38,26 @@ func (sqlDriver) OpenConnector(name string) (driver.Connector, error) {
 }
 
 type sqlConnector struct {
-	endpoint string
-	config   Config
+	endpoint      string
+	config        Config
+	clientFactory func(string) (*Client, error)
 }
 
 func sqlConnectorFor(dataSourceName string) (*sqlConnector, error) {
 	dataSourceName = strings.TrimSpace(dataSourceName)
-	record, err := csv.NewReader(strings.NewReader(dataSourceName)).Read()
+	reader := csv.NewReader(strings.NewReader(dataSourceName))
+	record, err := reader.Read()
 	if err != nil {
 		return nil, fmt.Errorf("parse OJP data source name: %w", err)
 	}
 	if len(record) != 3 {
 		return nil, errors.New("OJP data source name must contain a JDBC URL, username, and password")
+	}
+	if _, err := reader.Read(); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, fmt.Errorf("parse OJP data source name: %w", err)
+		}
+		return nil, errors.New("OJP data source name must contain exactly one CSV record")
 	}
 
 	const prefix = "jdbc:ojp["
@@ -56,17 +65,17 @@ func sqlConnectorFor(dataSourceName string) (*sqlConnector, error) {
 	if !strings.HasPrefix(ojpURL, prefix) {
 		return nil, fmt.Errorf("OJP data source name must start with %q", prefix)
 	}
-	endpointEnd := strings.IndexByte(ojpURL[len(prefix):], ']')
+	endpointEnd := strings.Index(ojpURL[len(prefix):], "]_")
 	if endpointEnd < 0 {
-		return nil, errors.New("OJP data source name is missing the closing endpoint bracket")
+		return nil, errors.New("OJP data source name is missing the endpoint separator")
 	}
 	endpointEnd += len(prefix)
-	endpoint := strings.TrimSpace(strings.SplitN(ojpURL[len(prefix):endpointEnd], ",", 2)[0])
+	endpoint := strings.TrimSpace(ojpURL[len(prefix):endpointEnd])
 	if endpoint == "" {
 		return nil, errors.New("OJP data source name has an empty endpoint")
 	}
-	if endpointEnd+1 >= len(ojpURL) || ojpURL[endpointEnd+1] != '_' {
-		return nil, errors.New("OJP data source name must separate the endpoint and JDBC URL with an underscore")
+	if strings.Contains(endpoint, ",") {
+		return nil, errors.New("OJP database/sql data source names currently support only one endpoint")
 	}
 	backendURL := strings.TrimSpace(ojpURL[endpointEnd+2:])
 	if backendURL == "" {
@@ -86,7 +95,11 @@ func sqlConnectorFor(dataSourceName string) (*sqlConnector, error) {
 }
 
 func (c *sqlConnector) Connect(ctx context.Context) (driver.Conn, error) {
-	client, err := NewClient(c.endpoint)
+	clientFactory := c.clientFactory
+	if clientFactory == nil {
+		clientFactory = NewClient
+	}
+	client, err := clientFactory(c.endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -152,10 +165,11 @@ func (c *sqlConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver
 }
 
 func (c *sqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if len(args) != 0 {
-		return nil, errors.New("OJP database/sql driver does not support query parameters")
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
 	}
-	count, err := c.connection.ExecuteUpdate(ctx, query)
+	count, err := c.connection.executeUpdate(ctx, query, parameters)
 	if err != nil {
 		return nil, err
 	}
@@ -163,10 +177,11 @@ func (c *sqlConn) ExecContext(ctx context.Context, query string, args []driver.N
 }
 
 func (c *sqlConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	if len(args) != 0 {
-		return nil, errors.New("OJP database/sql driver does not support query parameters")
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
 	}
-	result, err := c.connection.Query(ctx, query)
+	result, err := c.connection.query(ctx, query, parameters)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +223,7 @@ type sqlStmt struct {
 
 func (s *sqlStmt) Close() error { return nil }
 
-func (s *sqlStmt) NumInput() int { return 0 }
+func (s *sqlStmt) NumInput() int { return -1 }
 
 func (s *sqlStmt) Exec(args []driver.Value) (driver.Result, error) {
 	return s.ExecContext(context.Background(), namedValues(args))
@@ -219,10 +234,11 @@ func (s *sqlStmt) Query(args []driver.Value) (driver.Rows, error) {
 }
 
 func (s *sqlStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
-	if len(args) != 0 {
-		return nil, errors.New("OJP database/sql driver does not support query parameters")
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
 	}
-	count, err := s.connection.ExecuteUpdate(ctx, s.query)
+	count, err := s.connection.executeUpdate(ctx, s.query, parameters)
 	if err != nil {
 		return nil, err
 	}
@@ -230,10 +246,11 @@ func (s *sqlStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (dr
 }
 
 func (s *sqlStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
-	if len(args) != 0 {
-		return nil, errors.New("OJP database/sql driver does not support query parameters")
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
 	}
-	result, err := s.connection.Query(ctx, s.query)
+	result, err := s.connection.query(ctx, s.query, parameters)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +358,49 @@ func namedValues(args []driver.Value) []driver.NamedValue {
 		values[index] = driver.NamedValue{Ordinal: index + 1, Value: value}
 	}
 	return values
+}
+
+func toProtoParameters(args []driver.NamedValue) ([]*pb.ParameterProto, error) {
+	parameters := make([]*pb.ParameterProto, 0, len(args))
+	for index, argument := range args {
+		if argument.Name != "" {
+			return nil, errors.New("OJP database/sql driver does not support named query parameters")
+		}
+		parameter := &pb.ParameterProto{Index: int32(index + 1)}
+		switch value := argument.Value.(type) {
+		case nil:
+			parameter.Type = pb.ParameterTypeProto_PT_NULL
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_IsNull{IsNull: true}}}
+		case bool:
+			parameter.Type = pb.ParameterTypeProto_PT_BOOLEAN
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_BoolValue{BoolValue: value}}}
+		case int64:
+			parameter.Type = pb.ParameterTypeProto_PT_LONG
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_LongValue{LongValue: value}}}
+		case float64:
+			parameter.Type = pb.ParameterTypeProto_PT_DOUBLE
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_DoubleValue{DoubleValue: value}}}
+		case string:
+			parameter.Type = pb.ParameterTypeProto_PT_STRING
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_StringValue{StringValue: value}}}
+		case []byte:
+			parameter.Type = pb.ParameterTypeProto_PT_BYTES
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_BytesValue{BytesValue: append([]byte(nil), value...)}}}
+		case time.Time:
+			timestamp := timestamppb.New(value)
+			if err := timestamp.CheckValid(); err != nil {
+				return nil, fmt.Errorf("invalid timestamp parameter: %w", err)
+			}
+			parameter.Type = pb.ParameterTypeProto_PT_TIMESTAMP
+			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_TimestampValue{
+				TimestampValue: &pb.TimestampWithZone{Instant: timestamp},
+			}}}
+		default:
+			return nil, fmt.Errorf("unsupported database/sql parameter type %T", argument.Value)
+		}
+		parameters = append(parameters, parameter)
+	}
+	return parameters, nil
 }
 
 func toDriverValue(value any) (driver.Value, error) {

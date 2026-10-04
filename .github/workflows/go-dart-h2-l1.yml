@@ -56,7 +56,7 @@ jobs:
 
       - name: Check Go protobuf generation
         run: ./generate-proto.sh --check
-        working-directory: ojp-client-go
+        working-directory: ojp-client-go-database-sql
 
       - name: Start OJP server (background)
         run: |
@@ -82,13 +82,13 @@ jobs:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
         run: go test -count=1 -json ./... | tee /tmp/go-h2-l1-test.json
-        working-directory: ojp-client-go
+        working-directory: ojp-client-go-database-sql
 
       - name: Run Go H2 L1 CRUD CLI smoke test
         env:
           OJP_JDBC_LINE: 'jdbc:ojp[localhost:1059]_h2:mem:ojp_go_h2_l1;DB_CLOSE_DELAY=-1,sa,'
         run: go run ./cmd/ojp-client
-        working-directory: ojp-client-go
+        working-directory: ojp-client-go-database-sql
 
       - name: Set up Dart
         uses: dart-lang/setup-dart@v1.8.1
@@ -100,14 +100,14 @@ jobs:
           dart pub get
           dart format --output=none --set-exit-if-changed lib test
           dart analyze
-        working-directory: ojp-client-dart
+        working-directory: ojp-client-dart-drift
 
       - name: Run Dart H2 L1 integration tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
         run: dart test --reporter=expanded
-        working-directory: ojp-client-dart
+        working-directory: ojp-client-dart-drift
 
       - name: Show ojp-server.log
         if: always()

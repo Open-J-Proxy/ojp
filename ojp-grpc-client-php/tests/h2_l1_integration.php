@@ -56,7 +56,7 @@ try {
         '23505'
     );
     assertSqlState(static fn() => $pdo->exec('THIS IS NOT VALID SQL'), '42001');
-    assertSqlState(static fn() => $pdo->query("SELECT * FRM $table"), '42001');
+    assertSqlState(static fn() => $pdo->query("SELECT * FRM $table"), '42000');
 
     assertSameValue(1, $pdo->exec("DELETE FROM $table WHERE id = 1"), 'delete count');
     $empty = $pdo->query("SELECT id, name, active FROM $table WHERE id = 1");

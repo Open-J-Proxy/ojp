@@ -27,6 +27,31 @@ class ClientTest < Minitest::Test
     assert_nil client.send(:decode_value, Com::Openjproxy::Grpc::ParameterValue.new(is_null: true))
   end
 
+  def test_close_terminates_session_and_closes_channel_once
+    client = Ojp::Client.allocate
+    stub = Class.new do
+      def terminate_session(_session)
+        Struct.new(:terminated).new(true)
+      end
+    end.new
+    channel = Class.new do
+      attr_reader :close_count
+
+      def close
+        @close_count = (@close_count || 0) + 1
+      end
+    end.new
+    client.instance_variable_set(:@stub, stub)
+    client.instance_variable_set(:@channel, channel)
+    client.instance_variable_set(:@session, nil)
+    client.instance_variable_set(:@mutex, Mutex.new)
+    client.instance_variable_set(:@closed, false)
+
+    assert client.close
+    refute client.close
+    assert_equal 1, channel.close_count
+  end
+
   def test_rejects_incomplete_dbi_data_source
     driver = DBI::DBD::Ojp::Driver.new
 

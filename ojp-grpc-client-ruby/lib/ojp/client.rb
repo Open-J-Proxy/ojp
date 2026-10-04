@@ -31,7 +31,12 @@ module Ojp
       @url = url
       @user = user || ""
       @password = password || ""
-      @stub = Com::Openjproxy::Grpc::StatementService::Stub.new(endpoint, :this_channel_is_insecure)
+      @channel = GRPC::Core::Channel.new(endpoint, {}, :this_channel_is_insecure)
+      @stub = Com::Openjproxy::Grpc::StatementService::Stub.new(
+        endpoint,
+        :this_channel_is_insecure,
+        channel_override: @channel
+      )
       @mutex = Mutex.new
       @closed = false
       @session = @stub.connect(Com::Openjproxy::Grpc::ConnectionDetails.new(
@@ -45,7 +50,7 @@ module Ojp
       ))
       raise IOError, "OJP server returned an empty session" unless @session
     rescue GRPC::BadStatus => error
-      @stub&.close
+      @channel&.close
       raise map_rpc_error(error)
     end
 
@@ -76,7 +81,7 @@ module Ojp
           raise map_rpc_error(error)
         ensure
           @closed = true
-          @stub.close
+          @channel.close
         end
         true
       end

@@ -1,0 +1,6 @@
+obj/Debug/net8.0/StatementService.cs \
+obj/Debug/net8.0/StatementServiceGrpc.cs: /home/runner/.nuget/packages/grpc.tools/2.84.0/build/native/include/google/protobuf/timestamp.proto\
+ /home/runner/.nuget/packages/grpc.tools/2.84.0/build/native/include/google/protobuf/wrappers.proto\
+ /home/runner/.nuget/packages/google.api.commonprotos/2.17.0/content/protos/google/type/date.proto\
+ /home/runner/.nuget/packages/google.api.commonprotos/2.17.0/content/protos/google/type/timeofday.proto\
+ ../../../ojp-grpc-commons/src/main/proto/StatementService.proto

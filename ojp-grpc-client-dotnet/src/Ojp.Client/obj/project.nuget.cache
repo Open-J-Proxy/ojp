@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "dgSpecHash": "aNnuU/Frj+s=",
+  "success": true,
+  "projectFilePath": "/home/runner/work/ojp/ojp/ojp-grpc-client-dotnet/src/Ojp.Client/Ojp.Client.csproj",
+  "expectedPackageFiles": [
+    "/home/runner/.nuget/packages/google.api.commonprotos/2.17.0/google.api.commonprotos.2.17.0.nupkg.sha512",
+    "/home/runner/.nuget/packages/google.protobuf/3.36.2/google.protobuf.3.36.2.nupkg.sha512",
+    "/home/runner/.nuget/packages/grpc.core.api/2.84.0/grpc.core.api.2.84.0.nupkg.sha512",
+    "/home/runner/.nuget/packages/grpc.net.client/2.84.0/grpc.net.client.2.84.0.nupkg.sha512",
+    "/home/runner/.nuget/packages/grpc.net.common/2.84.0/grpc.net.common.2.84.0.nupkg.sha512",
+    "/home/runner/.nuget/packages/grpc.tools/2.84.0/grpc.tools.2.84.0.nupkg.sha512",
+    "/home/runner/.nuget/packages/microsoft.extensions.dependencyinjection.abstractions/8.0.1/microsoft.extensions.dependencyinjection.abstractions.8.0.1.nupkg.sha512",
+    "/home/runner/.nuget/packages/microsoft.extensions.logging.abstractions/8.0.1/microsoft.extensions.logging.abstractions.8.0.1.nupkg.sha512"
+  ],
+  "logs": []
+}

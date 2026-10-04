@@ -1,0 +1,8 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <Import Project="$(NuGetPackageRoot)microsoft.extensions.logging.abstractions/8.0.1/buildTransitive/net6.0/Microsoft.Extensions.Logging.Abstractions.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.extensions.logging.abstractions/8.0.1/buildTransitive/net6.0/Microsoft.Extensions.Logging.Abstractions.targets')" />
+    <Import Project="$(NuGetPackageRoot)grpc.tools/2.84.0/build/Grpc.Tools.targets" Condition="Exists('$(NuGetPackageRoot)grpc.tools/2.84.0/build/Grpc.Tools.targets')" />
+    <Import Project="$(NuGetPackageRoot)google.api.commonprotos/2.17.0/build/Google.Api.CommonProtos.targets" Condition="Exists('$(NuGetPackageRoot)google.api.commonprotos/2.17.0/build/Google.Api.CommonProtos.targets')" />
+  </ImportGroup>
+</Project>

@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   ruby-h2-l1:
     name: Ruby DBI L1 integration test against H2

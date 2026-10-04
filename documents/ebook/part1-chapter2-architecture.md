@@ -13,6 +13,7 @@ graph TB
     subgraph "Client Side"
     APP[Java Application]
     DRIVER[ojp-jdbc-driver<br/>JDBC Implementation]
+    OTHER[Go / Dart / .NET / PHP / Python / Ruby / C++ Client APIs]
     end
     
     subgraph "Shared Contract"
@@ -31,6 +32,7 @@ graph TB
     end
     
     APP --> DRIVER
+    OTHER -->|gRPC/HTTP2| SERVER
     DRIVER -.->|uses| GRPC
     DRIVER -->|gRPC/HTTP2| SERVER
     SERVER -.->|uses| GRPC
@@ -182,6 +184,12 @@ ojp.server.circuitBreakerTimeout=60000
 The **ojp-jdbc-driver** is a complete JDBC 4.2 specification implementation that applications use as a drop-in replacement for traditional JDBC drivers.
 
 The driver implements the JDBC API interfaces to ensure compliance with the standard. Rather than maintaining actual database connections, it provides lightweight virtual connection objects that delegate to the server. Under the hood, it acts as a gRPC client, communicating with ojp-server to execute all database operations. The driver handles result set streaming efficiently to minimize memory overhead, and manages transaction state across the network boundary. For high availability scenarios, it supports connecting to multiple OJP servers simultaneously, automatically failing over when needed.
+
+### Early Non-Java Client Implementations
+
+The gRPC contract is language-neutral, and OJP now includes early client modules that expose language-native database APIs: Go `database/sql`, Dart Drift, .NET ADO.NET, PHP PDO-compatible, Python DB-API 2.0, Ruby DBI, and C++ ODBC. Each is a separate client implementation that communicates with the same OJP server; these are not wrappers around the Java driver.
+
+All currently documented non-Java clients target single-endpoint H2 L1 (basic connectivity and CRUD). They do not yet provide the JDBC driver's full operational capabilities or production-readiness guarantees. See the [client implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) and the individual [Go](../../ojp-client-go-database-sql/README.md), [Dart](../../ojp-client-dart-drift/README.md), [.NET](../../ojp-client-dotnet-ado-net/README.md), [PHP](../../ojp-client-php-pdo/README.md), [Python](../../ojp-client-python-dbapi/README.rst), [Ruby](../../ojp-client-ruby-dbi/README.md), and [C++ ODBC](../../ojp-client-cpp-odbc/README.md) guides.
 
 **JDBC Implementation Mapping**:
 

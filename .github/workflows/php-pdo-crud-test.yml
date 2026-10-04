@@ -45,19 +45,19 @@ jobs:
 
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist
-        working-directory: ojp-grpc-client-php
+        working-directory: ojp-client-php-pdo
 
       - name: Verify generated protobuf classes
         run: ./generate-proto.sh --check
-        working-directory: ojp-grpc-client-php
+        working-directory: ojp-client-php-pdo
 
       - name: Lint PHP client and integration test
         run: find src gen tests -name '*.php' -print0 | xargs -0 -n1 php -l
-        working-directory: ojp-grpc-client-php
+        working-directory: ojp-client-php-pdo
 
       - name: Run PHP unit checks
         run: php tests/unit.php
-        working-directory: ojp-grpc-client-php
+        working-directory: ojp-client-php-pdo
 
       - name: Start OJP server
         run: |
@@ -84,7 +84,7 @@ jobs:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: localhost:1059
         run: php tests/h2_l1_integration.php
-        working-directory: ojp-grpc-client-php
+        working-directory: ojp-client-php-pdo
 
       - name: Show OJP server log
         if: always()

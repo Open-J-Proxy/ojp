@@ -24,7 +24,7 @@ Learn how Open J Proxy works, how to deploy it, and how to use it in production.
 
 ---
 
-**A smart, open-source database control plane** — delivered as a Type 3 JDBC driver and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover — all behind a standard JDBC API and with a roadmap for non-Java clients.
+**A smart, open-source database control plane** — delivered as a Type 3 JDBC driver, early language-native clients, and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover.
 
 _"The only open-source JDBC Type 3 driver globally, this project introduces a transparent Quality-of-Service layer that decouples application performance from database bottlenecks. It's a must-try for any team struggling with data access contention, offering easy-to-implement back-pressure and pooling management." (Bruno Bossola - Java Champion and CTO @ Meterian.io)_  
 
@@ -40,9 +40,19 @@ OJP is a **smart database control plane** for relational databases — more than
 - **Rich observability** — OpenTelemetry traces and Prometheus metrics for pools, admission, classification and throttling. See [Telemetry and Observability](documents/telemetry/README.md).
 - **Load balancing & failover in the driver** — multinode URLs (`jdbc:ojp[host1:port1,host2:port2]_...`) with load-aware routing and session stickiness. See [Multinode Configuration](documents/multinode/README.md).
 - **Seamless Java integration** — standard JDBC 4.2, Spring Boot starter, Quarkus and Micronaut guides; no application rewrite.
-- **Path to a universal database control plane** — the gRPC protocol is language-neutral, so non-Java clients (Python, Node, Go, …) can join the same plane. See the [multi-language client spec](documents/multi-language-client-spec/).
+- **Language-neutral protocol** — early non-Java clients use the same gRPC server with language-native database APIs. See the [multi-language client spec](documents/multi-language-client-spec/).
 
-Early single-endpoint H2 L1 clients are available for [Python DB-API 2.0](ojp-grpc-client-python/README.rst) and [Go `database/sql`](ojp-grpc-client-go/README.md). These clients do not yet provide the JDBC driver's full operational capabilities.
+Early single-endpoint clients target H2 L1; they are not feature-equivalent to the JDBC driver and are not yet production-ready:
+
+| Client module | Application API | Current scope |
+|---|---|---|
+| [Go](ojp-client-go-database-sql/README.md) | `database/sql` | H2 L1 |
+| [Dart](ojp-client-dart-drift/README.md) | Drift executor | H2 L1 |
+| [.NET](ojp-client-dotnet-ado-net/README.md) | ADO.NET | H2 L1 |
+| [PHP](ojp-client-php-pdo/README.md) | PDO-compatible | H2 L1 |
+| [Python](ojp-client-python-dbapi/README.rst) | DB-API 2.0 | H2 L1 |
+| [Ruby](ojp-client-ruby-dbi/README.md) | DBI | H2 L1 |
+| [C++](ojp-client-cpp-odbc/README.md) | ODBC | H2 L1 |
 
 Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2**. Also compatible in principle with any database that provides a JDBC driver.
 

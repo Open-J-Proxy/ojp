@@ -3,6 +3,9 @@
 
 #include "StatementService.grpc.pb.h"
 
+#include <google/protobuf/descriptor.h>
+#include <google/protobuf/message.h>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -59,6 +62,7 @@ struct ConnectionHandle final : HandleBase {
     std::shared_ptr<grpc::Channel> channel;
     std::unique_ptr<StatementService::Stub> stub;
     SessionInfo session;
+    std::mutex operation_mutex;
     bool connected = false;
 };
 
@@ -71,8 +75,15 @@ struct BoundParameter {
     SQLLEN* indicator = nullptr;
 };
 
-using Cell = std::variant<std::monostate, bool, std::int64_t, double, std::string,
-                          std::vector<std::uint8_t>>;
+struct BoundColumn {
+    SQLSMALLINT value_type = SQL_C_DEFAULT;
+    SQLPOINTER value = nullptr;
+    SQLLEN buffer_length = 0;
+    SQLLEN* indicator = nullptr;
+};
+
+using Cell = std::variant<std::monostate, bool, std::int32_t, std::int64_t, double,
+                          std::string, std::vector<std::uint8_t>>;
 
 struct StatementHandle final : HandleBase {
     explicit StatementHandle(ConnectionHandle* parent)
@@ -81,6 +92,7 @@ struct StatementHandle final : HandleBase {
     ConnectionHandle* connection;
     std::string sql;
     std::map<SQLUSMALLINT, BoundParameter> parameters;
+    std::map<SQLUSMALLINT, BoundColumn> bound_columns;
     std::vector<std::string> columns;
     std::vector<std::vector<Cell>> rows;
     SQLLEN row_count = -1;
@@ -128,7 +140,9 @@ ParsedConnectionString parse_connection_string(const std::string& input) {
     ParsedConnectionString parsed;
     std::size_t position = 0;
     while (position < input.size()) {
-        while (position < input.size() && (input[position] == ';' || std::isspace(input[position]))) {
+        while (position < input.size() &&
+               (input[position] == ';' ||
+                std::isspace(static_cast<unsigned char>(input[position])))) {
             ++position;
         }
         if (position == input.size()) {
@@ -165,7 +179,8 @@ ParsedConnectionString parse_connection_string(const std::string& input) {
                 parsed.error = "ODBC connection string contains an unterminated braced value";
                 return parsed;
             }
-            while (position < input.size() && std::isspace(input[position])) {
+            while (position < input.size() &&
+                   std::isspace(static_cast<unsigned char>(input[position]))) {
                 ++position;
             }
             if (position < input.size() && input[position] != ';') {
@@ -175,7 +190,8 @@ ParsedConnectionString parse_connection_string(const std::string& input) {
         } else {
             const auto end = input.find(';', position);
             value = input.substr(position, end == std::string::npos ? end : end - position);
-            while (!value.empty() && std::isspace(value.back())) {
+            while (!value.empty() &&
+                   std::isspace(static_cast<unsigned char>(value.back()))) {
                 value.pop_back();
             }
             position = end == std::string::npos ? input.size() : end;
@@ -243,9 +259,9 @@ SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
             item.first.find("sqlerrorresponse-bin") != std::string::npos) {
             com::openjproxy::grpc::SqlErrorResponse response;
             if (response.ParseFromString(std::string(item.second.data(), item.second.size()))) {
-            sql_state = get_string_field(response, "sqlState");
-            message = get_string_field(response, "reason");
-            native_error = get_int32_field(response, "vendorCode");
+                sql_state = get_string_field(response, "sqlState");
+                message = get_string_field(response, "reason");
+                native_error = get_int32_field(response, "vendorCode");
                 break;
             }
         }
@@ -276,7 +292,7 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             }
             return true;
         case google::protobuf::FieldDescriptor::CPPTYPE_INT32:
-            *output = static_cast<std::int64_t>(reflection->GetInt32(value, field));
+            *output = reflection->GetInt32(value, field);
             return true;
         case google::protobuf::FieldDescriptor::CPPTYPE_INT64:
             *output = reflection->GetInt64(value, field);
@@ -308,6 +324,9 @@ std::string cell_as_string(const Cell& cell) {
     if (const auto* value = std::get_if<std::int64_t>(&cell)) {
         return std::to_string(*value);
     }
+    if (const auto* value = std::get_if<std::int32_t>(&cell)) {
+        return std::to_string(*value);
+    }
     if (const auto* value = std::get_if<double>(&cell)) {
         return std::to_string(*value);
     }
@@ -318,6 +337,135 @@ std::string cell_as_string(const Cell& cell) {
         return std::string(value->begin(), value->end());
     }
     return {};
+}
+
+template <typename T>
+void write_numeric(SQLPOINTER output, SQLLEN* indicator, const T& value) {
+    if (indicator != nullptr) {
+        *indicator = static_cast<SQLLEN>(sizeof(T));
+    }
+    if (output != nullptr) {
+        std::memcpy(output, &value, sizeof(T));
+    }
+}
+
+SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_type,
+                     SQLPOINTER target_value, SQLLEN buffer_length, SQLLEN* indicator) {
+    if (std::holds_alternative<std::monostate>(cell)) {
+        if (indicator != nullptr) {
+            *indicator = SQL_NULL_DATA;
+        }
+        return SQL_SUCCESS;
+    }
+    if (target_value == nullptr) {
+        return fail(handle, "Output buffer is required", "HY009");
+    }
+    if (target_type == SQL_C_DEFAULT) {
+        if (std::holds_alternative<bool>(cell)) {
+            target_type = SQL_C_BIT;
+        } else if (std::holds_alternative<std::int32_t>(cell)) {
+            target_type = SQL_C_SLONG;
+        } else if (std::holds_alternative<std::int64_t>(cell)) {
+            target_type = SQL_C_SBIGINT;
+        } else if (std::holds_alternative<double>(cell)) {
+            target_type = SQL_C_DOUBLE;
+        } else if (std::holds_alternative<std::vector<std::uint8_t>>(cell)) {
+            target_type = SQL_C_BINARY;
+        } else {
+            target_type = SQL_C_CHAR;
+        }
+    }
+    if (target_type == SQL_C_CHAR) {
+        const std::string text = cell_as_string(cell);
+        if (indicator != nullptr) {
+            *indicator = static_cast<SQLLEN>(text.size());
+        }
+        if (buffer_length <= 0) {
+            return text.empty() ? SQL_SUCCESS : SQL_SUCCESS_WITH_INFO;
+        }
+        const auto copy_count = std::min<std::size_t>(text.size(),
+            static_cast<std::size_t>(buffer_length - 1));
+        std::memcpy(target_value, text.data(), copy_count);
+        static_cast<char*>(target_value)[copy_count] = '\0';
+        if (copy_count < text.size()) {
+            handle->diagnostics.push_back({"01004", 0, "Character result was truncated"});
+            return SQL_SUCCESS_WITH_INFO;
+        }
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_BINARY) {
+        const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&cell);
+        const std::string text = bytes == nullptr ? cell_as_string(cell) :
+            std::string(bytes->begin(), bytes->end());
+        if (indicator != nullptr) {
+            *indicator = static_cast<SQLLEN>(text.size());
+        }
+        const auto copy_count = std::min<std::size_t>(text.size(),
+            static_cast<std::size_t>(std::max<SQLLEN>(0, buffer_length)));
+        std::memcpy(target_value, text.data(), copy_count);
+        if (copy_count < text.size()) {
+            handle->diagnostics.push_back({"01004", 0, "Binary result was truncated"});
+            return SQL_SUCCESS_WITH_INFO;
+        }
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_LONG || target_type == SQL_C_SLONG) {
+        SQLINTEGER converted = 0;
+        if (const auto* value = std::get_if<std::int64_t>(&cell)) {
+            converted = static_cast<SQLINTEGER>(*value);
+        } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
+            converted = static_cast<SQLINTEGER>(*value);
+        } else if (const auto* value = std::get_if<bool>(&cell)) {
+            converted = *value ? 1 : 0;
+        } else {
+            return fail(handle, "Result value cannot be converted to SQL_C_LONG", "07006");
+        }
+        write_numeric(target_value, indicator, converted);
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_SBIGINT) {
+        SQLBIGINT converted = 0;
+        if (const auto* value = std::get_if<std::int64_t>(&cell)) {
+            converted = static_cast<SQLBIGINT>(*value);
+        } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
+            converted = static_cast<SQLBIGINT>(*value);
+        } else {
+            return fail(handle, "Result value cannot be converted to SQL_C_SBIGINT", "07006");
+        }
+        write_numeric(target_value, indicator, converted);
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_DOUBLE || target_type == SQL_C_FLOAT) {
+        double number = 0;
+        if (const auto* value = std::get_if<double>(&cell)) {
+            number = *value;
+        } else if (const auto* value = std::get_if<std::int64_t>(&cell)) {
+            number = static_cast<double>(*value);
+        } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
+            number = static_cast<double>(*value);
+        } else {
+            return fail(handle, "Result value cannot be converted to a floating-point type", "07006");
+        }
+        if (target_type == SQL_C_FLOAT) {
+            const float converted = static_cast<float>(number);
+            write_numeric(target_value, indicator, converted);
+        } else {
+            write_numeric(target_value, indicator, number);
+        }
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_BIT) {
+        const auto* boolean = std::get_if<bool>(&cell);
+        const auto* integer = std::get_if<std::int64_t>(&cell);
+        const auto* small_integer = std::get_if<std::int32_t>(&cell);
+        const SQLCHAR converted = boolean != nullptr
+            ? static_cast<SQLCHAR>(*boolean)
+            : static_cast<SQLCHAR>((integer != nullptr && *integer != 0) ||
+                                   (small_integer != nullptr && *small_integer != 0));
+        write_numeric(target_value, indicator, converted);
+        return SQL_SUCCESS;
+    }
+    return fail(handle, "ODBC C target type is not supported by the OJP L1 client", "07006");
 }
 
 bool is_query_sql(const std::string& sql) {
@@ -455,7 +603,11 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     statement->row_index = 0;
     statement->row_count = -1;
     statement->has_result_set = false;
-    if (connection == nullptr || !connection->connected || !connection->stub) {
+    if (connection == nullptr) {
+        return fail(statement, "ODBC connection is not open", "08003");
+    }
+    std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
+    if (!connection->connected || !connection->stub) {
         return fail(statement, "ODBC connection is not open", "08003");
     }
 
@@ -539,6 +691,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     if (!parsed.error.empty()) {
         return fail(connection, parsed.error, "IM012");
     }
+    std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
     auto find = [&parsed](const std::string& key) -> std::string {
         const auto entry = parsed.values.find(key);
         return entry == parsed.values.end() ? std::string{} : entry->second;
@@ -589,7 +742,11 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
 
 SQLRETURN disconnect(ConnectionHandle* connection) {
     clear_diagnostics(connection);
-    if (connection == nullptr || !connection->connected || !connection->stub) {
+    if (connection == nullptr) {
+        return SQL_INVALID_HANDLE;
+    }
+    std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
+    if (!connection->connected || !connection->stub) {
         return fail(connection, "ODBC connection is not open", "08003");
     }
     grpc::ClientContext context;
@@ -606,16 +763,6 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     connection->stub.reset();
     connection->channel.reset();
     return SQL_SUCCESS;
-}
-
-template <typename T>
-void write_numeric(SQLPOINTER output, SQLLEN* indicator, const T& value) {
-    if (indicator != nullptr) {
-        *indicator = static_cast<SQLLEN>(sizeof(T));
-    }
-    if (output != nullptr) {
-        std::memcpy(output, &value, sizeof(T));
-    }
 }
 
 }  // namespace
@@ -686,7 +833,8 @@ SQLRETURN SQL_API SQLSetEnvAttr(SQLHENV environment, SQLINTEGER attribute,
 }
 
 SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connection, SQLHWND, SQLCHAR* input_string,
-                                   SQLSMALLINT input_length, SQLCHAR*, SQLSMALLINT,
+                                   SQLSMALLINT input_length, SQLCHAR* output_string,
+                                   SQLSMALLINT output_buffer_length,
                                    SQLSMALLINT* output_length, SQLUSMALLINT) {
     if (connection == SQL_NULL_HDBC ||
         static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
@@ -701,10 +849,25 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connection, SQLHWND, SQLCHAR* input_s
         : static_cast<std::size_t>(std::max<SQLSMALLINT>(0, input_length));
     const auto status = connect(static_cast<ConnectionHandle*>(connection),
                                 std::string(input, length));
-    if (SQL_SUCCEEDED(status) && output_length != nullptr) {
-        *output_length = 0;
+    if (!SQL_SUCCEEDED(status)) {
+        return status;
     }
-    return status;
+    if (output_length != nullptr) {
+        *output_length = static_cast<SQLSMALLINT>(length);
+    }
+    if (output_string == nullptr || output_buffer_length <= 0) {
+        return SQL_SUCCESS;
+    }
+    const auto copy_count = std::min<std::size_t>(
+        length, static_cast<std::size_t>(output_buffer_length - 1));
+    std::memcpy(output_string, input, copy_count);
+    output_string[copy_count] = '\0';
+    if (copy_count < length) {
+        static_cast<HandleBase*>(connection)->diagnostics.push_back(
+            {"01004", 0, "Connection string output was truncated"});
+        return SQL_SUCCESS_WITH_INFO;
+    }
+    return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLConnect(SQLHDBC connection, SQLCHAR*, SQLSMALLINT,
@@ -778,6 +941,27 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
     return SQL_SUCCESS;
 }
 
+SQLRETURN SQL_API SQLBindCol(SQLHSTMT statement, SQLUSMALLINT column_number,
+                             SQLSMALLINT target_type, SQLPOINTER target_value,
+                             SQLLEN buffer_length, SQLLEN* indicator) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    clear_diagnostics(target);
+    if (column_number == 0) {
+        return fail(target, "ODBC column numbers start at 1", "07009");
+    }
+    if (target_value == nullptr) {
+        target->bound_columns.erase(column_number);
+        return SQL_SUCCESS;
+    }
+    target->bound_columns[column_number] = {
+        target_type, target_value, buffer_length, indicator};
+    return SQL_SUCCESS;
+}
+
 SQLRETURN SQL_API SQLExecute(SQLHSTMT statement) {
     if (statement == SQL_NULL_HSTMT ||
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
@@ -800,7 +984,23 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
         return SQL_NO_DATA;
     }
     ++target->row_index;
-    return SQL_SUCCESS;
+    SQLRETURN result = SQL_SUCCESS;
+    const auto& row = target->rows[target->row_index - 1];
+    for (const auto& binding : target->bound_columns) {
+        if (binding.first == 0 || binding.first > row.size()) {
+            return fail(target, "Bound column number exceeds the result column count", "07009");
+        }
+        const auto& column = binding.second;
+        const auto column_result = write_cell(target, row[binding.first - 1],
+            column.value_type, column.value, column.buffer_length, column.indicator);
+        if (!SQL_SUCCEEDED(column_result)) {
+            return column_result;
+        }
+        if (column_result == SQL_SUCCESS_WITH_INFO) {
+            result = SQL_SUCCESS_WITH_INFO;
+        }
+    }
+    return result;
 }
 
 SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
@@ -817,89 +1017,7 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
         return fail(target, "No current row or invalid column number", "07009");
     }
     const Cell& cell = target->rows[target->row_index - 1][column_number - 1];
-    if (std::holds_alternative<std::monostate>(cell)) {
-        if (indicator != nullptr) {
-            *indicator = SQL_NULL_DATA;
-        }
-        return SQL_SUCCESS;
-    }
-    if (target_value == nullptr) {
-        return fail(target, "Output buffer is required", "HY009");
-    }
-    if (target_type == SQL_C_CHAR) {
-        const std::string text = cell_as_string(cell);
-        if (indicator != nullptr) {
-            *indicator = static_cast<SQLLEN>(text.size());
-        }
-        if (buffer_length <= 0) {
-            return SQL_SUCCESS_WITH_INFO;
-        }
-        const auto copy_count = std::min<std::size_t>(text.size(),
-            static_cast<std::size_t>(buffer_length - 1));
-        std::memcpy(target_value, text.data(), copy_count);
-        static_cast<char*>(target_value)[copy_count] = '\0';
-        return copy_count < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
-    }
-    if (target_type == SQL_C_BINARY) {
-        const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&cell);
-        const std::string text = bytes == nullptr ? cell_as_string(cell) :
-            std::string(bytes->begin(), bytes->end());
-        if (indicator != nullptr) {
-            *indicator = static_cast<SQLLEN>(text.size());
-        }
-        const auto copy_count = std::min<std::size_t>(text.size(),
-            static_cast<std::size_t>(std::max<SQLLEN>(0, buffer_length)));
-        std::memcpy(target_value, text.data(), copy_count);
-        return copy_count < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
-    }
-    if (target_type == SQL_C_LONG || target_type == SQL_C_SLONG) {
-        SQLINTEGER converted = 0;
-        if (const auto* value = std::get_if<std::int64_t>(&cell)) {
-            converted = static_cast<SQLINTEGER>(*value);
-        } else if (const auto* value = std::get_if<bool>(&cell)) {
-            converted = *value ? 1 : 0;
-        } else {
-            return fail(target, "Result value cannot be converted to SQL_C_LONG", "07006");
-        }
-        write_numeric(target_value, indicator, converted);
-        return SQL_SUCCESS;
-    }
-    if (target_type == SQL_C_SBIGINT) {
-        SQLBIGINT converted = 0;
-        if (const auto* value = std::get_if<std::int64_t>(&cell)) {
-            converted = static_cast<SQLBIGINT>(*value);
-        } else {
-            return fail(target, "Result value cannot be converted to SQL_C_SBIGINT", "07006");
-        }
-        write_numeric(target_value, indicator, converted);
-        return SQL_SUCCESS;
-    }
-    if (target_type == SQL_C_DOUBLE || target_type == SQL_C_FLOAT) {
-        double number = 0;
-        if (const auto* value = std::get_if<double>(&cell)) {
-            number = *value;
-        } else if (const auto* value = std::get_if<std::int64_t>(&cell)) {
-            number = static_cast<double>(*value);
-        } else {
-            return fail(target, "Result value cannot be converted to a floating-point type", "07006");
-        }
-        if (target_type == SQL_C_FLOAT) {
-            const float converted = static_cast<float>(number);
-            write_numeric(target_value, indicator, converted);
-        } else {
-            write_numeric(target_value, indicator, number);
-        }
-        return SQL_SUCCESS;
-    }
-    if (target_type == SQL_C_BIT) {
-        SQLCHAR converted = std::get_if<bool>(&cell) != nullptr
-            ? static_cast<SQLCHAR>(*std::get_if<bool>(&cell))
-            : static_cast<SQLCHAR>(std::get_if<std::int64_t>(&cell) != nullptr &&
-                                   *std::get_if<std::int64_t>(&cell) != 0);
-        write_numeric(target_value, indicator, converted);
-        return SQL_SUCCESS;
-    }
-    return fail(target, "ODBC C target type is not supported by the OJP L1 client", "07006");
+    return write_cell(target, cell, target_type, target_value, buffer_length, indicator);
 }
 
 SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT statement, SQLSMALLINT* column_count) {
@@ -943,6 +1061,8 @@ SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,
         const Cell& cell = target->rows.front()[column_number - 1];
         if (std::holds_alternative<std::int64_t>(cell)) {
             inferred_type = SQL_BIGINT;
+        } else if (std::holds_alternative<std::int32_t>(cell)) {
+            inferred_type = SQL_INTEGER;
         } else if (std::holds_alternative<double>(cell)) {
             inferred_type = SQL_DOUBLE;
         } else if (std::holds_alternative<bool>(cell)) {
@@ -994,7 +1114,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
             target->row_index = 0;
             target->has_result_set = false;
         } else if (option == SQL_UNBIND) {
-            return SQL_SUCCESS;
+            target->bound_columns.clear();
         } else {
             target->parameters.clear();
         }
@@ -1124,30 +1244,32 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
     if (supported == nullptr) {
         return fail(static_cast<HandleBase*>(connection), "Function support output is required", "HY009");
     }
+    const std::vector<SQLUSMALLINT> functions = {
+        SQL_API_SQLALLOCHANDLE, SQL_API_SQLFREEHANDLE, SQL_API_SQLSETENVATTR,
+        SQL_API_SQLDRIVERCONNECT, SQL_API_SQLCONNECT, SQL_API_SQLDISCONNECT,
+        SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
+        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
+        SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
+        SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETINFO,
+        SQL_API_SQLGETFUNCTIONS};
     if (function_id == SQL_API_ALL_FUNCTIONS) {
         std::fill(supported, supported + SQL_API_ALL_FUNCTIONS_SIZE, SQL_FALSE);
+        for (const auto function : functions) {
+            if (function < SQL_API_ALL_FUNCTIONS_SIZE) {
+                supported[function] = SQL_TRUE;
+            }
+        }
         return SQL_SUCCESS;
     }
-    const bool implemented =
-        function_id == SQL_API_SQLALLOCHANDLE ||
-        function_id == SQL_API_SQLFREEHANDLE ||
-        function_id == SQL_API_SQLSETENVATTR ||
-        function_id == SQL_API_SQLDRIVERCONNECT ||
-        function_id == SQL_API_SQLCONNECT ||
-        function_id == SQL_API_SQLDISCONNECT ||
-        function_id == SQL_API_SQLEXECDIRECT ||
-        function_id == SQL_API_SQLPREPARE ||
-        function_id == SQL_API_SQLBINDPARAMETER ||
-        function_id == SQL_API_SQLEXECUTE ||
-        function_id == SQL_API_SQLFETCH ||
-        function_id == SQL_API_SQLGETDATA ||
-        function_id == SQL_API_SQLNUMRESULTCOLS ||
-        function_id == SQL_API_SQLDESCRIBECOL ||
-        function_id == SQL_API_SQLROWCOUNT ||
-        function_id == SQL_API_SQLFREESTMT ||
-        function_id == SQL_API_SQLGETDIAGREC ||
-        function_id == SQL_API_SQLGETINFO ||
-        function_id == SQL_API_SQLGETFUNCTIONS;
+    if (function_id == SQL_API_ODBC3_ALL_FUNCTIONS) {
+        std::fill(supported, supported + SQL_API_ODBC3_ALL_FUNCTIONS_SIZE, SQL_FALSE);
+        for (const auto function : functions) {
+            supported[function >> 4] = static_cast<SQLUSMALLINT>(
+                supported[function >> 4] | (1U << (function & 0x0f)));
+        }
+        return SQL_SUCCESS;
+    }
+    const bool implemented = std::find(functions.begin(), functions.end(), function_id) != functions.end();
     *supported = implemented ? SQL_TRUE : SQL_FALSE;
     return SQL_SUCCESS;
 }

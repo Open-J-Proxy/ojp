@@ -20,7 +20,9 @@ execution, basic result columns and scalar values, input parameters for common
 ODBC scalar types, and SQL error diagnostics. The implementation supports
 `SQLDriverConnect`, `SQLPrepare`/`SQLExecute`, `SQLBindParameter` for input
 parameters, `SQLExecDirect`, forward-only `SQLFetch`/`SQLGetData`, and affected
-row counts.
+row counts. The current parameter/value mapping covers null, booleans, signed
+integers, floats, doubles, strings, and binary values. Disable application-side
+connection pooling when using OJP.
 
 Transactions, output parameters, wide-character ODBC entry points, metadata
 discovery, LOBs, pagination, session affinity, multinode routing, health
@@ -60,7 +62,7 @@ Register the driver with the ODBC Driver Manager as `OJP`, then use
 For example:
 
 ```text
-DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:example;DB_CLOSE_DELAY=-1};UID={sa};
+DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:example;DB_CLOSE_DELAY=-1};UID={sa};PWD=;
 ```
 
 The ODBC connection-string braces protect semicolons in the H2 URL; a literal

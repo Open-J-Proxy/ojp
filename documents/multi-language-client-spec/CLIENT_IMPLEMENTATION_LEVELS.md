@@ -78,3 +78,10 @@ When publishing a new language client, report:
 - tested level,
 - database-by-database achieved level,
 - explicit gaps by level (for example: “L9 missing for MySQL and DB2”).
+
+## 5) Non-Java Client Implementations
+
+| Client | Target / implemented level | H2 integration status | Notes |
+|---|---:|---|---|
+| [Go client](../../ojp-grpc-client-go/README.md) | L1 | H2 L1 suite is documented as passing locally; CI confirmation is pending. | Standard `database/sql` API. |
+| [C++ ODBC client](../../ojp-odbc-client-cpp/README.md) | L1 | Opt-in real-server H2 suite is implemented; it has not been run in this checkout. | ANSI ODBC, single OJP endpoint, and common scalar parameters. |

@@ -2,6 +2,7 @@
 #include <sqlext.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -161,7 +162,13 @@ void assert_h2_sql_error(SQLHSTMT statement, const std::string& sql, const char*
 
 int run_integration_test() {
     const char* enabled = std::getenv("OJP_TEST_H2");
-    const std::string enabled_value = enabled == nullptr ? "" : enabled;
+    std::string enabled_value = enabled == nullptr ? "" : enabled;
+    std::transform(enabled_value.begin(), enabled_value.end(), enabled_value.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    const auto first = enabled_value.find_first_not_of(" \t\r\n");
+    const auto last = enabled_value.find_last_not_of(" \t\r\n");
+    enabled_value = first == std::string::npos
+        ? "" : enabled_value.substr(first, last - first + 1);
     if (enabled_value.empty() || enabled_value == "false" || enabled_value == "0" ||
         enabled_value == "no") {
         std::cout << "Skipped: set OJP_TEST_H2=true to run the real-server H2 L1 suite\n";
@@ -170,8 +177,13 @@ int run_integration_test() {
     if (enabled_value != "true" && enabled_value != "1" && enabled_value != "yes") {
         throw std::runtime_error("OJP_TEST_H2 must be true or false");
     }
-    const char* endpoint = std::getenv("OJP_TEST_H2_ADDR");
-    if (endpoint == nullptr || *endpoint == '\0') {
+    const char* endpoint_value = std::getenv("OJP_TEST_H2_ADDR");
+    std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
+    const auto endpoint_first = endpoint.find_first_not_of(" \t\r\n");
+    const auto endpoint_last = endpoint.find_last_not_of(" \t\r\n");
+    endpoint = endpoint_first == std::string::npos
+        ? "" : endpoint.substr(endpoint_first, endpoint_last - endpoint_first + 1);
+    if (endpoint.empty()) {
         throw std::runtime_error("OJP_TEST_H2_ADDR is required when OJP_TEST_H2=true");
     }
 
@@ -245,6 +257,16 @@ int run_integration_test() {
             reinterpret_cast<SQLCHAR*>(const_cast<char*>(select.c_str())), SQL_NTS),
             "SQLPrepare(select)", SQL_HANDLE_STMT, statement);
         prepare_integer_parameter(statement, &row_id, &id_length);
+        SQLINTEGER bound_id = 0;
+        SQLLEN bound_id_length = 0;
+        SQLCHAR bound_name[64] = {};
+        SQLLEN bound_name_length = 0;
+        require_success(SQLBindCol(statement, 1, SQL_C_SLONG, &bound_id,
+                                   sizeof(bound_id), &bound_id_length),
+                        "SQLBindCol(id)", SQL_HANDLE_STMT, statement);
+        require_success(SQLBindCol(statement, 2, SQL_C_CHAR, bound_name,
+                                   sizeof(bound_name), &bound_name_length),
+                        "SQLBindCol(name)", SQL_HANDLE_STMT, statement);
         require_success(SQLExecute(statement), "SQLExecute(select)", SQL_HANDLE_STMT, statement);
         SQLSMALLINT column_count = 0;
         require_success(SQLNumResultCols(statement, &column_count),
@@ -263,11 +285,27 @@ int run_integration_test() {
         require_success(SQLGetData(statement, 2, SQL_C_CHAR, actual_name,
                                    sizeof(actual_name), &actual_name_length),
                         "SQLGetData(name)", SQL_HANDLE_STMT, statement);
-        if (actual_id != row_id ||
+        if (actual_id != row_id || bound_id != row_id ||
+            std::string(reinterpret_cast<const char*>(bound_name)) != "before" ||
             std::string(reinterpret_cast<const char*>(actual_name)) != "before") {
             throw std::runtime_error("SELECT returned unexpected L1 row values");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(select)",
+                        SQL_HANDLE_STMT, statement);
+        require_success(SQLFreeStmt(statement, SQL_UNBIND), "SQLFreeStmt(unbind)",
+                        SQL_HANDLE_STMT, statement);
+
+        execute_direct(statement, "SELECT CAST(NULL AS VARCHAR(10))");
+        require_success(SQLFetch(statement), "SQLFetch(NULL)", SQL_HANDLE_STMT, statement);
+        SQLCHAR null_value[16] = {};
+        SQLLEN null_indicator = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_CHAR, null_value,
+                                   sizeof(null_value), &null_indicator),
+                        "SQLGetData(NULL)", SQL_HANDLE_STMT, statement);
+        if (null_indicator != SQL_NULL_DATA) {
+            throw std::runtime_error("SQL NULL was not returned as SQL_NULL_DATA");
+        }
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(NULL)",
                         SQL_HANDLE_STMT, statement);
 
         char updated_name[] = "after";
@@ -311,9 +349,29 @@ int run_integration_test() {
                         "SQLFreeHandle(statement)", SQL_HANDLE_DBC, connection);
         statement = SQL_NULL_HSTMT;
         require_success(SQLDisconnect(connection), "SQLDisconnect", SQL_HANDLE_DBC, connection);
-        if (SQLExecDirect(SQL_NULL_HSTMT, nullptr, 0) != SQL_INVALID_HANDLE) {
-            throw std::runtime_error("invalid ODBC statement handle was not rejected");
+        SQLHSTMT closed_statement = SQL_NULL_HSTMT;
+        require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
+                                       reinterpret_cast<SQLHANDLE*>(&closed_statement)),
+                        "SQLAllocHandle(closed connection)", SQL_HANDLE_DBC, connection);
+        const std::string after_close = "SELECT 1";
+        if (SQLExecDirect(closed_statement,
+                reinterpret_cast<SQLCHAR*>(const_cast<char*>(after_close.c_str())),
+                SQL_NTS) != SQL_ERROR) {
+            throw std::runtime_error("closed ODBC connection accepted a query");
         }
+        SQLCHAR closed_state[6] = {};
+        SQLCHAR closed_message[128] = {};
+        SQLINTEGER closed_native_error = 0;
+        SQLSMALLINT closed_message_length = 0;
+        require_success(SQLGetDiagRec(SQL_HANDLE_STMT, closed_statement, 1, closed_state,
+                                      &closed_native_error, closed_message,
+                                      sizeof(closed_message), &closed_message_length),
+                        "SQLGetDiagRec(closed connection)", SQL_HANDLE_STMT, closed_statement);
+        if (std::string(reinterpret_cast<const char*>(closed_state)) != "08003") {
+            throw std::runtime_error("closed ODBC connection returned the wrong SQLSTATE");
+        }
+        require_success(SQLFreeHandle(SQL_HANDLE_STMT, closed_statement),
+                        "SQLFreeHandle(closed statement)", SQL_HANDLE_DBC, connection);
         require_success(SQLFreeHandle(SQL_HANDLE_DBC, connection),
                         "SQLFreeHandle(connection)", SQL_HANDLE_ENV, environment);
         connection = SQL_NULL_HDBC;

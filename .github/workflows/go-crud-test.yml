@@ -78,8 +78,6 @@ jobs:
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
-          OJP_TEST_H2_JDBC_URL: 'jdbc:h2:mem:ojp_go_h2_l1;DB_CLOSE_DELAY=-1'
-          OJP_TEST_H2_USER: 'sa'
         run: go test -count=1 -json ./... | tee /tmp/go-h2-l1-test.json
         working-directory: ojp-grpc-client-go
 

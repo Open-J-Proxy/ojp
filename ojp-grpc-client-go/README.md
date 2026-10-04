@@ -14,7 +14,7 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
 | Database | Highest achieved level (current tests) | Evidence highlights |
 |---|---:|---|
-| **H2** | **L1** | `client_test.TestH2L1Integration` passed twice locally: Go → one OJP server → H2; CI confirmation is pending. |
+| **H2** | **L1** | `client_test.TestH2ConnectionShouldSupportL1CRUDAndLifecycle` passed twice locally: Go → one OJP server → H2; CI confirmation is pending. |
 | **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
 | **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
 | **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
@@ -174,11 +174,9 @@ The H2 suite runs Go through a real OJP gRPC server to an H2 database. Start the
 ```bash
 OJP_TEST_H2=true \
 OJP_TEST_H2_ADDR=localhost:1059 \
-OJP_TEST_H2_JDBC_URL='jdbc:h2:mem:go_h2_l1;DB_CLOSE_DELAY=-1' \
-OJP_TEST_H2_USER=sa \
-go test -count=1 -v ./client -run '^TestH2L1Integration$'
+go test -count=1 -v ./client -run '^TestH2ConnectionShouldSupportL1CRUDAndLifecycle$'
 ```
 
 When `OJP_TEST_H2` is enabled, missing connection configuration or an unavailable database fails the test; the suite never treats an unavailable H2 server as a skip.
 
-The test uses a unique table per run, performs a protocol/database readiness query, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and session termination. Run the test repeatedly with `-count=2` to check for conflicts.
+The test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv`. It uses a unique table per run, performs a protocol/database readiness query, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and session termination. Run the test repeatedly with `-count=2` to check for conflicts.

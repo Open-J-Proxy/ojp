@@ -1,5 +1,5 @@
 # =============================================================================
-# Go CRUD Test (H2)
+# Go Main CI
 # =============================================================================
 #
 # This workflow builds the OJP server, starts it with the embedded H2 database,
@@ -11,13 +11,14 @@
 #
 # =============================================================================
 
-name: Go CRUD Test (H2)
+name: Go Main CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
+  workflow_dispatch:
 
 jobs:
   go-crud-test:

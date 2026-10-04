@@ -84,6 +84,11 @@ Located in [guides/](guides/):
 - [Release Process & Maven Central Integration](guides/RELEASE_PROCESS.md) - One-click release workflow, Sonatype setup, and suggestions
 - [Adding Database XA Support](guides/ADDING_DATABASE_XA_SUPPORT.md) - How to add XA support for new databases
 
+## Multi-language Clients
+
+- [Go client](../ojp-grpc-client-go/README.md) - Go `database/sql` client, currently L1
+- [Dart client](../ojp-grpc-client-dart/README.md) - Drift SQL executor, currently H2 L1
+
 ### Code Contributions
 
 Located in [code-contributions/](code-contributions/):

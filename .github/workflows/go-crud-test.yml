@@ -1,17 +1,17 @@
 # =============================================================================
-# Go CRUD Test (H2)
+# Go and Dart L1 CRUD Test (H2)
 # =============================================================================
 #
 # This workflow builds the OJP server, starts it with the embedded H2 database,
-# and runs the Go CRUD client against it. It validates the Go gRPC client
-# implementation end-to-end against a real OJP server.
+# and runs the Go and Dart clients against it. It validates both L1 gRPC client
+# implementations end-to-end against a real OJP server.
 #
 # This runs as a separate workflow so it is independently triggerable and does
 # not affect the Java-based H2 fail-fast job in main.yml.
 #
 # =============================================================================
 
-name: Go CRUD Test (H2)
+name: Go and Dart L1 CRUD Test (H2)
 
 on:
   push:
@@ -19,9 +19,12 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   go-crud-test:
-    name: Go CRUD Test against H2
+    name: Go and Dart L1 CRUD Test against H2
     runs-on: ubuntu-latest
 
     steps:
@@ -86,6 +89,25 @@ jobs:
           OJP_JDBC_LINE: 'jdbc:ojp[localhost:1059]_h2:mem:ojp_go_h2_l1;DB_CLOSE_DELAY=-1,sa,'
         run: go run ./cmd/ojp-grpc-client
         working-directory: ojp-grpc-client-go
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1.8.1
+        with:
+          sdk: '3.13.5'
+
+      - name: Check Dart formatting and analysis
+        run: |
+          dart pub get
+          dart format --output=none --set-exit-if-changed lib test
+          dart analyze
+        working-directory: ojp-grpc-client-dart
+
+      - name: Run Dart H2 L1 integration test
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: dart test --reporter=expanded
+        working-directory: ojp-grpc-client-dart
 
       - name: Show ojp-server.log
         if: always()

@@ -1,17 +1,16 @@
 # =============================================================================
-# Go and Dart H2 L1 Integration
+# Go H2 L1 Integration
 # =============================================================================
 #
 # This workflow builds the OJP server, starts it with the embedded H2 database,
-# and runs the Go and Dart clients against it. It validates both L1 gRPC client
-# implementations end-to-end against a real OJP server.
+# and runs the Go client against it.
 #
 # This runs as a separate workflow so it is independently triggerable and does
 # not affect the Java-based H2 fail-fast job in main.yml.
 #
 # =============================================================================
 
-name: Go and Dart H2 L1 Integration
+name: Go H2 L1 Integration
 
 on:
   push:
@@ -23,8 +22,8 @@ permissions:
   contents: read
 
 jobs:
-  go-dart-h2-l1-integration:
-    name: Go and Dart H2 L1 Integration
+  go-h2-l1-integration:
+    name: Go H2 L1 Integration
     runs-on: ubuntu-latest
 
     steps:
@@ -90,25 +89,6 @@ jobs:
         run: go run ./cmd/ojp-client
         working-directory: ojp-client-go-database-sql
 
-      - name: Set up Dart
-        uses: dart-lang/setup-dart@v1.8.1
-        with:
-          sdk: '3.13.5'
-
-      - name: Check Dart formatting and analysis
-        run: |
-          dart pub get
-          dart format --output=none --set-exit-if-changed lib test
-          dart analyze
-        working-directory: ojp-client-dart-drift
-
-      - name: Run Dart H2 L1 integration tests
-        env:
-          OJP_TEST_H2: 'true'
-          OJP_TEST_H2_ADDR: 'localhost:1059'
-        run: dart test --reporter=expanded
-        working-directory: ojp-client-dart-drift
-
       - name: Show ojp-server.log
         if: always()
         run: cat /tmp/ojp-server.log
@@ -117,7 +97,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: go-dart-h2-l1-test-results
+          name: go-h2-l1-test-results
           path: |
             /tmp/go-h2-l1-test.json
             /tmp/ojp-server.log

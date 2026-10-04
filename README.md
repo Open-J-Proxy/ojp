@@ -46,13 +46,13 @@ Early single-endpoint clients target H2 L1; they are not feature-equivalent to t
 
 | Client module | Application API | Current scope |
 |---|---|---|
-| [Go](ojp-grpc-client-go/README.md) | `database/sql` | H2 L1 |
-| [Dart](ojp-grpc-client-dart/README.md) | Drift executor | H2 L1 |
-| [.NET](ojp-grpc-client-dotnet/README.md) | ADO.NET | H2 L1 |
-| [PHP](ojp-grpc-client-php/README.md) | PDO-compatible | H2 L1 |
-| [Python](ojp-grpc-client-python/README.rst) | DB-API 2.0 | H2 L1 |
-| [Ruby](ojp-grpc-client-ruby/README.md) | DBI | H2 L1 |
-| [C++](ojp-grpc-client-cpp/README.md) | ODBC | H2 L1 |
+| [Go](ojp-client-go/README.md) | `database/sql` | H2 L1 |
+| [Dart](ojp-client-dart/README.md) | Drift executor | H2 L1 |
+| [.NET](ojp-client-dotnet/README.md) | ADO.NET | H2 L1 |
+| [PHP](ojp-client-php/README.md) | PDO-compatible | H2 L1 |
+| [Python](ojp-client-python/README.rst) | DB-API 2.0 | H2 L1 |
+| [Ruby](ojp-client-ruby/README.md) | DBI | H2 L1 |
+| [C++](ojp-client-cpp/README.md) | ODBC | H2 L1 |
 
 Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2**. Also compatible in principle with any database that provides a JDBC driver.
 

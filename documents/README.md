@@ -86,13 +86,13 @@ Located in [guides/](guides/):
 
 ## Multi-language Clients
 
-- [Go client](../ojp-grpc-client-go/README.md) - Go `database/sql` client, H2 L1
-- [Dart client](../ojp-grpc-client-dart/README.md) - Drift executor, H2 L1
-- [.NET client](../ojp-grpc-client-dotnet/README.md) - ADO.NET provider, H2 L1
-- [PHP client](../ojp-grpc-client-php/README.md) - PDO-compatible API, H2 L1
-- [Python client](../ojp-grpc-client-python/README.rst) - DB-API 2.0 client, H2 L1
-- [Ruby client](../ojp-grpc-client-ruby/README.md) - DBI client, H2 L1
-- [C++ ODBC client](../ojp-grpc-client-cpp/README.md) - ODBC driver, H2 L1
+- [Go client](../ojp-client-go/README.md) - Go `database/sql` client, H2 L1
+- [Dart client](../ojp-client-dart/README.md) - Drift executor, H2 L1
+- [.NET client](../ojp-client-dotnet/README.md) - ADO.NET provider, H2 L1
+- [PHP client](../ojp-client-php/README.md) - PDO-compatible API, H2 L1
+- [Python client](../ojp-client-python/README.rst) - DB-API 2.0 client, H2 L1
+- [Ruby client](../ojp-client-ruby/README.md) - DBI client, H2 L1
+- [C++ ODBC client](../ojp-client-cpp/README.md) - ODBC driver, H2 L1
 
 ### Code Contributions
 

@@ -179,7 +179,7 @@ jobs:
           dart format --output=none --set-exit-if-changed lib test
           dart analyze
           dart test --reporter=expanded
-        working-directory: ojp-grpc-client-dart
+        working-directory: ojp-client-dart
 
       - name: Show ojp-server.log
         if: always()  # ensures it runs even if previous steps fail
@@ -245,7 +245,7 @@ jobs:
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
-        run: dotnet test ojp-grpc-client-dotnet/Ojp.Client.DotNet.sln --logger "trx;LogFileName=dotnet-h2-l1.trx" --results-directory ojp-grpc-client-dotnet/TestResults
+        run: dotnet test ojp-client-dotnet/Ojp.Client.DotNet.sln --logger "trx;LogFileName=dotnet-h2-l1.trx" --results-directory ojp-client-dotnet/TestResults
 
       - name: Show OJP server log
         if: always()
@@ -257,7 +257,7 @@ jobs:
         with:
           name: dotnet-h2-l1-test-results
           path: |
-            ojp-grpc-client-dotnet/TestResults/
+            ojp-client-dotnet/TestResults/
             /tmp/ojp-server-dotnet.log
           retention-days: 7
 
@@ -299,11 +299,11 @@ jobs:
         with:
           ruby-version: 3.2
           bundler-cache: true
-          working-directory: ojp-grpc-client-ruby
+          working-directory: ojp-client-ruby
 
       - name: Verify generated Ruby protocol bindings
         run: ./generate-proto.sh --check
-        working-directory: ojp-grpc-client-ruby
+        working-directory: ojp-client-ruby
 
       - name: Start OJP server
         run: |
@@ -333,7 +333,7 @@ jobs:
           set -o pipefail
           bundle exec ruby -Ilib -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }' \
             | tee /tmp/ruby-h2-l1-test.log
-        working-directory: ojp-grpc-client-ruby
+        working-directory: ojp-client-ruby
 
       - name: Show OJP server log
         if: always()
@@ -382,11 +382,11 @@ jobs:
         run: bash ojp-server/download-drivers.sh ./ojp-libs
 
       - name: Install Python client
-        working-directory: ojp-grpc-client-python
+        working-directory: ojp-client-python
         run: python -m pip install -e '.[dev]'
 
       - name: Check Python protobuf generation
-        working-directory: ojp-grpc-client-python
+        working-directory: ojp-client-python
         run: ojp-generate-proto --check
 
       - name: Start OJP server
@@ -410,7 +410,7 @@ jobs:
           exit 1
 
       - name: Run all Python unit and H2 integration tests
-        working-directory: ojp-grpc-client-python
+        working-directory: ojp-client-python
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: localhost:1059
@@ -2248,19 +2248,19 @@ jobs:
 
       - name: Configure C++ ODBC client
         run: |
-          cmake -S ojp-grpc-client-cpp -B ojp-grpc-client-cpp/build \
+          cmake -S ojp-client-cpp -B ojp-client-cpp/build \
             -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build C++ ODBC client and tests
-        run: cmake --build ojp-grpc-client-cpp/build --parallel 2
+        run: cmake --build ojp-client-cpp/build --parallel 2
 
       - name: Run all C++ ODBC tests against H2
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
         run: |
-          ctest --test-dir ojp-grpc-client-cpp/build --output-on-failure \
+          ctest --test-dir ojp-client-cpp/build --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-test.log
 
       - name: Show ojp-server.log

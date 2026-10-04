@@ -11,7 +11,7 @@
 - [Implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md): L1–L10. Each level includes all earlier levels.
 - [Client specification](../multi-language-client-spec/CLIENT_SPEC.md) and [AI contract](../multi-language-client-spec/CLIENT_SPEC_AI.md): expected client behavior.
 - [StatementService.proto](../../ojp-grpc-commons/src/main/proto/StatementService.proto) and [echo.proto](../../ojp-grpc-commons/src/main/proto/echo.proto): actual messages and RPCs.
-- [Go README](../../ojp-grpc-client-go/README.md), [client code](../../ojp-grpc-client-go/client/), and [Go/Dart H2 L1 workflow](../../.github/workflows/go-dart-h2-l1.yml): current implementation and coverage.
+- [Go README](../../ojp-client-go/README.md), [client code](../../ojp-client-go/client/), and [Go/Dart H2 L1 workflow](../../.github/workflows/go-dart-h2-l1.yml): current implementation and coverage.
 
 Build a reusable Go client and keep the command-line example. A `database/sql` adapter and ORM support are separate work. Do not add an application-side database pool.
 

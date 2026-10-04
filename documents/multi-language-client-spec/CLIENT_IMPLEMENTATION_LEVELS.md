@@ -64,13 +64,13 @@ These entries describe the levels targeted by the language client modules; they 
 
 | Client | Database | Target level | Evidence |
 |---|---|---:|---|
-| Go (`ojp-grpc-client-go`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
-| Dart (`ojp-grpc-client-dart`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
-| .NET ADO.NET (`ojp-grpc-client-dotnet`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
-| PHP PDO-compatible (`ojp-grpc-client-php`) | H2 | **L1** | `tests/h2_l1_integration.php` exercises the real-server CRUD and lifecycle path. |
-| Python DB-API (`ojp-grpc-client-python`) | H2 | **L1** | `tests/test_h2.py` exercises the real-server CRUD and lifecycle path. |
-| Ruby DBI (`ojp-grpc-client-ruby`) | H2 | **L1** | `test/integration/h2_l1_test.rb` exercises the real-server CRUD and lifecycle path. |
-| C++ ODBC (`ojp-grpc-client-cpp`) | H2 | **L1** | `tests/h2_l1_integration_test.cpp` exercises the real-server CRUD and lifecycle path. |
+| Go (`ojp-client-go`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
+| Dart (`ojp-client-dart`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
+| .NET ADO.NET (`ojp-client-dotnet`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
+| PHP PDO-compatible (`ojp-client-php`) | H2 | **L1** | `tests/h2_l1_integration.php` exercises the real-server CRUD and lifecycle path. |
+| Python DB-API (`ojp-client-python`) | H2 | **L1** | `tests/test_h2.py` exercises the real-server CRUD and lifecycle path. |
+| Ruby DBI (`ojp-client-ruby`) | H2 | **L1** | `test/integration/h2_l1_test.rb` exercises the real-server CRUD and lifecycle path. |
+| C++ ODBC (`ojp-client-cpp`) | H2 | **L1** | `tests/h2_l1_integration_test.cpp` exercises the real-server CRUD and lifecycle path. |
 
 ### Important interpretation note
 
@@ -84,15 +84,15 @@ These levels are based on each language client's own integration tests and are i
 
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
-| **Go** | H2 | **L1** | `ojp-grpc-client-go/client/h2_l1_integration_test.go` |
-| **Dart** | H2 | **L1** | `ojp-grpc-client-dart/test/h2_l1_integration_test.dart` |
-| **.NET ADO.NET** | H2 | **L1** | `ojp-grpc-client-dotnet/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
-| **PHP PDO-compatible** | H2 | **L1** | `ojp-grpc-client-php/tests/h2_l1_integration.php` |
-| **Python DB-API 2.0** | H2 | **L1** | `ojp-grpc-client-python/tests/test_h2.py` |
-| **Ruby DBI** | H2 | **L1** | `ojp-grpc-client-ruby/test/integration/h2_l1_test.rb` |
-| **C++ ODBC** | H2 | **L1** | `ojp-grpc-client-cpp/tests/h2_l1_integration_test.cpp` |
+| **Go** | H2 | **L1** | `ojp-client-go/client/h2_l1_integration_test.go` |
+| **Dart** | H2 | **L1** | `ojp-client-dart/test/h2_l1_integration_test.dart` |
+| **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
+| **PHP PDO-compatible** | H2 | **L1** | `ojp-client-php/tests/h2_l1_integration.php` |
+| **Python DB-API 2.0** | H2 | **L1** | `ojp-client-python/tests/test_h2.py` |
+| **Ruby DBI** | H2 | **L1** | `ojp-client-ruby/test/integration/h2_l1_test.rb` |
+| **C++ ODBC** | H2 | **L1** | `ojp-client-cpp/tests/h2_l1_integration_test.cpp` |
 
-The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-grpc-client-ruby/README.md`](../../ojp-grpc-client-ruby/README.md) for the implemented API and current gaps.
+The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-client-ruby/README.md`](../../ojp-client-ruby/README.md) for the implemented API and current gaps.
 
 ---
 
@@ -115,12 +115,12 @@ The following table records the implemented target level and its real-server int
 
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
-| **Go (`database/sql`)** | H2 | **L1** | `ojp-grpc-client-go/client/h2_l1_integration_test.go` |
-| **Dart (Drift)** | H2 | **L1** | `ojp-grpc-client-dart/test/h2_l1_integration_test.dart` |
-| **.NET (ADO.NET)** | H2 | **L1** | `ojp-grpc-client-dotnet/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
-| **C++ ODBC** | H2 | **L1** | `ojp-grpc-client-cpp/tests/h2_l1_integration_test.cpp` |
-| **PHP (`PDO`-compatible)** | H2 | **L1** | `ojp-grpc-client-php/tests/h2_l1_integration.php` |
-| **Python (DB-API 2.0)** | H2 | **L1** | `ojp-grpc-client-python/tests/test_h2.py` |
-| **Ruby DBI** | H2 | **L1** | `ojp-grpc-client-ruby/test/integration/h2_l1_test.rb` |
+| **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go/client/h2_l1_integration_test.go` |
+| **Dart (Drift)** | H2 | **L1** | `ojp-client-dart/test/h2_l1_integration_test.dart` |
+| **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
+| **C++ ODBC** | H2 | **L1** | `ojp-client-cpp/tests/h2_l1_integration_test.cpp` |
+| **PHP (`PDO`-compatible)** | H2 | **L1** | `ojp-client-php/tests/h2_l1_integration.php` |
+| **Python (DB-API 2.0)** | H2 | **L1** | `ojp-client-python/tests/test_h2.py` |
+| **Ruby DBI** | H2 | **L1** | `ojp-client-ruby/test/integration/h2_l1_test.rb` |
 
 The PHP client currently exposes the L1 operations through a userland `PDO` subclass; it is not a native PDO driver. It targets a single OJP endpoint and does not implement L2+ behavior.

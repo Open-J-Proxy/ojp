@@ -2,18 +2,17 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	ojpclient "github.com/open-j-proxy/ojp-client/internal/client"
-	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
+	ojpclient "github.com/open-j-proxy/ojp-client/client"
 )
 
 func main() {
@@ -57,162 +56,113 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	client := ojpclient.NewGrpcStatementServiceClient(addr)
-
-	connectResp, err := client.Connect(ctx, &pb.ConnectionDetails{
-		Url:        backendURL,
-		User:       dbUser,
-		Password:   dbPassword,
-		ClientUUID: "go-example-client",
-	})
+	dataSourceName, err := makeDataSourceName(addr, backendURL, dbUser, dbPassword)
 	if err != nil {
+		log.Fatalf("build OJP data source name failed: %v", err)
+	}
+	db, err := sql.Open(ojpclient.DriverName, dataSourceName)
+	if err != nil {
+		log.Fatalf("open OJP database failed: %v", err)
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
 		log.Fatalf("connect failed: %v", err)
 	}
 
-	// DB2 default schema handling for demo table operations.
-	// Without this, DB2 may resolve objects in an unexpected schema.
 	if strings.HasPrefix(strings.ToLower(backendURL), "jdbc:db2:") {
-		setSchemaReq := &pb.StatementRequest{
-			Session: connectResp,
-			Sql:     "SET SCHEMA DB2INST1",
-		}
-		if _, err = client.ExecuteUpdate(ctx, connectResp, setSchemaReq.Sql); err != nil {
+		if _, err = db.ExecContext(ctx, "SET SCHEMA DB2INST1"); err != nil {
 			log.Fatalf("set schema failed: %v", err)
 		}
 	}
-
-	// CREATE
-	updateReq := &pb.StatementRequest{
-		Session: connectResp,
-		Sql:     "CREATE TABLE IF NOT EXISTS demo(id INT NOT NULL PRIMARY KEY, name VARCHAR(100))",
-	}
-	if _, err = client.ExecuteUpdate(ctx, connectResp, updateReq.Sql); err != nil {
+	if _, err = db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS demo(id INT NOT NULL PRIMARY KEY, name VARCHAR(100))"); err != nil {
 		log.Fatalf("create table failed: %v", err)
 	}
 
-	// INSERT
-	insertSQL := "INSERT INTO demo(id, name) VALUES (1, 'hello from go')"
-
-	insertReq := &pb.StatementRequest{
-		Session: connectResp,
-		Sql:     insertSQL,
+	if _, err = db.ExecContext(ctx, "DELETE FROM demo WHERE id = ?", 1); err != nil {
+		log.Fatalf("clean demo row failed: %v", err)
 	}
-	if _, err = client.ExecuteUpdate(ctx, connectResp, insertReq.Sql); err != nil {
+	if _, err = db.ExecContext(ctx, "INSERT INTO demo(id, name) VALUES (?, ?)", 1, "hello from go"); err != nil {
 		log.Fatalf("insert failed: %v", err)
 	}
-
-	// READ
-	queryReq := &pb.StatementRequest{
-		Session: connectResp,
-		Sql:     "SELECT id, name FROM demo ORDER BY id",
-	}
-	results, err := client.ExecuteQuery(ctx, connectResp, queryReq.Sql)
-	if err != nil {
-		log.Fatalf("executeQuery failed: %v", err)
-	}
-	for _, msg := range results {
-		fmt.Printf("opResult: type=%v uuid=%s\n", msg.GetType(), msg.GetUuid())
-	}
 	fmt.Println("READ after CREATE/INSERT:")
-	var insertedRows []*pb.ResultRow
-	for _, r := range results {
-		if qr := r.GetQueryResult(); qr != nil {
-			insertedRows = append(insertedRows, qr.GetRows()...)
-		}
-	}
-	if len(insertedRows) != 1 {
-		log.Fatalf("assert after insert failed: expected 1 row, got %d", len(insertedRows))
-	}
-	insertCols := insertedRows[0].GetColumns()
-	if len(insertCols) < 2 {
-		log.Fatalf("assert after insert failed: expected at least 2 columns, got %d", len(insertCols))
-	}
+	assertDemoRow(db, ctx, 1, "hello from go")
 
-	// UPDATE
-	updateReq2 := &pb.StatementRequest{
-		Session: connectResp,
-		Sql:     "UPDATE demo SET name = 'updated from go' WHERE id = 1",
-	}
-	if _, err = client.ExecuteUpdate(ctx, connectResp, updateReq2.Sql); err != nil {
+	if _, err = db.ExecContext(ctx, "UPDATE demo SET name = ? WHERE id = ?", "updated from go", 1); err != nil {
 		log.Fatalf("update failed: %v", err)
 	}
-	results, err = client.ExecuteQuery(ctx, connectResp, queryReq.Sql)
-	if err != nil {
-		log.Fatalf("executeQuery after update failed: %v", err)
-	}
-	for _, msg := range results {
-		fmt.Printf("opResult: type=%v uuid=%s\n", msg.GetType(), msg.GetUuid())
-	}
 	fmt.Println("READ after UPDATE:")
-	var updatedRows []*pb.ResultRow
-	for _, r := range results {
-		if qr := r.GetQueryResult(); qr != nil {
-			updatedRows = append(updatedRows, qr.GetRows()...)
-		}
-	}
-	if len(updatedRows) != 1 {
-		log.Fatalf("assert after update failed: expected 1 row, got %d", len(updatedRows))
-	}
-	updateCols := updatedRows[0].GetColumns()
-	if len(updateCols) < 2 {
-		log.Fatalf("assert after update failed: expected at least 2 columns, got %d", len(updateCols))
-	}
-
-	// DELETE
-	deleteReq := &pb.StatementRequest{
-		Session: connectResp,
-		Sql:     "DELETE FROM demo WHERE id = 1",
-	}
-	if _, err = client.ExecuteUpdate(ctx, connectResp, deleteReq.Sql); err != nil {
+	assertDemoRow(db, ctx, 1, "updated from go")
+	if _, err = db.ExecContext(ctx, "DELETE FROM demo WHERE id = ?", 1); err != nil {
 		log.Fatalf("delete failed: %v", err)
 	}
-	results, err = client.ExecuteQuery(ctx, connectResp, queryReq.Sql)
-	if err != nil {
-		log.Fatalf("executeQuery after delete failed: %v", err)
-	}
-	for _, msg := range results {
-		fmt.Printf("opResult: type=%v uuid=%s\n", msg.GetType(), msg.GetUuid())
-	}
 	fmt.Println("READ after DELETE:")
-	var deletedRows int
-	for _, r := range results {
-		if qr := r.GetQueryResult(); qr != nil {
-			deletedRows += len(qr.GetRows())
-		}
-	}
-	if deletedRows != 0 {
-		log.Fatalf("assert after delete failed: expected 0 rows, got %d", deletedRows)
-	}
-	//close the simple round trip
-	_ = client.TerminateSession(context.Background(), connectResp)
+	assertDemoRowAbsent(db, ctx, 1)
 
-	//staring with transcational database connections
-	if err = runTransactionRollbackRoundTrip(addr, backendURL, dbUser, dbPassword); err != nil {
-		log.Fatalf("transaction rollback round trip failed: %v", err)
+	if _, err = db.ExecContext(ctx, "DELETE FROM demo WHERE id = ?", 2); err != nil {
+		log.Fatalf("clean rollback row failed: %v", err)
 	}
-	if err = runTransactionCommitRoundTrip(addr, backendURL, dbUser, dbPassword); err != nil {
-		log.Fatalf("transaction commit round trip failed: %v", err)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Fatalf("start rollback transaction failed: %v", err)
 	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO demo(id, name) VALUES (?, ?)", 2, "rollback"); err != nil {
+		log.Fatalf("insert rollback row failed: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		log.Fatalf("rollback transaction failed: %v", err)
+	}
+	assertDemoRowAbsent(db, ctx, 2)
 
-	client.Shutdown()
+	if _, err = db.ExecContext(ctx, "DELETE FROM demo WHERE id = ?", 3); err != nil {
+		log.Fatalf("clean commit row failed: %v", err)
+	}
+	tx, err = db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Fatalf("start commit transaction failed: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO demo(id, name) VALUES (?, ?)", 3, "commit"); err != nil {
+		log.Fatalf("insert commit row failed: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		log.Fatalf("commit transaction failed: %v", err)
+	}
+	assertDemoRow(db, ctx, 3, "commit")
+	if _, err := db.ExecContext(ctx, "DELETE FROM demo WHERE id = ?", 3); err != nil {
+		log.Fatalf("clean committed row failed: %v", err)
+	}
 }
 
-// drainQueryStream consumes the full ExecuteQuery stream, prints each OpResult,
-// and returns the collected results for assertions.
-func drainQueryStream(stream pb.StatementService_ExecuteQueryClient) ([]*pb.OpResult, error) {
-	var results []*pb.OpResult
-	for {
-		msg, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			return nil, fmt.Errorf("stream recv failed: %w", recvErr)
-		}
-		results = append(results, msg)
-		fmt.Printf("opResult: type=%v uuid=%s\n", msg.GetType(), msg.GetUuid())
+func assertDemoRow(db *sql.DB, ctx context.Context, expectedID int64, expectedName string) {
+	var id int64
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT id, name FROM demo WHERE id = ?", expectedID).Scan(&id, &name); err != nil {
+		log.Fatalf("read demo row: %v", err)
 	}
-	return results, nil
+	if id != expectedID || name != expectedName {
+		log.Fatalf("unexpected demo row: id=%d name=%q", id, name)
+	}
+	fmt.Printf("id=%d name=%s\n", id, name)
+}
+
+func assertDemoRowAbsent(db *sql.DB, ctx context.Context, id int64) {
+	var name string
+	err := db.QueryRowContext(ctx, "SELECT name FROM demo WHERE id = ?", id).Scan(&name)
+	if !errors.Is(err, sql.ErrNoRows) {
+		log.Fatalf("expected demo row %d to be absent, got name=%q error=%v", id, name, err)
+	}
+}
+
+func makeDataSourceName(endpoint, backendURL, user, password string) (string, error) {
+	var dataSourceName strings.Builder
+	writer := csv.NewWriter(&dataSourceName)
+	if err := writer.Write([]string{"jdbc:ojp[" + endpoint + "]_" + backendURL, user, password}); err != nil {
+		return "", err
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(dataSourceName.String()), nil
 }
 
 type parsedOjpCsv struct {

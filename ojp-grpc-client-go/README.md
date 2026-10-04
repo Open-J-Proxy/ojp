@@ -7,14 +7,14 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
 | Assessment | Value |
 |---|---|
-| Highest achieved level in this module | **L1** |
-| Summary | This module currently provides a basic CRUD client flow. It does not yet have per-database integration test suites to claim higher cumulative levels by database. |
+| Highest implemented level in this module | **L1** |
+| Summary | A public single-endpoint L1 API is implemented. The H2 real-server L1 suite passes locally; CI confirmation is pending. |
 
 ### Current Test-Proven Coverage by Database (`ojp-grpc-client-go`)
 
 | Database | Highest achieved level (current tests) | Evidence highlights |
 |---|---:|---|
-| **H2** | **Not established** | No database-specific integration suite in this module yet. |
+| **H2** | **L1** | `client_test.TestH2DatabaseShouldSupportL1CRUDAndLifecycle` exercises Go `database/sql` → one OJP server → H2. |
 | **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
 | **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
 | **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
@@ -29,9 +29,10 @@ Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATI
 
 ```text
 ojp-grpc-client-go/
+  client/                      # database/sql driver and H2 L1 integration tests
   cmd/ojp-grpc-client/        # executable entrypoint (main package)
-  internal/client/            # client-side connection/load-balancing helpers
-  internal/gen/               # generated protobuf/gRPC Go stubs
+  internal/gen/                # generated protobuf/gRPC Go stubs
+  generate-proto.sh           # regenerate or verify the Go protocol bindings
   go.mod
   go.sum
 ```
@@ -69,116 +70,70 @@ jdbc:ojp[localhost:1059]_postgresql://localhost:5432/defaultdb,testuser,testpass
 
 ## Using as a Library
 
-The Go client can be imported and used programmatically in another Go application:
+The Go client uses `database/sql` because it is Go's standard-library API for accessing SQL databases. It gives Go applications a familiar, driver-independent interface for queries, transactions, and connection pooling, while the OJP driver handles communication with the server. This follows the [OJP multi-language client specification](https://github.com/Open-J-Proxy/ojp/blob/main/documents/multi-language-client-spec/CLIENT_SPEC.md), which identifies `database/sql` as Go's standard database-access API. See the [Go database access documentation](https://go.dev/doc/database/) for details.
 
-### Import
+Importing the client registers the `ojp` driver:
 
-```go
-import (
-    ojpb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
-    ojpclient "github.com/open-j-proxy/ojp-client/internal/client"
-)
-```
-
-### Basic CRUD Example
+### `database/sql` API
 
 ```go
-package main
-
 import (
     "context"
-    "fmt"
+    "database/sql"
     "log"
     "time"
 
-    ojpb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
-    ojpclient "github.com/open-j-proxy/ojp-client/internal/client"
+    ojpclient "github.com/open-j-proxy/ojp-client/client"
 )
 
 func main() {
-    // 1. Create a client connecting to OJP server at 127.0.0.1:1059
-    client := ojpclient.NewGrpcStatementServiceClient("127.0.0.1:1059")
-    defer client.Shutdown()
-
     ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
     defer cancel()
 
-    // 2. Connect to the backend database through OJP
-    conn, err := client.Connect(ctx, &ojpb.ConnectionDetails{
-        Url:        "jdbc:postgresql://postgres:5432/mydb",
-        User:       "dbuser",
-        Password:   "dbpass",
-        ClientUUID: "my-app-client",
-    })
+    db, err := sql.Open(ojpclient.DriverName,
+        "jdbc:ojp[127.0.0.1:1059]_jdbc:postgresql://postgres:5432/mydb,dbuser,")
     if err != nil {
-        log.Fatalf("connect failed: %v", err)
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    if err := db.PingContext(ctx); err != nil {
+        log.Fatal(err)
     }
 
-    // 3. Execute DDL / UPDATE statements
-    _, err = client.ExecuteUpdate(ctx, conn, "CREATE TABLE IF NOT EXISTS items(id INT PRIMARY KEY, label VARCHAR(100))")
-    if err != nil {
-        log.Fatalf("create failed: %v", err)
+    if _, err := db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS items(id INT PRIMARY KEY, label VARCHAR(100))"); err != nil {
+        log.Fatal(err)
+    }
+    if result, err := db.ExecContext(ctx, "INSERT INTO items(id, label) VALUES (1, 'example')"); err != nil {
+        log.Fatal(err)
+    } else if count, err := result.RowsAffected(); err != nil || count != 1 {
+        log.Fatalf("expected one inserted row, got %d (error %v)", count, err)
     }
 
-    // 4. Execute INSERT
-    _, err = client.ExecuteUpdate(ctx, conn, "INSERT INTO items(id, label) VALUES (1, 'example')")
+    rows, err := db.QueryContext(ctx, "SELECT id, label FROM items ORDER BY id")
     if err != nil {
-        log.Fatalf("insert failed: %v", err)
+        log.Fatal(err)
     }
-
-    // 5. Execute SELECT queries
-    results, err := client.ExecuteQuery(ctx, conn, "SELECT id, label FROM items ORDER BY id")
-    if err != nil {
-        log.Fatalf("query failed: %v", err)
-    }
-    for _, msg := range results {
-        if qr := msg.GetQueryResult(); qr != nil {
-            for _, row := range qr.GetRows() {
-                fmt.Printf("id=%v label=%v\n", row.GetColumns()[0], row.GetColumns()[1])
-            }
+    defer rows.Close()
+    for rows.Next() {
+        var id int64
+        var label string
+        if err := rows.Scan(&id, &label); err != nil {
+            log.Fatal(err)
         }
+        log.Printf("id=%d label=%s", id, label)
     }
-
-    // 6. Clean up
-    _ = client.TerminateSession(context.Background(), conn)
+    if err := rows.Err(); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
-### Transaction Example
+The data source name (DSN) is a CSV record containing the OJP JDBC URL, database username, and password. For credentials containing commas, use normal CSV quoting:
 
-```go
-// Start a transaction
-tx, err := client.StartTransaction(ctx, conn)
-if err != nil {
-    log.Fatalf("start tx failed: %v", err)
-}
+`database/sql` manages OJP sessions and gRPC connections through its normal pool lifecycle. Positional parameters support nil, booleans, integers, floating-point values, strings, byte slices, and timestamps; named parameters and other driver values are not supported yet. `BeginTx`, `Commit`, and `Rollback` use OJP's transaction RPCs. SQL failures with OJP error trailers are returned as `*client.SQLError`.
 
-// Execute statements inside the transaction
-_, _ = client.ExecuteUpdate(ctx, tx, "UPDATE items SET label = 'updated' WHERE id = 1")
-
-// Rollback
-err = client.RollbackTransaction(ctx, tx)
-if err != nil {
-    log.Fatalf("rollback failed: %v", err)
-}
-
-// Or commit instead
-// err = client.CommitTransaction(ctx, tx)
-```
-
-### API Overview
-
-| Method                                | Description                                        |
-|---------------------------------------|----------------------------------------------------|
-| `NewGrpcStatementServiceClient(addr)` | Create a new client connected to an OJP server     |
-| `Connect(ctx, *ConnectionDetails)`    | Open a session pointing to a backend database      |
-| `ExecuteUpdate(ctx, session, sql)`    | Execute DDL / DML (INSERT, UPDATE, DELETE, CREATE) |
-| `ExecuteQuery(ctx, session, sql)`     | Execute SELECT and stream result sets              |
-| `StartTransaction(ctx, session)`      | Start a new database transaction                   |
-| `CommitTransaction(ctx, tx)`          | Commit an active transaction                       |
-| `RollbackTransaction(ctx, tx)`        | Rollback an active transaction                     |
-| `TerminateSession(ctx, session)`      | Close the database session                         |
-| `Shutdown()`                          | Close the gRPC connection and release resources    |
+`database/sql` is the only supported Go database access API. The generated protocol bindings remain internal implementation details.
 
 ## Run the Client
 
@@ -202,19 +157,22 @@ opResult: type=RESULT_SET_DATA uuid=...
 
 ## Unit Tests
 
-Unit tests are in:
-
-- `cmd/ojp-grpc-client/main_test.go`
-
-Covered functions:
-
-- `parseOjpCsvLine`
-- `selectCsvLine`
-- `drainQueryStream` (with mock streaming client)
-
-Run:
+Run all unit tests:
 
 ```bash
-go test ./cmd/ojp-grpc-client
+go test ./...
 ```
 
+## H2 L1 Integration Tests
+
+The H2 suite runs Go through a real OJP gRPC server to an H2 database. Start the server using Java 25 and UTC, then run:
+
+```bash
+OJP_TEST_H2=true \
+OJP_TEST_H2_ADDR=localhost:1059 \
+go test -count=1 -v ./client -run '^TestH2DatabaseShouldSupportL1CRUDAndLifecycle$'
+```
+
+When `OJP_TEST_H2` is enabled, missing connection configuration or an unavailable database fails the test; the suite never treats an unavailable H2 server as a skip.
+
+The test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv` and exercises the standard `database/sql` API. It uses a unique table per run, performs a protocol/database readiness check, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and database close behavior. Run the test repeatedly with `-count=2` to check for conflicts.

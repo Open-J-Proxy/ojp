@@ -36,7 +36,8 @@ class H2L1IntegrationTest < Minitest::Test
 
     assert_equal 0, dbh.do("DROP TABLE IF EXISTS #{table}")
     table = nil
-    assert dbh.disconnect
+    dbh.disconnect
+    refute dbh.connected?
     assert_raises(DBI::Error) { dbh.ping }
   ensure
     if dbh&.connected?

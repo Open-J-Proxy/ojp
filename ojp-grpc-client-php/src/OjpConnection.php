@@ -32,12 +32,17 @@ final class OjpConnection
         $details->setPassword($password);
         $details->setClientUUID(self::processUuid());
 
-        [$session, $status] = $this->client->connect($details)->wait();
-        self::checkStatus('connect', $status);
-        if (!$session instanceof SessionInfo) {
-            throw new RuntimeException('OJP server returned an empty session');
+        try {
+            [$session, $status] = $this->client->connect($details)->wait();
+            self::checkStatus('connect', $status);
+            if (!$session instanceof SessionInfo) {
+                throw new RuntimeException('OJP server returned an empty session');
+            }
+            $this->session = $session;
+        } catch (Throwable $error) {
+            $this->client->close();
+            throw $error;
         }
-        $this->session = $session;
     }
 
     public function executeUpdate(string $sql, array $arguments): int
@@ -66,7 +71,9 @@ final class OjpConnection
                 continue;
             }
             if ($columns === []) {
-                $columns = iterator_to_array($queryResult->getLabels());
+                foreach ($queryResult->getLabels() as $label) {
+                    $columns[] = $label;
+                }
             }
             foreach ($queryResult->getRows() as $row) {
                 $values = [];
@@ -98,6 +105,11 @@ final class OjpConnection
     public function isClosed(): bool
     {
         return $this->closed;
+    }
+
+    public function closeTransport(): void
+    {
+        $this->client->close();
     }
 
     private function unaryUpdate(string $sql, array $arguments): OpResult

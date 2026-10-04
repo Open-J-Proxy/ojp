@@ -4,25 +4,32 @@ declare(strict_types=1);
 use OpenJProxy\PDO\OjpPDO;
 use OpenJProxy\PDO\OjpPDOException;
 
-require dirname(__DIR__) . '/vendor/autoload.php';
-
 $enabled = strtolower(trim((string) getenv('OJP_TEST_H2')));
-if (!in_array($enabled, ['true', '1', 'yes'], true)) {
+if (in_array($enabled, ['', 'false', '0', 'no'], true)) {
     fwrite(STDOUT, "SKIP: set OJP_TEST_H2=true to run the real-server H2 L1 suite\n");
     exit(0);
 }
+if (!in_array($enabled, ['true', '1', 'yes'], true)) {
+    throw new RuntimeException('OJP_TEST_H2 must be true or false');
+}
+
+require dirname(__DIR__) . '/vendor/autoload.php';
 
 $endpoint = trim((string) getenv('OJP_TEST_H2_ADDR'));
 if ($endpoint === '') {
     throw new RuntimeException('OJP_TEST_H2_ADDR is required when OJP_TEST_H2=true');
 }
-$endpointParts = explode(':', $endpoint);
-if (count($endpointParts) !== 2 || $endpointParts[0] === '' || $endpointParts[1] === '') {
+$endpointMatch = [];
+if (preg_match('/^(.+):([0-9]+)$/D', $endpoint, $endpointMatch) !== 1) {
     throw new RuntimeException('OJP_TEST_H2_ADDR must be a host:port endpoint');
+}
+[, $host, $port] = $endpointMatch;
+if (str_contains($host, ':') && !str_starts_with($host, '[')) {
+    $host = '[' . $host . ']';
 }
 [$databaseUrl, $username, $password] = readH2ConnectionConfig();
 $pdo = new OjpPDO(
-    'ojp:host=' . $endpointParts[0] . ';port=' . $endpointParts[1] . ';url=' . $databaseUrl,
+    'ojp:host=' . $host . ';port=' . $port . ';url=' . $databaseUrl,
     $username,
     $password
 );

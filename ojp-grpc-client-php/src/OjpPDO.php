@@ -133,6 +133,12 @@ final class OjpPDO extends PDO
                 $this->connection->terminate();
             } catch (Throwable) {
                 // Destructors must not throw while PHP is shutting down.
+            } finally {
+                try {
+                    $this->connection->closeTransport();
+                } catch (Throwable) {
+                    // Destructors must not throw while PHP is shutting down.
+                }
             }
         }
     }
@@ -193,6 +199,9 @@ final class OjpPDO extends PDO
         $databaseUrl = substr($parts[2], 4);
         if ($host === '' || filter_var($port, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]) === false) {
             throw new OjpPDOException('OJP PDO DSN has an invalid host or port');
+        }
+        if (str_contains($host, ':') && !str_starts_with($host, '[')) {
+            $host = '[' . $host . ']';
         }
         if ($databaseUrl === '' || !str_starts_with($databaseUrl, 'jdbc:')) {
             throw new OjpPDOException('OJP PDO DSN requires a backend JDBC URL');

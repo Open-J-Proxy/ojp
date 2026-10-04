@@ -38,7 +38,7 @@ final class OjpPDOStatement extends PDOStatement
             $this->affectedRows = 0;
             $this->lastError = null;
 
-            if (preg_match('/^\s*(?:SELECT|VALUES|TABLE|WITH)\b/i', $this->sql) === 1) {
+            if (self::isQuery($this->sql)) {
                 $result = $this->connection->executeQuery($this->sql, $arguments);
                 $this->columns = $result['columns'];
                 $this->rows = $result['rows'];
@@ -230,6 +230,12 @@ final class OjpPDOStatement extends PDOStatement
                 : (string) $value,
             default => throw new OjpPDOException('Unsupported PDO parameter type: ' . $type),
         };
+    }
+
+    private static function isQuery(string $sql): bool
+    {
+        $sql = preg_replace('/\A(?:\s|--[^\r\n]*(?:\r?\n|\z)|\/\*.*?\*\/)*/s', '', $sql) ?? $sql;
+        return preg_match('/^(?:SELECT|VALUES|TABLE|WITH)\b/i', $sql) === 1;
     }
 
     private static function formatRow(array $row, array $columns, int $mode): mixed

@@ -52,6 +52,10 @@ jobs:
         run: find src gen tests -name '*.php' -print0 | xargs -0 -n1 php -l
         working-directory: ojp-grpc-client-php
 
+      - name: Run PHP unit checks
+        run: php tests/unit.php
+        working-directory: ojp-grpc-client-php
+
       - name: Start OJP server
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)

@@ -8,7 +8,7 @@ use Throwable;
 
 final class OjpPDOException extends PDOException
 {
-    public array $errorInfo;
+    public ?array $errorInfo;
 
     public function __construct(string $message, array $errorInfo = ['HY000', 0, ''], ?Throwable $previous = null)
     {

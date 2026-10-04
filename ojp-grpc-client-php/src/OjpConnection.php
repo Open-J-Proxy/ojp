@@ -11,7 +11,6 @@ use Com\Openjproxy\Grpc\ParameterValue;
 use Com\Openjproxy\Grpc\ResultType;
 use Com\Openjproxy\Grpc\SessionInfo;
 use Com\Openjproxy\Grpc\StatementRequest;
-use PDO;
 use RuntimeException;
 use Throwable;
 
@@ -93,6 +92,7 @@ final class OjpConnection
             throw new RuntimeException('OJP server did not terminate the session');
         }
         $this->closed = true;
+        $this->client->close();
     }
 
     public function isClosed(): bool

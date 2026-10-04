@@ -41,7 +41,7 @@ output_dir="$module_dir"
 if [[ "$mode" == "--check" ]]; then
     output_dir="$temporary_dir/output"
 fi
-mkdir -p "$output_dir"
+mkdir -p "$output_dir/gen"
 
 "$protoc" \
     "${proto_includes[@]}" \

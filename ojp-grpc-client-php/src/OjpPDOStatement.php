@@ -10,6 +10,8 @@ use Throwable;
 final class OjpPDOStatement extends PDOStatement
 {
     private array $boundValues = [];
+    private array $boundReferences = [];
+    private array $boundTypes = [];
     private array $columns = [];
     private array $rows = [];
     private int $rowIndex = 0;
@@ -28,7 +30,7 @@ final class OjpPDOStatement extends PDOStatement
     {
         try {
             $arguments = $params === null
-                ? $this->boundValues
+                ? $this->getBoundValues()
                 : self::normalizeExecuteParameters($params);
             $this->columns = [];
             $this->rows = [];
@@ -56,6 +58,7 @@ final class OjpPDOStatement extends PDOStatement
         try {
             $index = self::parameterIndex($param);
             $this->boundValues[$index] = self::normalizeBoundValue($value, $type);
+            unset($this->boundReferences[$index], $this->boundTypes[$index]);
             ksort($this->boundValues);
             return true;
         } catch (Throwable $error) {
@@ -71,7 +74,16 @@ final class OjpPDOStatement extends PDOStatement
         int $maxLength = 0,
         mixed $driverOptions = null
     ): bool {
-        return $this->bindValue($param, $var, $type);
+        try {
+            $index = self::parameterIndex($param);
+            $this->boundReferences[$index] = &$var;
+            $this->boundTypes[$index] = $type;
+            unset($this->boundValues[$index]);
+            return true;
+        } catch (Throwable $error) {
+            $this->lastError = $error;
+            return $this->pdo->handleError($error);
+        }
     }
 
     public function fetch(
@@ -176,6 +188,20 @@ final class OjpPDOStatement extends PDOStatement
         return $param;
     }
 
+    private function getBoundValues(): array
+    {
+        $values = $this->boundValues;
+        foreach ($this->boundReferences as $index => &$value) {
+            $values[$index] = self::normalizeBoundValue($value, $this->boundTypes[$index]);
+        }
+        unset($value);
+        ksort($values);
+        if ($values !== [] && array_keys($values) !== range(1, count($values))) {
+            throw new OjpPDOException('Bound PDO parameters must use contiguous one-based indexes');
+        }
+        return array_values($values);
+    }
+
     private static function normalizeExecuteParameters(array $params): array
     {
         if ($params === []) {
@@ -199,7 +225,7 @@ final class OjpPDOStatement extends PDOStatement
             PDO::PARAM_NULL => null,
             PDO::PARAM_BOOL => (bool) $value,
             PDO::PARAM_INT => (int) $value,
-            PDO::PARAM_STR, PDO::PARAM_LOB => is_resource($value)
+            PDO::PARAM_STR => is_resource($value)
                 ? throw new OjpPDOException('L1 does not support stream-backed PDO parameters')
                 : (string) $value,
             default => throw new OjpPDOException('Unsupported PDO parameter type: ' . $type),

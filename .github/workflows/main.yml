@@ -1,5 +1,5 @@
 # =============================================================================
-# Main CI Workflow with Sequential Job Execution
+# Main CI Workflow with Fail-Fast Java Integration Tests
 # =============================================================================
 #
 # This workflow implements a fail-fast CI strategy where H2 tests run first,
@@ -7,6 +7,7 @@
 #
 # WORKFLOW STRUCTURE:
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
+# 1a. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
 # 2. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
 # 3. mysql-test: MySQL database tests (needs: build-test, resolve-version)
 # 4. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
@@ -159,6 +160,94 @@ jobs:
       - name: Show ojp-server.log
         if: always()  # ensures it runs even if previous steps fail
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
+
+  # ===========================================================================
+  # Ruby DBI Client Tests (H2)
+  # ===========================================================================
+  #
+  # Run independently of the Java H2 gate so Java failures cannot skip Ruby
+  # coverage. The live H2 integration test uses the checked-in CSV fixture.
+  #
+  # ===========================================================================
+  ruby-dbi-test:
+    name: Ruby DBI Client Tests (H2)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+          cache: maven
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.2
+          bundler-cache: true
+          working-directory: ojp-grpc-client-ruby
+
+      - name: Verify generated Ruby protocol bindings
+        run: ./generate-proto.sh --check
+        working-directory: ojp-grpc-client-ruby
+
+      - name: Start OJP server
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" &>/tmp/ojp-server.log &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"
+          cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Run all Ruby DBI unit and H2 integration tests
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: |
+          set -o pipefail
+          bundle exec ruby -Ilib -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }' \
+            | tee /tmp/ruby-h2-l1-test.log
+        working-directory: ojp-grpc-client-ruby
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server.log
+
+      - name: Save Ruby H2 test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ruby-h2-l1-test-results
+          path: |
+            /tmp/ruby-h2-l1-test.log
+            /tmp/ojp-server.log
+          retention-days: 7
 
   # ===========================================================================
   # Python DB-API 2.0: all unit and real-server H2 integration tests

@@ -7,16 +7,17 @@
 #
 # WORKFLOW STRUCTURE:
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
-# 2. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
-# 3. mysql-test: MySQL database tests (needs: build-test, resolve-version)
-# 4. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
-# 5. cockroachdb-test: CockroachDB database tests (needs: build-test, resolve-version)
-# 6. db2-test: IBM DB2 database tests (needs: build-test, resolve-version)
-# 7. multinode-test: Multinode failover/recovery tests (needs: build-test, resolve-version)
-# 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
-# 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
-# 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
-# 11. notify-integration: Triggers integration repo workflow (needs: build-test)
+# 2. dotnet-crud-test: .NET ADO.NET H2 L1 tests (needs: build-test)
+# 3. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
+# 4. mysql-test: MySQL database tests (needs: build-test, resolve-version)
+# 5. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
+# 6. cockroachdb-test: CockroachDB database tests (needs: build-test, resolve-version)
+# 7. db2-test: IBM DB2 database tests (needs: build-test, resolve-version)
+# 8. multinode-test: Multinode failover/recovery tests (needs: build-test, resolve-version)
+# 9. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
+# 10. oracle-test: Oracle database tests (needs: build-test, resolve-version)
+# 11. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
+# 12. notify-integration: Triggers integration repo workflow (needs: build-test)
 #
 # SEQUENTIAL EXECUTION:
 # All specialized test jobs depend on build-test completing successfully.
@@ -158,7 +159,82 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 2: PostgreSQL Integration Tests
+  # JOB 2: .NET ADO.NET H2 L1 Integration Tests
+  # ===========================================================================
+  dotnet-crud-test:
+    name: .NET ADO.NET L1 Test against H2
+    runs-on: ubuntu-latest
+    needs: [build-test]
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build (ojp-server)
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Start OJP server (background)
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" &>/tmp/ojp-server-dotnet.log &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server-dotnet.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"
+          cat /tmp/ojp-server-dotnet.log
+          exit 1
+
+      - name: Run all .NET tests with H2 L1 integration enabled
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: dotnet test ojp-grpc-client-dotnet/Ojp.Client.DotNet.sln --logger "trx;LogFileName=dotnet-h2-l1.trx" --results-directory ojp-grpc-client-dotnet/TestResults
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server-dotnet.log
+
+      - name: Save .NET H2 L1 test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: dotnet-h2-l1-test-results
+          path: |
+            ojp-grpc-client-dotnet/TestResults/
+            /tmp/ojp-server-dotnet.log
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 3: PostgreSQL Integration Tests
   # ===========================================================================
   #
   # This job tests PostgreSQL database integration.

@@ -11,13 +11,48 @@ import grpc
 
 from ._proto import StatementService_pb2 as pb
 from ._proto import StatementService_pb2_grpc as rpc
-from ._values import decode, parameter
+from ._values import decode, decode_column, parameter
 from .errors import InterfaceError, OperationalError, ProgrammingError, NotSupportedError, from_rpc
 
 _CLIENT_UUID = str(uuid.uuid4())
 _ENDPOINT = re.compile(r"(?:[A-Za-z0-9_.-]+|\[[0-9A-Fa-f:]+\]):([0-9]+)\Z")
-_SCALAR_TYPES = {1, 12, -1, -15, -9, -16, -2, -3, -4, -7, 16, -6, 5, 4, -5,
+_SCALAR_TYPES = {0, 1, 12, -1, -15, -9, -16, -2, -3, -4, -7, 16, -6, 5, 4, -5,
                  6, 7, 8, 2, 3, 91, 92, 93, 2013, 2014}
+_UPDATE_WORDS = {"INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP", "TRUNCATE"}
+
+
+def _sql_route(sql):
+    """Route only unambiguous H2 statement families; everything else uses JDBC execute."""
+    position = 0
+    while position < len(sql):
+        if sql[position].isspace():
+            position += 1
+        elif sql.startswith("--", position):
+            end = sql.find("\n", position + 2)
+            position = len(sql) if end < 0 else end + 1
+        elif sql.startswith("/*", position):
+            depth = 1
+            position += 2
+            while position < len(sql) and depth:
+                if sql.startswith("/*", position):
+                    depth += 1
+                    position += 2
+                elif sql.startswith("*/", position):
+                    depth -= 1
+                    position += 2
+                else:
+                    position += 1
+            if depth:
+                return None
+        else:
+            break
+    match = re.match(r"[A-Za-z][\w$]*", sql[position:])
+    word = match.group().upper() if match else ""
+    if word in ("SELECT", "VALUES"):
+        return "query"
+    if word in _UPDATE_WORDS:
+        return "update"
+    return None
 
 
 def _configuration(dsn: str, endpoint: str | None) -> tuple[str, str]:
@@ -103,11 +138,14 @@ class Connection:
             response = method(request, timeout=self._timeout)
         except grpc.RpcError as error:
             raise from_rpc(error) from error
+        self._apply_response(response)
+        return response
+
+    def _apply_response(self, response):
         if isinstance(response, pb.SessionInfo):
             self._session.CopyFrom(response)
         elif hasattr(response, "session") and response.HasField("session"):
             self._session.CopyFrom(response.session)
-        return response
 
     def _call(self, resource, resource_uuid, call_type, name="", params=(), *,
               next_call=None, properties=()):
@@ -241,6 +279,7 @@ class Cursor:
         connection._begin()
         statement_uuid = ""
         result_uuid = ""
+        streamed_query = False
         failed = False
         try:
             # Creation plus an innocuous getter avoids executing SQL merely to classify it.
@@ -254,16 +293,62 @@ class Cursor:
                 raise OperationalError("server returned an invalid prepared statement")
             if decode(response.values[0]) != len(bindings):
                 raise ProgrammingError("parameter count does not match SQL placeholders")
+            typed_parameters = [
+                pb.ParameterProto(index=index, type=getattr(pb, "PT_" + setter.upper()), values=values)
+                for index, (setter, values) in enumerate(bindings, 1)
+            ]
+            request = pb.StatementRequest(
+                session=connection._session, sql=operation, statementUUID=statement_uuid,
+                parameters=typed_parameters,
+            )
+            route = _sql_route(operation)
+            if route == "query":
+                streamed_query = True
+                request.ClearField("statementUUID")
+                buffered = []
+                stream = None
+                try:
+                    stream = connection._stub.executeQuery(request, timeout=connection._timeout)
+                    for block in stream:
+                        connection._apply_response(block)
+                        if block.WhichOneof("result") != "query_result":
+                            raise OperationalError("server returned a non-query stream block")
+                        identifier = block.query_result.resultSetUUID
+                        if not identifier or (result_uuid and result_uuid != identifier):
+                            raise OperationalError("server returned inconsistent result set identifiers")
+                        result_uuid = identifier
+                        if block.flag:
+                            raise NotSupportedError(f"unsupported query stream mode: {block.flag}")
+                        buffered.extend(block.query_result.rows)
+                except grpc.RpcError as error:
+                    raise from_rpc(error) from error
+                finally:
+                    if stream is not None:
+                        stream.cancel()
+                if not result_uuid:
+                    raise OperationalError("server returned an empty query stream")
+                codes = self._read_description(result_uuid)
+                rows = []
+                for row in buffered:
+                    if len(row.columns) != len(codes):
+                        raise OperationalError("server returned an invalid row width")
+                    rows.append(tuple(decode_column(value, code) for value, code in zip(row.columns, codes)))
+                self._rows = rows
+                self.rowcount = len(rows)
+                return self
+            if route == "update":
+                response = connection._invoke(connection._stub.executeUpdate, request)
+                if response.WhichOneof("result") != "int_value":
+                    raise OperationalError("server returned an invalid update count")
+                self.rowcount = response.int_value
+                return self
             if bindings:
                 # Generic callResource setters cannot distinguish raw bytes from serialized
                 # containers. The typed addBatch operation binds without executing SQL;
                 # clearBatch removes the staged batch, retaining JDBC parameter values.
                 response = connection._invoke(connection._stub.executeUpdate, pb.StatementRequest(
                     session=connection._session, sql=operation, statementUUID=statement_uuid,
-                    parameters=[
-                        pb.ParameterProto(index=index, type=getattr(pb, "PT_" + setter.upper()), values=values)
-                        for index, (setter, values) in enumerate(bindings, 1)
-                    ],
+                    parameters=typed_parameters,
                     properties=[pb.PropertyEntry(key="PREPARED_STATEMENT_ADD_BATCH_FLAG", bool_value=True)],
                 ))
                 if response.type != pb.UUID_STRING or response.uuid_value != statement_uuid:
@@ -283,6 +368,14 @@ class Cursor:
             raise
         finally:
             cleanup_error = None
+            if result_uuid and streamed_query:
+                try:
+                    connection._call(
+                        pb.RES_RESULT_SET, result_uuid, pb.CALL_GET, "Statement",
+                        next_call=pb.TargetCall(callType=pb.CALL_CLOSE),
+                    )
+                except Exception as error:
+                    cleanup_error = error
             for resource, identifier in ((pb.RES_RESULT_SET, result_uuid),
                                          (pb.RES_PREPARED_STATEMENT, statement_uuid)):
                 if identifier:
@@ -303,7 +396,7 @@ class Cursor:
             next_call=pb.TargetCall(callType=call_type, resourceName=name, params=params),
         )
 
-    def _read_result(self, identifier):
+    def _read_description(self, identifier):
         count = self._metadata(identifier, "ColumnCount")
         columns = []
         codes = []
@@ -320,6 +413,11 @@ class Cursor:
                 None if nullable == 2 else bool(nullable),
             ))
             codes.append(code)
+        self.description = tuple(columns)
+        return codes
+
+    def _read_result(self, identifier):
+        codes = self._read_description(identifier)
         rows = []
         while self.connection._scalar(pb.RES_RESULT_SET, identifier, pb.CALL_NEXT):
             row = []
@@ -332,7 +430,6 @@ class Cursor:
                     value = Decimal(value)
                 row.append(value)
             rows.append(tuple(row))
-        self.description = tuple(columns)
         self._rows = rows
         self.rowcount = len(rows)
 

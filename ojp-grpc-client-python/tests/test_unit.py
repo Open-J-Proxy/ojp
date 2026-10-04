@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 import pickle
 import unittest
 
@@ -6,8 +7,8 @@ import grpc
 
 import ojp
 from ojp._proto import StatementService_pb2 as pb
-from ojp._values import parameter, decode
-from ojp.dbapi import _configuration, Connection
+from ojp._values import parameter, decode, decode_column
+from ojp.dbapi import _configuration, _sql_route, Connection
 from ojp.errors import from_rpc
 
 
@@ -119,6 +120,26 @@ class UnitTests(unittest.TestCase):
         session = pb.SessionInfo(connHash="pool", clientUUID="client")
         self.assertEqual(pickle.loads(pickle.dumps(session)), session)
         self.assertTrue(type(session).__module__.startswith("ojp._proto."))
+
+    def test_only_unambiguous_h2_families_use_direct_rpcs(self):
+        for sql in ("SELECT 1", " values(1)", "-- line\n /* block */ SELECT 1",
+                    "/* nested /* block */ comment */ SELECT '?'"):
+            self.assertEqual(_sql_route(sql), "query")
+        for sql in ("INSERT INTO t VALUES(1)", "/* leading */ UPDATE t SET x=1",
+                    "DELETE FROM t", "CREATE TABLE t(x INT)"):
+            self.assertEqual(_sql_route(sql), "update")
+        for sql in ("WITH t AS (SELECT 1) UPDATE x SET y=2", "WITH t AS (SELECT 1) SELECT * FROM t",
+                    "CALL p()", "(SELECT 1)", "SELECTED", "SELECTé", "/* unfinished", "-- only a comment"):
+            self.assertIsNone(_sql_route(sql))
+
+    def test_decimal_stream_decode_preserves_precision(self):
+        digits = b"123456789012345678901234567890123456789"
+        wire = b"\x01" + len(digits).to_bytes(4, "big", signed=True) + digits + (5).to_bytes(4, "big", signed=True)
+        self.assertEqual(decode_column(pb.ParameterValue(bytes_value=wire), 3),
+                         Decimal("1234567890123456789012345678901234.56789"))
+        self.assertEqual(decode_column(pb.ParameterValue(bytes_value=wire), -3), wire)
+        with self.assertRaises(ojp.OperationalError):
+            decode_column(pb.ParameterValue(bytes_value=b"\x01"), 3)
 
 
 if __name__ == "__main__":

@@ -22,7 +22,9 @@ Python client machine.
 
 Start an OJP server on Java 25, with ``-Duser.timezone=UTC`` and an H2 JDBC
 driver in its ``ojp-libs`` directory. Application-side connection pools must
-be disabled.
+be disabled: do not wrap ``ojp.connect`` in an application/framework connection
+pool. The OJP server owns database connection pooling; double-pooling causes
+incorrect behavior and unnecessary resource use.
 
 API
 ---
@@ -95,28 +97,41 @@ The complete DB-API exception hierarchy is exported. SQL errors preserve
 ``IntegrityError``, ``DataError``, ``ProgrammingError`` and related subclasses.
 Transport errors and deadlines become ``OperationalError`` with the original
 gRPC exception chained as the cause.
+Deadline-triggered server cancellation may report gRPC ``CANCELLED`` rather
+than ``DEADLINE_EXCEEDED``. A deadline does not guarantee cancellation of the
+underlying JDBC statement; never retry a timed-out write automatically.
 
 Scope and safety
 ----------------
 
-SQL is executed once using server-side JDBC ``PreparedStatement.execute``
-through ``callResource``. Result versus update dispatch is decided by JDBC,
-not SQL keyword heuristics. Parameters use typed ``ParameterProto`` binding:
+SQL executes exactly once. A bounded H2 lexical routing rule skips leading
+whitespace and SQL comments (including nested block comments). ``SELECT``
+and ``VALUES`` use ``executeQuery``; ``INSERT``, ``UPDATE``, ``DELETE``,
+``MERGE``, ``CREATE``, ``ALTER``, ``DROP`` and ``TRUNCATE`` use
+``executeUpdate``. These H2 families have unambiguous result kinds.
+Other statements, notably **all WITH statements**, ``CALL`` and parenthesized
+queries, use server-side JDBC ``PreparedStatement.execute`` through
+``callResource``; JDBC decides their result kind. There is no speculative
+execution or guessing whether a WITH statement contains a SELECT or DML.
+
+Parameters use typed ``ParameterProto`` binding. On the JDBC fallback path,
 the protocol's add-batch mode binds without executing, then ``clearBatch``
-removes the staged batch before the single JDBC execution. This avoids the
-generic reflective setter's ambiguity between bytes and serialized objects.
-The staging RPC follows the server's update path (including its cache/write
+removes the staged batch before the single execution. This avoids the generic
+reflective setter's ambiguity between bytes and serialized objects. The
+staging RPC follows the server's update path (including its cache/write
 routing bookkeeping); query caching and read/write splitting are outside this
-client's supported scope. Metadata and scalar rows are read via reflective
-JDBC calls. The client replaces its session from every RPC response that
+client's supported scope. Metadata always comes from reflective JDBC metadata
+calls, even for empty results. The client replaces its session from every RPC response that
 carries one. Server result sets and statements are closed after buffering.
 The server-side connection session remains allocated until connection close;
 prefer short-lived connection contexts rather than leaving connections idle.
 
-All query rows are buffered in memory during ``execute``. Reading uses
-multiple RPCs per row/cell and is intended for small L1 datasets, not large
-results or high throughput. There is no ``executeQuery`` streaming,
-``fetchNextRows`` pagination, scrollable cursor, LOB hydration, stored
+All query rows are buffered in memory during ``execute``. The normal query
+path consumes the complete ``executeQuery`` stream, including every block.
+The JDBC fallback reads rows via multiple RPCs per row/cell. Both are intended
+for small L1 datasets, not large results or high throughput. Unsupported
+row-by-row/LOB stream modes fail explicitly rather than returning partial rows.
+There is no ``fetchNextRows`` pagination, scrollable cursor, LOB hydration, stored
 procedure, savepoint, XA, connection cache, admission controller, health
 checker, failover, or multi-node implementation. Basic manual transactions
 and scalar metadata do not constitute an L4 or broader maturity claim.
@@ -155,8 +170,10 @@ Real H2 integration tests are explicitly enabled::
 
     OJP_TEST_H2=true python -m unittest discover -s tests -v
 
-The default fixture is ``tests/resources/h2.csv`` with two independent H2
-in-memory database cases. Each CSV record is exactly ``URL,user,password``,
+The default fixture is ``tests/resources/h2.csv`` with three independent H2
+in-memory database cases, including a CSV-quoted backend URL containing a
+comma. Both backend JDBC URLs and wrapped OJP URLs are accepted. Every record
+is tested. Each CSV record is exactly ``URL,user,password``,
 without a header; CSV quoting supports commas in URLs or credentials.
 ``OJP_TEST_H2_CSV`` selects another CSV path and ``OJP_TEST_H2_ADDR`` optionally
 overrides the endpoint for every record. Example environment overrides::
@@ -168,4 +185,9 @@ overrides the endpoint for every record. Example environment overrides::
 When enabled, missing/malformed fixtures and unavailable servers are failures,
 never skips. Tests create unique tables and drop them in cleanup; they verify
 exact CRUD counts, rows and scalar types, empty-result metadata, server SQL
-errors, lifecycle, commit/rollback visibility and deadlines.
+errors, lifecycle, commit/rollback visibility, deadlines, and complete results
+beyond the server's default 100-row block size. Real gRPC interceptors verify
+the required ``connect``, ``executeQuery``, ``executeUpdate`` and
+``terminateSession`` calls; WITH SELECT and a data-changing WITH query exercise
+JDBC fallback. H2 2.3.232 rejects top-level WITH UPDATE syntax; such server SQL
+errors are surfaced, not reclassified or retried.

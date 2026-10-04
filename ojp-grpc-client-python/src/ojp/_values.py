@@ -1,9 +1,11 @@
 """Scalar values for reflective JDBC setters and result getters."""
 
 from datetime import date, datetime, time, timezone
+from decimal import Decimal
+import struct
 
 from ._proto import StatementService_pb2 as pb
-from .errors import DataError, NotSupportedError
+from .errors import DataError, NotSupportedError, OperationalError
 
 
 def parameter(value):
@@ -63,3 +65,25 @@ def decode(value):
     if field in ("bool_value", "int_value", "long_value", "float_value", "double_value", "string_value", "bytes_value"):
         return getattr(value, field)
     raise NotSupportedError(f"unsupported result wire type: {field}")
+
+
+def decode_column(value, jdbc_type):
+    """JDBC metadata distinguishes decimal wire bytes from binary column values."""
+    if jdbc_type not in (2, 3) or value.WhichOneof("value") != "bytes_value":
+        return decode(value)
+    data = value.bytes_value
+    if len(data) < 9 or data[0] != 1:
+        raise OperationalError("invalid decimal wire value")
+    length = struct.unpack_from(">i", data, 1)[0]
+    if length < 1 or len(data) != length + 9:
+        raise OperationalError("invalid decimal wire length")
+    try:
+        digits = data[5:5 + length].decode("ascii")
+        negative = digits.startswith("-")
+        magnitude = digits[1:] if negative else digits
+        if not magnitude or not magnitude.isdecimal():
+            raise ValueError("invalid unscaled decimal")
+        scale = struct.unpack_from(">i", data, 5 + length)[0]
+        return Decimal((int(negative), tuple(int(digit) for digit in magnitude), -scale))
+    except (ValueError, UnicodeError, struct.error) as error:
+        raise OperationalError("invalid decimal wire value") from error

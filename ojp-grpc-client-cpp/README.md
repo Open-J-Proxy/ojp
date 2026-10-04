@@ -56,9 +56,9 @@ uses one gRPC channel per ODBC connection and a process-stable client UUID.
 Build the driver and test executable:
 
 ```sh
-cmake -S ojp-odbc-client-cpp -B ojp-odbc-client-cpp/build \
+cmake -S ojp-grpc-client-cpp -B ojp-grpc-client-cpp/build \
   -DGOOGLEAPIS_PROTO_DIR=/path/to/googleapis
-cmake --build ojp-odbc-client-cpp/build
+cmake --build ojp-grpc-client-cpp/build
 ```
 
 The CMake build generates C++ bindings from the shared OJP proto source in the
@@ -134,11 +134,11 @@ Start OJP using Java 25 and UTC. Then build and run the test:
 
 ```sh
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
-  cmake -S ojp-odbc-client-cpp -B ojp-odbc-client-cpp/build \
+  cmake -S ojp-grpc-client-cpp -B ojp-grpc-client-cpp/build \
   -DGOOGLEAPIS_PROTO_DIR=/path/to/googleapis
-cmake --build ojp-odbc-client-cpp/build
+cmake --build ojp-grpc-client-cpp/build
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
-  ctest --test-dir ojp-odbc-client-cpp/build --output-on-failure
+  ctest --test-dir ojp-grpc-client-cpp/build --output-on-failure
 ```
 
 The test is skipped when `OJP_TEST_H2` is unset or false. When enabled, a

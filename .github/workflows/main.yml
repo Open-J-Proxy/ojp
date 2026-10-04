@@ -2248,19 +2248,19 @@ jobs:
 
       - name: Configure C++ ODBC client
         run: |
-          cmake -S ojp-odbc-client-cpp -B ojp-odbc-client-cpp/build \
+          cmake -S ojp-grpc-client-cpp -B ojp-grpc-client-cpp/build \
             -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build C++ ODBC client and tests
-        run: cmake --build ojp-odbc-client-cpp/build --parallel 2
+        run: cmake --build ojp-grpc-client-cpp/build --parallel 2
 
       - name: Run all C++ ODBC tests against H2
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
         run: |
-          ctest --test-dir ojp-odbc-client-cpp/build --output-on-failure \
+          ctest --test-dir ojp-grpc-client-cpp/build --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-test.log
 
       - name: Show ojp-server.log

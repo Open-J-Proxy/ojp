@@ -83,7 +83,7 @@ import (
     "log"
     "time"
 
-    ojpclient "github.com/open-j-proxy/ojp-client/client"
+    ojpclient "github.com/open-j-proxy/ojp-grpc-client-go/client"
 )
 
 func main() {
@@ -137,7 +137,7 @@ The data source name (DSN) is a CSV record containing the OJP JDBC URL, database
 
 ## Run the Client
 
-From `ojp-grpc-client-go`:
+The module path is `github.com/open-j-proxy/ojp-grpc-client-go`; run commands from the `ojp-grpc-client-go` directory:
 
 ```bash
 $env:OJP_JDBC_LINE='jdbc:ojp[localhost:1059]_h2:~/test,sa,'

@@ -86,8 +86,13 @@ Located in [guides/](guides/):
 
 ## Multi-language Clients
 
-- [Go client](../ojp-grpc-client-go/README.md) - Go `database/sql` client, currently L1
-- [Dart client](../ojp-grpc-client-dart/README.md) - Drift SQL executor, currently H2 L1
+- [Go client](../ojp-grpc-client-go/README.md) - Go `database/sql` client, H2 L1
+- [Dart client](../ojp-grpc-client-dart/README.md) - Drift executor, H2 L1
+- [.NET client](../ojp-grpc-client-dotnet/README.md) - ADO.NET provider, H2 L1
+- [PHP client](../ojp-grpc-client-php/README.md) - PDO-compatible API, H2 L1
+- [Python client](../ojp-grpc-client-python/README.rst) - DB-API 2.0 client, H2 L1
+- [Ruby client](../ojp-grpc-client-ruby/README.md) - DBI client, H2 L1
+- [C++ ODBC client](../ojp-grpc-client-cpp/README.md) - ODBC driver, H2 L1
 
 ### Code Contributions
 
@@ -103,9 +108,7 @@ Located in [protocol/](protocol/):
 - [Multi-language Client Specification](multi-language-client-spec/CLIENT_SPEC.md) - Protocol and client responsibilities for non-Java clients
 - [Client Implementation Levels](multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) - L1–L10 capabilities and test-proven implementation coverage
 
-Non-Java client modules:
-- [Go client](../ojp-grpc-client-go/README.md) (`database/sql`, H2 L1)
-- [PHP PDO-compatible client](../ojp-grpc-client-php/README.md) (H2 L1)
+All currently available non-Java clients are listed above. Their tested scope and integration-test evidence are tracked in the [client implementation levels](multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 
 ### Telemetry
 

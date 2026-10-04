@@ -1,4 +1,4 @@
-module github.com/open-j-proxy/ojp-client
+module github.com/open-j-proxy/ojp-grpc-client-go
 
 go 1.25.14
 

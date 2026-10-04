@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	ojpclient "github.com/open-j-proxy/ojp-client/client"
+	ojpclient "github.com/open-j-proxy/ojp-grpc-client-go/client"
 )
 
 func main() {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
+	pb "github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/com/openjproxy/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	ojpclient "github.com/open-j-proxy/ojp-client/client"
+	ojpclient "github.com/open-j-proxy/ojp-grpc-client-go/client"
 )
 
 // TestH2DatabaseShouldSupportL1CRUDAndLifecycle covers the L1 capabilities

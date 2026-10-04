@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
+	pb "github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/com/openjproxy/grpc"
 )
 
 func decodeValue(value *pb.ParameterValue) (any, error) {

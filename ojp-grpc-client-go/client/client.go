@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	pb "github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc"
+	pb "github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/com/openjproxy/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"

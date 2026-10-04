@@ -1,5 +1,5 @@
 # =============================================================================
-# Go and Dart L1 CRUD Test (H2)
+# Go and Dart H2 L1 Integration
 # =============================================================================
 #
 # This workflow builds the OJP server, starts it with the embedded H2 database,
@@ -11,7 +11,7 @@
 #
 # =============================================================================
 
-name: Go and Dart L1 CRUD Test (H2)
+name: Go and Dart H2 L1 Integration
 
 on:
   push:
@@ -23,8 +23,8 @@ permissions:
   contents: read
 
 jobs:
-  go-crud-test:
-    name: Go and Dart L1 CRUD Test against H2
+  go-dart-h2-l1-integration:
+    name: Go and Dart H2 L1 Integration
     runs-on: ubuntu-latest
 
     steps:
@@ -84,7 +84,7 @@ jobs:
         run: go test -count=1 -json ./... | tee /tmp/go-h2-l1-test.json
         working-directory: ojp-grpc-client-go
 
-      - name: Run Go CRUD CLI smoke test
+      - name: Run Go H2 L1 CRUD CLI smoke test
         env:
           OJP_JDBC_LINE: 'jdbc:ojp[localhost:1059]_h2:mem:ojp_go_h2_l1;DB_CLOSE_DELAY=-1,sa,'
         run: go run ./cmd/ojp-grpc-client
@@ -102,7 +102,7 @@ jobs:
           dart analyze
         working-directory: ojp-grpc-client-dart
 
-      - name: Run Dart H2 L1 integration test
+      - name: Run Dart H2 L1 integration tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
@@ -117,7 +117,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: go-h2-l1-test-results
+          name: go-dart-h2-l1-test-results
           path: |
             /tmp/go-h2-l1-test.json
             /tmp/ojp-server.log

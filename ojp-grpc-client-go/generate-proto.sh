@@ -49,15 +49,15 @@ done
   --plugin="protoc-gen-go=$GOBIN/protoc-gen-go" \
   --plugin="protoc-gen-go-grpc=$GOBIN/protoc-gen-go-grpc" \
   --go_out="$output_root" \
-  --go_opt=module=github.com/open-j-proxy/ojp-client \
-  --go_opt=MStatementService.proto=github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc \
-  --go_opt=Mecho.proto=github.com/open-j-proxy/ojp-client/internal/gen/go/org/openjproxy/grpc \
-  --go_opt=Mcontainers.proto=github.com/open-j-proxy/ojp-client/internal/gen/go/ojp/transport/v1 \
+  --go_opt=module=github.com/open-j-proxy/ojp-grpc-client-go \
+  --go_opt=MStatementService.proto=github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/com/openjproxy/grpc \
+  --go_opt=Mecho.proto=github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/org/openjproxy/grpc \
+  --go_opt=Mcontainers.proto=github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/ojp/transport/v1 \
   --go-grpc_out="$output_root" \
-  --go-grpc_opt=module=github.com/open-j-proxy/ojp-client \
-  --go-grpc_opt=MStatementService.proto=github.com/open-j-proxy/ojp-client/internal/gen/go/com/openjproxy/grpc \
-  --go-grpc_opt=Mecho.proto=github.com/open-j-proxy/ojp-client/internal/gen/go/org/openjproxy/grpc \
-  --go-grpc_opt=Mcontainers.proto=github.com/open-j-proxy/ojp-client/internal/gen/go/ojp/transport/v1 \
+  --go-grpc_opt=module=github.com/open-j-proxy/ojp-grpc-client-go \
+  --go-grpc_opt=MStatementService.proto=github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/com/openjproxy/grpc \
+  --go-grpc_opt=Mecho.proto=github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/org/openjproxy/grpc \
+  --go-grpc_opt=Mcontainers.proto=github.com/open-j-proxy/ojp-grpc-client-go/internal/gen/go/ojp/transport/v1 \
   "$proto_dir/StatementService.proto" \
   "$proto_dir/echo.proto" \
   "$proto_dir/containers.proto"

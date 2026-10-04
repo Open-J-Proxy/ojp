@@ -1,5 +1,5 @@
 # =============================================================================
-# Main CI Workflow with Sequential Job Execution
+# Main CI Workflow with Fail-Fast Java Integration Tests
 # =============================================================================
 #
 # This workflow implements a fail-fast CI strategy where H2 tests run first,
@@ -7,25 +7,31 @@
 #
 # WORKFLOW STRUCTURE:
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
-# 2. dotnet-crud-test: .NET ADO.NET H2 L1 tests (needs: build-test)
-# 3. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
-# 4. mysql-test: MySQL database tests (needs: build-test, resolve-version)
-# 5. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
-# 6. cockroachdb-test: CockroachDB database tests (needs: build-test, resolve-version)
-# 7. db2-test: IBM DB2 database tests (needs: build-test, resolve-version)
-# 8. multinode-test: Multinode failover/recovery tests (needs: build-test, resolve-version)
-# 9. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
-# 10. oracle-test: Oracle database tests (needs: build-test, resolve-version)
-# 11. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
+# 1a. dotnet-crud-test: .NET ADO.NET H2 L1 tests (independent)
+# 1b. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
+# 2. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
+# 3. mysql-test: MySQL database tests (needs: build-test, resolve-version)
+# 4. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
+# 5. cockroachdb-test: CockroachDB database tests (needs: build-test, resolve-version)
+# 6. db2-test: IBM DB2 database tests (needs: build-test, resolve-version)
+# 7. multinode-test: Multinode failover/recovery tests (needs: build-test, resolve-version)
+# 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
+# 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
+# 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
+# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 (independent)
 # 12. notify-integration: Triggers integration repo workflow (needs: build-test)
+# 13. python-h2-l1: Independent Python DB-API unit and H2 integration tests
 #
 # SEQUENTIAL EXECUTION:
-# All specialized test jobs depend on build-test completing successfully.
+# Specialized Java database test jobs depend on build-test completing
+# successfully. .NET, Ruby, Python, and C++ client test jobs run independently.
 # This ensures that expensive database setups only run if basic H2 tests pass,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
 # - Resource efficiency (avoids running expensive tests when basics fail)
 # - Cost savings (reduces CI minutes when tests would fail anyway)
+#
+# Python tests build their own server and run independently of the Java gate.
 #
 # This sequential execution works on ALL branches (PRs, main, feature branches)
 # because all jobs are defined in a single workflow file.
@@ -159,13 +165,14 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 2: .NET ADO.NET H2 L1 Integration Tests
+  # .NET ADO.NET H2 L1 Integration Tests
   # ===========================================================================
   dotnet-crud-test:
     name: .NET ADO.NET L1 Test against H2
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - name: Git checkout
         uses: actions/checkout@v5
@@ -185,7 +192,7 @@ jobs:
       - name: Download open source JDBC drivers
         run: bash ojp-server/download-drivers.sh ./ojp-libs
 
-      - name: Build (ojp-server)
+      - name: Build OJP server
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
       - name: Set up .NET 8
@@ -193,14 +200,14 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Start OJP server (background)
+      - name: Start OJP server
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" &>/tmp/ojp-server-dotnet.log &
           echo "OJP server PID=$!"
 
-      - name: Wait for OJP server to start
+      - name: Wait for OJP server
         run: |
           for i in $(seq 1 30); do
             if grep -q "OJP gRPC Server started" /tmp/ojp-server-dotnet.log 2>/dev/null; then
@@ -234,7 +241,181 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 3: PostgreSQL Integration Tests
+  # Ruby DBI Client Tests (H2)
+  # ===========================================================================
+  #
+  # Run independently of the Java H2 gate so Java failures cannot skip Ruby
+  # coverage. The live H2 integration test uses the checked-in CSV fixture.
+  #
+  # ===========================================================================
+  ruby-dbi-test:
+    name: Ruby DBI Client Tests (H2)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+          cache: maven
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.2
+          bundler-cache: true
+          working-directory: ojp-grpc-client-ruby
+
+      - name: Verify generated Ruby protocol bindings
+        run: ./generate-proto.sh --check
+        working-directory: ojp-grpc-client-ruby
+
+      - name: Start OJP server
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" &>/tmp/ojp-server.log &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"
+          cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Run all Ruby DBI unit and H2 integration tests
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: |
+          set -o pipefail
+          bundle exec ruby -Ilib -Itest -e 'Dir["test/**/*_test.rb"].sort.each { |file| require_relative file }' \
+            | tee /tmp/ruby-h2-l1-test.log
+        working-directory: ojp-grpc-client-ruby
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server.log
+
+      - name: Save Ruby H2 test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ruby-h2-l1-test-results
+          path: |
+            /tmp/ruby-h2-l1-test.log
+            /tmp/ojp-server.log
+          retention-days: 7
+
+  # ===========================================================================
+  # Python DB-API 2.0: all unit and real-server H2 integration tests
+  # ===========================================================================
+  python-h2-l1:
+    name: Python DB-API Tests against H2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Download JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Install Python client
+        working-directory: ojp-grpc-client-python
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check Python protobuf generation
+        working-directory: ojp-grpc-client-python
+        run: ojp-generate-proto --check
+
+      - name: Start OJP server
+        run: |
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*-shaded.jar' -print -quit)
+          test -n "$jar"
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" > /tmp/ojp-python-server.log 2>&1 &
+          echo "$!" > /tmp/ojp-python-server.pid
+          for i in $(seq 1 60); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-python-server.log; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/ojp-python-server.pid)" 2>/dev/null; then
+              cat /tmp/ojp-python-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/ojp-python-server.log
+          exit 1
+
+      - name: Run all Python unit and H2 integration tests
+        working-directory: ojp-grpc-client-python
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee /tmp/ojp-python-tests.log
+
+      - name: Stop OJP server
+        if: always()
+        run: |
+          if test -f /tmp/ojp-python-server.pid; then
+            kill "$(cat /tmp/ojp-python-server.pid)" || true
+          fi
+
+      - name: Save Python test results and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: python-h2-l1-test-results
+          path: |
+            /tmp/ojp-python-tests.log
+            /tmp/ojp-python-server.log
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 2: PostgreSQL Integration Tests
   # ===========================================================================
   #
   # This job tests PostgreSQL database integration.
@@ -1979,7 +2160,104 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 11: Notify Integration Repository
+  # JOB 11: C++ ODBC H2 L1 Integration Tests
+  # ===========================================================================
+  #
+  # Builds the native ODBC client and runs its full CTest suite against the
+  # embedded H2 database through a real OJP server, following the Go H2 job.
+  #
+  # ===========================================================================
+  cpp-odbc-test:
+    name: C++ ODBC H2 L1 Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build (ojp-server)
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Install C++ gRPC and ODBC build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            golang-github-gogo-googleapis-dev \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            unixodbc-dev
+
+      - name: Start OJP server (background)
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" > /tmp/ojp-server.log 2>&1 &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Configure C++ ODBC client
+        run: |
+          cmake -S ojp-odbc-client-cpp -B ojp-odbc-client-cpp/build \
+            -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build C++ ODBC client and tests
+        run: cmake --build ojp-odbc-client-cpp/build --parallel 2
+
+      - name: Run all C++ ODBC tests against H2
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: |
+          ctest --test-dir ojp-odbc-client-cpp/build --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-h2-l1-test.log
+
+      - name: Show ojp-server.log
+        if: always()
+        run: cat /tmp/ojp-server.log
+
+      - name: Save C++ ODBC H2 test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: cpp-odbc-h2-l1-test-results
+          path: |
+            /tmp/cpp-odbc-h2-l1-test.log
+            /tmp/ojp-server.log
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 12: Notify Integration Repository
   # ===========================================================================
   #
   # This job triggers a workflow in the ojp-framework-integration repository

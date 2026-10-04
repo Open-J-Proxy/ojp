@@ -73,9 +73,20 @@ These entries describe the levels targeted by the language client modules; they 
 - Those tests validate client behavior independent of SQL dialect, while database-specific suites validate SQL/type/driver behavior.
 - For this reason, operational capability may be considered “platform-proven” even when a specific database does not have a dedicated multinode test class.
 
+## 4) Non-Java Client Test-Proven Coverage
+
+These levels are based on each language client's own integration tests and are independent of the Java reference-client matrix above.
+
+| Client | Database | Highest achieved level | Evidence |
+|---|---|---:|---|
+| **Go** | H2 | **L1** | `ojp-grpc-client-go/client/h2_l1_integration_test.go` |
+| **Ruby DBI** | H2 | **L1** | `ojp-grpc-client-ruby/test/integration/h2_l1_test.rb` |
+
+The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-grpc-client-ruby/README.md`](../../ojp-grpc-client-ruby/README.md) for the implemented API and current gaps.
+
 ---
 
-## 4) How to Use This Scale for New Clients
+## 5) How to Use This Scale for New Clients
 
 1. Start by targeting **L1 → L4** for first production viability.
 2. Add **L5/L6** before claiming broad compatibility.
@@ -87,3 +98,17 @@ When publishing a new language client, report:
 - tested level,
 - database-by-database achieved level,
 - explicit gaps by level (for example: “L9 missing for MySQL and DB2”).
+
+## 5) Non-Java Client Implementations
+
+The following table records the implemented target level and its real-server integration suite for each non-Java client module. A passing CI run is required before treating the level as test-proven.
+
+| Client | Database | Implemented target level | Integration suite |
+|---|---|---:|---|
+| **Go (`database/sql`)** | H2 | **L1** | `ojp-grpc-client-go/client/h2_l1_integration_test.go` |
+| **C++ ODBC** | H2 | **L1** | `ojp-odbc-client-cpp/tests/h2_l1_integration_test.cpp` |
+| **PHP (`PDO`-compatible)** | H2 | **L1** | `ojp-grpc-client-php/tests/h2_l1_integration.php` |
+| **Python (DB-API 2.0)** | H2 | **L1** | `ojp-grpc-client-python/tests/test_h2.py` |
+| **Ruby DBI** | H2 | **L1** | `ojp-grpc-client-ruby/test/integration/h2_l1_test.rb` |
+
+The PHP client currently exposes the L1 operations through a userland `PDO` subclass; it is not a native PDO driver. It targets a single OJP endpoint and does not implement L2+ behavior.

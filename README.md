@@ -42,6 +42,8 @@ OJP is a **smart database control plane** for relational databases — more than
 - **Seamless Java integration** — standard JDBC 4.2, Spring Boot starter, Quarkus and Micronaut guides; no application rewrite.
 - **Path to a universal database control plane** — the gRPC protocol is language-neutral, so non-Java clients (Python, Node, Go, …) can join the same plane. See the [multi-language client spec](documents/multi-language-client-spec/).
 
+Early single-endpoint H2 L1 clients are available for [Python DB-API 2.0](ojp-grpc-client-python/README.rst) and [Go `database/sql`](ojp-grpc-client-go/README.md). These clients do not yet provide the JDBC driver's full operational capabilities.
+
 Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2**. Also compatible in principle with any database that provides a JDBC driver.
 
 ---

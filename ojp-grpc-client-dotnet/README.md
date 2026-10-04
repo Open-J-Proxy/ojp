@@ -40,6 +40,28 @@ while (reader.Read())
 
 `OjpUrl` contains the complete OJP URL: `jdbc:ojp[host:port]_backend-jdbc-url`. The connection string builder quotes the URL when required, so backend JDBC options containing semicolons remain part of that URL. `OjpConnection` can also be created empty and assigned a connection string before `Open()`.
 
+## Current Implementation Level Assessment
+
+| Assessment | Value |
+|---|---|
+| Highest implemented level in this module | **L1** |
+| Summary | A public single-endpoint ADO.NET API and an opt-in H2 real-server L1 suite are included; CI has not yet confirmed the H2 suite. |
+
+### Current Test-Proven Coverage by Database (`ojp-grpc-client-dotnet`)
+
+| Database | Highest achieved level (current tests) | Evidence highlights |
+|---|---:|---|
+| **H2** | **Not yet confirmed** | The opt-in `H2L1IntegrationTests` suite exercises ADO.NET → one OJP server → H2. |
+| **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
+| **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
+| **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
+| **Oracle** | **Not established** | No database-specific integration suite in this module yet. |
+| **SQL Server** | **Not established** | No database-specific integration suite in this module yet. |
+| **DB2** | **Not established** | No database-specific integration suite in this module yet. |
+| **CockroachDB** | **Not established** | No database-specific integration suite in this module yet. |
+
+Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
+
 ## L1 scope
 
 - `OjpConnection`, `OjpCommand`, `OjpParameter`, and `OjpDataReader` expose the ADO.NET connection, command, parameter, and forward-only reader APIs.

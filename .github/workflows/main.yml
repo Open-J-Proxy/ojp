@@ -17,15 +17,17 @@
 # 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
 # 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
 # 11. notify-integration: Triggers integration repo workflow (needs: build-test)
-# 12. python-h2-l1: Python DB-API unit and H2 integration tests (needs: build-test)
+# 12. python-h2-l1: Independent Python DB-API unit and H2 integration tests
 #
 # SEQUENTIAL EXECUTION:
-# All specialized test jobs depend on build-test completing successfully.
+# Specialized Java test jobs depend on build-test completing successfully.
 # This ensures that expensive database setups only run if basic H2 tests pass,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
 # - Resource efficiency (avoids running expensive tests when basics fail)
 # - Cost savings (reduces CI minutes when tests would fail anyway)
+#
+# Python tests build their own server and run independently of the Java gate.
 #
 # This sequential execution works on ALL branches (PRs, main, feature branches)
 # because all jobs are defined in a single workflow file.
@@ -164,7 +166,6 @@ jobs:
   python-h2-l1:
     name: Python DB-API Tests against H2
     runs-on: ubuntu-latest
-    needs: [build-test]
     timeout-minutes: 20
     permissions:
       contents: read

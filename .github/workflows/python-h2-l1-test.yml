@@ -1,0 +1,91 @@
+name: Python DB-API H2 L1
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-h2-l1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Download JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Install Python client
+        working-directory: ojp-grpc-client-python
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check Python protobuf generation
+        working-directory: ojp-grpc-client-python
+        run: ojp-generate-proto --check
+
+      - name: Start OJP server
+        run: |
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*-shaded.jar' -print -quit)
+          test -n "$jar"
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" > /tmp/ojp-python-server.log 2>&1 &
+          echo "$!" > /tmp/ojp-python-server.pid
+          for i in $(seq 1 60); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-python-server.log; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/ojp-python-server.pid)" 2>/dev/null; then
+              cat /tmp/ojp-python-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/ojp-python-server.log
+          exit 1
+
+      - name: Run Python unit and H2 integration tests
+        working-directory: ojp-grpc-client-python
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee /tmp/ojp-python-tests.log
+
+      - name: Stop OJP server
+        if: always()
+        run: |
+          if test -f /tmp/ojp-python-server.pid; then
+            kill "$(cat /tmp/ojp-python-server.pid)" || true
+          fi
+
+      - name: Save test results and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: python-h2-l1-test-results
+          path: |
+            /tmp/ojp-python-tests.log
+            /tmp/ojp-python-server.log
+          retention-days: 7

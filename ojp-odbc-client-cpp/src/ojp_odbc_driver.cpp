@@ -5,12 +5,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <optional>
+#include <random>
 #include <string>
 #include <variant>
 #include <vector>
@@ -106,6 +107,14 @@ std::string get_string_field(const google::protobuf::Message& message, const std
         return {};
     }
     return message.GetReflection()->GetString(message, field);
+}
+
+std::int32_t get_int32_field(const google::protobuf::Message& message, const std::string& name) {
+    const auto* field = message.GetDescriptor()->FindFieldByName(name);
+    if (field == nullptr || field->cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_INT32) {
+        return 0;
+    }
+    return message.GetReflection()->GetInt32(message, field);
 }
 
 void set_bool_field(google::protobuf::Message* message, const std::string& name, bool value) {
@@ -234,9 +243,9 @@ SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
             item.first.find("sqlerrorresponse-bin") != std::string::npos) {
             com::openjproxy::grpc::SqlErrorResponse response;
             if (response.ParseFromString(std::string(item.second.data(), item.second.size()))) {
-                sql_state = response.sqlstate();
-                message = response.reason();
-                native_error = response.vendorcode();
+            sql_state = get_string_field(response, "sqlState");
+            message = get_string_field(response, "reason");
+            native_error = get_int32_field(response, "vendorCode");
                 break;
             }
         }
@@ -417,6 +426,27 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
     }
 }
 
+ParameterTypeProto parameter_type(const BoundParameter& bound) {
+    if (bound.value == nullptr ||
+        (bound.indicator != nullptr && *bound.indicator == SQL_NULL_DATA)) {
+        return static_cast<ParameterTypeProto>(0); // PT_NULL
+    }
+    switch (bound.parameter_type) {
+        case SQL_TINYINT: return static_cast<ParameterTypeProto>(2);   // PT_BYTE
+        case SQL_SMALLINT: return static_cast<ParameterTypeProto>(3);  // PT_SHORT
+        case SQL_INTEGER: return static_cast<ParameterTypeProto>(4);   // PT_INT
+        case SQL_BIGINT: return static_cast<ParameterTypeProto>(5);    // PT_LONG
+        case SQL_REAL: return static_cast<ParameterTypeProto>(6);      // PT_FLOAT
+        case SQL_FLOAT:
+        case SQL_DOUBLE: return static_cast<ParameterTypeProto>(7);   // PT_DOUBLE
+        case SQL_BINARY:
+        case SQL_VARBINARY:
+        case SQL_LONGVARBINARY: return static_cast<ParameterTypeProto>(10); // PT_BYTES
+        case SQL_BIT: return static_cast<ParameterTypeProto>(1);       // PT_BOOLEAN
+        default: return static_cast<ParameterTypeProto>(9);            // PT_STRING
+    }
+}
+
 SQLRETURN execute_statement(StatementHandle* statement) {
     auto* connection = statement->connection;
     clear_diagnostics(statement);
@@ -439,7 +469,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
         auto* parameter = request.add_parameters();
         parameter->set_index(static_cast<std::int32_t>(entry.first));
-        parameter->set_type(static_cast<ParameterTypeProto>(bound.parameter_type));
+        parameter->set_type(parameter_type(bound));
         auto* value = parameter->add_values();
         Diagnostic parameter_error;
         if (!set_parameter_value(value, bound, entry.first, &parameter_error)) {
@@ -450,6 +480,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
 
     if (is_query_sql(statement->sql)) {
         grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
         auto reader = connection->stub->ExecuteQuery(&context, request);
         OpResult result;
         while (reader->Read(&result)) {
@@ -482,11 +513,11 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
         statement->has_result_set = true;
         statement->row_count = static_cast<SQLLEN>(statement->rows.size());
-        connection->session.CopyFrom(request.session());
         return SQL_SUCCESS;
     }
 
     grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     OpResult result;
     const auto status = connection->stub->ExecuteUpdate(&context, request, &result);
     if (!status.ok()) {
@@ -543,6 +574,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     set_bool_field(&details, "isXA", false);
 
     grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     SessionInfo session;
     const auto status = connection->stub->Connect(&context, details, &session);
     if (!status.ok()) {
@@ -561,6 +593,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
         return fail(connection, "ODBC connection is not open", "08003");
     }
     grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     com::openjproxy::grpc::SessionTerminationStatus response;
     const auto status = connection->stub->TerminateSession(&context, connection->session, &response);
     if (!status.ok()) {
@@ -622,7 +655,10 @@ SQLRETURN SQL_API SQLFreeHandle(SQLSMALLINT handle_type, SQLHANDLE handle) {
     } else if (handle_type == SQL_HANDLE_DBC) {
         auto* connection = static_cast<ConnectionHandle*>(handle);
         if (connection->connected) {
-            disconnect(connection);
+            const auto result = disconnect(connection);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
         }
         delete connection;
     } else if (handle_type == SQL_HANDLE_STMT) {

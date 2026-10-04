@@ -31,6 +31,10 @@ set(PROTO_HDRS
     "${GENERATED_DIR}/StatementService.grpc.pb.h"
     "${GENERATED_DIR}/google/type/date.pb.h"
     "${GENERATED_DIR}/google/type/timeofday.pb.h")
+set(PROTO_INCLUDE_ARGS)
+foreach(PROTO_INCLUDE_DIR IN LISTS Protobuf_INCLUDE_DIRS)
+    list(APPEND PROTO_INCLUDE_ARGS "--proto_path=${PROTO_INCLUDE_DIR}")
+endforeach()
 
 add_custom_command(
     OUTPUT ${PROTO_SRCS} ${PROTO_HDRS}
@@ -38,13 +42,13 @@ add_custom_command(
     COMMAND $<TARGET_FILE:protobuf::protoc>
         --proto_path="${OJP_PROTO_DIR}"
         --proto_path="${GOOGLEAPIS_PROTO_DIR}"
-        --proto_path="${Protobuf_INCLUDE_DIRS}"
+        ${PROTO_INCLUDE_ARGS}
         --cpp_out="${GENERATED_DIR}"
         "${PROTO_FILE}" "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
     COMMAND $<TARGET_FILE:protobuf::protoc>
         --proto_path="${OJP_PROTO_DIR}"
         --proto_path="${GOOGLEAPIS_PROTO_DIR}"
-        --proto_path="${Protobuf_INCLUDE_DIRS}"
+        ${PROTO_INCLUDE_ARGS}
         --grpc_out="${GENERATED_DIR}"
         --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
         "${PROTO_FILE}"
@@ -56,10 +60,10 @@ add_library(ojp_odbc SHARED
     ${PROTO_SRCS}
     ${PROTO_HDRS})
 target_include_directories(ojp_odbc PRIVATE "${GENERATED_DIR}")
+target_include_directories(ojp_odbc PRIVATE ${ODBC_INCLUDE_DIRS})
 target_link_libraries(ojp_odbc PRIVATE
     gRPC::grpc++
-    protobuf::libprotobuf
-    ODBC::ODBC)
+    protobuf::libprotobuf)
 set_target_properties(ojp_odbc PROPERTIES
     OUTPUT_NAME "ojp_odbc"
     CXX_VISIBILITY_PRESET default
@@ -76,12 +80,12 @@ if(BUILD_TESTING)
     add_dependencies(ojp_odbc_h2_l1_integration_test ojp_odbc)
 
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/odbc")
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/odbc/odbcinst.ini"
-        "[OJP]\nDriver=$<TARGET_FILE:ojp_odbc>\n")
+    file(GENERATE
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/odbc/odbcinst.ini"
+        CONTENT "[OJP]\nDriver=$<TARGET_FILE:ojp_odbc>\n")
     add_test(NAME OjpOdbcH2L1Integration
         COMMAND ojp_odbc_h2_l1_integration_test)
     set_tests_properties(OjpOdbcH2L1Integration PROPERTIES
         SKIP_RETURN_CODE 77
-        ENVIRONMENT
-            "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_TEST_H2=${OJP_TEST_H2};OJP_TEST_H2_ADDR=${OJP_TEST_H2_ADDR}")
+        ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
 endif()

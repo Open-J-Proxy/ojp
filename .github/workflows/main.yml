@@ -1915,6 +1915,8 @@ jobs:
     name: C++ ODBC H2 L1 Tests
     needs: [build-test]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Git checkout

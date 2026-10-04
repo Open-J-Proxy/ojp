@@ -35,6 +35,7 @@ grpc_tools_ruby_protoc "${includes[@]}" \
   "$proto_dir/echo.proto"
 
 if [[ "$mode" == "--check" ]]; then
-  diff -ru "$module_dir/lib/com" "$output_dir/com"
-  diff -ru "$module_dir/lib/org" "$output_dir/org"
+  for generated_file in StatementService_pb.rb StatementService_services_pb.rb echo_pb.rb echo_services_pb.rb; do
+    diff -u "$module_dir/lib/$generated_file" "$output_dir/$generated_file"
+  done
 fi

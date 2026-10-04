@@ -11,6 +11,8 @@ module DBI
       class Driver < DBI::BaseDriver
         def initialize
           super(DBI::VERSION)
+          @connections = []
+          @mutex = Mutex.new
         end
 
         def connect(dbname, user, auth, attributes)
@@ -19,30 +21,46 @@ module DBI
             raise DBI::InterfaceError, "OJP DSN must contain endpoint and database URL as CSV fields"
           end
 
-          endpoint, url = fields.map(&:strip)
+          endpoint = fields[0].strip
+          url = fields[1].strip
           client = Ojp::Client.new(
             endpoint: endpoint,
             url: url,
             user: user,
             password: auth
           )
-          Database.new(client, attributes)
+          database = Database.new(client, attributes, self)
+          @mutex.synchronize { @connections << database }
+          database
         end
 
         def disconnect_all
+          connections = @mutex.synchronize do
+            active = @connections
+            @connections = []
+            active
+          end
+          connections.each(&:disconnect)
           true
+        end
+
+        def remove_connection(database)
+          @mutex.synchronize { @connections.delete(database) }
         end
       end
 
       class Database < DBI::BaseDatabase
-        def initialize(client, attributes)
+        def initialize(client, attributes, driver)
           super(nil, {})
           @client = client
+          @driver = driver
           @attr = attributes || {}
         end
 
         def disconnect
           @client.close
+        ensure
+          @driver.remove_connection(self)
         end
 
         def ping

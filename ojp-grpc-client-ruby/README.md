@@ -49,7 +49,7 @@ Start `ojp-server` with Java 25, `-Duser.timezone=UTC`, and the H2 JDBC driver a
 The generated Ruby stubs are checked in under `lib/`. Regenerate them with:
 
 ```bash
-bundle exec ruby -S grpc_tools_ruby_protoc --version
+bundle exec grpc_tools_ruby_protoc --version
 ./generate-proto.sh
 ./generate-proto.sh --check
 ```

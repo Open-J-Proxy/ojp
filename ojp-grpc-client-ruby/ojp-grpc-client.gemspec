@@ -11,6 +11,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "dbi", "~> 0.4"
   spec.add_dependency "google-protobuf", "~> 4.36"
+  spec.add_dependency "googleapis-common-protos-types", "~> 1.23"
   spec.add_dependency "grpc", "~> 1.84"
 
   spec.add_development_dependency "grpc-tools", "~> 1.84"

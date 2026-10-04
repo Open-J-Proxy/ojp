@@ -1,8 +1,9 @@
 require "securerandom"
+require "date"
 require "dbi"
 require "grpc"
-require "com/openjproxy/grpc/statement_service_pb"
-require "com/openjproxy/grpc/statement_service_services_pb"
+require "StatementService_pb"
+require "StatementService_services_pb"
 
 module Ojp
   class SqlError < DBI::DatabaseError
@@ -36,7 +37,7 @@ module Ojp
         url: @url,
         user: @user,
         password: @password,
-        client_uuid: CLIENT_UUID
+        clientUUID: CLIENT_UUID
       ))
       raise IOError, "OJP server returned an empty session" unless @session
     rescue GRPC::BadStatus => error
@@ -94,7 +95,7 @@ module Ojp
         parameters: encode_parameters(parameters)
       ))
       @session = result.session if result&.session
-      unless result && result.type == Com::Openjproxy::Grpc::ResultType::INTEGER
+      unless result && result.type == :INTEGER
         raise IOError, "OJP server returned an invalid update result"
       end
 
@@ -148,7 +149,12 @@ module Ojp
                                Com::Openjproxy::Grpc::ParameterValue.new(string_value: value)]
                             when Time
                               timestamp = Google::Protobuf::Timestamp.new(seconds: value.to_i, nanos: value.nsec)
-                              zone_value = Com::Openjproxy::Grpc::TimestampWithZone.new(instant: timestamp)
+                              offset = value.utc_offset
+                              timezone = format("%+03d:%02d", offset / 3600, (offset.abs % 3600) / 60)
+                              zone_value = Com::Openjproxy::Grpc::TimestampWithZone.new(
+                                instant: timestamp,
+                                timezone: timezone
+                              )
                               [Com::Openjproxy::Grpc::ParameterTypeProto::PT_TIMESTAMP,
                                Com::Openjproxy::Grpc::ParameterValue.new(timestamp_value: zone_value)]
                             else
@@ -172,7 +178,9 @@ module Ojp
       when :double_value then value.double_value
       when :string_value then value.string_value
       when :bytes_value then value.bytes_value
-      when :timestamp_value then value.timestamp_value.instant.to_time
+      when :timestamp_value
+        instant = value.timestamp_value.instant
+        Time.at(instant.seconds, instant.nanos, :nanosecond).utc
       when :date_value
         Date.new(value.date_value.year, value.date_value.month, value.date_value.day)
       when :time_value
@@ -189,7 +197,7 @@ module Ojp
       payload = payload.first if payload.is_a?(Array)
       if payload
         response = Com::Openjproxy::Grpc::SqlErrorResponse.decode(payload)
-        return SqlError.new(response.reason, response.sql_state, response.vendor_code, error)
+        return SqlError.new(response.reason, response.sqlState, response.vendorCode, error)
       end
 
       error

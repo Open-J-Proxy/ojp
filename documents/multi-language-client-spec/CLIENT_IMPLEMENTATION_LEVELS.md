@@ -64,9 +64,20 @@ This table describes what is currently demonstrated by tests in `ojp-jdbc-driver
 - Those tests validate client behavior independent of SQL dialect, while database-specific suites validate SQL/type/driver behavior.
 - For this reason, operational capability may be considered “platform-proven” even when a specific database does not have a dedicated multinode test class.
 
+## 4) Non-Java Client Test-Proven Coverage
+
+These levels are based on each language client's own integration tests and are independent of the Java reference-client matrix above.
+
+| Client | Database | Highest achieved level | Evidence |
+|---|---|---:|---|
+| **Go** | H2 | **L1** | `ojp-grpc-client-go/client/h2_l1_integration_test.go` |
+| **Ruby DBI** | H2 | **L1** | `ojp-grpc-client-ruby/test/integration/h2_l1_test.rb` |
+
+The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-grpc-client-ruby/README.md`](../../ojp-grpc-client-ruby/README.md) for the implemented API and current gaps.
+
 ---
 
-## 4) How to Use This Scale for New Clients
+## 5) How to Use This Scale for New Clients
 
 1. Start by targeting **L1 → L4** for first production viability.
 2. Add **L5/L6** before claiming broad compatibility.

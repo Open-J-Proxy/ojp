@@ -18,14 +18,19 @@ class H2L1IntegrationTest < Minitest::Test
     assert_equal 0, dbh.do("CREATE TABLE #{table} (id INT PRIMARY KEY, name VARCHAR(100) NOT NULL)")
 
     assert_equal 1, dbh.do("INSERT INTO #{table} (id, name) VALUES (?, ?)", 1, "before")
-    assert_equal [1, "before"], dbh.execute("SELECT id, name FROM #{table} WHERE id = ?", 1).fetch
+    assert_equal [1, "before"], query_one(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 1)
     assert_equal 1, dbh.do("UPDATE #{table} SET name = ? WHERE id = ?", "after", 1)
-    assert_equal [1, "after"], dbh.execute("SELECT id, name FROM #{table} WHERE id = ?", 1).fetch
-    assert_nil dbh.execute("SELECT id, name FROM #{table} WHERE id = ?", 2).fetch
+    assert_equal [1, "after"], query_one(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 1)
+    assert_nil query_one(dbh, "SELECT id, name FROM #{table} WHERE id = ?", 2)
     assert_equal 1, dbh.do("DELETE FROM #{table} WHERE id = ?", 1)
 
-    assert_raises(DBI::DatabaseError) { dbh.do("INSERT INTO #{table} (id, name) VALUES (1, 'duplicate')") }
-    assert_raises(DBI::DatabaseError) { dbh.execute("THIS IS NOT VALID SQL") }
+    duplicate_error = assert_raises(Ojp::SqlError) do
+      dbh.do("INSERT INTO #{table} (id, name) VALUES (1, 'duplicate')")
+    end
+    assert_equal "23505", duplicate_error.sql_state
+    refute_equal 0, duplicate_error.vendor_code
+    syntax_error = assert_raises(Ojp::SqlError) { dbh.execute("THIS IS NOT VALID SQL") }
+    assert_equal "42001", syntax_error.sql_state
 
     assert_equal 0, dbh.do("DROP TABLE IF EXISTS #{table}")
     assert dbh.disconnect
@@ -40,12 +45,18 @@ class H2L1IntegrationTest < Minitest::Test
 
   private
 
+  def query_one(dbh, sql, *parameters)
+    dbh.execute(sql, *parameters) do |statement|
+      statement.fetch
+    end
+  end
+
   def read_connection_config
     records = CSV.read(File.join(__dir__, "../testdata/h2_l1_connection.csv"))
     raise "expected exactly one three-field H2 connection record" unless records.length == 1 && records.first.length == 3
     raise "H2 JDBC URL is required in the connection CSV" if records.first.first.to_s.strip.empty?
 
-    records.first.map(&:strip)
+    [records.first[0].strip, records.first[1].strip, records.first[2].to_s]
   end
 
   def integration_enabled?

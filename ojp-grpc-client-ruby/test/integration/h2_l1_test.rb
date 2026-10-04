@@ -56,7 +56,7 @@ class H2L1IntegrationTest < Minitest::Test
 
   def query_one(dbh, sql, *parameters)
     dbh.execute(sql, *parameters) do |statement|
-      statement.fetch
+      statement.fetch&.to_a
     end
   end
 

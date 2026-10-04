@@ -58,6 +58,15 @@ This table describes what is currently demonstrated by tests in `ojp-jdbc-driver
 | **DB2** | **L8** | Strong CRUD/types/LOB/transaction/session-affinity coverage; no dedicated DB2 XA integration suite found. |
 | **CockroachDB** | **L8** | CRUD/types/LOB/transaction and large result-set coverage; no dedicated XA coverage found. |
 
+### Non-Java client implementation targets
+
+These entries describe the levels targeted by the language client modules; they do not increase the Java reference-client levels above.
+
+| Client | Database | Target level | Evidence |
+|---|---|---:|---|
+| Go (`ojp-grpc-client-go`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
+| .NET ADO.NET (`ojp-grpc-client-dotnet`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
+
 ### Important interpretation note
 
 - **Operational levels (L7/L8/L10)** are validated primarily in protocol-level multinode test suites under `org/openjproxy/grpc/client`.

@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/Ojp.Client/Ojp.Client.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/Ojp.Client.IntegrationTests/Ojp.Client.IntegrationTests.csproj" />
-  </Folder>
-</Solution>

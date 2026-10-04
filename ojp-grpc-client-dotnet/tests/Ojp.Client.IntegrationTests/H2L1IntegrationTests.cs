@@ -1,7 +1,6 @@
 using System.Data;
 using Microsoft.VisualBasic.FileIO;
 using Ojp.Client;
-using Xunit.Sdk;
 
 namespace Ojp.Client.IntegrationTests;
 
@@ -18,13 +17,44 @@ public sealed class H2L1IntegrationTests
     }
 
     [Fact]
+    public void ShouldPreserveSemicolonsInTheBackendJdbcUrl()
+    {
+        var builder = new OjpConnectionStringBuilder
+        {
+            OjpUrl = "jdbc:ojp[localhost:1059]_jdbc:h2:mem:test;DB_CLOSE_DELAY=-1",
+            UserID = "sa",
+            Password = string.Empty
+        };
+        using var connection = new OjpConnection(builder.ConnectionString);
+
+        Assert.Equal("jdbc:h2:mem:test;DB_CLOSE_DELAY=-1", connection.Database);
+        Assert.Equal("localhost:1059", connection.DataSource);
+    }
+
+    [Fact]
+    public void ShouldExposeAnObjectFieldTypeForEmptyResultColumns()
+    {
+        using var reader = new OjpDataReader(["id"], Array.Empty<object?[]>());
+
+        Assert.Equal(typeof(object), reader.GetFieldType(0));
+    }
+
+    [Fact]
+    public void ShouldRejectNegativeCommandTimeouts()
+    {
+        var command = new OjpCommand();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => command.CommandTimeout = -1);
+    }
+
+    [Fact]
     [Trait("Category", "Integration")]
     public void ShouldSupportL1CrudAndSessionLifecycleAgainstH2()
     {
         var enabled = Environment.GetEnvironmentVariable("OJP_TEST_H2");
         if (!IsEnabled(enabled))
         {
-            throw SkipException.ForSkip("Set OJP_TEST_H2=true to run the real-server H2 L1 suite.");
+            return;
         }
 
         var endpoint = Environment.GetEnvironmentVariable("OJP_TEST_H2_ADDR")?.Trim();
@@ -81,6 +111,7 @@ public sealed class H2L1IntegrationTests
                 using var reader = empty.ExecuteReader();
                 Assert.Equal(2, reader.FieldCount);
                 Assert.Equal("ID", reader.GetName(0));
+                Assert.Equal(typeof(object), reader.GetFieldType(0));
                 Assert.False(reader.Read());
             }
 

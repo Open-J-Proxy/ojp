@@ -67,8 +67,16 @@ public sealed class OjpDataReader(IReadOnlyList<string> columns, IReadOnlyList<o
 
     public override Type GetFieldType(int ordinal)
     {
-        var value = GetValue(ordinal);
-        return value is DBNull ? typeof(object) : value.GetType();
+        _ = columns[ordinal];
+        foreach (var row in rows)
+        {
+            if (row[ordinal] is { } value)
+            {
+                return value.GetType();
+            }
+        }
+
+        return typeof(object);
     }
 
     public override float GetFloat(int ordinal) => Convert.ToSingle(GetValue(ordinal));

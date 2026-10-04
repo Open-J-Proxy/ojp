@@ -24,6 +24,16 @@ internal static class OjpErrors
                 exception);
         }
 
+        if (exception.StatusCode == StatusCode.DeadlineExceeded)
+        {
+            return new TimeoutException("The OJP command exceeded its configured timeout.", exception);
+        }
+
+        if (exception.StatusCode == StatusCode.Cancelled)
+        {
+            return new OperationCanceledException("The OJP request was cancelled.", exception);
+        }
+
         return new InvalidOperationException($"OJP gRPC request failed ({exception.StatusCode}): {exception.Status.Detail}", exception);
     }
 }

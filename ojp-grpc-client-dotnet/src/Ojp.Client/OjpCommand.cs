@@ -13,6 +13,7 @@ public sealed class OjpCommand : DbCommand
     private string commandText = string.Empty;
     private OjpConnection? connection;
     private DbTransaction? transaction;
+    private int commandTimeout = 30;
 
     [AllowNull]
     public override string CommandText
@@ -21,7 +22,13 @@ public sealed class OjpCommand : DbCommand
         set => commandText = value ?? string.Empty;
     }
 
-    public override int CommandTimeout { get; set; } = 30;
+    public override int CommandTimeout
+    {
+        get => commandTimeout;
+        set => commandTimeout = value >= 0
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), "Command timeout must be zero or greater.");
+    }
 
     public override CommandType CommandType { get; set; } = CommandType.Text;
 
@@ -55,7 +62,8 @@ public sealed class OjpCommand : DbCommand
         {
             try
             {
-                var result = currentConnection.RpcClient.executeUpdate(CreateRequest(currentConnection));
+                var result = currentConnection.RpcClient.executeUpdate(
+                    CreateRequest(currentConnection), deadline: GetDeadline());
                 currentConnection.ReplaceSession(result.Session);
                 if (result.Type != ResultType.Integer || result.ResultCase != OpResult.ResultOneofCase.IntValue)
                 {
@@ -91,7 +99,8 @@ public sealed class OjpCommand : DbCommand
         {
             try
             {
-                using var call = currentConnection.RpcClient.executeQuery(CreateRequest(currentConnection));
+                using var call = currentConnection.RpcClient.executeQuery(
+                    CreateRequest(currentConnection), deadline: GetDeadline());
                 var columns = new List<string>();
                 var rows = new List<object?[]>();
                 while (call.ResponseStream.MoveNext().GetAwaiter().GetResult())
@@ -168,6 +177,9 @@ public sealed class OjpCommand : DbCommand
 
         return request;
     }
+
+    private DateTime? GetDeadline() =>
+        CommandTimeout == 0 ? null : DateTime.UtcNow.AddSeconds(CommandTimeout);
 }
 
 internal static class OjpValues

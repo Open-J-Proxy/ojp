@@ -1,0 +1,6 @@
+/node_modules
+/dist
+npm-debug.log*
+
+# Real credentials go here locally; never commit this file.
+.env

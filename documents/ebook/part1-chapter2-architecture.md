@@ -13,7 +13,7 @@ graph TB
     subgraph "Client Side"
     APP[Java Application]
     DRIVER[ojp-jdbc-driver<br/>JDBC Implementation]
-    OTHER[Go / Dart / .NET / PHP / Python / Ruby / C++ Clients]
+    OTHER[Go / Dart / .NET / PHP / Python / Ruby / C++ Client APIs]
     end
     
     subgraph "Shared Contract"
@@ -32,7 +32,7 @@ graph TB
     end
     
     APP --> DRIVER
-    OTHER -->|language-native APIs| SERVER
+    OTHER -->|gRPC/HTTP2| SERVER
     DRIVER -.->|uses| GRPC
     DRIVER -->|gRPC/HTTP2| SERVER
     SERVER -.->|uses| GRPC

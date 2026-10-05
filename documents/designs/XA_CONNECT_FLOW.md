@@ -33,6 +33,12 @@ flowchart TD
 - **5–7:** XA pooling uses the XA pool provider, not the regular JDBC pool. In unpooled mode setup records an XA datasource without creating a session; the backend connection is opened on demand.
 - **9:** The transaction manager controls commit and rollback through the XA resource. The logical JDBC connection rejects direct commit/rollback. Continue with [XA branch work](XA_BRANCH_FLOW.md).
 
+## Go deeper
+
+- How do I configure an XA datasource? See [XA management](../multinode/XA_MANAGEMENT.md#configuration) and the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md).
+- What happens after setup? Follow [XA branch work](XA_BRANCH_FLOW.md).
+- How does ordinary JDBC differ? Compare [Connect](CONNECT_FLOW.md).
+
 ## Source checkpoints
 
 - [XA datasource](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXADataSource.java), [lazy session creation](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXAConnection.java), and [single-server selection](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeConnectionManager.java).

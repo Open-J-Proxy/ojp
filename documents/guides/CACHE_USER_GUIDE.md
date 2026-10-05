@@ -1,5 +1,7 @@
 # Query Result Caching - User Guide
 
+First follow the [normal query flow](../designs/EXECUTE_QUERY_FLOW.md); its optional-feature notes explain where a cache hit changes the journey. This guide covers that specialised scenario. Use the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md) for driver and datasource settings and the [documentation hub](../README.md) for other tasks.
+
 ## Overview
 
 OJP query result caching provides automatic caching of SELECT query results to reduce database load and improve query performance. Cache configuration is specified by the client application in the JDBC connection string. This guide covers configuration, usage, monitoring, and troubleshooting.

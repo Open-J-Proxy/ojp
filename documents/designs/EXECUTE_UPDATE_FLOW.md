@@ -37,6 +37,12 @@ flowchart TD
 - **10:** Without a session, the server closes the temporary statement and returns the borrowed connection to its pool (or closes it in unpooled mode). With a session, resources remain available until separately closed or the session ends.
 - **7–11:** In manual-commit mode the row count does **not** mean the transaction is committed; use [commit or rollback](TRANSACTION_FLOW.md).
 
+## Go deeper
+
+- Why might work wait? See [admission and backpressure](../analysis/ADMISSION_CONTROL_BACKPRESSURE_SUMMARY.md).
+- How is a manual transaction completed? Follow [commit / rollback](TRANSACTION_FLOW.md), then [connection closure](CLOSE_CONNECTION_FLOW.md).
+- Which options change the behaviour? See the [JDBC](../configuration/ojp-jdbc-configuration.md) and [server](../configuration/ojp-server-configuration.md) references.
+
 ## Source checkpoints
 
 - [Statement entry and overloads](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java), [prepared updates](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/PreparedStatement.java), and [routing](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeStatementService.java).

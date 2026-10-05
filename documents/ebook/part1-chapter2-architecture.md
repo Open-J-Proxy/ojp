@@ -2,6 +2,8 @@
 
 > **Chapter Overview**: This chapter explores the internal architecture of OJP, detailing its components, communication protocols, and connection pool management. You'll understand how the pieces fit together to deliver intelligent database connection management.
 
+Before the deep dive, see the [system picture](../../README.md#system-picture) and follow [executeQuery](../designs/EXECUTE_QUERY_FLOW.md). Its steps provide a place for the mechanisms explained here. Choose other operations from the [flow index](../designs/MAIN_FLOWS.md), or jump directly to the [documentation hub](../README.md) for task guides and exact references.
+
 ---
 
 ## 2.1 System Components

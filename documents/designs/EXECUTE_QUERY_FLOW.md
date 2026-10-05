@@ -47,6 +47,18 @@ flowchart TD
 
 Optional features change the middle of the flow: a query-cache hit skips database execution after session/connection resolution; read/write splitting can select a replica; SQL enhancement can rewrite SQL when enabled (experimental, disabled by default).
 
+## Go deeper
+
+| My next question | Follow this link |
+|---|---|
+| Why does a request wait or get rejected? | [Admission, timeouts, and backpressure](../analysis/ADMISSION_CONTROL_BACKPRESSURE_SUMMARY.md) |
+| When is the connection released? | [Connection closure](CLOSE_CONNECTION_FLOW.md); result closure only closes the cursor, as noted above |
+| What changes with caching? | [Cache user guide](../guides/CACHE_USER_GUIDE.md) |
+| How does routing or failover change the journey? | [Multinode guide](../multinode/README.md) |
+| What changes with distributed transactions? | [XA branch work](XA_BRANCH_FLOW.md) and [XA completion](XA_COMPLETION_FLOW.md) |
+| Which settings control this behaviour? | [JDBC reference](../configuration/ojp-jdbc-configuration.md) and [server reference](../configuration/ojp-server-configuration.md) |
+| Where is this implemented? | [Source checkpoints](#source-checkpoints) below |
+
 ## Source checkpoints
 
 - [Driver query entry](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java), [prepared query inputs](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/PreparedStatement.java), and [server routing](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeStatementService.java).

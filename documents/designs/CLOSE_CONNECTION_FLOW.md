@@ -31,6 +31,12 @@ flowchart TD
 - **4–6:** Cleanup uses the physical connection's automatic-commit state to decide rollback. Acquired replica connections are closed before the primary. Pooled connection closure returns them for reuse; unpooled connections are physically closed.
 - **5–8:** The shared server pools and gRPC channels stay open for other connections. Closing only a statement or result through [Call Proxy](CALL_PROXY_FLOW.md) does not perform this session cleanup. See [XA connection closure](XA_CLOSE_FLOW.md) for the separate XA pooling lifecycle.
 
+## Go deeper
+
+- Which settings affect closing? See [connection close behaviour](../configuration/ojp-jdbc-configuration.md#connection-close-behavior).
+- How are abandoned sessions cleaned up? See [server session cleanup](../configuration/SESSION_CLEANUP.md).
+- How does XA differ? Follow [XA connection closure](XA_CLOSE_FLOW.md).
+
 ## Source checkpoints
 
 - [Driver synchronous/asynchronous closure](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Connection.java) and [termination routing](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeStatementService.java).

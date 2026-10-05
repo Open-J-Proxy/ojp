@@ -33,6 +33,12 @@ flowchart TD
 - **5–6:** Pool identity includes database URL, credentials, and datasource name. Repeated connects reuse the matching pool; pool initialization may open physical database connections.
 - **7–9:** The returned information has no session identifier yet. Later SQL, transaction, or [Call Proxy](CALL_PROXY_FLOW.md) work creates a session or borrows a temporary connection as needed. Unpooled mode records connection settings instead of creating a pool; see [XA connection setup](XA_CONNECT_FLOW.md) for the separate XA lifecycle.
 
+## Go deeper
+
+- How do I connect an application? See [framework integration](../java-frameworks/README.md) and the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md).
+- What happens when SQL starts? Follow [executeQuery](EXECUTE_QUERY_FLOW.md) or [executeUpdate](EXECUTE_UPDATE_FLOW.md).
+- How are pools managed? See the [pool provider overview](../connection-pool/README.md). For distributed transactions, start with [XA connection setup](XA_CONNECT_FLOW.md).
+
 ## Source checkpoints
 
 - [URL, options, and JDBC connection creation](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Driver.java) and [multinode connection setup and identity caching](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeConnectionManager.java).

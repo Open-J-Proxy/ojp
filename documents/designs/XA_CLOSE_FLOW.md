@@ -32,6 +32,12 @@ flowchart TD
 - **6–8:** Pooled XA session teardown leaves backend return to the registry rather than closing the physical XA connection directly. Unpooled teardown closes the physical XA connection. The read-only prepare optimization has a separate immediate-return path.
 - **1–9:** This diagram assumes a completed, registered branch. Never-used handles, recovery-only sessions, and failure cleanup do not necessarily follow that pool-return path; shared pools and gRPC channels are not shut down.
 
+## Go deeper
+
+- Why are completion and closure both required? See the [dual-condition lifecycle](../multinode/XA_MANAGEMENT.md#dual-condition-session-lifecycle).
+- Which settings control the backend pool? See the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md).
+- How does ordinary JDBC closure differ? Compare [connection closure](CLOSE_CONNECTION_FLOW.md).
+
 ## Source checkpoints
 
 - [Outer XA connection close](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXAConnection.java) and [logical connection close](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXALogicalConnection.java).

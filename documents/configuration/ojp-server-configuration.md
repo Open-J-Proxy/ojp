@@ -2,6 +2,8 @@
 
 The OJP Server supports comprehensive configuration through both JVM system properties and environment variables. This document covers all available configuration options including server settings, connection pools, slow query segregation, and client-side configuration.
 
+Use this page for exact server settings. To see where they affect execution, follow [executeQuery](../designs/EXECUTE_QUERY_FLOW.md) and its notes on capacity and sessions. For client-supplied pool settings, use the [JDBC reference](ojp-jdbc-configuration.md); for installation, see [Docker deployment](DOCKER_DEPLOYMENT.md) or the [runnable JAR guide](../runnable-jar/README.md). [Documentation hub](../README.md).
+
 > **⚠️ Important JVM Property:**  
 > Always start the server with `-Duser.timezone=UTC`. The OJP Server handles date/time values from multiple databases and client timezones. Running the JVM in UTC ensures consistent and predictable temporal conversions. Omitting this setting can cause incorrect date/time handling when clients and databases use different timezones.
 

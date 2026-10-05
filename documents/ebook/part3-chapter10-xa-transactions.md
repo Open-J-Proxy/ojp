@@ -1,5 +1,7 @@
 # Chapter 10: XA Distributed Transactions
 
+Start with the [simplified XA flows](../designs/MAIN_FLOWS.md#main-xa-flows) to understand setup, branch work, completion, closure, and recovery before reading the mechanisms below. For exact settings, use the [JDBC](../configuration/ojp-jdbc-configuration.md) and [server](../configuration/ojp-server-configuration.md) references. [Documentation hub](../README.md).
+
 XA transactions represent one of the most powerful—and traditionally most complex—features in enterprise software. They allow you to coordinate changes across multiple databases or resources, ensuring that either all changes commit together or all roll back together. No half-completed transactions, no orphaned data. It's the kind of reliability that mission-critical applications demand, but it often comes at the cost of significant complexity and performance overhead.
 
 OJP transforms this equation. By managing XA connections through server-side pooling with Apache Commons Pool 2, OJP eliminates most of the traditional XA performance penalties while maintaining full compliance with the JDBC XA specification. You get the reliability of distributed transactions without sacrificing the performance your applications need.

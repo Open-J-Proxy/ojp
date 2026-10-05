@@ -12,9 +12,50 @@ We can share technical knowledge in the same way. Let's call it **knowledge in l
 
 For OJP, the base layer is straightforward. An application uses the OJP JDBC driver, the driver communicates with the OJP server over gRPC, and the server uses database connections managed on the server side. That tells us where the work happens and why OJP sits between the application and the database. The next layer follows a particular operation through those components. Further layers explain resource lifetimes, configuration choices, unusual paths, and finally the code behind each step.
 
+```mermaid
+flowchart LR
+    app["Application"] <-->|"JDBC calls and results"| driver["OJP JDBC driver"]
+    driver <-->|"gRPC requests and responses"| server["OJP server"]
+    server <-->|"Server-managed JDBC connections"| db["Database"]
+```
+
+This is our first coat of paint: a component map, not an execution sequence. It shows who talks to whom without asking you to understand how a query runs or when a connection is released. We can now add those details to the same picture rather than introduce a completely new one.
+
 ## A flow tells a story that a class name cannot
 
 Suppose you want to understand what happens when an application requests query results. Starting with a class name tells you where some code lives, but it does not tell you the whole journey. The [executeQuery diagram](EXECUTE_QUERY_FLOW.md) starts with the application's request and follows it through checking inputs, sending the request, checking server capacity, obtaining a session with a database connection, and running the SQL. It then follows the rows back to the application and ends with the result being closed.
+
+Here is a slightly condensed version of that next layer. It assumes an open OJP connection and shows a successful, forward-only query using a server-managed pool, without query caching, read replicas, or SQL enhancement. The component map now has a journey inside it, from asking for rows to closing the result's database cursor.
+
+```mermaid
+flowchart TD
+    subgraph app["Application"]
+        s1["1. Request rows for a SQL query"]
+        s9["9. Close the result after reading"]
+    end
+    subgraph driver["ojp-jdbc-driver"]
+        s2["2. Check inputs and send the query"]
+        s8["8. Supply rows as the application reads"]
+        s10["10. Forward the result-close request"]
+    end
+    subgraph server["ojp-server"]
+        s3["3. Check query safety and available capacity"]
+        s4["4. Reuse or create a session with a database connection"]
+        s5["5. Prepare the statement and bind values"]
+        s7["7. Track the result and stream rows in blocks"]
+        s11["11. Close the database cursor"]
+    end
+    subgraph db["Database"]
+        s6["6. Run the SQL query"]
+    end
+    s1 --> s2
+    s2 -->|"gRPC request"| s3
+    s3 --> s4 --> s5 --> s6 --> s7
+    s7 -->|"gRPC response stream"| s8
+    s8 -->|"When the application closes the result"| s9
+    s9 --> s10
+    s10 -->|"gRPC request"| s11
+```
 
 That is a story you can follow without knowing the project's internal vocabulary. The larger boxes tell you which component is responsible, and the numbered steps help you keep your place. The arrows make the handoffs visible, including the request to the server and the response stream back to the driver. You can step back and see the operation as a whole instead of trying to assemble it from disconnected implementation fragments.
 

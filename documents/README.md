@@ -128,6 +128,7 @@ Located in [targeted-problem/](targeted-problem/):
 ### Design Documents
 
 Located in [designs/](designs/):
+- [Knowledge in Layers](designs/KNOWLEDGE_IN_LAYERS.md) - How Simplified Flow Diagrams make OJP easier to understand
 - [Simplified Flow Diagrams](designs/MAIN_FLOWS.md) - Documentation method and main-flow index
 - [Connect — Simplified Flow Diagram](designs/CONNECT_FLOW.md) - Datasource setup and lazy sessions
 - [executeQuery — Simplified Flow Diagram](designs/EXECUTE_QUERY_FLOW.md) - Query execution, row streaming, and result closure

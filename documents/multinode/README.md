@@ -217,6 +217,7 @@ By default, OJP uses load-aware server selection to automatically balance connec
 2. **Automatic Retry**: Failed requests are retried on other healthy servers (for non-session operations)
 3. **Recovery Attempts**: Unhealthy servers are periodically tested for recovery
 4. **Graceful Degradation**: System continues operating with remaining healthy servers
+5. **Graceful Server Shutdown (draining)**: When an OJP server receives `SIGTERM` it enters a draining state. The driver recognises the `ojp-server-draining` error, stops sending new sessions to that server, retries requests that have no session yet on another server, and keeps existing sessions (including XA transactions) on the draining server until they finish. After the server restarts, the normal health check brings it back. See the [Graceful Shutdown Guide](../guides/GRACEFUL_SHUTDOWN.md).
 
 ### Session Stickiness Enforcement
 

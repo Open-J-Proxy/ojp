@@ -470,7 +470,11 @@ public class MultinodeConnectionManager {
                     .collect(Collectors.toList());
 
             for (ServerEndpoint endpoint : healthyServers) {
-                if (!validateServer(endpoint)) {
+                HealthCheckValidator.Result result = healthCheckValidator.checkServer(endpoint);
+                if (result == HealthCheckValidator.Result.DRAINING) {
+                    // Graceful shutdown: keep bound sessions, only stop routing new work there.
+                    markDraining(endpoint);
+                } else if (result != HealthCheckValidator.Result.HEALTHY) {
                     log.info("Health check: Server {} has become unhealthy", endpoint.getAddress());
 
                     // Mark server unhealthy
@@ -513,7 +517,8 @@ public class MultinodeConnectionManager {
 
             // Only check if enough time has passed since last failure
             if (timeSinceFailure >= healthCheckConfig.getHealthCheckThresholdMs()) {
-                if (validateServer(endpoint)) {
+                HealthCheckValidator.Result result = healthCheckValidator.checkServer(endpoint);
+                if (result == HealthCheckValidator.Result.HEALTHY) {
                     // For non-XA connections: proactively re-initialize pools BEFORE marking the
                     // server healthy. Non-XA connect() calls are cached after the first successful
                     // connect(), so the recovered server never receives a connect() RPC from
@@ -537,10 +542,21 @@ public class MultinodeConnectionManager {
                     pushClusterHealthToAllHealthyServers();
 
                     notifyServerRecovered(endpoint);
-                } else {
-                    // Still unhealthy, update timestamp
+                } else if (result == HealthCheckValidator.Result.UNREACHABLE && endpoint.isDraining()) {
+                    // The draining server has now actually stopped: its remaining bound sessions
+                    // are gone, so treat it as a regular failure (invalidate XA sessions, etc.).
+                    log.info("Draining server {} is no longer reachable; treating as failed", endpoint.getAddress());
+                    endpoint.setHealthy(false);
                     endpoint.setLastFailureTime(System.nanoTime());
-                    log.info("Server {} still unhealthy", endpoint.getAddress());
+                    if (!sessionToServerMap.isEmpty()) {
+                        invalidateSessionsAndConnectionsForFailedServer(endpoint);
+                    }
+                    notifyServerUnhealthy(endpoint, new Exception("Draining server stopped"));
+                } else {
+                    // Still unhealthy (or still draining), update timestamp
+                    endpoint.setLastFailureTime(System.nanoTime());
+                    log.info("Server {} still unhealthy{}", endpoint.getAddress(),
+                            endpoint.isDraining() ? " (draining)" : "");
                 }
             }
         }
@@ -683,14 +699,6 @@ public class MultinodeConnectionManager {
             log.info("Invalidated {} session(s) for failed server {} (no connections tracked)",
                     sessionsToInvalidate.size(), endpoint.getAddress());
         }
-    }
-
-    /**
-     * Validates if a server is healthy by attempting a simple connection.
-     * Returns true if server is responsive, false otherwise.
-     */
-    private boolean validateServer(ServerEndpoint endpoint) {
-        return healthCheckValidator.validateServer(endpoint);
     }
 
     /**
@@ -956,7 +964,9 @@ public class MultinodeConnectionManager {
 
         log.debug("Session {} is bound to server {}", sessionKey, sessionServer.getAddress());
 
-        if (!sessionServer.isHealthy()) {
+        if (!sessionServer.acceptsBoundSessions()) {
+            // A draining server still serves sessions already bound to it (graceful shutdown).
+            // Any other unhealthy server cannot continue the session.
             // Remove from map and throw exception - do NOT fall back to round-robin
             sessionToServerMap.remove(sessionKey);
             throw new SQLException("Session " + sessionKey +
@@ -1097,6 +1107,13 @@ public class MultinodeConnectionManager {
      * @param exception The exception that caused the failure
      */
     public void handleServerFailure(ServerEndpoint endpoint, Exception exception) {
+        // Graceful shutdown: the server explicitly told us it is draining. Stop sending it new
+        // work but keep its bound sessions, its XA sessions and its channel alive.
+        if (GrpcExceptionHandler.isServerDrainingError(exception)) {
+            markDraining(endpoint);
+            return;
+        }
+
         // Only mark server unhealthy for connection-level failures
         // Database-level errors (e.g., table not found, syntax errors) should not affect server health
         boolean shouldMarkUnhealthy = isConnectionLevelError(exception);
@@ -1159,6 +1176,42 @@ public class MultinodeConnectionManager {
             } catch (Exception e) {
                 log.warn("Error shutting down channel for {}: {}", endpoint.getAddress(), e.getMessage());
             }
+        }
+    }
+
+    /**
+     * Marks a server as draining after it rejected a request with the {@code ojp-server-draining}
+     * trailer (graceful shutdown in progress).
+     *
+     * <p>Unlike {@link #handleServerFailure}, this does <b>not</b> invalidate XA sessions, notify
+     * health listeners or close the gRPC channel: sessions already bound to the server keep being
+     * routed to it so they can commit/rollback normally. The server is only excluded from
+     * new-session and XA-connect selection. The updated cluster health is pushed to the
+     * remaining healthy servers so they can enlarge their pools.</p>
+     *
+     * <p>Recovery reuses the normal health check path: heartbeats fail while the server is draining
+     * or down, and once the restarted server answers again it is re-initialised and marked healthy
+     * (which clears the draining flag).</p>
+     *
+     * @param endpoint the server that reported it is draining
+     */
+    public void markDraining(ServerEndpoint endpoint) {
+        if (endpoint == null || endpoint.isDraining()) {
+            return;
+        }
+        boolean wasHealthy = endpoint.isHealthy();
+        endpoint.markDraining();
+        log.warn("Server {} is draining (graceful shutdown); no new sessions will be routed to it, "
+                + "existing sessions continue", endpoint.getAddress());
+
+        if (wasHealthy && healthCheckScheduler != null) {
+            healthCheckScheduler.submit(() -> {
+                try {
+                    pushClusterHealthToAllHealthyServers();
+                } catch (Exception e) {
+                    log.warn("Failed to push cluster health after server drain detection: {}", e.getMessage());
+                }
+            });
         }
     }
 

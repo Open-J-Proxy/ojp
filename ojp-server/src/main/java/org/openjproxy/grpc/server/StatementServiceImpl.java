@@ -320,4 +320,62 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
             sqlEnhancerEngine.shutdown();
         }
     }
+
+    /**
+     * Closes every connection pool owned by this server: regular pools, read replica pools
+     * and XA pools. Called at the end of a graceful shutdown, after the gRPC server has
+     * stopped, so that database connections are released cleanly instead of being dropped
+     * when the JVM exits.
+     */
+    public void closeAllPools() {
+        Map<String, DataSource> datasourceMap = actionContext.getDatasourceMap();
+        Optional<String> providerId = org.openjproxy.datasource.ConnectionPoolProviderRegistry.getDefaultProvider()
+                .map(org.openjproxy.datasource.ConnectionPoolProvider::id);
+        int closed = 0;
+        for (Map.Entry<String, DataSource> entry : datasourceMap.entrySet()) {
+            if (closeDataSource(providerId, entry.getValue(), entry.getKey())) {
+                closed++;
+            }
+        }
+        datasourceMap.clear();
+
+        org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry rwRegistry =
+                actionContext.getReadWriteDataSourceRegistry();
+        if (rwRegistry != null) {
+            for (DataSource replica : rwRegistry.getAllReplicas()) {
+                if (closeDataSource(providerId, replica, "replica")) {
+                    closed++;
+                }
+            }
+            rwRegistry.clear();
+        }
+
+        Map<String, XATransactionRegistry> xaRegistries = actionContext.getXaRegistries();
+        for (Map.Entry<String, XATransactionRegistry> entry : xaRegistries.entrySet()) {
+            try {
+                entry.getValue().close();
+                closed++;
+            } catch (Exception e) {
+                log.warn("Failed to close XA pool for connHash {}: {}", entry.getKey(), e.getMessage());
+            }
+        }
+        xaRegistries.clear();
+        log.info("Closed {} connection pool(s) during shutdown", closed);
+    }
+
+    private boolean closeDataSource(Optional<String> providerId, DataSource dataSource, String label) {
+        try {
+            if (providerId.isPresent()) {
+                org.openjproxy.datasource.ConnectionPoolProviderRegistry.closeDataSource(providerId.get(), dataSource);
+            } else if (dataSource instanceof AutoCloseable closeable) {
+                closeable.close();
+            } else {
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to close pool {}: {}", label, e.getMessage());
+            return false;
+        }
+    }
 }

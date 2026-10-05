@@ -9,9 +9,11 @@ import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.datasource.ConnectionPoolProviderRegistry;
 import org.openjproxy.datasource.PoolConfig;
 import org.openjproxy.constants.CommonConstants;
+import org.openjproxy.grpc.server.GrpcExceptionHandler;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.MultinodeXaCoordinator;
 import org.openjproxy.grpc.server.AdmissionControlManager;
+import org.openjproxy.grpc.server.ShutdownCoordinator;
 import org.openjproxy.grpc.server.UnpooledConnectionDetails;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
@@ -71,6 +73,15 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
     @Override
     public void execute(ActionContext context, ConnectionDetails connectionDetails, StreamObserver<SessionInfo> responseObserver) {
+        // Graceful shutdown: while draining, reject both heartbeat health checks and real
+        // connect() calls so drivers stop routing new work here. Existing sessions are
+        // unaffected because they never call connect() again.
+        if (!ShutdownCoordinator.getInstance().isAcceptingNewSessions()) {
+            log.info("Rejecting connect() request: server is draining");
+            GrpcExceptionHandler.sendServerDraining(responseObserver);
+            return;
+        }
+
         // Handle empty connection details (health check)
         if (connectionDetails.getUrl().isBlank() &&
             connectionDetails.getUser().isBlank() &&

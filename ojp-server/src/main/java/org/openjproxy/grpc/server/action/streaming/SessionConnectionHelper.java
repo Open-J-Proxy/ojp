@@ -8,6 +8,7 @@ import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.PoolNotFoundException;
 import org.openjproxy.grpc.server.Session;
+import org.openjproxy.grpc.server.ShutdownCoordinator;
 import org.openjproxy.grpc.server.UnpooledConnectionDetails;
 import org.openjproxy.grpc.server.action.ActionContext;
 
@@ -138,6 +139,10 @@ public class SessionConnectionHelper {
                 }
             }
         } else {
+            // Graceful shutdown: while draining, requests on existing sessions keep working
+            // (branch above) but no new session/connection may be created on this server.
+            ShutdownCoordinator.getInstance().checkAcceptingNewSessions();
+
             // Lazy allocation: check if this is an XA or regular connection
             String connHash = sessionInfo.getConnHash();
             boolean isXA = sessionInfo.getIsXA();

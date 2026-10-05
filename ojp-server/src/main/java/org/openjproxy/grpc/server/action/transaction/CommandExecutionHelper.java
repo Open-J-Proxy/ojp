@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.server.CircuitBreaker;
 import org.openjproxy.grpc.server.PoolNotFoundException;
 import org.openjproxy.grpc.server.AdmissionControlManager;
+import org.openjproxy.grpc.server.ServerDrainingException;
 import org.openjproxy.grpc.server.ServerOverloadException;
 import org.openjproxy.grpc.server.SqlStatementXXHash;
 import org.openjproxy.grpc.server.action.ActionContext;
@@ -19,6 +20,7 @@ import java.sql.SQLException;
 
 import static org.openjproxy.grpc.server.GrpcExceptionHandler.sendServerOverload;
 import static org.openjproxy.grpc.server.GrpcExceptionHandler.sendSQLExceptionMetadata;
+import static org.openjproxy.grpc.server.GrpcExceptionHandler.sendServerDraining;
 import static org.openjproxy.grpc.server.action.session.ResultSetHelper.updateSessionActivity;
 
 @Slf4j
@@ -83,6 +85,10 @@ public class CommandExecutionHelper {
 
             circuitBreaker.onSuccess(stmtHash);
 
+        } catch (ServerDrainingException e) {
+            // Graceful shutdown in progress: not a SQL failure, so the circuit breaker is not touched.
+            log.info("Rejecting {} request without session: server is draining", operationName);
+            sendServerDraining(responseObserver);
         } catch (SQLDataException e) {
             circuitBreaker.onFailure(stmtHash, e);
             log.error("SQL data failure during {} execution: {}",

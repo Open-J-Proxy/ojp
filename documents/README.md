@@ -83,6 +83,7 @@ Located in [guides/](guides/):
 - [DBeaver Tutorial](guides/DBEAVER.md) - How to use the OJP JDBC driver in DBeaver
 - [Release Process & Maven Central Integration](guides/RELEASE_PROCESS.md) - One-click release workflow, Sonatype setup, and suggestions
 - [Adding Database XA Support](guides/ADDING_DATABASE_XA_SUPPORT.md) - How to add XA support for new databases
+- [Graceful Shutdown](guides/GRACEFUL_SHUTDOWN.md) - Server draining on SIGTERM, driver failover, Kubernetes settings
 
 ## Multi-language Clients
 

@@ -54,7 +54,9 @@ Early single-endpoint clients target H2 L1; they are not feature-equivalent to t
 | [Ruby](ojp-client-ruby-dbi/README.md) | DBI | H2 L1 |
 | [C++](ojp-client-cpp-odbc/README.md) | ODBC | H2 L1 |
 
+---
 Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2**. Also compatible in principle with any database that provides a JDBC driver.
+Note: only fully tested via OJP JDBC Type 3 driver, other clients as per table above have more limited tested implementations.
 
 ---
 ## Requirements

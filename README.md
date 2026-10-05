@@ -26,6 +26,14 @@ Learn how Open J Proxy works, how to deploy it, and how to use it in production.
 
 **A smart, open-source database control plane** — delivered as a Type 3 JDBC driver, early language-native clients, and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover.
 
+```mermaid
+flowchart LR
+    app["Application"] <-->|"JDBC calls and results"| driver["OJP JDBC driver"]
+    driver <-->|"gRPC requests and responses"| server["OJP server"]
+    server <-->|"Server-managed JDBC connections"| db["Database"]
+```
+
+
 _"The only open-source JDBC Type 3 driver globally, this project introduces a transparent Quality-of-Service layer that decouples application performance from database bottlenecks. It's a must-try for any team struggling with data access contention, offering easy-to-implement back-pressure and pooling management." (Bruno Bossola - Java Champion and CTO @ Meterian.io)_  
 
 ---

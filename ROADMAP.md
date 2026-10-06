@@ -56,6 +56,15 @@ This document outlines the planned releases and key milestones for the Open J Pr
 
 ---
 
+## 🚀 Version 1.2.0 — Late December 2026 (planned)
+
+**Theme: Per-pool Slow Query Segregation**
+
+- Configure Slow Query Segregation independently for each connection pool instead of relying only on the current server-wide on/off setting
+- [PR #636](https://github.com/Open-J-Proxy/ojp/pull/636) is the current open draft for analysis and design; the proposed per-datasource configuration is not implemented yet
+
+---
+
 ## 💡 Future Considerations (post 1.0.0)
 
 Items under consideration for future releases:

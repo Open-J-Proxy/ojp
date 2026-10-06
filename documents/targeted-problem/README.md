@@ -13,7 +13,7 @@ OJP acts as a **smart database control plane**: a programmable layer that sits b
 - **Client-side reactive throttling.** When the server detects pressure, clients are signaled to throttle themselves and recover automatically.
 - **Slow vs fast query segregation.** Optional lane-based segregation prevents long analytical queries from starving fast OLTP traffic on the same database.
 - **Built-in observability.** OpenTelemetry traces and Prometheus metrics expose pool, admission, classification and throttling behaviour, so operators can see what the data tier is doing.
-- **Load balancing & failover.** Multinode support inside the JDBC driver routes load across multiple OJP servers and fails over transparently.
+- **Client-side load balancing & automatic failover.** Configure multiple OJP server endpoints in the JDBC URL; the driver selects healthy servers to balance new work and retries on connection-level failures. Session-bound work retains server affinity, so failover is subject to session semantics.
 
 ## How OJP differs from common proxy approaches
 

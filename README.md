@@ -12,6 +12,7 @@
 
 ---
 
+<a id="📘-free-open-j-proxy-ebook"></a>
 ## 📘 Free Open J Proxy eBook
 
 Learn how Open J Proxy works, how to deploy it, and how to use it in production.
@@ -26,60 +27,52 @@ Learn how Open J Proxy works, how to deploy it, and how to use it in production.
 
 **A smart, open-source database control plane** — delivered as a Type 3 JDBC driver, early language-native clients, and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover.
 
+<a id="overview"></a>
+## System picture
+
+This component map shows who communicates with whom, **not the sequence of a query**. The server owns the real database connections; applications use the OJP JDBC driver.
+
 ```mermaid
 flowchart LR
     app["Application"] <-->|"JDBC calls and results"| driver["OJP JDBC driver"]
     driver <-->|"gRPC requests and responses"| server["OJP server"]
     server <-->|"Server-managed JDBC connections"| db["Database"]
 ```
+<a id="value-proposition"></a>
+OJP helps elastic applications avoid connection storms, gives operators visibility into database pressure, and supports load-aware routing and optional slow/fast query segregation. See the [problem and solution](documents/targeted-problem/README.md) for context.
 
+### Choose your next step
 
-_"The only open-source JDBC Type 3 driver globally, this project introduces a transparent Quality-of-Service layer that decouples application performance from database bottlenecks. It's a must-try for any team struggling with data access contention, offering easy-to-implement back-pressure and pooling management." (Bruno Bossola - Java Champion and CTO @ Meterian.io)_  
+You do not need to understand OJP's implementation to use it. Choose the information that helps you make a decision or complete your task:
 
----
+<a id="further-documents"></a>
+| I want to… | Start here |
+|---|---|
+| Evaluate OJP — managers and architects | [Problem and solution](documents/targeted-problem/README.md) · [Introduction and suitability](documents/ebook/part1-chapter1-introduction.md) · [Support policy](SUPPORT.md) |
+| Try OJP | [Quick start below](#quick-start) · [Full walkthrough](documents/ebook/part1-chapter3-quickstart.md) |
+| Integrate an application | [Framework guides](documents/java-frameworks/README.md) |
+| Deploy and operate OJP — ops teams and DBAs | [Docker](documents/configuration/DOCKER_DEPLOYMENT.md) · [Runnable JAR](documents/runnable-jar/README.md) · [Production guide](documents/monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) · [Telemetry](documents/telemetry/README.md) |
+| Look up settings | [JDBC reference](documents/configuration/ojp-jdbc-configuration.md) · [Server reference](documents/configuration/ojp-server-configuration.md) |
+| Configure high availability | [Multinode guide](documents/multinode/README.md) |
+| Understand behaviour or contribute | [Optional flow diagrams](documents/designs/MAIN_FLOWS.md) · [Contributing](CONTRIBUTING.md) |
+| Browse all documentation | [Documentation hub](documents/README.md) · [Ebook reading paths](documents/ebook/README.md#reading-paths) |
 
-## Value Proposition
-
-OJP is a **smart database control plane** for relational databases — more than a connection-pool proxy, it is a programmable layer between your applications and your databases that delivers:
-
-- **Backpressure & connection-storm protection** — a global, OJP-managed pool fronts the database so elastic fleets cannot exhaust connections.
-- **Client-side reactive throttling** — when the server is under pressure, clients back off automatically and recover on their own.
-- **Slow vs fast query segregation (SQS)** — keeps long analytical queries from starving short OLTP traffic. See [Mixed OLTP + OLAP workloads](#mixed-oltp--olap-workloads-enable-slow-query-segregation) below.
-- **Rich observability** — OpenTelemetry traces and Prometheus metrics for pools, admission, classification and throttling. See [Telemetry and Observability](documents/telemetry/README.md).
-- **Load balancing & failover in the driver** — multinode URLs (`jdbc:ojp[host1:port1,host2:port2]_...`) with load-aware routing and session stickiness. See [Multinode Configuration](documents/multinode/README.md).
-- **Seamless Java integration** — standard JDBC 4.2, Spring Boot starter, Quarkus and Micronaut guides; no application rewrite.
-- **Language-neutral protocol** — early non-Java clients use the same gRPC server with language-native database APIs. See the [multi-language client spec](documents/multi-language-client-spec/).
-
-Early single-endpoint clients target H2 L1; they are not feature-equivalent to the JDBC driver and are not yet production-ready:
-
-| Client module | Application API | Current scope |
-|---|---|---|
-| [Go](ojp-client-go-database-sql/README.md) | `database/sql` | H2 L1 |
-| [Dart](ojp-client-dart-drift/README.md) | Drift executor | H2 L1 |
-| [.NET](ojp-client-dotnet-ado-net/README.md) | ADO.NET | H2 L1 |
-| [PHP](ojp-client-php-pdo/README.md) | PDO-compatible | H2 L1 |
-| [Python](ojp-client-python-dbapi/README.rst) | DB-API 2.0 | H2 L1 |
-| [Ruby](ojp-client-ruby-dbi/README.md) | DBI | H2 L1 |
-| [C++](ojp-client-cpp-odbc/README.md) | ODBC | H2 L1 |
-
----
-Tested support for databases: **PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2**. Also compatible in principle with any database that provides a JDBC driver.
-Note: only fully tested via OJP JDBC Type 3 driver, other clients as per table above have more limited tested implementations.
-
----
 ## Requirements
 
 - **OJP JDBC Driver**: Java 11 or higher
 - **OJP Server**: Java 25 or higher
+- **Tested through JDBC**: PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, DB2, and H2.
+- **Early non-Java clients** currently target single-endpoint H2 L1; they are not JDBC-feature-equivalent or production-ready. See [clients and tested coverage](documents/README.md#multi-language-clients).
 
----
 ## Quick Start
 
-Get OJP running in under 5 minutes:
+This Docker example runs from a cloned repository on a Linux host with an existing database accessible to the server.
+
+> **Disable application-level connection pooling** (including HikariCP). OJP manages backend pools on the server. [Framework guides](documents/java-frameworks/README.md) explain integration and runtime dependencies.
 
 ### 1. Start OJP Server (Docker)
 
-> **⚠️ Important for v0.4.0-beta and later:** JDBC drivers must be downloaded and mounted. See [Chapter 4: Database Drivers](documents/ebook/part2-chapter4-database-drivers.md) for details.
+> **JDBC drivers are not bundled.** Download and mount them; proprietary drivers require separate installation. See [external drivers and libraries](documents/configuration/DRIVERS_AND_LIBS.md).
 
 ```bash
 # Download drivers first
@@ -91,24 +84,10 @@ cd ..
 # Run with drivers mounted
 docker run --rm -d \
   --network host \
-  -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
+  -v "$(pwd)/ojp-libs:/opt/ojp/ojp-libs" \
+  -e JAVA_TOOL_OPTIONS="-Duser.timezone=UTC" \
   rrobetti/ojp:1.0.0
 ```
-
-**Alternative: Runnable JAR (No Docker)**
-
-```bash
-# Download OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0/ojp-server-1.0.0-shaded.jar
-chmod +x ojp-server-1.0.0-shaded.jar
-
-# Download open source JDBC drivers
-curl -LO https://raw.githubusercontent.com/Open-J-Proxy/ojp/main/ojp-server/download-drivers.sh
-bash download-drivers.sh  # Downloads H2, PostgreSQL, MySQL, MariaDB to ojp-libs/
-java -Duser.timezone=UTC -jar ojp-server-1.0.0-shaded.jar
-```
-
-📖 See [Executable JAR Setup Guide](documents/runnable-jar/README.md) for details.
 
 ### 2. Add OJP JDBC Driver to your project
 ```xml
@@ -124,106 +103,38 @@ Replace your existing connection URL by prefixing with `ojp[host:port]_`:
 
 ```java
 // Before (PostgreSQL example)
-"jdbc:postgresql://user@localhost/mydb"
+"jdbc:postgresql://localhost:5432/mydb"
 
-// After  
-"jdbc:ojp[localhost:1059]_postgresql://user@localhost/mydb"
-
-// Oracle example
-"jdbc:ojp[localhost:1059]_oracle:thin:@localhost:1521/XEPDB1"
-
-// SQL Server example
-"jdbc:ojp[localhost:1059]_sqlserver://localhost:1433;databaseName=mydb"
+// After
+"jdbc:ojp[localhost:1059]_postgresql://localhost:5432/mydb"
 ```
 Use the ojp driver: `org.openjproxy.jdbc.Driver`
 
-That's it! Your application now uses intelligent connection pooling through OJP.
+Supply database credentials through your application's secure configuration. For a full walkthrough and first query, see the [Quick Start Guide](documents/ebook/part1-chapter3-quickstart.md).
 
-**Note**: For detailed driver setup including proprietary databases (Oracle, SQL Server, DB2), see [Chapter 4: Database Drivers](documents/ebook/part2-chapter4-database-drivers.md).
-
----
-
-## Mixed OLTP + OLAP workloads — Enable Slow Query Segregation
-
-If the same database serves **both** short OLTP queries **and** long reporting/OLAP queries, enable **Slow Query Segregation (SQS)** on the OJP server:
-
-```bash
--Dojp.server.slowQuerySegregation.enabled=true
-```
-
-Or via environment variable: `OJP_SERVER_SLOWQUERYSEGREGATION_ENABLED=true`.
-
-That single flag is enough — defaults are tuned for typical mixed workloads. For tuning options (slow-slot percentage, classification mode, thresholds), see [Slow Query Segregation](documents/designs/SLOW_QUERY_SEGREGATION.md) and the [server configuration reference](documents/configuration/ojp-server-configuration.md#slow-query-segregation-settings). For pure OLTP-only or pure OLAP-only deployments, leave SQS disabled (the default).
-
----
-
-## Alternative Setup: Executable JAR (No Docker)
-
-If Docker is not available in your environment, you can run OJP Server as a standalone JAR file downloaded directly from Maven Central — no source code or build tools required:
-
-📖 **[Executable JAR Setup Guide](documents/runnable-jar/README.md)** - Complete instructions for downloading from Maven Central and running OJP Server as a standalone executable JAR with all dependencies included.
-
-> **For contributors:** If you need to build the JAR from source, see [Building from Source](documents/runnable-jar/BUILDING_FROM_SOURCE.md).
-
----
+<a id="alternative-setup-executable-jar-no-docker"></a>
+Without Docker, use the [Executable JAR Setup Guide](documents/runnable-jar/README.md); always start the server with `-Duser.timezone=UTC`.
 
 ## Documentation
-### Overview
 
-<img src="documents/images/open_j_proxy_overview.png" alt="Open J Proxy Overview" />
+Choose a task or audience in the [documentation hub](documents/README.md), or follow the [ebook reading paths](documents/ebook/README.md#reading-paths) for a longer explanation.
 
-* The OJP JDBC driver is used as a replacement for the native JDBC driver(s) previously used with minimal change, the only change required being prefixing the connection URL with `ojp_`. 
-* **Open Source**: OJP is an open-source project that is free to use, modify, and distribute.
-* **Smart database control plane**: The OJP server is deployed as an independent service that sits between application(s) and their relational database(s), centrally enforcing connection limits, admission control, throttling and quality-of-service policy.
-* **Backpressure & connection-storm protection**: real database connections are allocated only when needed and capped globally, so elastic application fleets cannot overwhelm the database.
-* **Client-side reactive throttling**: when the server is under pressure, clients are signaled to throttle themselves and recover automatically — preventing thread pile-ups in the application.
-* **Slow vs fast query segregation**: optional lane-based segregation of OLTP and OLAP traffic on the same database — see [Mixed OLTP + OLAP workloads](#mixed-oltp--olap-workloads-enable-slow-query-segregation).
-* **Rich observability**: built-in OpenTelemetry tracing and Prometheus metrics expose pool, admission, classification and throttling behaviour. See [Telemetry and Observability](documents/telemetry/README.md).
-* **Load balancing & failover in the driver**: the OJP JDBC driver supports multinode URLs (`jdbc:ojp[host1:port1,host2:port2]_...`) with load-aware routing, session stickiness, and automatic failover. See [Multinode Configuration](documents/multinode/README.md).
-* **Elastic scalability**: client applications can scale elastically without increasing the pressure on the database.
-* **gRPC protocol** between driver and server provides multiplexed, low-latency communication — and is language-neutral, opening the door to non-Java clients (see [multi-language client spec](documents/multi-language-client-spec/)).
-* **Multiple relational databases**: in theory any relational database that provides a JDBC driver implementation.
-* **Simple setup**: just add the OJP library to the classpath and prefix the connection URL (e.g. `jdbc:ojp[host:port]_h2:~/test`).
-* **Drop-In External Libraries**: Add proprietary JDBC drivers (Oracle, SQL Server, DB2) and additional libraries (e.g., Oracle UCP) without recompiling - see [Drop-In Driver Documentation](documents/configuration/DRIVERS_AND_LIBS.md). Simply place JARs in the `ojp-libs` directory.
-* **SQL Query Enhancement**: ⚠️ **EXPERIMENTAL (NOT RECOMMENDED)** - Optional SQL enhancer with Apache Calcite for query optimization. **Disabled by default.** Has known limitations with traditional JDBC databases (PostgreSQL, MySQL, Oracle, SQL Server). See [configuration documentation](documents/configuration/ojp-server-configuration.md#sql-enhancer-and-schema-loader-settings) for details.
+## Understand what happens
 
-### Further documents
-- [Docker Deployment Guide](documents/configuration/DOCKER_DEPLOYMENT.md) - Comprehensive guide for deploying OJP Server with Docker, including JVM parameter configuration, production examples, and troubleshooting.
-- [Drop-In External Libraries Support](documents/configuration/DRIVERS_AND_LIBS.md) - Add proprietary database drivers and libraries (Oracle JDBC, Oracle UCP, SQL Server, DB2) without recompiling.
-- [SSL/TLS Certificate Configuration Guide](documents/configuration/ssl-tls-certificate-placeholders.md) - Configure SSL/TLS certificates with server-side property placeholders for PostgreSQL, MySQL, Oracle, SQL Server, and DB2.
-- [Architectural decision records (ADRs)](documents/ADRs) - Technical decisions and rationale behind OJP's architecture.
-- [Get started: Spring Boot, Quarkus and Micronaut](documents/java-frameworks/README.md) - Framework-specific integration guides and examples.
-- [Understanding OJP Service Provider Interfaces (SPIs)](documents/Understanding-OJP-SPIs.md) - Guide for Java developers on implementing custom connection pool providers.
-- [Connection Pool Configuration](documents/configuration/ojp-jdbc-configuration.md) - OJP JDBC driver setup, connection pool settings, and environment-specific configuration (ojp-dev.properties, ojp-staging.properties, ojp-prod.properties).
-- [OJP Server Configuration](documents/configuration/ojp-server-configuration.md) - Server startup options, runtime configuration, and SQL enhancer with schema loading.
-- [Multinode Configuration](documents/multinode/README.md) - High availability and load balancing with multiple OJP servers.
-- [Slow query segregation feature](documents/designs/SLOW_QUERY_SEGREGATION.md) - Strongly recommended for mixed fast+slow query workloads; usually not needed for pure OLTP or pure OLAP workloads.
-- [Telemetry and Observability](documents/telemetry/README.md) - OpenTelemetry integration and monitoring setup.
-- [OJP Components](documents/OJPComponents.md) - Core modules that define OJP’s architecture, including the server, JDBC driver, and shared gRPC contracts.
-- [Targeted Problem and Solution](documents/targeted-problem/README.md) - Explanation of the problem OJP solves and how it addresses it.
-- [BigDecimal Wire Format](documents/protocol/BIGDECIMAL_WIRE_FORMAT.md) - Protocol specification for language-neutral BigDecimal serialization.
+If you want to explore runtime behaviour, start with [executeQuery](documents/designs/EXECUTE_QUERY_FLOW.md), or choose an operation in the **[Simplified Flow Diagrams](documents/designs/MAIN_FLOWS.md)**. These are optional explanations, not prerequisites for evaluation, deployment, or use. Follow notes and source checkpoints only when your question needs that detail.
 
----
+<a id="mixed-oltp--olap-workloads--enable-slow-query-segregation"></a>
+<a id="mixed-oltp--olap-workloads-enable-slow-query-segregation"></a>
+For mixed OLTP/OLAP workloads, see [Slow Query Segregation](documents/designs/SLOW_QUERY_SEGREGATION.md); it is disabled by default. The SQL enhancer is experimental, disabled by default, and not recommended for production.
 
-## Vision
+<a id="contributing--developer-guide"></a>
+To contribute, start with [CONTRIBUTING.md](CONTRIBUTING.md) and [source setup and testing](documents/code-contributions/setup_and_testing_ojp_source.md).
 
-Provide a free and open-source **universal database control plane** for relational databases — a single, programmable layer where teams can enforce connection limits, backpressure, throttling, slow/fast segregation, and observability across many databases and (in time) many client languages. The project is designed to help microservices, event-driven, and serverless architectures scale elastically without sacrificing database stability, while giving operators a clear view into what the data tier is doing.
+## Project information
 
----
-
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for planned releases and upcoming features, including the path to 1.0.0 (production ready).
-
----
-
-## Contributing & Developer Guide
-
-Welcome to OJP! We appreciate your interest in contributing. This guide will help you get started with development.
-- [OJP Contributor Recognition Program](documents/contributor-badges/contributor-recognition-program.md) - OJP Contributor Recognition rewards program and badges recognize more than code contributions, check it out!
-- [Source code developer setup and local testing](documents/code-contributions/setup_and_testing_ojp_source.md) - Outlines how to get started building OJP source code locally and running tests.
-
----
+<a id="vision"></a>
+<a id="roadmap"></a>
+[Roadmap and vision](ROADMAP.md) · [Support policy](SUPPORT.md) · [Releases](https://github.com/Open-J-Proxy/ojp/releases) · [License](LICENSE) · [Contributor recognition](documents/contributor-badges/contributor-recognition-program.md)
 
 ## Partners
 

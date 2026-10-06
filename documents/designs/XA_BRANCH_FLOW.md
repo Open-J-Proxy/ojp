@@ -42,6 +42,12 @@ flowchart TD
 - **9–11:** A successful end does **not** commit. Suspend/resume and join use XA flags on end/start; they are alternatives to the new-branch path shown. Failure flags tell the transaction manager the work did not succeed.
 - **11:** Continue with [XA completion](XA_COMPLETION_FLOW.md). Application SQL and transaction-manager calls must follow the XA protocol order.
 
+## Go deeper
+
+- What happens during SQL execution? Follow [executeQuery](EXECUTE_QUERY_FLOW.md) or [executeUpdate](EXECUTE_UPDATE_FLOW.md), keeping the XA assumptions above in mind.
+- How is the branch completed? Follow [XA completion](XA_COMPLETION_FLOW.md).
+- How does coordination work across databases? See the [XA transaction explanation](../ebook/part3-chapter10-xa-transactions.md).
+
 ## Source checkpoints
 
 - [XA requests and flags](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXAResource.java) and [session-aware routing](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeStatementService.java).

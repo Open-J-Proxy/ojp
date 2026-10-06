@@ -1,6 +1,8 @@
 # OJP JDBC Driver Configuration Guide
 
-This document covers configuration options for the OJP JDBC driver, including client-side connection pool settings with multi-datasource support.
+This is the reference for JDBC URLs, driver properties, and client-supplied settings for server-managed pools, including multi-datasource support. These settings do **not** require an application-side connection pool; disable application-level pooling when using OJP.
+
+To understand what the settings affect, follow [Connect](../designs/CONNECT_FLOW.md), [executeQuery](../designs/EXECUTE_QUERY_FLOW.md), or [connection closure](../designs/CLOSE_CONNECTION_FLOW.md). For setup, choose a [framework guide](../java-frameworks/README.md); for server-owned options, use the [server reference](ojp-server-configuration.md). [Documentation hub](../README.md).
 
 ## Overview
 

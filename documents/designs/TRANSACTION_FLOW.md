@@ -34,6 +34,12 @@ flowchart TD
 - **5:** Switching automatic commit back on is a [Call Proxy](CALL_PROXY_FLOW.md) operation; the database JDBC driver commits pending work while changing the mode. Rolling back to a savepoint also uses Call Proxy and is distinct from a full rollback.
 - **1–8:** Distributed XA transactions use [XA branch work](XA_BRANCH_FLOW.md) and [XA completion](XA_COMPLETION_FLOW.md), not this flow.
 
+## Go deeper
+
+- What happens to resources after completion? Follow [connection closure](CLOSE_CONNECTION_FLOW.md); completing a transaction does not close the logical connection.
+- How is isolation handled? See [transaction isolation handling](../analysis/TRANSACTION_ISOLATION_HANDLING.md) and the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md).
+- Who coordinates a distributed transaction? Follow [XA completion](XA_COMPLETION_FLOW.md) instead.
+
 ## Source checkpoints
 
 - [Driver transaction and mode changes](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Connection.java) and [session-aware routing](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeStatementService.java).

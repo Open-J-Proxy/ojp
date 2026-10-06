@@ -2,6 +2,8 @@
 
 > **Chapter Overview**: This chapter explores the internal architecture of OJP, detailing its components, communication protocols, and connection pool management. You'll understand how the pieces fit together to deliver intelligent database connection management.
 
+Before the deep dive, see the [system picture](https://github.com/Open-J-Proxy/ojp/blob/main/README.md#system-picture) and follow [executeQuery](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/EXECUTE_QUERY_FLOW.md). Its steps provide a place for the mechanisms explained here. Choose other operations from the [flow index](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/MAIN_FLOWS.md), or jump directly to the [documentation hub](https://github.com/Open-J-Proxy/ojp/blob/main/documents/README.md) for task guides and exact references.
+
 ---
 
 ## 2.1 System Components

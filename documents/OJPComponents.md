@@ -1,5 +1,7 @@
 ## Components
 
+Start with the [system picture](../README.md#system-picture), then follow an operation in the [Simplified Flow Diagrams](designs/MAIN_FLOWS.md). This page describes component responsibilities; the diagrams explain their runtime handoffs. Return to the [documentation hub](README.md) for practical guides and references.
+
 ### ojp-server
 The ojp-server is a gRPC server that manages a HikariCP connection pool and abstracts the creation and management of database connections. It supports one or multiple relational databases and provides virtual connections to the ojp-jdbc-driver. The server ensures the number of open real connections is always under control, according to predefined settings, improving database scalability.
 

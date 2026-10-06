@@ -39,6 +39,12 @@ flowchart TD
 - **10–11:** Normal pooled commit/rollback marks the branch complete and sanitizes its backend, but keeps it attached until [XA connection closure](XA_CLOSE_FLOW.md). Completion is not itself pool return.
 - **1–11:** OJP relays participant operations; it does not choose the global outcome. Failures and in-doubt branches require coordinator handling and [recovery](XA_RECOVERY_FLOW.md), not an assumption that all participants committed.
 
+## Go deeper
+
+- When does the pooled backend return? Follow [XA connection closure](XA_CLOSE_FLOW.md) and the [dual-condition lifecycle](../multinode/XA_MANAGEMENT.md#dual-condition-session-lifecycle).
+- What if the outcome is in doubt? Follow [XA recovery](XA_RECOVERY_FLOW.md) and read the [guarantees and limitations](../ebook/part3-chapter10-xa-transactions.md#109-xa-guarantees-and-limitations-what-ojp-can-and-cannot-promise).
+- How does ordinary JDBC differ? Compare [commit / rollback](TRANSACTION_FLOW.md).
+
 ## Source checkpoints
 
 - [Driver XA operations](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXAResource.java), [prepare](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/xa/XaPrepareAction.java), [commit](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/xa/XaCommitAction.java), and [rollback](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/xa/XaRollbackAction.java).

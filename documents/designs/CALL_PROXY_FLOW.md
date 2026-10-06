@@ -33,6 +33,12 @@ flowchart TD
 - **6:** The real database JDBC driver handles the operation; not every call needs database network traffic. Nested calls, such as reading a metadata property, can run within one request.
 - **7–9:** Values cross the wire directly when supported; remote objects can be registered and represented by identifiers. The driver keeps returned session/object references for later calls. Server SQL errors are reported as JDBC exceptions.
 
+## Go deeper
+
+- How does remote cursor work fit into a query? Follow [executeQuery](EXECUTE_QUERY_FLOW.md).
+- What crosses the wire? See [serialization details](../protobuf-nonjava-serializations.md) and the [client protocol specification](../multi-language-client-spec/CLIENT_SPEC.md).
+- How does routing preserve a session? See the [multinode guide](../multinode/README.md).
+
 ## Source checkpoints
 
 - [Connection request/response handling](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Connection.java), [statement handling](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java), and [remote cursor calls](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/RemoteProxyResultSet.java).

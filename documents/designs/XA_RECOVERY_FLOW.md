@@ -34,6 +34,12 @@ flowchart TD
 - **8:** Do not infer automatic restart recovery from this scan: pooled commit/rollback currently requires the branch in OJP's in-memory registry. Returning an Xid alone does not recreate a lost registry entry or migrate an active branch.
 - **2–8:** The driver reports transient unreachable-server/timeout scan failures as retryable resource-manager failures. A coordinator may separately request forget for heuristic outcomes; that call delegates to the backend resource, not a normal commit or pool cleanup.
 
+## Go deeper
+
+- What can OJP promise during recovery? Read the [XA guarantees and limitations](../ebook/part3-chapter10-xa-transactions.md#109-xa-guarantees-and-limitations-what-ojp-can-and-cannot-promise).
+- How does normal completion work? Follow [XA completion](XA_COMPLETION_FLOW.md).
+- What should operators inspect? See [XA troubleshooting](../multinode/XA_MANAGEMENT.md#troubleshooting).
+
 ## Source checkpoints
 
 - [Scan flags, Xid decoding, and transient errors](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/xa/OjpXAResource.java) and [bound-server routing](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeStatementService.java).

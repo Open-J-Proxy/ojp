@@ -71,16 +71,15 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 
 ## Reading Paths
 
-The ebook is the narrative learning route. You do not need to read every layer: start with the [system picture](../../README.md#system-picture), choose a [Simplified Flow Diagram](../designs/MAIN_FLOWS.md), read its essential notes, and follow specialised scenarios or source checkpoints when your next question requires them.
+The ebook offers narrative learning for people evaluating, using, operating, or developing OJP. Choose a path for your goal below; implementation details and simplified flow diagrams are optional, not prerequisites.
 
 For task-oriented navigation, use the [documentation hub](../README.md). Exact settings belong in the [JDBC](../configuration/ojp-jdbc-configuration.md) and [server](../configuration/ojp-server-configuration.md) references; client responsibilities and wire contracts belong in the [client specification](../multi-language-client-spec/CLIENT_SPEC.md).
 
-### For Understanding an Operation
+### For Evaluators and Managers
 
-1. Start with the [system picture](../../README.md#system-picture), which shows component relationships rather than execution order.
-2. Follow [executeQuery](../designs/EXECUTE_QUERY_FLOW.md) or another [main flow](../designs/MAIN_FLOWS.md).
-3. Read the flow's assumptions and essential notes, then choose its **Go deeper** links for your scenario.
-4. Continue with [Chapter 2: Architecture](part1-chapter2-architecture.md) for mechanisms, or the flow's source checkpoints to verify implementation.
+1. [Chapter 1: Introduction](part1-chapter1-introduction.md) — the problem, benefits, and suitability.
+2. [Support policy](../../SUPPORT.md) and [roadmap](../../ROADMAP.md) — support commitments and direction.
+3. [Production deployment guide](../monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) — planning a phased rollout.
 
 ### For Quick Start
 Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then explore Chapter 1 (Introduction) for deeper context.
@@ -113,6 +112,13 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 2. Chapter 16: Contributing Workflow and Git Strategy
 3. Chapter 17: Testing Philosophy and Code Quality
 4. Chapter 18: Contributor Recognition Program
+
+### For Understanding an Operation
+
+1. Start with the [system picture](../../README.md#system-picture), which shows component relationships rather than execution order.
+2. Follow [executeQuery](../designs/EXECUTE_QUERY_FLOW.md) or another [main flow](../designs/MAIN_FLOWS.md).
+3. Read the flow's assumptions and essential notes, then choose its **Go deeper** links for your scenario.
+4. Continue with [Chapter 2: Architecture](part1-chapter2-architecture.md) for mechanisms, or the flow's source checkpoints to verify implementation.
 
 ## E-Book Characteristics
 

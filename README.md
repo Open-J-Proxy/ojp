@@ -10,6 +10,21 @@
 [![security status](https://www.meterian.com/badge/gh/Open-J-Proxy/ojp/security?branch=main)](https://www.meterian.com/report/gh/Open-J-Proxy/ojp)
 [![stability status](https://www.meterian.com/badge/gh/Open-J-Proxy/ojp/stability?branch=main)](https://www.meterian.com/report/gh/Open-J-Proxy/ojp)
 
+---
+
+<a id="📘-free-open-j-proxy-ebook"></a>
+## 📘 Free Open J Proxy eBook
+
+Learn how Open J Proxy works, how to deploy it, and how to use it in production.
+
+**[Download the free Open J Proxy eBook →](https://openjproxy.com/register-to-ojp-email-list.html)**
+
+---
+
+**Community:** [Website](https://openjproxy.com) · [LinkedIn](https://www.linkedin.com/company/open-j-proxy) · [Discord](https://discord.gg/J5DdHpaUzu)
+
+---
+
 **A smart, open-source database control plane** — delivered as a Type 3 JDBC driver, early language-native clients, and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover.
 
 <a id="overview"></a>
@@ -26,10 +41,21 @@ flowchart LR
 <a id="value-proposition"></a>
 OJP helps elastic applications avoid connection storms, gives operators visibility into database pressure, and supports load-aware routing and optional slow/fast query segregation. See the [problem and solution](documents/targeted-problem/README.md) for context.
 
-## Understand what happens
+### Choose your next step
 
-Start with [executeQuery](documents/designs/EXECUTE_QUERY_FLOW.md), or choose an operation in the **[Simplified Flow Diagrams](documents/designs/MAIN_FLOWS.md)**.
-Follow the normal path, read its essential assumptions, then explore specialised scenarios or source checkpoints only when your next question needs them.
+You do not need to understand OJP's implementation to use it. Choose the information that helps you make a decision or complete your task:
+
+<a id="further-documents"></a>
+| I want to… | Start here |
+|---|---|
+| Evaluate OJP — managers and architects | [Problem and solution](documents/targeted-problem/README.md) · [Introduction and suitability](documents/ebook/part1-chapter1-introduction.md) · [Support policy](SUPPORT.md) |
+| Try OJP | [Quick start below](#quick-start) · [Full walkthrough](documents/ebook/part1-chapter3-quickstart.md) |
+| Integrate an application | [Framework guides](documents/java-frameworks/README.md) |
+| Deploy and operate OJP — ops teams and DBAs | [Docker](documents/configuration/DOCKER_DEPLOYMENT.md) · [Runnable JAR](documents/runnable-jar/README.md) · [Production guide](documents/monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) · [Telemetry](documents/telemetry/README.md) |
+| Look up settings | [JDBC reference](documents/configuration/ojp-jdbc-configuration.md) · [Server reference](documents/configuration/ojp-server-configuration.md) |
+| Configure high availability | [Multinode guide](documents/multinode/README.md) |
+| Understand behaviour or contribute | [Optional flow diagrams](documents/designs/MAIN_FLOWS.md) · [Contributing](CONTRIBUTING.md) |
+| Browse all documentation | [Documentation hub](documents/README.md) · [Ebook reading paths](documents/ebook/README.md#reading-paths) |
 
 ## Requirements
 
@@ -91,17 +117,11 @@ Without Docker, use the [Executable JAR Setup Guide](documents/runnable-jar/READ
 
 ## Documentation
 
-### Choose your next step
+Choose a task or audience in the [documentation hub](documents/README.md), or follow the [ebook reading paths](documents/ebook/README.md#reading-paths) for a longer explanation.
 
-<a id="further-documents"></a>
-| I want to… | Start here |
-|---|---|
-| Browse all documentation | [Documentation hub](documents/README.md) |
-| Integrate an application | [Framework guides](documents/java-frameworks/README.md) |
-| Deploy OJP | [Docker](documents/configuration/DOCKER_DEPLOYMENT.md) · [Runnable JAR](documents/runnable-jar/README.md) |
-| Look up settings | [JDBC reference](documents/configuration/ojp-jdbc-configuration.md) · [Server reference](documents/configuration/ojp-server-configuration.md) |
-| Run and monitor production | [Production guide](documents/monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) · [Telemetry](documents/telemetry/README.md) |
-| Configure high availability | [Multinode guide](documents/multinode/README.md) |
+## Understand what happens
+
+If you want to explore runtime behaviour, start with [executeQuery](documents/designs/EXECUTE_QUERY_FLOW.md), or choose an operation in the **[Simplified Flow Diagrams](documents/designs/MAIN_FLOWS.md)**. These are optional explanations, not prerequisites for evaluation, deployment, or use. Follow notes and source checkpoints only when your question needs that detail.
 
 <a id="mixed-oltp--olap-workloads--enable-slow-query-segregation"></a>
 <a id="mixed-oltp--olap-workloads-enable-slow-query-segregation"></a>
@@ -110,17 +130,11 @@ For mixed OLTP/OLAP workloads, see [Slow Query Segregation](documents/designs/SL
 <a id="contributing--developer-guide"></a>
 To contribute, start with [CONTRIBUTING.md](CONTRIBUTING.md) and [source setup and testing](documents/code-contributions/setup_and_testing_ojp_source.md).
 
-<a id="📘-free-open-j-proxy-ebook"></a>
-<a id="-free-open-j-proxy-ebook"></a>
-Learn through the [ebook reading paths](documents/ebook/README.md#reading-paths), or [download the free ebook](https://openjproxy.com/register-to-ojp-email-list.html).
-
 ## Project information
 
 <a id="vision"></a>
 <a id="roadmap"></a>
 [Roadmap and vision](ROADMAP.md) · [Support policy](SUPPORT.md) · [Releases](https://github.com/Open-J-Proxy/ojp/releases) · [License](LICENSE) · [Contributor recognition](documents/contributor-badges/contributor-recognition-program.md)
-
-**Community:** [Website](https://openjproxy.com) · [LinkedIn](https://www.linkedin.com/company/open-j-proxy) · [Discord](https://discord.gg/J5DdHpaUzu)
 
 ## Partners
 

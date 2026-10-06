@@ -1,10 +1,19 @@
 # OJP Documentation Index
 
-Choose a reading path: [understand the system](#understand-ojp), [use and operate it](#use-and-operate-ojp), or [develop and extend it](#develop-and-extend-ojp). The [complete inventory](#document-organization) includes reference material, proposals, investigations, and publishing resources.
+Choose the information you need for your role or task. Start with the purpose or practical steps, then look up details when needed; source code and flow diagrams are not required reading for using OJP.
+
+| Your goal | Start here | Next information |
+|---|---|---|
+| Evaluate OJP — managers, architects, and teams | [Problem and solution](targeted-problem/README.md) · [Introduction and suitability](ebook/part1-chapter1-introduction.md) | [Support policy](../SUPPORT.md) · [Roadmap](../ROADMAP.md) · [Production rollout](monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) |
+| Use OJP in an application | [Quick start](ebook/part1-chapter3-quickstart.md) · [Framework integration](java-frameworks/README.md) | [JDBC settings](configuration/ojp-jdbc-configuration.md) · [Client capabilities](#multi-language-clients) |
+| Deploy and operate OJP — ops teams and DBAs | [Docker](configuration/DOCKER_DEPLOYMENT.md) · [Runnable JAR](runnable-jar/README.md) · [Production guide](monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) | [Server settings](configuration/ojp-server-configuration.md) · [Security](configuration/mtls-configuration-guide.md) · [Monitoring and troubleshooting](#telemetry) |
+| Understand behaviour or contribute | [System overview](#understand-ojp) · [Development guides](#develop-and-extend-ojp) | Optional flow diagrams, specialised explanations, contracts, and source checkpoints |
+
+Browse [use and operate OJP](#use-and-operate-ojp) for practical guides, or the [ebook reading paths](ebook/README.md#reading-paths) for narrative learning. The [complete inventory](#document-organization) includes reference material, proposals, investigations, and publishing resources.
 
 ## Understand OJP
 
-Start with the component picture and go deeper only when your next question requires it: operation flows → essential notes → specialized scenarios → source checkpoints. These are optional drill-down layers, not compulsory reading; task guides remain directly accessible.
+For an overview without implementation details, read the [problem and solution](targeted-problem/README.md) and [introduction](ebook/part1-chapter1-introduction.md). To explore runtime behaviour, the optional path below starts with the component picture and reveals flows, notes, specialised scenarios, and source checkpoints as needed. This is one learning route, not the structure every reader must follow.
 
 <a id="architecture-and-design"></a>
 

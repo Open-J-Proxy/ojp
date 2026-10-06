@@ -71,6 +71,7 @@ Items under consideration for future releases:
 
 - Native reactive/non-blocking driver support
 - gRPC streaming improvements for high-throughput workloads
+- Graceful shutdown support
 - Kubernetes operator for automated OJP cluster management
 - Support for additional connection pool providers via SPI
 - `2.0.0` only when breaking changes justify a new major version

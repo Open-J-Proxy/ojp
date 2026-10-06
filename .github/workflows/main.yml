@@ -18,7 +18,7 @@
 # 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
 # 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
 # 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
-# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 (independent)
+# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 and PostgreSQL (independent)
 # 12. notify-integration: Triggers integration repo workflow (needs: build-test)
 # 13. python-h2-l1: Independent Python DB-API unit and H2 integration tests
 #
@@ -2189,10 +2189,24 @@ jobs:
   #
   # ===========================================================================
   cpp-odbc-test:
-    name: C++ ODBC H2 L1 Tests
+    name: C++ ODBC H2 and PostgreSQL L1 Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: defaultdb
+        options: >-
+          --health-cmd "pg_isready -U testuser -d defaultdb"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 5432:5432
 
     steps:
       - name: Git checkout
@@ -2255,25 +2269,27 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run all C++ ODBC tests against H2
+      - name: Run C++ ODBC L1 tests against H2 and PostgreSQL
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
+          OJP_TEST_POSTGRESQL: 'true'
+          OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-h2-l1-test.log
+            2>&1 | tee /tmp/cpp-odbc-l1-test.log
 
       - name: Show ojp-server.log
         if: always()
         run: cat /tmp/ojp-server.log
 
-      - name: Save C++ ODBC H2 test report and server log
+      - name: Save C++ ODBC test report and server log
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-h2-l1-test-results
+          name: cpp-odbc-l1-test-results
           path: |
-            /tmp/cpp-odbc-h2-l1-test.log
+            /tmp/cpp-odbc-l1-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

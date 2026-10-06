@@ -1,6 +1,6 @@
 # Chapter 10: XA Distributed Transactions
 
-Start with the [simplified XA flows](../designs/MAIN_FLOWS.md#main-xa-flows) to understand setup, branch work, completion, closure, and recovery before reading the mechanisms below. For exact settings, use the [JDBC](../configuration/ojp-jdbc-configuration.md) and [server](../configuration/ojp-server-configuration.md) references. [Documentation hub](../README.md).
+Start with the [simplified XA flows](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/MAIN_FLOWS.md#main-xa-flows) to understand setup, branch work, completion, closure, and recovery before reading the mechanisms below. For exact settings, use the [JDBC](https://github.com/Open-J-Proxy/ojp/blob/main/documents/configuration/ojp-jdbc-configuration.md) and [server](https://github.com/Open-J-Proxy/ojp/blob/main/documents/configuration/ojp-server-configuration.md) references. [Documentation hub](https://github.com/Open-J-Proxy/ojp/blob/main/documents/README.md).
 
 XA transactions represent one of the most powerful—and traditionally most complex—features in enterprise software. They allow you to coordinate changes across multiple databases or resources, ensuring that either all changes commit together or all roll back together. No half-completed transactions, no orphaned data. It's the kind of reliability that mission-critical applications demand, but it often comes at the cost of significant complexity and performance overhead.
 

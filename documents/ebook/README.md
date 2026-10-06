@@ -73,13 +73,13 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 
 The ebook offers narrative learning for people evaluating, using, operating, or developing OJP. Choose a path for your goal below; implementation details and simplified flow diagrams are optional, not prerequisites.
 
-For task-oriented navigation, use the [documentation hub](../README.md). Exact settings belong in the [JDBC](../configuration/ojp-jdbc-configuration.md) and [server](../configuration/ojp-server-configuration.md) references; client responsibilities and wire contracts belong in the [client specification](../multi-language-client-spec/CLIENT_SPEC.md).
+For task-oriented navigation, use the [documentation hub](https://github.com/Open-J-Proxy/ojp/blob/main/documents/README.md). Exact settings belong in the [JDBC](https://github.com/Open-J-Proxy/ojp/blob/main/documents/configuration/ojp-jdbc-configuration.md) and [server](https://github.com/Open-J-Proxy/ojp/blob/main/documents/configuration/ojp-server-configuration.md) references; client responsibilities and wire contracts belong in the [client specification](https://github.com/Open-J-Proxy/ojp/blob/main/documents/multi-language-client-spec/CLIENT_SPEC.md).
 
 ### For Evaluators and Managers
 
-1. [Chapter 1: Introduction](part1-chapter1-introduction.md) — the problem, benefits, and suitability.
-2. [Support policy](../../SUPPORT.md) and [roadmap](../../ROADMAP.md) — support commitments and direction.
-3. [Production deployment guide](../monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) — planning a phased rollout.
+1. [Chapter 1: Introduction](https://github.com/Open-J-Proxy/ojp/blob/main/documents/ebook/part1-chapter1-introduction.md) — the problem, benefits, and suitability.
+2. [Support policy](https://github.com/Open-J-Proxy/ojp/blob/main/SUPPORT.md) and [roadmap](https://github.com/Open-J-Proxy/ojp/blob/main/ROADMAP.md) — support commitments and direction.
+3. [Production deployment guide](https://github.com/Open-J-Proxy/ojp/blob/main/documents/monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) — planning a phased rollout.
 
 ### For Quick Start
 Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then explore Chapter 1 (Introduction) for deeper context.
@@ -115,10 +115,10 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 
 ### For Understanding an Operation
 
-1. Start with the [system picture](../../README.md#system-picture), which shows component relationships rather than execution order.
-2. Follow [executeQuery](../designs/EXECUTE_QUERY_FLOW.md) or another [main flow](../designs/MAIN_FLOWS.md).
+1. Start with the [system picture](https://github.com/Open-J-Proxy/ojp/blob/main/README.md#system-picture), which shows component relationships rather than execution order.
+2. Follow [executeQuery](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/EXECUTE_QUERY_FLOW.md) or another [main flow](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/MAIN_FLOWS.md).
 3. Read the flow's assumptions and essential notes, then choose its **Go deeper** links for your scenario.
-4. Continue with [Chapter 2: Architecture](part1-chapter2-architecture.md) for mechanisms, or the flow's source checkpoints to verify implementation.
+4. Continue with [Chapter 2: Architecture](https://github.com/Open-J-Proxy/ojp/blob/main/documents/ebook/part1-chapter2-architecture.md) for mechanisms, or the flow's source checkpoints to verify implementation.
 
 ## E-Book Characteristics
 

@@ -44,12 +44,14 @@ This document outlines the planned releases and key milestones for the Open J Pr
 
 ---
 
-## 🚀 Version 1.1.0 — planned
+## 🚀 Version 1.1.0 — October/November 2026 (expected deployment)
 
 **Theme: Post-LTS feature cycle**
 
 - First feature release after the 1.0.0 GA
-- Backwards-compatible new features added to `main`
+- PostgreSQL `PGobject` JSON/JSONB support, preserving type metadata through JDBC parameter relay
+- Global per-database connection quotas shared across OJP connection pools ([PR #640](https://github.com/Open-J-Proxy/ojp/pull/640))
+- Backwards-compatible new features added to `main`; this release is not an LTS release
 - `lts/1.0` continues to receive maintenance patches in parallel
 
 ---

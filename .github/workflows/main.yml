@@ -2198,8 +2198,8 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_USER: testuser
-          POSTGRES_PASSWORD: testpassword
           POSTGRES_DB: defaultdb
+          POSTGRES_HOST_AUTH_METHOD: trust
         options: >-
           --health-cmd "pg_isready -U testuser -d defaultdb"
           --health-interval=10s

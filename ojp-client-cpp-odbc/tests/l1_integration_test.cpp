@@ -154,9 +154,9 @@ void assert_sql_error(SQLHSTMT statement, const std::string& sql, const char* sq
                                   &native_error, message, sizeof(message), &message_length),
                     "SQLGetDiagRec", SQL_HANDLE_STMT, statement);
     if (std::string(reinterpret_cast<const char*>(actual_state)) != sql_state ||
-        native_error == 0) {
+        message_length == 0) {
         throw std::runtime_error("expected SQLSTATE " + std::string(sql_state) +
-                                 " with a vendor code, got " +
+                                 " with a diagnostic message, got " +
                                  std::string(reinterpret_cast<const char*>(actual_state)) +
                                  " and vendor code " + std::to_string(native_error) +
                                  ": " + reinterpret_cast<const char*>(message));

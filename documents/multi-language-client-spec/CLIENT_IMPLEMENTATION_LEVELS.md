@@ -70,7 +70,8 @@ These entries describe the levels targeted by the language client modules; they 
 | PHP PDO-compatible (`ojp-client-php-pdo`) | H2 | **L1** | `tests/h2_l1_integration.php` exercises the real-server CRUD and lifecycle path. |
 | Python DB-API (`ojp-client-python-dbapi`) | H2 | **L1** | `tests/test_h2.py` exercises the real-server CRUD and lifecycle path. |
 | Ruby DBI (`ojp-client-ruby-dbi`) | H2 | **L1** | `test/integration/h2_l1_test.rb` exercises the real-server CRUD and lifecycle path. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L1** | `tests/h2_l1_integration_test.cpp` exercises the real-server CRUD and lifecycle path. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L1** | `tests/l1_integration_test.cpp` exercises the real-server CRUD and lifecycle path. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L1** | `tests/l1_integration_test.cpp` exercises the real-server CRUD and lifecycle path. |
 
 ### Important interpretation note
 
@@ -90,7 +91,8 @@ These levels are based on each language client's own integration tests and are i
 | **PHP PDO-compatible** | H2 | **L1** | `ojp-client-php-pdo/tests/h2_l1_integration.php` |
 | **Python DB-API 2.0** | H2 | **L1** | `ojp-client-python-dbapi/tests/test_h2.py` |
 | **Ruby DBI** | H2 | **L1** | `ojp-client-ruby-dbi/test/integration/h2_l1_test.rb` |
-| **C++ ODBC** | H2 | **L1** | `ojp-client-cpp-odbc/tests/h2_l1_integration_test.cpp` |
+| **C++ ODBC** | H2 | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` |
+| **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` |
 
 The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-client-ruby-dbi/README.md`](../../ojp-client-ruby-dbi/README.md) for the implemented API and current gaps.
 
@@ -118,7 +120,8 @@ The following table records the implemented target level and its real-server int
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
-| **C++ ODBC** | H2 | **L1** | `ojp-client-cpp-odbc/tests/h2_l1_integration_test.cpp` |
+| **C++ ODBC** | H2 | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` |
+| **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` |
 | **PHP (`PDO`-compatible)** | H2 | **L1** | `ojp-client-php-pdo/tests/h2_l1_integration.php` |
 | **Python (DB-API 2.0)** | H2 | **L1** | `ojp-client-python-dbapi/tests/test_h2.py` |
 | **Ruby DBI** | H2 | **L1** | `ojp-client-ruby-dbi/test/integration/h2_l1_test.rb` |

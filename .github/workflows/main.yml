@@ -22,7 +22,8 @@
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1 test (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
-# 14. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
+# 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1 test (needs: h2-integration-gate)
+# 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
 # SEQUENTIAL EXECUTION:
 # Java and C++ ODBC database-specific jobs wait for the H2 integration gate.
@@ -2411,7 +2412,150 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 13: Notify Integration Repository
+  # JOB 14: C++ ODBC SQL Server L1 Integration Test
+  # ===========================================================================
+  #
+  # Runs alongside the C++ ODBC PostgreSQL test after the aggregate H2 gate.
+  #
+  # ===========================================================================
+  cpp-odbc-sqlserver-test:
+    name: C++ ODBC SQL Server L1 Test
+    runs-on: ubuntu-latest
+    needs: [h2-integration-gate]
+    permissions:
+      contents: read
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download SQL Server JDBC driver
+        run: |
+          mkdir -p ojp-libs
+          mvn dependency:copy \
+            -Dartifact=com.microsoft.sqlserver:mssql-jdbc:12.8.2.jre11 \
+            -DoutputDirectory=ojp-libs \
+            -Dmdep.stripVersion=false
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build (ojp-server)
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Install C++ gRPC and ODBC build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            golang-github-gogo-googleapis-dev \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            unixodbc-dev
+
+      - name: Start SQL Server database
+        run: |
+          docker run --detach --rm --name ojp-odbc-sqlserver \
+            --publish 1433:1433 \
+            --env ACCEPT_EULA=Y \
+            --env MSSQL_SA_PASSWORD='TestPassword123!' \
+            mcr.microsoft.com/mssql/server:2022-latest
+          for i in $(seq 1 60); do
+            if docker exec ojp-odbc-sqlserver \
+              /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+              -P 'TestPassword123!' -C -b -Q 'SELECT 1' >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              docker logs ojp-odbc-sqlserver
+              exit 1
+            fi
+            sleep 2
+          done
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -Q \
+            "IF DB_ID('defaultdb') IS NULL CREATE DATABASE defaultdb;"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -Q \
+            "IF NOT EXISTS (SELECT * FROM sys.sql_logins WHERE name = 'testuser') CREATE LOGIN testuser WITH PASSWORD = 'TestPassword123!';"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -d defaultdb -Q \
+            "IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'testuser') BEGIN CREATE USER testuser FOR LOGIN testuser; ALTER ROLE db_owner ADD MEMBER testuser; END"
+
+      - name: Start OJP server (background)
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" > /tmp/ojp-server.log 2>&1 &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Configure C++ ODBC client
+        run: |
+          cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
+            -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build C++ ODBC client and tests
+        run: cmake --build ojp-client-cpp-odbc/build --parallel 2
+
+      - name: Run C++ ODBC SQL Server L1 tests
+        env:
+          OJP_TEST_SQLSERVER: 'true'
+          OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
+        run: |
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcSqlServerL1Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-test.log
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server.log
+
+      - name: Show SQL Server logs
+        if: always()
+        run: |
+          docker logs ojp-odbc-sqlserver 2>&1 || true
+          docker stop ojp-odbc-sqlserver || true
+
+      - name: Save C++ ODBC SQL Server test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: cpp-odbc-sqlserver-l1-test-results
+          path: |
+            /tmp/cpp-odbc-sqlserver-l1-test.log
+            /tmp/ojp-server.log
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 15: Notify Integration Repository
   # ===========================================================================
   #
   # This job triggers a workflow in the ojp-framework-integration repository

@@ -242,12 +242,26 @@ int run_integration_test(int argc, char** argv) {
 
         id = 2;
         id_length = sizeof(id);
+        char empty_lob[1] = {};
+        SQLLEN empty_length = 0;
+        require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                                         SQL_INTEGER, 0, 0, &id, sizeof(id), &id_length),
+                        "SQLBindParameter(empty row id)", SQL_HANDLE_STMT, statement);
+        bind_lob_parameter(statement, 2, SQL_C_BINARY, SQL_LONGVARBINARY,
+                           empty_lob, &empty_length);
+        bind_lob_parameter(statement, 3, SQL_C_CHAR, SQL_LONGVARCHAR,
+                           empty_lob, &empty_length);
+        require_success(SQLExecute(statement), "SQLExecute(empty LOBs)",
+                        SQL_HANDLE_STMT, statement);
+
+        id = 3;
+        id_length = sizeof(id);
         SQLLEN null_binary = SQL_NULL_DATA;
         SQLLEN null_clob = SQL_NULL_DATA;
         SQLPOINTER null_value = nullptr;
         require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
                                          SQL_INTEGER, 0, 0, &id, sizeof(id), &id_length),
-                        "SQLBindParameter(null row id)", SQL_HANDLE_STMT, statement);
+                        "SQLBindParameter(NULL row id)", SQL_HANDLE_STMT, statement);
         bind_lob_parameter(statement, 2, SQL_C_BINARY, SQL_LONGVARBINARY,
                            null_value, &null_binary);
         bind_lob_parameter(statement, 3, SQL_C_CHAR, SQL_LONGVARCHAR,
@@ -286,6 +300,26 @@ int run_integration_test(int argc, char** argv) {
                         SQL_HANDLE_STMT, statement);
         execute_direct(statement, "SELECT binary_payload, text_payload FROM " + table +
                                   " WHERE id = 2");
+        require_success(SQLFetch(statement), "SQLFetch(empty LOB row)", SQL_HANDLE_STMT, statement);
+        SQLCHAR empty_output[1] = {};
+        SQLLEN empty_indicator = -1;
+        require_success(SQLGetData(statement, 1, SQL_C_BINARY, empty_output,
+                                   sizeof(empty_output), &empty_indicator),
+                        "SQLGetData(empty BLOB)", SQL_HANDLE_STMT, statement);
+        if (empty_indicator != 0) {
+            throw std::runtime_error("empty BLOB was not returned as an empty value");
+        }
+        require_success(SQLGetData(statement, 2, SQL_C_CHAR, empty_output,
+                                   sizeof(empty_output), &empty_indicator),
+                        "SQLGetData(empty CLOB)", SQL_HANDLE_STMT, statement);
+        if (empty_indicator != 0) {
+            throw std::runtime_error("empty CLOB was not returned as an empty value");
+        }
+
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(empty result)",
+                        SQL_HANDLE_STMT, statement);
+        execute_direct(statement, "SELECT binary_payload, text_payload FROM " + table +
+                                  " WHERE id = 3");
         require_success(SQLFetch(statement), "SQLFetch(NULL LOB row)", SQL_HANDLE_STMT, statement);
         SQLCHAR null_output[1] = {};
         SQLLEN null_indicator = 0;

@@ -21,7 +21,7 @@ struct DatabaseConfig {
     std::string password;
 };
 
-DatabaseConfig read_connection_config(const std::string &path) {
+DatabaseConfig read_connection_config(const std::string& path) {
     std::ifstream input(path);
     std::string line;
     if (!input || !std::getline(input, line)) {
@@ -57,7 +57,7 @@ DatabaseConfig read_connection_config(const std::string &path) {
     return {fields[0], fields[1], fields[2]};
 }
 
-std::string brace_value(const std::string &value) {
+std::string brace_value(const std::string& value) {
     std::string escaped;
     for (const char character : value) {
         escaped.push_back(character);
@@ -68,7 +68,7 @@ std::string brace_value(const std::string &value) {
     return "{" + escaped + "}";
 }
 
-void require_success(SQLRETURN result, const std::string &operation,
+void require_success(SQLRETURN result, const std::string& operation,
                      SQLSMALLINT handle_type = SQL_HANDLE_ENV, SQLHANDLE handle = SQL_NULL_HANDLE) {
     if (SQL_SUCCEEDED(result)) {
         return;
@@ -83,7 +83,7 @@ void require_success(SQLRETURN result, const std::string &operation,
         if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail, sizeof(detail),
                           &detail_length) == SQL_SUCCESS) {
             message << " [" << state << ", " << native_error << "] "
-                    << reinterpret_cast<const char *>(detail);
+                    << reinterpret_cast<const char*>(detail);
         }
     }
     throw std::runtime_error(message.str());
@@ -99,21 +99,21 @@ std::string random_suffix() {
     return suffix.str();
 }
 
-void execute_direct(SQLHSTMT statement, const std::string &sql) {
+void execute_direct(SQLHSTMT statement, const std::string& sql) {
     require_success(SQLExecDirect(statement,
-                                  reinterpret_cast<SQLCHAR *>(const_cast<char *>(sql.c_str())),
+                                  reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
                                   SQL_NTS),
                     "SQLExecDirect", SQL_HANDLE_STMT, statement);
 }
 
 void bind_lob_parameter(SQLHSTMT statement, SQLUSMALLINT index, SQLSMALLINT c_type,
-                        SQLSMALLINT sql_type, SQLPOINTER token, SQLLEN *indicator) {
+                        SQLSMALLINT sql_type, SQLPOINTER token, SQLLEN* indicator) {
     require_success(SQLBindParameter(statement, index, SQL_PARAM_INPUT, c_type, sql_type, 0, 0,
                                      token, 0, indicator),
                     "SQLBindParameter(LOB)", SQL_HANDLE_STMT, statement);
 }
 
-void send_parameter(SQLHSTMT statement, SQLPOINTER expected_token, const std::string &data,
+void send_parameter(SQLHSTMT statement, SQLPOINTER expected_token, const std::string& data,
                     std::size_t chunk_size) {
     SQLPOINTER token = nullptr;
     require_success(SQLParamData(statement, &token), "SQLParamData", SQL_HANDLE_STMT, statement);
@@ -122,20 +122,20 @@ void send_parameter(SQLHSTMT statement, SQLPOINTER expected_token, const std::st
     }
     for (std::size_t offset = 0; offset < data.size(); offset += chunk_size) {
         const auto length = std::min(chunk_size, data.size() - offset);
-        require_success(SQLPutData(statement, const_cast<char *>(data.data() + offset),
+        require_success(SQLPutData(statement, const_cast<char*>(data.data() + offset),
                                    static_cast<SQLLEN>(length)),
                         "SQLPutData", SQL_HANDLE_STMT, statement);
     }
 }
 
-int run_integration_test(int argc, char **argv) {
+int run_integration_test(int argc, char** argv) {
     if (argc != 4) {
         throw std::runtime_error("expected H2 CSV path, enable variable, and endpoint variable");
     }
     const std::string csv_path = argv[1];
     const std::string enable_variable = argv[2];
     const std::string endpoint_variable = argv[3];
-    const char *enabled_value = std::getenv(enable_variable.c_str());
+    const char* enabled_value = std::getenv(enable_variable.c_str());
     std::string enabled = enabled_value == nullptr ? "" : enabled_value;
     std::transform(enabled.begin(), enabled.end(), enabled.begin(), [](unsigned char character) {
         return static_cast<char>(std::tolower(character));
@@ -147,7 +147,7 @@ int run_integration_test(int argc, char **argv) {
     if (enabled != "true" && enabled != "1" && enabled != "yes") {
         throw std::runtime_error(enable_variable + " must be true or false");
     }
-    const char *endpoint_value = std::getenv(endpoint_variable.c_str());
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
     const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
     if (endpoint.empty()) {
         throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
@@ -173,13 +173,13 @@ int run_integration_test(int argc, char **argv) {
     bool table_created = false;
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
-                                       reinterpret_cast<SQLHANDLE *>(&environment)),
+                                       reinterpret_cast<SQLHANDLE*>(&environment)),
                         "SQLAllocHandle(environment)");
         require_success(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
         require_success(
-            SQLAllocHandle(SQL_HANDLE_DBC, environment, reinterpret_cast<SQLHANDLE *>(&connection)),
+            SQLAllocHandle(SQL_HANDLE_DBC, environment, reinterpret_cast<SQLHANDLE*>(&connection)),
             "SQLAllocHandle(connection)", SQL_HANDLE_ENV, environment);
         const std::string connection_string = "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
                                               ";DATABASE=" + brace_value(config.url) +
@@ -188,12 +188,12 @@ int run_integration_test(int argc, char **argv) {
                                               "WD=" +
                                               brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr,
-                                         reinterpret_cast<SQLCHAR *>(
-                                             const_cast<char *>(connection_string.c_str())),
+                                         reinterpret_cast<SQLCHAR*>(
+                                             const_cast<char*>(connection_string.c_str())),
                                          SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
         require_success(
-            SQLAllocHandle(SQL_HANDLE_STMT, connection, reinterpret_cast<SQLHANDLE *>(&statement)),
+            SQLAllocHandle(SQL_HANDLE_STMT, connection, reinterpret_cast<SQLHANDLE*>(&statement)),
             "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
         execute_direct(statement,
@@ -203,7 +203,7 @@ int run_integration_test(int argc, char **argv) {
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(create table)",
                         SQL_HANDLE_STMT, statement);
         require_success(SQLPrepare(statement,
-                                   reinterpret_cast<SQLCHAR *>(const_cast<char *>(
+                                   reinterpret_cast<SQLCHAR*>(const_cast<char*>(
                                        ("INSERT INTO " + table +
                                         " (id, binary_payload, text_payload) VALUES (?, ?, ?)")
                                            .c_str())),
@@ -288,7 +288,7 @@ int run_integration_test(int argc, char **argv) {
                                    &received_clob_length),
                         "SQLGetData(CLOB)", SQL_HANDLE_STMT, statement);
         if (received_clob_length != static_cast<SQLLEN>(clob_data.size()) ||
-            std::string(reinterpret_cast<const char *>(received_clob.data()),
+            std::string(reinterpret_cast<const char*>(received_clob.data()),
                         static_cast<std::size_t>(received_clob_length)) != clob_data) {
             throw std::runtime_error("CLOB stream round trip changed the UTF-8 text payload");
         }
@@ -349,7 +349,7 @@ int run_integration_test(int argc, char **argv) {
     } catch (...) {
         if (table_created && statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
-            SQLExecDirect(statement, reinterpret_cast<SQLCHAR *>(const_cast<char *>(drop.c_str())),
+            SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(const_cast<char*>(drop.c_str())),
                           SQL_NTS);
         }
         if (statement != SQL_NULL_HSTMT) {
@@ -370,10 +370,10 @@ int run_integration_test(int argc, char **argv) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     try {
         return run_integration_test(argc, argv);
-    } catch (const std::exception &error) {
+    } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
     }

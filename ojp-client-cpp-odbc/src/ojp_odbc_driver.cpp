@@ -841,8 +841,7 @@ bool is_lob_parameter_type(SQLSMALLINT sql_type) {
            sql_type == SQL_WLONGVARCHAR;
 }
 
-bool get_lob_parameter_data(const BoundParameter& bound, std::string* data,
-                            Diagnostic* error) {
+bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diagnostic* error) {
     if (bound.data_at_execution) {
         if (bound.indicator != nullptr && *bound.indicator != SQL_DATA_AT_EXEC &&
             *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET) {
@@ -925,8 +924,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    if (data.size() >
-        static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+    if (data.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
         return fail(handle, "LOB input exceeds the supported size", "22001");
     }
     grpc::ClientContext context;

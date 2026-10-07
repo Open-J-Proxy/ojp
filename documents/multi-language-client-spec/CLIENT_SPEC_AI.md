@@ -284,7 +284,7 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 
 1. LOB handles (`LobReference.uuid`) are server-side objects. They MUST NOT be used after `terminateSession()`.
 2. Result set handles (`resultSetUUID`) are server-side objects. The client MUST call `callResource(RES_RESULT_SET, CALL_CLOSE)` when done, unless the connection is being terminated.
-3. Savepoint handles (from `CALL_SET` on `RES_SAVEPOINT`) MUST NOT be used after `commitTransaction()` or `rollbackTransaction()`.
+3. Savepoint handles returned by `CALL_SET` on `RES_CONNECTION` MUST NOT be used after `commitTransaction()` or `rollbackTransaction()`. Savepoint creation uses the connection resource; rollback/release resolve the returned handle through that connection's savepoint registry.
 
 ---
 
@@ -477,7 +477,7 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 - `TimestampWithZone` encoding/decoding for all 9 `TemporalType` values
 - LOB write (`createLob` client-streaming, chunked at 32–64 KB) and read (`readLob` server-streaming)
 - Non-XA transaction lifecycle (`startTransaction`, `commitTransaction`, `rollbackTransaction`)
-- Savepoints via `callResource` (`RES_SAVEPOINT`, `CALL_SET`/`CALL_ROLLBACK`/`CALL_RELEASE`)
+- Savepoints via `callResource` (`RES_CONNECTION` `CALL_SET`/`CALL_ROLLBACK`/`CALL_RELEASE`; `RES_SAVEPOINT` is used for savepoint attributes)
 - `callResource` protocol (all 7 `ResourceType` values, all 47 `CallType` codes)
 - Configuration loading: system/env properties > `ojp.properties` file > built-in defaults; per-datasource prefix `<name>.ojp.*`
 - TLS transport support (plaintext default; TLS when `ojp.grpc.tls.enabled=true`)
@@ -519,9 +519,9 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 | `begin_transaction()` | `startTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_ACTIVE` |
 | `commit()` | `commitTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_COMMITED` |
 | `rollback()` | `rollbackTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_ROLLBACK` |
-| `set_savepoint(name)` | `callResource(RES_SAVEPOINT, CALL_SET, "Savepoint", [name])` | Returns `resourceUUID` for later rollback/release |
-| `rollback_to_savepoint(uuid)` | `callResource(RES_SAVEPOINT, CALL_ROLLBACK, resourceUUID=uuid)` | |
-| `release_savepoint(uuid)` | `callResource(RES_SAVEPOINT, CALL_RELEASE, resourceUUID=uuid)` | |
+| `set_savepoint(name)` | `callResource(RES_CONNECTION, CALL_SET, "Savepoint", [name])` | Returns `resourceUUID` for later rollback/release |
+| `rollback_to_savepoint(uuid)` | `callResource(RES_CONNECTION, CALL_ROLLBACK, params=[uuid])` | The server resolves the registered savepoint handle |
+| `release_savepoint(uuid)` | `callResource(RES_CONNECTION, CALL_RELEASE, "Savepoint", params=[uuid])` | The server resolves and releases the registered savepoint handle |
 | `write_lob(data)` | `createLob(stream LobDataBlock)` | Client-streaming; chunk at 32–64 KB; returns `LobReference.uuid` |
 | `read_lob(uuid, pos, len)` | `readLob(ReadLobRequest)` | Server-streaming; concatenate `data` fields in order |
 | `close_result_set(uuid)` | `callResource(RES_RESULT_SET, CALL_CLOSE, resourceUUID=uuid)` | |

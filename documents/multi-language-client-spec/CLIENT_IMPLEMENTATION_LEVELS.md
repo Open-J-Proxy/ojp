@@ -64,7 +64,7 @@ These entries describe the levels targeted by the language client modules; they 
 
 | Client | Database | Target level | Evidence |
 |---|---|---:|---|
-| C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L3** | H2 L3 suite covers multi-block result streaming, end-of-result behavior, and result-set lifecycle, in addition to L1/L2 coverage. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L4** | H2 L4 suite covers isolation, commit/rollback, and savepoint lifecycle in addition to L1-L3 coverage. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L3** | SQL Server L3 suite covers multi-block result streaming, row-by-row binary fetching, end-of-result behavior, and result-set lifecycle, in addition to L1/L2 coverage. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L1** | Shared real-server L1 suite covers connectivity, CRUD, diagnostics, and lifecycle. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
@@ -86,7 +86,7 @@ These levels are based on each language client's own integration tests and are i
 
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L3** | L1/L2 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l3_integration_test.cpp` for streamed multi-block results and result-set lifecycle. |
+| **C++ ODBC** | H2 | **L4** | L1-L3 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l4_integration_test.cpp` for isolation, commit/rollback, and savepoint behavior. |
 | **C++ ODBC** | SQL Server | **L3** | L1/L2 real-server coverage plus `ojp-client-cpp-odbc/tests/sqlserver_l3_integration_test.cpp` for multi-block streaming and row-by-row binary result lifecycle. |
 | **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
@@ -119,7 +119,7 @@ The following table records the implemented target level and its real-server int
 
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L3** | `ojp-client-cpp-odbc/tests/h2_l3_integration_test.cpp` adds multi-block result streaming and result-set lifecycle to the L1/L2 suites. |
+| **C++ ODBC** | H2 | **L4** | `ojp-client-cpp-odbc/tests/h2_l4_integration_test.cpp` adds transaction isolation, commit/rollback, and savepoint lifecycle to the L1-L3 suites. |
 | **C++ ODBC** | SQL Server | **L3** | `ojp-client-cpp-odbc/tests/sqlserver_l3_integration_test.cpp` adds multi-block streaming, row-by-row binary fetching, and result-set lifecycle to L1/L2 coverage. |
 | **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |

@@ -119,7 +119,7 @@ The following table records the implemented target level and its real-server int
 
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L2** | `ojp-client-cpp-odbc/tests/h2_l2_integration_test.cpp` adds typed parameters, statement variants, generated identity retrieval, and result metadata to the L1 suite. |
+| **C++ ODBC** | H2 | **L3** | `ojp-client-cpp-odbc/tests/h2_l3_integration_test.cpp` adds multi-block result streaming and result-set lifecycle to the L1/L2 suites. |
 | **C++ ODBC** | SQL Server | **L2** | `ojp-client-cpp-odbc/tests/sqlserver_l2_integration_test.cpp` adds typed parameters, statement variants, generated identity retrieval, and result metadata to the L1 suite. |
 | **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |

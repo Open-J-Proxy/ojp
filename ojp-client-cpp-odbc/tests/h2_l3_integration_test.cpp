@@ -79,8 +79,8 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLCHAR detail[1024] = {};
         SQLINTEGER native_error = 0;
         SQLSMALLINT detail_length = 0;
-        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail,
-                          sizeof(detail), &detail_length) == SQL_SUCCESS) {
+        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail, sizeof(detail),
+                          &detail_length) == SQL_SUCCESS) {
             message << " [" << state << ", " << native_error << "] "
                     << reinterpret_cast<const char*>(detail);
         }
@@ -100,14 +100,15 @@ std::string random_suffix() {
 
 void execute_direct(SQLHSTMT statement, const std::string& sql) {
     require_success(SQLExecDirect(statement,
-        reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())), SQL_NTS),
-        "SQLExecDirect", SQL_HANDLE_STMT, statement);
+                                  reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
+                                  SQL_NTS),
+                    "SQLExecDirect", SQL_HANDLE_STMT, statement);
 }
 
 void verify_result_rows(SQLHSTMT statement, SQLINTEGER expected_rows) {
     SQLSMALLINT column_count = 0;
-    require_success(SQLNumResultCols(statement, &column_count),
-                    "SQLNumResultCols", SQL_HANDLE_STMT, statement);
+    require_success(SQLNumResultCols(statement, &column_count), "SQLNumResultCols", SQL_HANDLE_STMT,
+                    statement);
     if (column_count != 2) {
         throw std::runtime_error("expected two columns in the streamed result set");
     }
@@ -118,9 +119,8 @@ void verify_result_rows(SQLHSTMT statement, SQLINTEGER expected_rows) {
     SQLULEN column_size = 0;
     SQLSMALLINT decimal_digits = 0;
     SQLSMALLINT nullable = SQL_NULLABLE_UNKNOWN;
-    require_success(SQLDescribeCol(statement, 1, column_name, sizeof(column_name),
-                                   &name_length, &data_type, &column_size,
-                                   &decimal_digits, &nullable),
+    require_success(SQLDescribeCol(statement, 1, column_name, sizeof(column_name), &name_length,
+                                   &data_type, &column_size, &decimal_digits, &nullable),
                     "SQLDescribeCol", SQL_HANDLE_STMT, statement);
     if (std::string(reinterpret_cast<const char*>(column_name)) != "ID") {
         throw std::runtime_error("streamed result metadata returned the wrong first column");
@@ -144,8 +144,9 @@ void verify_result_rows(SQLHSTMT statement, SQLINTEGER expected_rows) {
                         "SQLGetData(label)", SQL_HANDLE_STMT, statement);
         ++count;
         if (id != count || std::string(reinterpret_cast<const char*>(label)) !=
-                               "H2_ROW_" + std::to_string(count)) {
-            throw std::runtime_error("streamed result rows were missing, duplicated, or out of order");
+                                   "H2_ROW_" + std::to_string(count)) {
+            throw std::runtime_error(
+                    "streamed result rows were missing, duplicated, or out of order");
         }
     }
     if (count != expected_rows) {
@@ -153,7 +154,8 @@ void verify_result_rows(SQLHSTMT statement, SQLINTEGER expected_rows) {
                                  " streamed rows, received " + std::to_string(count));
     }
     if (SQLFetch(statement) != SQL_NO_DATA) {
-        throw std::runtime_error("fetching past the end of the result set did not return SQL_NO_DATA");
+        throw std::runtime_error(
+                "fetching past the end of the result set did not return SQL_NO_DATA");
     }
 }
 
@@ -166,8 +168,9 @@ int run_integration_test(int argc, char** argv) {
     const std::string endpoint_variable = argv[3];
     const char* enabled_value = std::getenv(enable_variable.c_str());
     std::string enabled = enabled_value == nullptr ? "" : enabled_value;
-    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
-        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    std::transform(enabled.begin(), enabled.end(), enabled.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
     if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
         std::cout << "Skipped: set " << enable_variable << "=true to run the H2 L3 suite\n";
         return 77;
@@ -182,7 +185,7 @@ int run_integration_test(int argc, char** argv) {
                                  "=true");
     }
     const DatabaseConfig config = read_connection_config(csv_path);
-    constexpr SQLINTEGER total_rows = 1200;
+    constexpr SQLINTEGER total_rows = 10001;
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
@@ -193,46 +196,49 @@ int run_integration_test(int argc, char** argv) {
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
                         "SQLAllocHandle(environment)");
         require_success(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
-                                      reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3),
-                                      SQL_IS_INTEGER),
+                                      reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
         require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment,
                                        reinterpret_cast<SQLHANDLE*>(&connection)),
                         "SQLAllocHandle(connection)", SQL_HANDLE_ENV, environment);
-        const std::string connection_string =
-            "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
-            ";DATABASE=" + brace_value(config.url) +
-            ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+        const std::string connection_string = "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
+                                              ";DATABASE=" + brace_value(config.url) +
+                                              ";UID=" + brace_value(config.user) +
+                                              ";P"
+                                              "WD=" +
+                                              brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr,
-            reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.c_str())),
-            SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
-            "SQLDriverConnect", SQL_HANDLE_DBC, connection);
+                                         reinterpret_cast<SQLCHAR*>(
+                                                 const_cast<char*>(connection_string.c_str())),
+                                         SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
+                        "SQLDriverConnect", SQL_HANDLE_DBC, connection);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
         execute_direct(statement, "CREATE TABLE " + table +
-                                  " (id INT PRIMARY KEY, label VARCHAR(32) NOT NULL)");
+                                          " (id INT PRIMARY KEY, label VARCHAR(32) NOT NULL)");
         table_created = true;
-        execute_direct(statement, "INSERT INTO " + table +
-            " (id, label) SELECT CAST(X AS INT), CONCAT('H2_ROW_', X) "
-            "FROM SYSTEM_RANGE(1, " + std::to_string(total_rows) + ")");
+        execute_direct(statement,
+                       "INSERT INTO " + table +
+                               " (id, label) SELECT CAST(X AS INT), CONCAT('H2_ROW_', X) "
+                               "FROM SYSTEM_RANGE(1, " +
+                               std::to_string(total_rows) + ")");
         SQLLEN affected_rows = -1;
-        require_success(SQLRowCount(statement, &affected_rows), "SQLRowCount",
-                        SQL_HANDLE_STMT, statement);
+        require_success(SQLRowCount(statement, &affected_rows), "SQLRowCount", SQL_HANDLE_STMT,
+                        statement);
         if (affected_rows != total_rows) {
             throw std::runtime_error("expected all H2 L3 rows to be inserted");
         }
-        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(insert)",
-                        SQL_HANDLE_STMT, statement);
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(insert)", SQL_HANDLE_STMT,
+                        statement);
 
         execute_direct(statement, "SELECT id AS ID, label FROM " + table + " ORDER BY id");
         require_success(SQLFetch(statement), "SQLFetch(first row)", SQL_HANDLE_STMT, statement);
         SQLINTEGER first_id = 0;
         SQLLEN first_id_length = 0;
-        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &first_id,
-                                   sizeof(first_id), &first_id_length),
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &first_id, sizeof(first_id),
+                                   &first_id_length),
                         "SQLGetData(first id)", SQL_HANDLE_STMT, statement);
         if (first_id != 1) {
             throw std::runtime_error("the first streamed row had the wrong ID");
@@ -252,20 +258,20 @@ int run_integration_test(int argc, char** argv) {
 
         execute_direct(statement, "DROP TABLE " + table);
         table_created = false;
-        require_success(SQLFreeHandle(SQL_HANDLE_STMT, statement),
-                        "SQLFreeHandle(statement)", SQL_HANDLE_DBC, connection);
+        require_success(SQLFreeHandle(SQL_HANDLE_STMT, statement), "SQLFreeHandle(statement)",
+                        SQL_HANDLE_DBC, connection);
         statement = SQL_NULL_HSTMT;
         require_success(SQLDisconnect(connection), "SQLDisconnect", SQL_HANDLE_DBC, connection);
-        require_success(SQLFreeHandle(SQL_HANDLE_DBC, connection),
-                        "SQLFreeHandle(connection)", SQL_HANDLE_ENV, environment);
+        require_success(SQLFreeHandle(SQL_HANDLE_DBC, connection), "SQLFreeHandle(connection)",
+                        SQL_HANDLE_ENV, environment);
         connection = SQL_NULL_HDBC;
         require_success(SQLFreeHandle(SQL_HANDLE_ENV, environment), "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
         if (table_created && statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
-            SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(
-                const_cast<char*>(drop.c_str())), SQL_NTS);
+            SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(const_cast<char*>(drop.c_str())),
+                          SQL_NTS);
         }
         if (statement != SQL_NULL_HSTMT) {
             SQLFreeHandle(SQL_HANDLE_STMT, statement);
@@ -283,7 +289,7 @@ int run_integration_test(int argc, char** argv) {
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv) {
     try {

@@ -52,7 +52,7 @@ has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
 identities are read with database SQL rather than a driver-specific
 generated-keys API.
 
-The H2 L3 suite retrieves 1,200 ordered rows through the server-streaming query
+The H2 L3 suite retrieves 10,001 ordered rows through the server-streaming query
 protocol, checks result metadata and end-of-result behavior, and exercises
 closing a partially consumed result and reusing the statement for full and empty
 results. The client consumes every `executeQuery` stream and closes its
@@ -96,8 +96,8 @@ driver, the client decodes result bytes that match this layout exactly as
 decimal text and returns other bytes as binary.
 
 Transactions, output parameters, wide-character ODBC entry points, complete
-metadata discovery, LOBs, configurable fetch-size pagination, session affinity, multinode routing,
-health checking, and failover are not implemented. Use autocommit mode. The
+metadata discovery, LOBs, configurable fetch-size pagination, session affinity,
+multinode routing, health checking, and failover are not implemented. Use autocommit mode. The
 client uses one gRPC channel per ODBC connection and a process-stable client
 UUID.
 

@@ -178,8 +178,9 @@ and
 They exercise the ODBC API through the Driver Manager against a running OJP
 server and the respective database. The SQL Server fixture follows the OJP JDBC
 driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
-including the `42S01` syntax-error SQLSTATE that the Microsoft JDBC driver
-reports (and OJP passes through unchanged). Each test uses a unique
+including the SQLSTATE expected for the L1 suite's invalid SQL. The Microsoft
+JDBC driver reports `42S01` for this syntax error rather than the standard
+`42000`, and OJP passes it through unchanged. Each test uses a unique
 table per run and verifies connection readiness, prepared INSERT/SELECT/UPDATE,
 DELETE, row counts, result values, empty results, SQL error diagnostics, and
 session termination. The separate H2 L2 suite reuses the H2 L1 connection

@@ -283,7 +283,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
          sizeof(byte_value), &byte_length, "varbinary(1)");
     SQLCHAR binary_value[] = {'A', 'A', 'A', 'A'};
     SQLLEN binary_length = sizeof(binary_value);
-    bind(statement, 11, SQL_C_BINARY, SQL_BINARY, sizeof(binary_value), 0, binary_value,
+    bind(statement, 11, SQL_C_BINARY, SQL_VARBINARY, sizeof(binary_value), 0, binary_value,
          sizeof(binary_value), &binary_length, "varbinary(4)");
     SQL_DATE_STRUCT date_value{2025, 3, 29};
     SQLLEN date_length = sizeof(date_value);
@@ -381,8 +381,6 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect_text(statement, 17, "2024-12-01 08:10:10");
     expect_text(statement, 18, "2024-12-01 10:10:10.0000000 +02:00");
     expect_text(statement, 19, "1900-01-01 21:20:30");
-    require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(select types)",
-                    SQL_HANDLE_STMT, statement);
     close_and_reset(statement);
 
     execute_direct(statement, "INSERT INTO " + table + " (val_int, val_varchar)"

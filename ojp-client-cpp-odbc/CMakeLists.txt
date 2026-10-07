@@ -72,20 +72,30 @@ set_target_properties(ojp_odbc PROPERTIES
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(ojp_odbc_h2_l1_integration_test
-        tests/h2_l1_integration_test.cpp)
-    target_link_libraries(ojp_odbc_h2_l1_integration_test PRIVATE ODBC::ODBC)
-    target_compile_definitions(ojp_odbc_h2_l1_integration_test PRIVATE
-        "OJP_ODBC_TEST_CSV=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l1_connection.csv\"")
-    add_dependencies(ojp_odbc_h2_l1_integration_test ojp_odbc)
+    add_executable(ojp_odbc_l1_integration_test
+        tests/l1_integration_test.cpp)
+    target_link_libraries(ojp_odbc_l1_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_l1_integration_test ojp_odbc)
 
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/odbc")
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/odbc/odbcinst.ini"
         CONTENT "[OJP]\nDriver=$<TARGET_FILE:ojp_odbc>\n")
     add_test(NAME OjpOdbcH2L1Integration
-        COMMAND ojp_odbc_h2_l1_integration_test)
-    set_tests_properties(OjpOdbcH2L1Integration PROPERTIES
+        COMMAND ojp_odbc_l1_integration_test
+            "H2"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l1_connection.csv"
+            "OJP_TEST_H2"
+            "OJP_TEST_H2_ADDR"
+            "42001")
+    add_test(NAME OjpOdbcPostgreSqlL1Integration
+        COMMAND ojp_odbc_l1_integration_test
+            "PostgreSQL"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/postgresql_l1_connection.csv"
+            "OJP_TEST_POSTGRESQL"
+            "OJP_TEST_POSTGRESQL_ADDR"
+            "42601")
+    set_tests_properties(OjpOdbcH2L1Integration OjpOdbcPostgreSqlL1Integration PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
 endif()

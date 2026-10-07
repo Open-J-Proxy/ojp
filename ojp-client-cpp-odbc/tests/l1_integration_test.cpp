@@ -15,7 +15,7 @@
 
 namespace {
 
-struct H2Config {
+struct DatabaseConfig {
     std::string url;
     std::string user;
     std::string password;
@@ -46,20 +46,20 @@ std::vector<std::string> parse_csv_record(const std::string& line) {
         }
     }
     if (quoted) {
-        throw std::runtime_error("H2 connection CSV contains an unterminated quoted field");
+        throw std::runtime_error("database connection CSV contains an unterminated quoted field");
     }
     fields.push_back(field);
     return fields;
 }
 
-H2Config read_h2_config() {
-    std::ifstream input(OJP_ODBC_TEST_CSV);
+DatabaseConfig read_connection_config(const std::string& path) {
+    std::ifstream input(path);
     if (!input) {
-        throw std::runtime_error("cannot open the H2 connection CSV");
+        throw std::runtime_error("cannot open the database connection CSV");
     }
     std::string line;
     if (!std::getline(input, line)) {
-        throw std::runtime_error("H2 connection CSV is empty");
+        throw std::runtime_error("database connection CSV is empty");
     }
     if (!line.empty() && line.back() == '\r') {
         line.pop_back();
@@ -70,7 +70,7 @@ H2Config read_h2_config() {
     }
     std::string extra;
     if (std::getline(input, extra)) {
-        throw std::runtime_error("expected exactly one H2 connection CSV record");
+        throw std::runtime_error("expected exactly one database connection CSV record");
     }
     return {fields[0], fields[1], fields[2]};
 }
@@ -140,7 +140,7 @@ void prepare_integer_parameter(SQLHSTMT statement, SQLINTEGER* value, SQLLEN* in
                     "SQLBindParameter(integer)", SQL_HANDLE_STMT, statement);
 }
 
-void assert_h2_sql_error(SQLHSTMT statement, const std::string& sql, const char* sql_state) {
+void assert_sql_error(SQLHSTMT statement, const std::string& sql, const char* sql_state) {
     const auto result = SQLExecDirect(statement,
         reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())), SQL_NTS);
     if (result != SQL_ERROR) {
@@ -154,17 +154,26 @@ void assert_h2_sql_error(SQLHSTMT statement, const std::string& sql, const char*
                                   &native_error, message, sizeof(message), &message_length),
                     "SQLGetDiagRec", SQL_HANDLE_STMT, statement);
     if (std::string(reinterpret_cast<const char*>(actual_state)) != sql_state ||
-        native_error == 0) {
+        message_length == 0) {
         throw std::runtime_error("expected SQLSTATE " + std::string(sql_state) +
-                                 " with a vendor code, got " +
+                                 " with a diagnostic message, got " +
                                  std::string(reinterpret_cast<const char*>(actual_state)) +
                                  " and vendor code " + std::to_string(native_error) +
                                  ": " + reinterpret_cast<const char*>(message));
     }
 }
 
-int run_integration_test() {
-    const char* enabled = std::getenv("OJP_TEST_H2");
+int run_integration_test(int argc, char** argv) {
+    if (argc != 6) {
+        throw std::runtime_error(
+            "expected database name, CSV path, enable variable, endpoint variable, and SQLSTATE");
+    }
+    const std::string database = argv[1];
+    const std::string csv_path = argv[2];
+    const std::string enable_variable = argv[3];
+    const std::string endpoint_variable = argv[4];
+    const std::string expected_sql_state = argv[5];
+    const char* enabled = std::getenv(enable_variable.c_str());
     std::string enabled_value = enabled == nullptr ? "" : enabled;
     std::transform(enabled_value.begin(), enabled_value.end(), enabled_value.begin(),
         [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
@@ -174,23 +183,25 @@ int run_integration_test() {
         ? "" : enabled_value.substr(first, last - first + 1);
     if (enabled_value.empty() || enabled_value == "false" || enabled_value == "0" ||
         enabled_value == "no") {
-        std::cout << "Skipped: set OJP_TEST_H2=true to run the real-server H2 L1 suite\n";
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the real-server " << database << " L1 suite\n";
         return 77;
     }
     if (enabled_value != "true" && enabled_value != "1" && enabled_value != "yes") {
-        throw std::runtime_error("OJP_TEST_H2 must be true or false");
+        throw std::runtime_error(enable_variable + " must be true or false");
     }
-    const char* endpoint_value = std::getenv("OJP_TEST_H2_ADDR");
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
     std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
     const auto endpoint_first = endpoint.find_first_not_of(" \t\r\n");
     const auto endpoint_last = endpoint.find_last_not_of(" \t\r\n");
     endpoint = endpoint_first == std::string::npos
         ? "" : endpoint.substr(endpoint_first, endpoint_last - endpoint_first + 1);
     if (endpoint.empty()) {
-        throw std::runtime_error("OJP_TEST_H2_ADDR is required when OJP_TEST_H2=true");
+        throw std::runtime_error(endpoint_variable + " is required when " +
+                                 enable_variable + "=true");
     }
 
-    const H2Config config = read_h2_config();
+    const DatabaseConfig config = read_connection_config(csv_path);
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
@@ -229,7 +240,7 @@ int run_integration_test() {
                                    sizeof(readiness), &readiness_length),
                         "SQLGetData(readiness)", SQL_HANDLE_STMT, statement);
         if (readiness != 1) {
-            throw std::runtime_error("H2 readiness query did not return 1");
+            throw std::runtime_error(database + " readiness query did not return 1");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(readiness)",
                         SQL_HANDLE_STMT, statement);
@@ -342,7 +353,7 @@ int run_integration_test() {
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(empty select)",
                         SQL_HANDLE_STMT, statement);
 
-        assert_h2_sql_error(statement, "THIS IS NOT VALID SQL", "42001");
+        assert_sql_error(statement, "THIS IS NOT VALID SQL", expected_sql_state.c_str());
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(invalid SQL)",
                         SQL_HANDLE_STMT, statement);
 
@@ -378,15 +389,15 @@ int run_integration_test() {
         }
         throw;
     }
-    std::cout << "C++ ODBC L1 H2 integration test passed\n";
+    std::cout << "C++ ODBC L1 " << database << " integration test passed\n";
     return 0;
 }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
-        return run_integration_test();
+        return run_integration_test(argc, argv);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

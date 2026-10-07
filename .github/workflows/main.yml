@@ -2,36 +2,38 @@
 # Main CI Workflow with Fail-Fast Java Integration Tests
 # =============================================================================
 #
-# This workflow implements a fail-fast CI strategy where H2 tests run first,
-# followed by more expensive database-specific tests only if H2 tests pass.
+# This workflow runs H2 integration coverage first. Database-specific integration
+# jobs start only after the H2 gate succeeds.
 #
 # WORKFLOW STRUCTURE:
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
 # 1a. dotnet-crud-test: .NET ADO.NET H2 L1 tests (independent)
 # 1b. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
-# 2. postgres-test: PostgreSQL database tests (needs: build-test, resolve-version)
-# 3. mysql-test: MySQL database tests (needs: build-test, resolve-version)
-# 4. mariadb-test: MariaDB database tests (needs: build-test, resolve-version)
-# 5. cockroachdb-test: CockroachDB database tests (needs: build-test, resolve-version)
-# 6. db2-test: IBM DB2 database tests (needs: build-test, resolve-version)
-# 7. multinode-test: Multinode failover/recovery tests (needs: build-test, resolve-version)
-# 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
-# 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
-# 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
-# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 (independent)
-# 12. notify-integration: Triggers integration repo workflow (needs: build-test)
-# 13. python-h2-l1: Independent Python DB-API unit and H2 integration tests
+# 1c. python-h2-l1: Python DB-API unit and H2 integration tests
+# 2. h2-integration-gate: Waits for every Main CI H2 job to pass
+# 3. postgres-test: PostgreSQL database tests (needs: h2-integration-gate, resolve-version)
+# 4. mysql-test: MySQL database tests (needs: h2-integration-gate, resolve-version)
+# 5. mariadb-test: MariaDB database tests (needs: h2-integration-gate, resolve-version)
+# 6. cockroachdb-test: CockroachDB database tests (needs: h2-integration-gate, resolve-version)
+# 7. db2-test: IBM DB2 database tests (needs: h2-integration-gate, resolve-version)
+# 8. multinode-test: Multinode failover/recovery tests (needs: h2-integration-gate, resolve-version)
+# 9. multinode-xa-test: Multinode XA integration tests (needs: h2-integration-gate, resolve-version)
+# 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
+# 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
+# 12. cpp-odbc-test: C++ ODBC H2 L1 test (runs alongside build-test)
+# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
+# 14. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
 # SEQUENTIAL EXECUTION:
-# Specialized Java database test jobs depend on build-test completing
-# successfully. .NET, Ruby, Python, and C++ client test jobs run independently.
-# This ensures that expensive database setups only run if basic H2 tests pass,
+# Java and C++ ODBC database-specific jobs wait for the H2 integration gate.
+# The Java H2 matrix, .NET, Ruby, Python, and C++ ODBC H2 jobs run in parallel.
+# This ensures database-specific tests start only after every H2 job passes,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
 # - Resource efficiency (avoids running expensive tests when basics fail)
 # - Cost savings (reduces CI minutes when tests would fail anyway)
 #
-# Python tests build their own server and run independently of the Java gate.
+# Python tests build their own server and run alongside the Java H2 gate.
 #
 # This sequential execution works on ALL branches (PRs, main, feature branches)
 # because all jobs are defined in a single workflow file.
@@ -445,7 +447,7 @@ jobs:
   #
   # Database: PostgreSQL 17
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # SQL Enhancer Testing:
   # All PostgreSQL tests run twice per matrix configuration:
@@ -457,8 +459,8 @@ jobs:
   postgres-test:
     name: PostgreSQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
 
     strategy:
       fail-fast: false
@@ -591,14 +593,14 @@ jobs:
   #
   # Database: MySQL 8.0
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # ===========================================================================
   mysql-test:
     name: MySQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
 
     strategy:
       fail-fast: false
@@ -689,14 +691,14 @@ jobs:
   #
   # Database: MariaDB 10.11
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # ===========================================================================
   mariadb-test:
     name: MariaDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
 
     strategy:
       fail-fast: false
@@ -788,14 +790,14 @@ jobs:
   #
   # Database: CockroachDB v24.3.4
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # ===========================================================================
   cockroachdb-test:
     name: CockroachDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
 
     strategy:
       fail-fast: false
@@ -877,7 +879,7 @@ jobs:
   #
   # Database: IBM DB2 11.5.8.0
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # Note: DB2 container is large and takes longer to start up.
   #
@@ -885,8 +887,8 @@ jobs:
   db2-test:
     name: DB2 Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
 
     strategy:
       fail-fast: false
@@ -1050,15 +1052,14 @@ jobs:
   # 4. Restarting servers and verifying recovery
   #
   # Database: PostgreSQL (for multinode connection pooling tests)
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # ===========================================================================
   multinode-test:
     name: Multinode Integration Test (Run ${{ matrix.run }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    # This ensures we don't waste resources on multinode tests if H2 tests fail
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
     strategy:
       max-parallel: 1
       matrix:
@@ -1460,7 +1461,7 @@ jobs:
   # 4. Restarting servers and verifying XA recovery
   #
   # Database: PostgreSQL (with XA prepared transactions support)
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # NOTE: Connection count checks expect 20-27 connections (XA pool only, non-XA pool disabled).
   #
@@ -1468,9 +1469,8 @@ jobs:
   multinode-xa-test:
     name: Multinode XA Integration Test (Run ${{ matrix.run }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    # This ensures we don't waste resources on multinode XA tests if H2 tests fail
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
     strategy:
       max-parallel: 1
       matrix:
@@ -1908,15 +1908,14 @@ jobs:
   #
   # Database: Oracle XE 21c
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # ===========================================================================
   oracle-test:
     name: Oracle Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    # This ensures we don't waste resources on Oracle tests if H2 tests fail
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
     
     permissions:
       contents: read
@@ -2080,15 +2079,14 @@ jobs:
   #
   # Database: SQL Server (via TestContainers)
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Only runs AFTER build-test job succeeds (needs: [build-test])
+  # Execution: Runs after all Main CI H2 jobs succeed.
   #
   # ===========================================================================
   sqlserver-tests:
     name: SQL Server Integration Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job only runs if build-test succeeds
-    # This ensures we don't waste resources on SQL Server tests if H2 tests fail
-    needs: [build-test, resolve-version]
+    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
+    needs: [h2-integration-gate, resolve-version]
     
     permissions:
       contents: read
@@ -2181,19 +2179,17 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 11: C++ ODBC H2 L1 Integration Tests
+  # JOB 11: C++ ODBC H2 L1 Integration Test
   # ===========================================================================
   #
-  # Builds the native ODBC client and runs its full CTest suite against the
-  # embedded H2 database through a real OJP server, following the Go H2 job.
+  # This H2-only job runs in parallel with the main H2 build-test job.
   #
   # ===========================================================================
   cpp-odbc-test:
-    name: C++ ODBC H2 L1 Tests
+    name: C++ ODBC H2 L1 Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
       - name: Git checkout
         uses: actions/checkout@v5
@@ -2255,12 +2251,13 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run all C++ ODBC tests against H2
+      - name: Run C++ ODBC H2 L1 tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
         run: |
-          ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure \
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcH2L1Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-test.log
 
       - name: Show ojp-server.log
@@ -2278,18 +2275,154 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 12: Notify Integration Repository
+  # JOB 2: H2 Integration Gate
+  # ===========================================================================
+  #
+  # All independent H2 jobs run in parallel. This aggregate gate releases
+  # database-specific jobs only after the complete Main CI H2 phase succeeds.
+  #
+  # ===========================================================================
+  h2-integration-gate:
+    name: All H2 Integration Tests Passed
+    runs-on: ubuntu-latest
+    needs: [build-test, dotnet-crud-test, ruby-dbi-test, python-h2-l1, cpp-odbc-test]
+    steps:
+      - name: Confirm H2 integration phase passed
+        run: echo "All Main CI H2 integration jobs passed"
+
+  # ===========================================================================
+  # JOB 13: C++ ODBC PostgreSQL L1 Integration Test
+  # ===========================================================================
+  #
+  # Runs alongside the remaining database-specific integration tests, only
+  # after the aggregate H2 gate has succeeded.
+  #
+  # ===========================================================================
+  cpp-odbc-postgres-test:
+    name: C++ ODBC PostgreSQL L1 Test
+    runs-on: ubuntu-latest
+    needs: [h2-integration-gate]
+    permissions:
+      contents: read
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and Install (ojp-grpc-commons)
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build (ojp-server)
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Install C++ gRPC and ODBC build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            golang-github-gogo-googleapis-dev \
+            libgrpc++-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            unixodbc-dev
+
+      - name: Start OJP server (background)
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" > /tmp/ojp-server.log 2>&1 &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Configure C++ ODBC client
+        run: |
+          cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
+            -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build C++ ODBC client and tests
+        run: cmake --build ojp-client-cpp-odbc/build --parallel 2
+
+      - name: Run C++ ODBC PostgreSQL L1 tests
+        env:
+          OJP_TEST_POSTGRESQL: 'true'
+          OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
+        run: |
+          docker run --detach --rm --name ojp-odbc-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_USER=testuser \
+            --env POSTGRES_PASSWORD=testpassword \
+            --env POSTGRES_DB=defaultdb \
+            postgres:17
+          for i in $(seq 1 30); do
+            if docker exec ojp-odbc-postgres pg_isready -U testuser -d defaultdb; then
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              docker logs ojp-odbc-postgres
+              exit 1
+            fi
+            sleep 2
+          done
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcPostgreSqlL1Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-postgresql-l1-test.log
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server.log
+
+      - name: Show PostgreSQL logs
+        if: always()
+        run: |
+          docker logs ojp-odbc-postgres 2>&1 || true
+          docker stop ojp-odbc-postgres || true
+
+      - name: Save C++ ODBC PostgreSQL test report and server log
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: cpp-odbc-postgresql-l1-test-results
+          path: |
+            /tmp/cpp-odbc-postgresql-l1-test.log
+            /tmp/ojp-server.log
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 13: Notify Integration Repository
   # ===========================================================================
   #
   # This job triggers a workflow in the ojp-framework-integration repository
   # to run integration tests with the latest OJP changes.
   #
-  # Note: This job depends on build-test (H2 tests) completing successfully.
-  # It only notifies the integration repo if the main H2 tests pass.
+  # Note: This job waits for every Main CI H2 job to pass before notifying the
+  # integration repo.
   #
   # ===========================================================================
   notify-integration:
-    needs: [build-test]
+    needs: [h2-integration-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Trigger OJP Framework Integration Repo Workflow

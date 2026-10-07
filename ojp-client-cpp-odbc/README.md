@@ -11,14 +11,14 @@ communicates with the server over gRPC.
 | Assessment | Value |
 |---|---|
 | Highest implemented level | **L1** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. An H2 real-server integration suite is available. |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and PostgreSQL real-server integration suites are available. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L1** | `h2_l1_integration_test.cpp` exercises ODBC → one OJP server → H2. |
-| PostgreSQL | Not established | No database-specific integration suite in this module. |
+| **H2** | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → H2. |
+| PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -120,27 +120,29 @@ while (SQLFetch(statement) == SQL_SUCCESS) {
 Check every ODBC return code in application code and use `SQLGetDiagRec` on the
 relevant handle to inspect errors.
 
-## H2 L1 integration test
+## L1 integration tests
 
-The test follows the JDBC and Go real-server pattern: it reads the backend URL,
-user, and password from
-[`tests/testdata/h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
-then exercises the ODBC API through the Driver Manager against a running OJP
-server and H2. It uses a unique table per run and verifies connection
-readiness, prepared INSERT/SELECT/UPDATE, DELETE, row counts, result values,
-empty results, SQL error diagnostics, and session termination.
+The H2 and PostgreSQL tests read backend connection details from
+[`tests/testdata/h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv) and
+[`tests/testdata/postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
+then exercise the ODBC API through the Driver Manager against a running OJP
+server and the respective database. Each test uses a unique table per run and
+verifies connection readiness, prepared INSERT/SELECT/UPDATE, DELETE, row
+counts, result values, empty results, SQL error diagnostics, and session
+termination.
 
-Start OJP using Java 25 and UTC. Then build and run the test:
+Start OJP using Java 25 and UTC, with PostgreSQL reachable at the address in the
+CSV fixture. Then build and run both tests:
 
 ```sh
-OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
-  cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
+cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
   -DGOOGLEAPIS_PROTO_DIR=/path/to/googleapis
 cmake --build ojp-client-cpp-odbc/build
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
+OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
   ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure
 ```
 
-The test is skipped when `OJP_TEST_H2` is unset or false. When enabled, a
-missing endpoint or unavailable server fails the test instead of silently
-skipping it.
+Both tests are skipped when their corresponding `OJP_TEST_H2` or
+`OJP_TEST_POSTGRESQL` variable is unset or false. When enabled, a missing
+endpoint or unavailable server fails the test instead of silently skipping it.

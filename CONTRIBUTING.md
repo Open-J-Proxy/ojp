@@ -349,11 +349,18 @@ OJP is a multi-module Maven project:
 
 ### CI/CD Testing
 
-Tests run automatically in GitHub Actions:
+Main CI follows a two-phase integration test strategy: all H2 integration jobs
+run in parallel first, then database-specific integration tests run only if
+every H2 job succeeds. This includes the Java H2 matrix and client-specific H2
+tests for .NET, Ruby, Python, and C++ ODBC. The C++ ODBC H2 job runs alongside
+the main H2 matrix; its PostgreSQL test runs in the database-specific phase,
+after both the main H2 checks and the ODBC H2 test pass.
 
-- **Main CI**: Runs H2 tests first (fast fail-fast mechanism)
-- **Specialized Jobs**: Run only after Main CI succeeds (PostgreSQL, MySQL, MariaDB, CockroachDB, Oracle, SQL Server, DB2)
-  - **PostgreSQL tests** run twice: once with standard OJP server and once with SQL enhancer enabled
+- **H2 phase**: Runs first with the fast fail-fast H2 matrix and client suites.
+- **Database-specific phase**: Runs only after the aggregate H2 gate succeeds
+  (PostgreSQL, MySQL, MariaDB, CockroachDB, Oracle, SQL Server, and DB2).
+  - **PostgreSQL tests** run twice: once with the standard OJP server and once
+    with SQL enhancer enabled.
 
 For more details, see [Setup and Testing OJP Source](https://github.com/Open-J-Proxy/ojp/blob/main/documents/code-contributions/setup_and_testing_ojp_source.md).
 

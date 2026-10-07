@@ -95,8 +95,12 @@ struct BoundColumn {
     SQLLEN* indicator = nullptr;
 };
 
-using Cell = std::variant<std::monostate, bool, std::int32_t, std::int64_t, double,
-                          std::string, std::vector<std::uint8_t>>;
+struct UuidCell {
+    std::string value;
+};
+
+using Cell = std::variant<std::monostate, bool, std::int32_t, std::int64_t, double, std::string,
+                          std::vector<std::uint8_t>, UuidCell>;
 
 struct StatementHandle final : HandleBase {
     explicit StatementHandle(ConnectionHandle* parent)
@@ -358,7 +362,7 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             *output = value.rowid_value().value();
             return true;
         case ParameterValue::kUuidValue:
-            *output = value.uuid_value().value();
+            *output = UuidCell{value.uuid_value().value()};
             return true;
         case ParameterValue::kBigintegerValue:
             *output = value.biginteger_value().value();
@@ -418,6 +422,9 @@ std::string cell_as_string(const Cell& cell) {
     }
     if (const auto* value = std::get_if<std::vector<std::uint8_t>>(&cell)) {
         return std::string(value->begin(), value->end());
+    }
+    if (const auto* value = std::get_if<UuidCell>(&cell)) {
+        return value->value;
     }
     return {};
 }
@@ -837,6 +844,17 @@ bool is_lob_parameter_type(SQLSMALLINT sql_type) {
 bool get_lob_parameter_data(const BoundParameter& bound, std::string* data,
                             Diagnostic* error) {
     if (bound.data_at_execution) {
+        if (bound.indicator != nullptr && *bound.indicator != SQL_DATA_AT_EXEC &&
+            *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET) {
+            const auto expected_length =
+                static_cast<SQLLEN>(SQL_LEN_DATA_AT_EXEC_OFFSET) - *bound.indicator;
+            if (expected_length < 0 ||
+                static_cast<std::uint64_t>(expected_length) != bound.streamed_data.size()) {
+                error->state = "22001";
+                error->message = "LOB stream length does not match its declared length";
+                return false;
+            }
+        }
         *data = bound.streamed_data;
         return true;
     }
@@ -906,6 +924,10 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
                      const std::string& data, std::string* uuid) {
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
+    }
+    if (data.size() >
+        static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+        return fail(handle, "LOB input exceeds the supported size", "22001");
     }
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
@@ -983,8 +1005,9 @@ SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle, const std::
         if (block.has_session()) {
             connection->session.CopyFrom(block.session());
         }
-        if (block.data().size() >
-            static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) - data->size()) {
+        const auto max_lob_size =
+            static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+        if (data->size() > max_lob_size || block.data().size() > max_lob_size - data->size()) {
             return fail(handle, "LOB result exceeds the supported ODBC buffer size", "22001");
         }
         data->append(block.data());
@@ -1864,15 +1887,14 @@ SQLRETURN SQL_API SQLParamData(SQLHSTMT statement, SQLPOINTER* value) {
     if (target->data_at_execution_parameters.empty()) {
         return fail(target, "No data-at-execution parameter is pending", "HY010");
     }
+    if (value == nullptr) {
+        return fail(target, "Parameter token output is required", "HY009");
+    }
     if (target->current_data_at_execution_parameter != 0) {
         target->current_data_at_execution_parameter = 0;
         ++target->next_data_at_execution_parameter;
     }
-    if (target->next_data_at_execution_parameter <
-        target->data_at_execution_parameters.size()) {
-        if (value == nullptr) {
-            return fail(target, "Parameter token output is required", "HY009");
-        }
+    if (target->next_data_at_execution_parameter < target->data_at_execution_parameters.size()) {
         const auto parameter_number =
             target->data_at_execution_parameters[target->next_data_at_execution_parameter];
         target->current_data_at_execution_parameter = parameter_number;
@@ -1911,6 +1933,11 @@ SQLRETURN SQL_API SQLPutData(SQLHSTMT statement, SQLPOINTER data, SQLLEN length)
     }
     if (length > 0) {
         auto& parameter = target->parameters.at(target->current_data_at_execution_parameter);
+        constexpr std::size_t kMaxLobSize =
+            static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+        if (static_cast<std::size_t>(length) > kMaxLobSize - parameter.streamed_data.size()) {
+            return fail(target, "LOB stream exceeds the supported size", "22001");
+        }
         parameter.streamed_data.append(static_cast<const char*>(data),
                                        static_cast<std::size_t>(length));
     }
@@ -2028,6 +2055,8 @@ SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,
             inferred_type = SQL_BIT;
         } else if (std::holds_alternative<std::vector<std::uint8_t>>(cell)) {
             inferred_type = SQL_VARBINARY;
+        } else if (std::holds_alternative<UuidCell>(cell)) {
+            inferred_type = SQL_GUID;
         } else if (const auto* text = std::get_if<std::string>(&cell)) {
             if (text->compare(0, 16, "OJP_CLOB_PREFIX:") == 0) {
                 inferred_type = SQL_LONGVARCHAR;
@@ -2082,6 +2111,9 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
             target->bound_columns.clear();
         } else {
             target->parameters.clear();
+            target->data_at_execution_parameters.clear();
+            target->next_data_at_execution_parameter = 0;
+            target->current_data_at_execution_parameter = 0;
         }
         return SQL_SUCCESS;
     }

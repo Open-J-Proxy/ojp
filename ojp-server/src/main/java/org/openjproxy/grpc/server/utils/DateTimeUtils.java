@@ -2,7 +2,6 @@ package org.openjproxy.grpc.server.utils;
 
 import java.lang.reflect.Method;
 import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import lombok.experimental.UtilityClass;
@@ -35,10 +34,10 @@ public class DateTimeUtils {
             Timestamp timestamp = (Timestamp) getTimestampMethod.invoke(rawObject);
             int offsetMinutes = (Integer) getMinutesOffsetMethod.invoke(rawObject);
 
-            // Step 3: Convert to OffsetDateTime
-            LocalDateTime ldt = timestamp.toLocalDateTime();
+            // Step 3: Convert to OffsetDateTime. DateTimeOffset.getTimestamp() is the UTC instant,
+            // so apply the offset to that instant instead of reinterpreting its local wall-clock.
             ZoneOffset offset = ZoneOffset.ofTotalSeconds(offsetMinutes * 60);
-            return OffsetDateTime.of(ldt, offset);
+            return timestamp.toInstant().atOffset(offset);
 
         } catch (Exception e) {
             throw new RuntimeException("Failed to convert DateTimeOffset to OffsetDateTime", e);

@@ -65,7 +65,8 @@ These entries describe the levels targeted by the language client modules; they 
 | Client | Database | Target level | Evidence |
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L2** | H2-specific L2 suite covers typed decimal/temporal parameters, statement variants, generated identity retrieval, and basic result metadata. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL + SQL Server | **L1** | Shared real-server L1 suite covers connectivity, CRUD, diagnostics, and lifecycle. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L2** | SQL Server-specific L2 suite mirrors the JDBC SQL Server type coverage, plus statement variants, generated identity retrieval, and basic result metadata. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L1** | Shared real-server L1 suite covers connectivity, CRUD, diagnostics, and lifecycle. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
@@ -86,7 +87,8 @@ These levels are based on each language client's own integration tests and are i
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L2** | L1 real-server coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` and L2 coverage in `ojp-client-cpp-odbc/tests/h2_l2_integration_test.cpp`. |
-| **C++ ODBC** | PostgreSQL + SQL Server | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
+| **C++ ODBC** | SQL Server | **L2** | L1 real-server coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` and L2 coverage in `ojp-client-cpp-odbc/tests/sqlserver_l2_integration_test.cpp`. |
+| **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
@@ -118,7 +120,8 @@ The following table records the implemented target level and its real-server int
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L2** | `ojp-client-cpp-odbc/tests/h2_l2_integration_test.cpp` adds typed parameters, statement variants, generated identity retrieval, and result metadata to the L1 suite. |
-| **C++ ODBC** | PostgreSQL + SQL Server | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
+| **C++ ODBC** | SQL Server | **L2** | `ojp-client-cpp-odbc/tests/sqlserver_l2_integration_test.cpp` adds typed parameters, statement variants, generated identity retrieval, and result metadata to the L1 suite. |
+| **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

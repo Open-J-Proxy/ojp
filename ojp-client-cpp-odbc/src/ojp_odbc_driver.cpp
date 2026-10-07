@@ -538,22 +538,49 @@ bool is_query_sql(const std::string& sql) {
            keyword == "TABLE" || keyword == "SHOW" || keyword == "EXPLAIN";
 }
 
+// OJP binds NULL parameters with PreparedStatement.setNull, which needs a java.sql.Types code.
+std::int32_t jdbc_null_type(SQLSMALLINT sql_type) {
+    switch (sql_type) {
+        case SQL_CHAR:
+        case SQL_VARCHAR:
+        case SQL_LONGVARCHAR:
+        case SQL_WVARCHAR:
+        case SQL_DECIMAL:
+        case SQL_NUMERIC:
+        case SQL_SMALLINT:
+        case SQL_INTEGER:
+        case SQL_REAL:
+        case SQL_FLOAT:
+        case SQL_DOUBLE:
+        case SQL_BIT:
+        case SQL_TINYINT:
+        case SQL_BIGINT:
+        case SQL_BINARY:
+        case SQL_VARBINARY:
+        case SQL_LONGVARBINARY:
+        case SQL_TYPE_DATE:
+        case SQL_TYPE_TIME:
+        case SQL_TYPE_TIMESTAMP:
+            return sql_type;  // ODBC and java.sql.Types share these codes.
+        case SQL_WCHAR: return -15;         // Types.NCHAR
+        case SQL_WLONGVARCHAR: return -16;  // Types.LONGNVARCHAR
+        case SQL_GUID: return 1;            // Types.CHAR
+        default: return 0;                  // Types.NULL
+    }
+}
+
 bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
                          SQLUSMALLINT parameter_index, Diagnostic* error) {
     const auto* data = static_cast<const std::uint8_t*>(bound.value);
     SQLLEN length = bound.buffer_length;
+    if ((bound.indicator != nullptr && *bound.indicator == SQL_NULL_DATA) || data == nullptr) {
+        value->GetReflection()->SetInt32(value,
+            value->GetDescriptor()->FindFieldByName("int_value"),
+            jdbc_null_type(bound.parameter_type));
+        return true;
+    }
     if (bound.indicator != nullptr) {
         length = *bound.indicator;
-        if (length == SQL_NULL_DATA) {
-            value->GetReflection()->SetBool(value,
-                value->GetDescriptor()->FindFieldByName("is_null"), true);
-            return true;
-        }
-    }
-    if (data == nullptr) {
-        value->GetReflection()->SetBool(value,
-            value->GetDescriptor()->FindFieldByName("is_null"), true);
-        return true;
     }
     SQLSMALLINT c_type = bound.value_type;
     if (c_type == SQL_C_DEFAULT) {

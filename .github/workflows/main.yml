@@ -2185,8 +2185,8 @@ jobs:
   # JOB 11: C++ ODBC L1 Integration Tests
   # ===========================================================================
   #
-  # Builds the native ODBC client and runs its full CTest suite against the
-  # embedded H2 database through a real OJP server, following the Go H2 job.
+  # Builds the native ODBC client and runs its H2 suite before starting
+  # PostgreSQL for the database-specific suite.
   #
   # ===========================================================================
   cpp-odbc-test:
@@ -2195,21 +2195,6 @@ jobs:
     needs: [build-test]
     permissions:
       contents: read
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: testuser
-          POSTGRES_DB: defaultdb
-          POSTGRES_HOST_AUTH_METHOD: trust
-        options: >-
-          --health-cmd "pg_isready -U testuser -d defaultdb"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-        ports:
-          - 5432:5432
-
     steps:
       - name: Git checkout
         uses: actions/checkout@v5
@@ -2286,6 +2271,22 @@ jobs:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
         run: |
+          docker run --detach --rm --name ojp-odbc-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_USER=testuser \
+            --env POSTGRES_PASSWORD=testpassword \
+            --env POSTGRES_DB=defaultdb \
+            postgres:17
+          for i in $(seq 1 30); do
+            if docker exec ojp-odbc-postgres pg_isready -U testuser -d defaultdb; then
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              docker logs ojp-odbc-postgres
+              exit 1
+            fi
+            sleep 2
+          done
           ctest --test-dir ojp-client-cpp-odbc/build \
             -R '^OjpOdbcPostgreSqlL1Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-postgresql-l1-test.log
@@ -2293,6 +2294,12 @@ jobs:
       - name: Show ojp-server.log
         if: always()
         run: cat /tmp/ojp-server.log
+
+      - name: Show PostgreSQL logs
+        if: always()
+        run: |
+          docker logs ojp-odbc-postgres 2>&1 || true
+          docker stop ojp-odbc-postgres || true
 
       - name: Save C++ ODBC test report and server log
         if: always()

@@ -1,1 +1,1 @@
-"jdbc:postgresql://localhost:5432/defaultdb",testuser,
+"jdbc:postgresql://localhost:5432/defaultdb",testuser,testpassword

@@ -1,8 +1,9 @@
 # OJP C++ ODBC Client
 
 This module provides an ANSI ODBC driver for applications that access an OJP
-server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**
-and **L2 for H2 and SQL Server** from the [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
+server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
+**L2 for H2 and SQL Server**, and **L3 for H2** from the
+[client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
 
@@ -10,14 +11,14 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L2 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and SQL Server also have typed parameter, generated identity, and basic result metadata coverage. |
+| Highest implemented level | **L3 for H2; L2 for SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 also covers typed parameters, multi-block result streaming, and result-set lifecycle. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L2** | `l1_integration_test.cpp` and `h2_l2_integration_test.cpp` exercise ODBC → one OJP server → H2. |
+| **H2** | **L3** | `l1_integration_test.cpp`, `h2_l2_integration_test.cpp`, and `h2_l3_integration_test.cpp` exercise ODBC → one OJP server → H2. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
 | SQL Server | **L2** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
@@ -50,6 +51,13 @@ equivalent in the currently implemented ODBC parameter mapping. The ODBC API
 has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
 identities are read with database SQL rather than a driver-specific
 generated-keys API.
+
+The H2 L3 suite retrieves 1,200 ordered rows through the server-streaming query
+protocol, checks result metadata and end-of-result behavior, and exercises
+closing a partially consumed result and reusing the statement for full and empty
+results. The client consumes every `executeQuery` stream and closes its
+server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`. The
+client also uses `fetchNextRows` when the server marks a result as row-by-row.
 
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:
@@ -88,7 +96,7 @@ driver, the client decodes result bytes that match this layout exactly as
 decimal text and returns other bytes as binary.
 
 Transactions, output parameters, wide-character ODBC entry points, complete
-metadata discovery, LOBs, pagination, session affinity, multinode routing,
+metadata discovery, LOBs, configurable fetch-size pagination, session affinity, multinode routing,
 health checking, and failover are not implemented. Use autocommit mode. The
 client uses one gRPC channel per ODBC connection and a process-stable client
 UUID.
@@ -118,9 +126,8 @@ In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
 the client pulls the remaining rows with `fetchNextRows`. Earlier versions
 returned only the first row.
 
-Spec rules that belong to levels above L2 and are not implemented:
+Spec rules that belong to levels above L3 and are not implemented:
 
-- **L3:** pagination options beyond row-by-row fetching.
 - **L5:** `createLob` and `readLob`.
 - **L4 and L6:** transactions and session-affinity routing.
 - **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),

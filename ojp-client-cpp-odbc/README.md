@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2 for H2 and SQL Server**, and **L3 for H2** from the
+**L2 for H2 and SQL Server**, and **L3 for H2 and SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,8 +11,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L3 for H2; L2 for SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 also covers typed parameters, multi-block result streaming, and result-set lifecycle. |
+| Highest implemented level | **L3 for H2 and SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and SQL Server cover typed parameters, multi-block result streaming, row-by-row binary result streaming, and result-set lifecycle. |
 
 ### Current test-proven coverage by database
 
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L3** | `l1_integration_test.cpp`, `h2_l2_integration_test.cpp`, and `h2_l3_integration_test.cpp` exercise ODBC → one OJP server → H2. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L2** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
+| SQL Server | **L3** | `l1_integration_test.cpp`, `sqlserver_l2_integration_test.cpp`, and `sqlserver_l3_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -52,12 +52,14 @@ has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
 identities are read with database SQL rather than a driver-specific
 generated-keys API.
 
-The H2 L3 suite retrieves 10,001 ordered rows through the server-streaming query
-protocol, checks result metadata and end-of-result behavior, and exercises
-closing a partially consumed result and reusing the statement for full and empty
-results. The client consumes every `executeQuery` stream and closes its
-server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`. The
-client also uses `fetchNextRows` when the server marks a result as row-by-row.
+The H2 and SQL Server L3 suites retrieve 10,001 ordered rows through the
+server-streaming query protocol, check result metadata and end-of-result
+behavior, and exercise closing a partially consumed result and reusing the
+statement for full and empty results. The SQL Server suite also returns multiple
+`VARBINARY` rows, exercising the server's row-by-row result mode and
+`fetchNextRows` pagination. The client consumes every `executeQuery` stream and
+closes its server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`.
+The client also uses `fetchNextRows` when the server marks a result as row-by-row.
 
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:

@@ -1884,13 +1884,15 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
             return SQL_SUCCESS;
         }
         std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
-        const auto result =
-            get_transaction_isolation(target, target, static_cast<SQLUINTEGER*>(value));
+        SQLULEN isolation = 0;
+        const auto result = get_transaction_isolation(target, target, &isolation);
         if (!SQL_SUCCEEDED(result)) {
             return result;
         }
+        const auto isolation_value = static_cast<SQLUINTEGER>(isolation);
+        std::memcpy(value, &isolation_value, sizeof(isolation_value));
         if (output_length != nullptr) {
-            *output_length = static_cast<SQLSMALLINT>(sizeof(SQLUINTEGER));
+            *output_length = static_cast<SQLSMALLINT>(sizeof(isolation_value));
         }
         return SQL_SUCCESS;
     }

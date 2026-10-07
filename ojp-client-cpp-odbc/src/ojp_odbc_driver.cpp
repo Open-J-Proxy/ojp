@@ -3,9 +3,6 @@
 
 #include "StatementService.grpc.pb.h"
 
-#include <google/protobuf/descriptor.h>
-#include <google/protobuf/message.h>
-
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -35,6 +32,8 @@ using com::openjproxy::grpc::ParameterValue;
 using com::openjproxy::grpc::SessionInfo;
 using com::openjproxy::grpc::StatementRequest;
 using com::openjproxy::grpc::StatementService;
+
+constexpr char kRowByRowMode[] = "RESULT_SET_ROW_BY_ROW_MODE";
 
 struct Diagnostic {
     std::string state = "HY000";
@@ -107,37 +106,6 @@ struct ParsedConnectionString {
     std::map<std::string, std::string> values;
     std::string error;
 };
-
-void set_string_field(google::protobuf::Message* message, const std::string& name,
-                      const std::string& value) {
-    const auto* field = message->GetDescriptor()->FindFieldByName(name);
-    if (field != nullptr && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_STRING) {
-        message->GetReflection()->SetString(message, field, value);
-    }
-}
-
-std::string get_string_field(const google::protobuf::Message& message, const std::string& name) {
-    const auto* field = message.GetDescriptor()->FindFieldByName(name);
-    if (field == nullptr || field->cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_STRING) {
-        return {};
-    }
-    return message.GetReflection()->GetString(message, field);
-}
-
-std::int32_t get_int32_field(const google::protobuf::Message& message, const std::string& name) {
-    const auto* field = message.GetDescriptor()->FindFieldByName(name);
-    if (field == nullptr || field->cpp_type() != google::protobuf::FieldDescriptor::CPPTYPE_INT32) {
-        return 0;
-    }
-    return message.GetReflection()->GetInt32(message, field);
-}
-
-void set_bool_field(google::protobuf::Message* message, const std::string& name, bool value) {
-    const auto* field = message->GetDescriptor()->FindFieldByName(name);
-    if (field != nullptr && field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_BOOL) {
-        message->GetReflection()->SetBool(message, field, value);
-    }
-}
 
 ParsedConnectionString parse_connection_string(const std::string& input) {
     ParsedConnectionString parsed;
@@ -262,9 +230,9 @@ SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
             item.first.find("sqlerrorresponse-bin") != std::string::npos) {
             com::openjproxy::grpc::SqlErrorResponse response;
             if (response.ParseFromString(std::string(item.second.data(), item.second.size()))) {
-                sql_state = get_string_field(response, "sqlState");
-                message = get_string_field(response, "reason");
-                native_error = get_int32_field(response, "vendorCode");
+                sql_state = response.sqlstate();
+                message = response.reason();
+                native_error = response.vendorcode();
                 break;
             }
         }
@@ -278,93 +246,138 @@ SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
     return fail(handle, std::move(message), std::move(sql_state), native_error);
 }
 
-bool decode_value(const ParameterValue& value, Cell* output) {
-    const auto* field = value.GetReflection()->GetOneofFieldDescriptor(
-        value, value.GetDescriptor()->oneof_decl(0));
-    if (field == nullptr) {
-        *output = std::monostate{};
-        return true;
+std::string format_fraction(std::int32_t nanos) {
+    if (nanos == 0) {
+        return {};
     }
-    const auto* reflection = value.GetReflection();
-    switch (field->cpp_type()) {
-        case google::protobuf::FieldDescriptor::CPPTYPE_BOOL:
-            if (field->name() == "is_null" && reflection->GetBool(value, field)) {
-                *output = std::monostate{};
+    std::ostringstream fraction;
+    fraction << std::setfill('0') << std::setw(9) << nanos;
+    std::string digits = fraction.str();
+    while (!digits.empty() && digits.back() == '0') {
+        digits.pop_back();
+    }
+    return "." + digits;
+}
+
+std::uint32_t read_big_endian_32(const std::string& bytes, std::size_t offset) {
+    std::uint32_t number = 0;
+    for (std::size_t index = 0; index < 4; ++index) {
+        number = (number << 8) | static_cast<unsigned char>(bytes[offset + index]);
+    }
+    return number;
+}
+
+// The server sends BigDecimal results in the BigDecimalWire format (documents/protocol/
+// BIGDECIMAL_WIRE_FORMAT.md): 0x01, int32 length, unscaled UTF-8 digits, int32 scale.
+// Like the JDBC driver, which decodes untyped result bytes with BigDecimalWire, the
+// value is only treated as a decimal when the bytes match that layout exactly.
+bool decode_big_decimal_wire(const std::string& bytes, std::string* decimal) {
+    if (bytes.size() < 10 || bytes[0] != '\1') {
+        return false;
+    }
+    const auto length = read_big_endian_32(bytes, 1);
+    if (length == 0 || bytes.size() != 9 + static_cast<std::size_t>(length)) {
+        return false;
+    }
+    std::string digits = bytes.substr(5, length);
+    const bool negative = digits[0] == '-';
+    if (negative) {
+        digits.erase(0, 1);
+    }
+    if (digits.empty() || digits.find_first_not_of("0123456789") != std::string::npos) {
+        return false;
+    }
+    const auto scale = static_cast<std::int32_t>(read_big_endian_32(bytes, 5 + length));
+    if (scale > 1000 || scale < -1000) {
+        return false;
+    }
+    if (scale < 0) {
+        digits.append(static_cast<std::size_t>(-scale), '0');
+    } else if (scale > 0) {
+        if (digits.size() <= static_cast<std::size_t>(scale)) {
+            digits.insert(0, static_cast<std::size_t>(scale) + 1 - digits.size(), '0');
+        }
+        digits.insert(digits.size() - static_cast<std::size_t>(scale), 1, '.');
+    }
+    *decimal = negative ? "-" + digits : digits;
+    return true;
+}
+
+bool decode_value(const ParameterValue& value, Cell* output) {
+    switch (value.value_case()) {
+        case ParameterValue::VALUE_NOT_SET:
+        case ParameterValue::kIsNull:
+            *output = std::monostate{};
+            return true;
+        case ParameterValue::kBoolValue:
+            *output = value.bool_value();
+            return true;
+        case ParameterValue::kIntValue:
+            *output = value.int_value();
+            return true;
+        case ParameterValue::kLongValue:
+            *output = value.long_value();
+            return true;
+        case ParameterValue::kFloatValue:
+            *output = static_cast<double>(value.float_value());
+            return true;
+        case ParameterValue::kDoubleValue:
+            *output = value.double_value();
+            return true;
+        case ParameterValue::kStringValue:
+            *output = value.string_value();
+            return true;
+        case ParameterValue::kBytesValue: {
+            const auto& bytes = value.bytes_value();
+            std::string decimal;
+            if (decode_big_decimal_wire(bytes, &decimal)) {
+                *output = decimal;
             } else {
-                *output = reflection->GetBool(value, field);
-            }
-            return true;
-        case google::protobuf::FieldDescriptor::CPPTYPE_INT32:
-            *output = reflection->GetInt32(value, field);
-            return true;
-        case google::protobuf::FieldDescriptor::CPPTYPE_INT64:
-            *output = reflection->GetInt64(value, field);
-            return true;
-        case google::protobuf::FieldDescriptor::CPPTYPE_FLOAT:
-            *output = static_cast<double>(reflection->GetFloat(value, field));
-            return true;
-        case google::protobuf::FieldDescriptor::CPPTYPE_DOUBLE:
-            *output = reflection->GetDouble(value, field);
-            return true;
-        case google::protobuf::FieldDescriptor::CPPTYPE_STRING: {
-            const auto contents = reflection->GetString(value, field);
-            if (field->type() == google::protobuf::FieldDescriptor::TYPE_BYTES) {
-                *output = std::vector<std::uint8_t>(contents.begin(), contents.end());
-            } else {
-                *output = contents;
+                *output = std::vector<std::uint8_t>(bytes.begin(), bytes.end());
             }
             return true;
         }
-        case google::protobuf::FieldDescriptor::CPPTYPE_MESSAGE: {
-            const auto& message = reflection->GetMessage(value, field);
-            const auto* message_reflection = message.GetReflection();
-            auto integer = [&message, message_reflection](const char* name) {
-                const auto* member = message.GetDescriptor()->FindFieldByName(name);
-                return member == nullptr ? 0 : message_reflection->GetInt32(message, member);
-            };
+        case ParameterValue::kUrlValue:
+            *output = value.url_value().value();
+            return true;
+        case ParameterValue::kRowidValue:
+            *output = value.rowid_value().value();
+            return true;
+        case ParameterValue::kUuidValue:
+            *output = value.uuid_value().value();
+            return true;
+        case ParameterValue::kBigintegerValue:
+            *output = value.biginteger_value().value();
+            return true;
+        case ParameterValue::kRowidlifetimeValue:
+            *output = value.rowidlifetime_value().value();
+            return true;
+        case ParameterValue::kDateValue: {
+            const auto& date = value.date_value();
             std::ostringstream text;
-            auto append_fraction = [&text](int nanos) {
-                if (nanos == 0) {
-                    return;
-                }
-                std::ostringstream fraction;
-                fraction << std::setfill('0') << std::setw(9) << nanos;
-                std::string digits = fraction.str();
-                while (!digits.empty() && digits.back() == '0') {
-                    digits.pop_back();
-                }
-                text << "." << digits;
-            };
-            if (field->name() == "date_value") {
-                text << std::setfill('0') << std::setw(4) << integer("year") << "-"
-                     << std::setw(2) << integer("month") << "-"
-                     << std::setw(2) << integer("day");
-            } else if (field->name() == "time_value") {
-                text << std::setfill('0') << std::setw(2) << integer("hours") << ":"
-                     << std::setw(2) << integer("minutes") << ":"
-                     << std::setw(2) << integer("seconds");
-                append_fraction(integer("nanos"));
-            } else if (field->name() == "timestamp_value") {
-                const auto* instant_field = message.GetDescriptor()->FindFieldByName("instant");
-                if (instant_field == nullptr) {
-                    return false;
-                }
-                const auto& instant = message_reflection->GetMessage(message, instant_field);
-                const auto* instant_reflection = instant.GetReflection();
-                const auto* seconds_field = instant.GetDescriptor()->FindFieldByName("seconds");
-                const auto* nanos_field = instant.GetDescriptor()->FindFieldByName("nanos");
-                const auto seconds = instant_reflection->GetInt64(instant, seconds_field);
-                const auto nanos = instant_reflection->GetInt32(instant, nanos_field);
-                const std::time_t timestamp = static_cast<std::time_t>(seconds);
-                std::tm utc_time{};
-                if (gmtime_r(&timestamp, &utc_time) == nullptr) {
-                    return false;
-                }
-                text << std::put_time(&utc_time, "%Y-%m-%d %H:%M:%S");
-                append_fraction(nanos);
-            } else {
+            text << std::setfill('0') << std::setw(4) << date.year() << "-"
+                 << std::setw(2) << date.month() << "-" << std::setw(2) << date.day();
+            *output = text.str();
+            return true;
+        }
+        case ParameterValue::kTimeValue: {
+            const auto& time = value.time_value();
+            std::ostringstream text;
+            text << std::setfill('0') << std::setw(2) << time.hours() << ":"
+                 << std::setw(2) << time.minutes() << ":" << std::setw(2) << time.seconds()
+                 << format_fraction(time.nanos());
+            *output = text.str();
+            return true;
+        }
+        case ParameterValue::kTimestampValue: {
+            const auto& instant = value.timestamp_value().instant();
+            const std::time_t timestamp = static_cast<std::time_t>(instant.seconds());
+            std::tm utc_time{};
+            if (gmtime_r(&timestamp, &utc_time) == nullptr) {
                 return false;
             }
+            std::ostringstream text;
+            text << std::put_time(&utc_time, "%Y-%m-%d %H:%M:%S") << format_fraction(instant.nanos());
             *output = text.str();
             return true;
         }
@@ -538,22 +551,47 @@ bool is_query_sql(const std::string& sql) {
            keyword == "TABLE" || keyword == "SHOW" || keyword == "EXPLAIN";
 }
 
+// OJP binds NULL parameters with PreparedStatement.setNull, which needs a java.sql.Types code.
+std::int32_t jdbc_null_type(SQLSMALLINT sql_type) {
+    switch (sql_type) {
+        case SQL_CHAR:
+        case SQL_VARCHAR:
+        case SQL_LONGVARCHAR:
+        case SQL_WVARCHAR:
+        case SQL_DECIMAL:
+        case SQL_NUMERIC:
+        case SQL_SMALLINT:
+        case SQL_INTEGER:
+        case SQL_REAL:
+        case SQL_FLOAT:
+        case SQL_DOUBLE:
+        case SQL_BIT:
+        case SQL_TINYINT:
+        case SQL_BIGINT:
+        case SQL_BINARY:
+        case SQL_VARBINARY:
+        case SQL_LONGVARBINARY:
+        case SQL_TYPE_DATE:
+        case SQL_TYPE_TIME:
+        case SQL_TYPE_TIMESTAMP:
+            return sql_type;  // ODBC and java.sql.Types share these codes.
+        case SQL_WCHAR: return -15;         // Types.NCHAR
+        case SQL_WLONGVARCHAR: return -16;  // Types.LONGNVARCHAR
+        case SQL_GUID: return 1;            // Types.CHAR
+        default: return 0;                  // Types.NULL
+    }
+}
+
 bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
                          SQLUSMALLINT parameter_index, Diagnostic* error) {
     const auto* data = static_cast<const std::uint8_t*>(bound.value);
     SQLLEN length = bound.buffer_length;
+    if ((bound.indicator != nullptr && *bound.indicator == SQL_NULL_DATA) || data == nullptr) {
+        value->set_int_value(jdbc_null_type(bound.parameter_type));
+        return true;
+    }
     if (bound.indicator != nullptr) {
         length = *bound.indicator;
-        if (length == SQL_NULL_DATA) {
-            value->GetReflection()->SetBool(value,
-                value->GetDescriptor()->FindFieldByName("is_null"), true);
-            return true;
-        }
-    }
-    if (data == nullptr) {
-        value->GetReflection()->SetBool(value,
-            value->GetDescriptor()->FindFieldByName("is_null"), true);
-        return true;
     }
     SQLSMALLINT c_type = bound.value_type;
     if (c_type == SQL_C_DEFAULT) {
@@ -573,8 +611,6 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
             default: c_type = SQL_C_CHAR; break;
         }
     }
-    const auto* descriptor = value->GetDescriptor();
-    const auto* reflection = value->GetReflection();
     auto set_decimal = [&](const std::string& decimal_text) {
         std::string digits;
         int scale = 0;
@@ -621,43 +657,29 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         for (int shift = 24; shift >= 0; shift -= 8) {
             wire.push_back(static_cast<char>((wire_scale >> shift) & 0xff));
         }
-        reflection->SetString(value, descriptor->FindFieldByName("bytes_value"), wire);
+        value->set_bytes_value(wire);
         return true;
-    };
-    auto set_message_integer = [](google::protobuf::Message* message, const char* name,
-                                  std::int32_t number) {
-        const auto* field = message->GetDescriptor()->FindFieldByName(name);
-        if (field != nullptr) {
-            message->GetReflection()->SetInt32(message, field, number);
-        }
     };
     auto set_temporal_type = [&](SQLSMALLINT temporal_type) {
         if (temporal_type == SQL_C_TYPE_DATE) {
             const auto* date = reinterpret_cast<const SQL_DATE_STRUCT*>(data);
-            auto* date_value = reflection->MutableMessage(
-                value, descriptor->FindFieldByName("date_value"));
-            set_message_integer(date_value, "year", date->year);
-            set_message_integer(date_value, "month", date->month);
-            set_message_integer(date_value, "day", date->day);
+            auto* date_value = value->mutable_date_value();
+            date_value->set_year(date->year);
+            date_value->set_month(date->month);
+            date_value->set_day(date->day);
             return true;
         }
         if (temporal_type == SQL_C_TYPE_TIME) {
             const auto* time = reinterpret_cast<const SQL_TIME_STRUCT*>(data);
-            auto* time_value = reflection->MutableMessage(
-                value, descriptor->FindFieldByName("time_value"));
-            set_message_integer(time_value, "hours", time->hour);
-            set_message_integer(time_value, "minutes", time->minute);
-            set_message_integer(time_value, "seconds", time->second);
+            auto* time_value = value->mutable_time_value();
+            time_value->set_hours(time->hour);
+            time_value->set_minutes(time->minute);
+            time_value->set_seconds(time->second);
             return true;
         }
         if (temporal_type == SQL_C_TYPE_TIMESTAMP) {
             const auto* timestamp = reinterpret_cast<const SQL_TIMESTAMP_STRUCT*>(data);
-            auto* timestamp_value = reflection->MutableMessage(
-                value, descriptor->FindFieldByName("timestamp_value"));
-            const auto* instant_field =
-                timestamp_value->GetDescriptor()->FindFieldByName("instant");
-            auto* instant = timestamp_value->GetReflection()->MutableMessage(
-                timestamp_value, instant_field);
+            auto* timestamp_value = value->mutable_timestamp_value();
             const std::int64_t year = timestamp->year - (timestamp->month <= 2 ? 1 : 0);
             const std::int64_t era = (year >= 0 ? year : year - 399) / 400;
             const auto year_of_era = static_cast<std::uint32_t>(year - era * 400);
@@ -670,13 +692,11 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
             const std::int64_t days = era * 146097 + day_of_era - 719468;
             const std::int64_t seconds = days * 86400 +
                 timestamp->hour * 3600 + timestamp->minute * 60 + timestamp->second;
-            set_message_integer(instant, "nanos", static_cast<std::int32_t>(timestamp->fraction));
-            const auto* seconds_field = instant->GetDescriptor()->FindFieldByName("seconds");
-            instant->GetReflection()->SetInt64(instant, seconds_field, seconds);
-            set_string_field(timestamp_value, "timezone", "UTC");
-            const auto* original_type =
-                timestamp_value->GetDescriptor()->FindFieldByName("original_type");
-            timestamp_value->GetReflection()->SetEnumValue(timestamp_value, original_type, 1);
+            auto* instant = timestamp_value->mutable_instant();
+            instant->set_seconds(seconds);
+            instant->set_nanos(static_cast<std::int32_t>(timestamp->fraction));
+            timestamp_value->set_timezone("UTC");
+            timestamp_value->set_original_type(com::openjproxy::grpc::TEMPORAL_TYPE_TIMESTAMP);
             return true;
         }
         return false;
@@ -691,9 +711,7 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         if (bound.parameter_type == SQL_DECIMAL || bound.parameter_type == SQL_NUMERIC) {
             return set_decimal(std::string(reinterpret_cast<const char*>(data), text_length));
         }
-        const auto* field = descriptor->FindFieldByName("string_value");
-        reflection->SetString(value, field,
-            std::string(reinterpret_cast<const char*>(data), text_length));
+        value->set_string_value(std::string(reinterpret_cast<const char*>(data), text_length));
         return true;
     }
     if (c_type == SQL_C_NUMERIC) {
@@ -731,44 +749,31 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         c_type == SQL_C_TYPE_TIMESTAMP) {
         return set_temporal_type(c_type);
     }
-    auto set_integer = [&](const std::string& field_name, std::int64_t number) {
-        const auto* field = descriptor->FindFieldByName(field_name);
-        if (field->cpp_type() == google::protobuf::FieldDescriptor::CPPTYPE_INT32) {
-            reflection->SetInt32(value, field, static_cast<std::int32_t>(number));
-        } else {
-            reflection->SetInt64(value, field, number);
-        }
-    };
     switch (c_type) {
         case SQL_C_STINYINT:
-            set_integer("int_value", *reinterpret_cast<const SQLSCHAR*>(data));
+            value->set_int_value(*reinterpret_cast<const SQLSCHAR*>(data));
             return true;
         case SQL_C_SSHORT:
-            set_integer("int_value", *reinterpret_cast<const SQLSMALLINT*>(data));
+            value->set_int_value(*reinterpret_cast<const SQLSMALLINT*>(data));
             return true;
         case SQL_C_SLONG:
-            set_integer("int_value", *reinterpret_cast<const SQLINTEGER*>(data));
+            value->set_int_value(*reinterpret_cast<const SQLINTEGER*>(data));
             return true;
         case SQL_C_SBIGINT:
-            set_integer("long_value", *reinterpret_cast<const SQLBIGINT*>(data));
+            value->set_long_value(*reinterpret_cast<const SQLBIGINT*>(data));
             return true;
         case SQL_C_FLOAT:
-            reflection->SetFloat(value, descriptor->FindFieldByName("float_value"),
-                                 *reinterpret_cast<const float*>(data));
+            value->set_float_value(*reinterpret_cast<const float*>(data));
             return true;
         case SQL_C_DOUBLE:
-            reflection->SetDouble(value, descriptor->FindFieldByName("double_value"),
-                                  *reinterpret_cast<const double*>(data));
+            value->set_double_value(*reinterpret_cast<const double*>(data));
             return true;
         case SQL_C_BIT:
-            reflection->SetBool(value, descriptor->FindFieldByName("bool_value"),
-                                *reinterpret_cast<const SQLCHAR*>(data) != 0);
+            value->set_bool_value(*reinterpret_cast<const SQLCHAR*>(data) != 0);
             return true;
         case SQL_C_BINARY: {
-            const auto* field = descriptor->FindFieldByName("bytes_value");
             const auto byte_count = static_cast<std::size_t>(std::max<SQLLEN>(0, length));
-            reflection->SetString(value, field,
-                std::string(reinterpret_cast<const char*>(data), byte_count));
+            value->set_bytes_value(std::string(reinterpret_cast<const char*>(data), byte_count));
             return true;
         }
         default:
@@ -780,29 +785,52 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
 }
 
 ParameterTypeProto parameter_type(const BoundParameter& bound) {
+    using namespace com::openjproxy::grpc;
     if (bound.value == nullptr ||
         (bound.indicator != nullptr && *bound.indicator == SQL_NULL_DATA)) {
-        return static_cast<ParameterTypeProto>(0); // PT_NULL
+        return PT_NULL;
     }
     switch (bound.parameter_type) {
-        case SQL_TINYINT: return static_cast<ParameterTypeProto>(2);   // PT_BYTE
-        case SQL_SMALLINT: return static_cast<ParameterTypeProto>(3);  // PT_SHORT
-        case SQL_INTEGER: return static_cast<ParameterTypeProto>(4);   // PT_INT
-        case SQL_BIGINT: return static_cast<ParameterTypeProto>(5);    // PT_LONG
-        case SQL_REAL: return static_cast<ParameterTypeProto>(6);      // PT_FLOAT
+        case SQL_TINYINT: return PT_BYTE;
+        case SQL_SMALLINT: return PT_SHORT;
+        case SQL_INTEGER: return PT_INT;
+        case SQL_BIGINT: return PT_LONG;
+        case SQL_REAL: return PT_FLOAT;
         case SQL_FLOAT:
-        case SQL_DOUBLE: return static_cast<ParameterTypeProto>(7);   // PT_DOUBLE
+        case SQL_DOUBLE: return PT_DOUBLE;
         case SQL_DECIMAL:
-        case SQL_NUMERIC: return static_cast<ParameterTypeProto>(8);   // PT_BIG_DECIMAL
+        case SQL_NUMERIC: return PT_BIG_DECIMAL;
         case SQL_BINARY:
         case SQL_VARBINARY:
-        case SQL_LONGVARBINARY: return static_cast<ParameterTypeProto>(10); // PT_BYTES
-        case SQL_BIT: return static_cast<ParameterTypeProto>(1);       // PT_BOOLEAN
-        case SQL_TYPE_DATE: return static_cast<ParameterTypeProto>(11); // PT_DATE
-        case SQL_TYPE_TIME: return static_cast<ParameterTypeProto>(12); // PT_TIME
-        case SQL_TYPE_TIMESTAMP: return static_cast<ParameterTypeProto>(13); // PT_TIMESTAMP
-        default: return static_cast<ParameterTypeProto>(9);            // PT_STRING
+        case SQL_LONGVARBINARY: return PT_BYTES;
+        case SQL_BIT: return PT_BOOLEAN;
+        case SQL_TYPE_DATE: return PT_DATE;
+        case SQL_TYPE_TIME: return PT_TIME;
+        case SQL_TYPE_TIMESTAMP: return PT_TIMESTAMP;
+        default: return PT_STRING;
     }
+}
+
+// All rows are read eagerly, so the server-side result set is closed straight away
+// (CLIENT_SPEC_AI.md section 4.5 rule 2).
+SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& result_set_uuid,
+                           StatementHandle* statement) {
+    com::openjproxy::grpc::CallResourceRequest request;
+    request.mutable_session()->CopyFrom(connection->session);
+    request.set_resourcetype(com::openjproxy::grpc::RES_RESULT_SET);
+    request.set_resourceuuid(result_set_uuid);
+    request.mutable_target()->set_calltype(com::openjproxy::grpc::CALL_CLOSE);
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    com::openjproxy::grpc::CallResourceResponse response;
+    const auto status = connection->stub->callResource(&context, request, &response);
+    if (!status.ok()) {
+        return fail_grpc(statement, status, context);
+    }
+    if (response.has_session()) {
+        connection->session.CopyFrom(response.session());
+    }
+    return SQL_SUCCESS;
 }
 
 SQLRETURN execute_statement(StatementHandle* statement) {
@@ -841,18 +869,23 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     }
 
     if (is_query_sql(statement->sql)) {
-        grpc::ClientContext context;
-        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-        auto reader = connection->stub->executeQuery(&context, request);
-        OpResult result;
-        while (reader->Read(&result)) {
+        std::string result_set_uuid;
+        bool row_by_row = false;
+        bool decoded_all = true;
+        auto append_result = [&](const OpResult& result) {
             if (result.has_session()) {
                 connection->session.CopyFrom(result.session());
             }
+            if (result.flag() == kRowByRowMode) {
+                row_by_row = true;
+            }
             if (!result.has_query_result()) {
-                continue;
+                return std::size_t{0};
             }
             const OpQueryResultProto& query = result.query_result();
+            if (result_set_uuid.empty()) {
+                result_set_uuid = query.resultsetuuid();
+            }
             if (statement->columns.empty()) {
                 statement->columns.assign(query.labels().begin(), query.labels().end());
             }
@@ -862,16 +895,52 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                 for (const auto& column : row.columns()) {
                     Cell cell;
                     if (!decode_value(column, &cell)) {
-                        return fail(statement, "OJP returned a result type unsupported by the ODBC client", "HY000");
+                        decoded_all = false;
                     }
                     decoded.push_back(std::move(cell));
                 }
                 statement->rows.push_back(std::move(decoded));
             }
+            return static_cast<std::size_t>(query.rows_size());
+        };
+
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        auto reader = connection->stub->executeQuery(&context, request);
+        OpResult result;
+        while (reader->Read(&result)) {
+            append_result(result);
         }
         const auto status = reader->Finish();
         if (!status.ok()) {
             return fail_grpc(statement, status, context);
+        }
+        // SQL Server and DB2 send one row at a time when the result has binary or LOB
+        // columns; the remaining rows must be pulled with fetchNextRows.
+        while (row_by_row && !result_set_uuid.empty()) {
+            com::openjproxy::grpc::ResultSetFetchRequest fetch;
+            fetch.mutable_session()->CopyFrom(connection->session);
+            fetch.set_resultsetuuid(result_set_uuid);
+            fetch.set_size(1);
+            grpc::ClientContext fetch_context;
+            fetch_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            OpResult next;
+            const auto fetch_status = connection->stub->fetchNextRows(&fetch_context, fetch, &next);
+            if (!fetch_status.ok()) {
+                return fail_grpc(statement, fetch_status, fetch_context);
+            }
+            if (append_result(next) == 0) {
+                break;
+            }
+        }
+        if (!result_set_uuid.empty()) {
+            const auto close_result = close_result_set(connection, result_set_uuid, statement);
+            if (!SQL_SUCCEEDED(close_result)) {
+                return close_result;
+            }
+        }
+        if (!decoded_all) {
+            return fail(statement, "OJP returned a result type unsupported by the ODBC client", "HY000");
         }
         statement->has_result_set = true;
         statement->row_count = static_cast<SQLLEN>(statement->rows.size());
@@ -933,8 +1002,8 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     details.set_url(connection->url);
     details.set_user(connection->user);
     details.set_password(connection->password);
-    set_string_field(&details, "clientUUID", connection->client_uuid);
-    set_bool_field(&details, "isXA", false);
+    details.set_clientuuid(connection->client_uuid);
+    details.set_isxa(false);
 
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
@@ -963,15 +1032,16 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     com::openjproxy::grpc::SessionTerminationStatus response;
     const auto status = connection->stub->terminateSession(&context, connection->session, &response);
+    // terminateSession is sent exactly once; the connection is unusable even if it fails.
+    connection->connected = false;
+    connection->stub.reset();
+    connection->channel.reset();
     if (!status.ok()) {
         return fail_grpc(connection, status, context);
     }
     if (!response.terminated()) {
         return fail(connection, "OJP server did not terminate the session", "HY000");
     }
-    connection->connected = false;
-    connection->stub.reset();
-    connection->channel.reset();
     return SQL_SUCCESS;
 }
 

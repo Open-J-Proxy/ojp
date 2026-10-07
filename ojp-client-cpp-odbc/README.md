@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**
-and **L2 for H2** from the [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
+and **L2 for H2 and SQL Server** from the [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
 
@@ -10,8 +10,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L2 for H2; L1 for PostgreSQL and SQL Server** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 also has typed decimal/date/time/timestamp parameters and basic result metadata coverage. |
+| Highest implemented level | **L2 for H2 and SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and SQL Server also have typed parameter, generated identity, and basic result metadata coverage. |
 
 ### Current test-proven coverage by database
 
@@ -19,7 +19,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L2** | `l1_integration_test.cpp` and `h2_l2_integration_test.cpp` exercise ODBC → one OJP server → H2. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → SQL Server. |
+| SQL Server | **L2** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -36,7 +36,9 @@ ODBC scalar types, and SQL error diagnostics. The implementation supports
 `SQLDriverConnect`, `SQLPrepare`/`SQLExecute`, `SQLBindParameter` for input
 parameters, `SQLExecDirect`, forward-only `SQLFetch`/`SQLGetData`, and affected
 row counts. The current parameter/value mapping covers null, booleans, signed
-integers, floats, doubles, strings, and binary values. Disable application-side
+integers, floats, doubles, decimals, dates, times, timestamps, strings, and
+binary values. NULL parameters are sent with the `java.sql.Types` code matching
+the bound ODBC SQL type, because the server binds them with `setNull`. Disable application-side
 connection pooling when using OJP.
 
 The H2 L2 suite covers typed decimal, temporal, integer, floating-point,
@@ -49,11 +51,81 @@ has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
 identities are read with database SQL rather than a driver-specific
 generated-keys API.
 
+The SQL Server L2 suite mirrors the types in the JDBC driver's
+`SQLServerMultipleTypesIntegrationTest`:
+
+| SQL Server type (JDBC test) | ODBC binding / retrieval in the L2 suite |
+|---|---|
+| `INT`, `BIGINT`, `SMALLINT` | `SQL_C_SLONG`/`SQL_C_SBIGINT`/`SQL_C_SSHORT` parameters, read back as integers |
+| `TINYINT` (value 255) | Bound as `SQL_C_SLONG`/`SQL_INTEGER`, like the JDBC test's `setInt`; SQL Server `TINYINT` is unsigned, so 255 does not fit `SQL_C_STINYINT` |
+| `BIT` | `SQL_C_BIT` |
+| `FLOAT`, `REAL` | `SQL_C_DOUBLE`, `SQL_C_FLOAT` |
+| `DECIMAL(10, 2)`, `MONEY`, `SMALLMONEY` | `SQL_C_NUMERIC` and decimal text parameters, read back directly as decimal text |
+| `NVARCHAR`, `NTEXT`, `TEXT`, `NVARCHAR(MAX)`, `VARCHAR(MAX)` | `SQL_C_CHAR` with UTF-8 text, including Chinese characters and an emoji, and a 50 KB value |
+| `VARBINARY(1)`, `VARBINARY(4)`, `VARBINARY(MAX)` | `SQL_C_BINARY`, including a 10,000-byte value, and a multi-row `VARBINARY` query (the server sends these rows one at a time) |
+| `DATE`, `TIME`, `DATETIME2`, `SMALLDATETIME` | `SQL_C_TYPE_DATE`, `SQL_C_TYPE_TIME`, `SQL_C_TYPE_TIMESTAMP` |
+| `DATETIMEOFFSET` (`OffsetDateTime`, `OffsetTime`, `Instant`) | UTC timestamp structs and offset text such as `2024-12-01 10:10:10 +02:00`; values are read back as UTC, and a text `CAST` confirms the stored offset |
+| `UNIQUEIDENTIFIER` | Generated with `NEWID()` and read back as GUID text |
+| `IMAGE`, `XML`, `GEOMETRY`, `GEOGRAPHY`, `HIERARCHYID`, `SQL_VARIANT` | Created and returned as `SQL_NULL_DATA`, as in the JDBC test, which never writes them either |
+| NULL values | Typed NULL parameters plus omitted columns returned as `SQL_NULL_DATA` |
+
+These JDBC cases are not ported, and here is why:
+
+- **Java-specific types.** `LocalDate`, `LocalTime`, and `LocalDateTime` versus
+  `java.sql.Date`, `Time`, and `Timestamp`: ODBC has one C struct per SQL type,
+  so each pair maps to the same `DATE`, `TIME`, or `DATETIME2` binding.
+- **Arrays.** `createArrayOf` has no ODBC equivalent.
+- **Timezone-aware ODBC types.** The client does not implement SQL Server's
+  driver-specific `SQL_SS_TIMESTAMPOFFSET` C type. Offsets are therefore sent as
+  text.
+
+Generated SQL Server identities are read with `IDENT_CURRENT` for the table
+that the run creates.
+
+Decimal results arrive as BigDecimalWire bytes
+([format](../documents/protocol/BIGDECIMAL_WIRE_FORMAT.md)). Like the JDBC
+driver, the client decodes result bytes that match this layout exactly as
+decimal text and returns other bytes as binary.
+
 Transactions, output parameters, wide-character ODBC entry points, complete
 metadata discovery, LOBs, pagination, session affinity, multinode routing,
 health checking, and failover are not implemented. Use autocommit mode. The
 client uses one gRPC channel per ODBC connection and a process-stable client
 UUID.
+
+## Conformance with `CLIENT_SPEC_AI.md`
+
+The same driver code serves H2, PostgreSQL, and SQL Server, so these points
+apply to all three databases.
+
+Implemented rules:
+
+| Spec rule | Implementation |
+|---|---|
+| 4.1.1 process-stable UUID v4 `clientUUID` | Generated once per process |
+| 4.2 `ConnectionDetails` | `url`, `user`, `password`, `clientUUID`, `isXA=false` |
+| 4.3.1–4.3.2 send and replace `SessionInfo` | Sent with every request and replaced from every `executeQuery`, `executeUpdate`, `fetchNextRows`, and `callResource` response |
+| 4.3.4 `terminateSession` exactly once | Sent once by `SQLDisconnect`; the connection is unusable afterwards, even if the call fails |
+| 4.4.1 empty `statementUUID` for new statements | Always sent empty; prepared statements are not reused on the server |
+| 4.4.2 1-based parameter indexes | ODBC parameter numbers are passed through |
+| 4.4.3 `PT_BIG_DECIMAL` as BigDecimalWire `bytes_value` | Decimal parameters are encoded, and decimal results decoded, in this format |
+| 4.4.4 `StringValue` wrapper fields | `uuid_value`, `biginteger_value`, `url_value`, `rowid_value`, and `rowidlifetime_value` results are decoded as text |
+| 4.4.5 `PT_NULL` with a `java.sql.Types` code in `int_value` | Derived from the bound ODBC SQL type; unknown types send `0` (`Types.NULL`) |
+| 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
+| Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
+
+In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
+the client pulls the remaining rows with `fetchNextRows`. Earlier versions
+returned only the first row.
+
+Spec rules that belong to levels above L2 and are not implemented:
+
+- **L3:** pagination options beyond row-by-row fetching.
+- **L5:** `createLob` and `readLob`.
+- **L4 and L6:** transactions and session-affinity routing.
+- **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),
+  `connHash` caching and `NOT_FOUND` recovery (4.2), cluster health, and client
+  throttling (section 8).
 
 ## Build requirements
 
@@ -142,13 +214,16 @@ and
 They exercise the ODBC API through the Driver Manager against a running OJP
 server and the respective database. The SQL Server fixture follows the OJP JDBC
 driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
-including SQL Server's `42000` syntax-error SQLSTATE. Each test uses a unique
+including the SQLSTATE expected for the L1 suite's invalid SQL. The Microsoft
+JDBC driver reports `42S01` for this syntax error rather than the standard
+`42000`, and OJP passes it through unchanged. Each test uses a unique
 table per run and verifies connection readiness, prepared INSERT/SELECT/UPDATE,
 DELETE, row counts, result values, empty results, SQL error diagnostics, and
 session termination. The separate H2 L2 suite reuses the H2 L1 connection
 fixture and covers typed parameters, generated identity retrieval, and basic
-result metadata. Keeping L2 H2-specific avoids adding database-dependent
-branches to the shared L1 executable.
+result metadata. The SQL Server L2 suite does the same using the SQL Server
+fixture. The L2 suites are database-specific, so the shared L1 executable does
+not need database-dependent branches.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -171,4 +246,6 @@ enabled, a missing endpoint or unavailable server fails the test instead of
 silently skipping it.
 
 The C++ ODBC H2 workflow job runs both `OjpOdbcH2L1Integration` and
-`OjpOdbcH2L2Integration` against the same OJP server.
+`OjpOdbcH2L2Integration` against the same OJP server. The C++ ODBC SQL Server
+workflow job runs both `OjpOdbcSqlServerL1Integration` and
+`OjpOdbcSqlServerL2Integration`.

@@ -156,6 +156,10 @@ cmake --build ojp-client-cpp-odbc/build
 The CMake build generates C++ bindings from the shared OJP proto source in the
 build directory; generated files are not checked in.
 
+Prebuilt binaries are not published yet. See the
+[ODBC driver distribution analysis](../documents/analysis/ODBC_DRIVER_DISTRIBUTION_ANALYSIS.md)
+for the proposed per-OS delivery plan.
+
 ## Using from a C++ ODBC application
 
 Register the driver with the ODBC Driver Manager as `OJP`, then use

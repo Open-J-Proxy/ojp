@@ -207,5 +207,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-10-07  
+**Last Updated:** 2026-10-07
 **Maintained By:** OJP Core Team

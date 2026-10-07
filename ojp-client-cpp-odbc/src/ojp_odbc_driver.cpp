@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <variant>
@@ -24,15 +25,11 @@
 namespace {
 
 using com::openjproxy::grpc::ConnectionDetails;
-using com::openjproxy::grpc::CallResourceRequest;
-using com::openjproxy::grpc::CallResourceResponse;
-using com::openjproxy::grpc::CallType;
 using com::openjproxy::grpc::OpQueryResultProto;
 using com::openjproxy::grpc::OpResult;
 using com::openjproxy::grpc::ParameterProto;
 using com::openjproxy::grpc::ParameterTypeProto;
 using com::openjproxy::grpc::ParameterValue;
-using com::openjproxy::grpc::ResourceType;
 using com::openjproxy::grpc::SessionInfo;
 using com::openjproxy::grpc::StatementRequest;
 using com::openjproxy::grpc::StatementService;
@@ -69,10 +66,10 @@ struct ConnectionHandle final : HandleBase {
     std::unique_ptr<StatementService::Stub> stub;
     SessionInfo session;
     std::mutex operation_mutex;
-    std::map<std::string, std::string> savepoints;
-    SQLULEN transaction_isolation = SQL_TXN_READ_COMMITTED;
+    std::set<std::string> savepoints;
+    std::map<std::string, std::string> savepoint_names;
+    SQLULEN transaction_isolation = 0;
     bool auto_commit = true;
-    bool has_transaction_isolation = false;
     bool connected = false;
 };
 
@@ -841,198 +838,314 @@ SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& resu
     return SQL_SUCCESS;
 }
 
-SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle, ResourceType resource_type,
-                        CallType call_type, const std::string& resource_name,
-                        const std::vector<ParameterValue>& params,
-                        CallResourceResponse* response) {
-    CallResourceRequest request;
-    request.mutable_session()->CopyFrom(connection->session);
-    request.set_resourcetype(resource_type);
-    auto* target = request.mutable_target();
-    target->set_calltype(call_type);
-    target->set_resourcename(resource_name);
-    for (const auto& param : params) {
-        target->add_params()->CopyFrom(param);
-    }
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    const auto status = connection->stub->callResource(&context, request, response);
-    if (!status.ok()) {
-        return fail_grpc(handle, status, context);
-    }
-    if (response->has_session()) {
-        connection->session.CopyFrom(response->session());
-    }
-    return SQL_SUCCESS;
-}
-
-enum class TransactionAction {
-    START,
-    COMMIT,
-    ROLLBACK
-};
-
-SQLRETURN transaction_operation(ConnectionHandle* connection, HandleBase* handle,
-                                TransactionAction operation) {
-    if (connection->auto_commit && operation != TransactionAction::START) {
-        return SQL_SUCCESS;
+template <typename Invoke>
+SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, Invoke invoke) {
+    if (!connection->connected || !connection->stub) {
+        return fail(handle, "ODBC connection is not open", "08003");
     }
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     SessionInfo response;
-    grpc::Status status;
-    if (operation == TransactionAction::START) {
-        status = connection->stub->startTransaction(&context, connection->session, &response);
-    } else if (operation == TransactionAction::COMMIT) {
-        status = connection->stub->commitTransaction(&context, connection->session, &response);
-    } else {
-        status = connection->stub->rollbackTransaction(&context, connection->session, &response);
-    }
+    const auto status = invoke(&context, connection->session, &response);
     if (!status.ok()) {
         return fail_grpc(handle, status, context);
     }
     connection->session.CopyFrom(response);
-    if (operation != TransactionAction::START) {
-        connection->savepoints.clear();
+    return SQL_SUCCESS;
+}
+
+SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
+                        com::openjproxy::grpc::ResourceType resource_type,
+                        const std::string& resource_uuid,
+                        com::openjproxy::grpc::CallType call_type,
+                        const std::string& resource_name,
+                        const std::vector<ParameterValue>& parameters,
+                        com::openjproxy::grpc::CallResourceResponse* output) {
+    if (!connection->connected || !connection->stub) {
+        return fail(handle, "ODBC connection is not open", "08003");
+    }
+    com::openjproxy::grpc::CallResourceRequest request;
+    request.mutable_session()->CopyFrom(connection->session);
+    request.set_resourcetype(resource_type);
+    request.set_resourceuuid(resource_uuid);
+    auto* target = request.mutable_target();
+    target->set_calltype(call_type);
+    target->set_resourcename(resource_name);
+    for (const auto& parameter : parameters) {
+        target->add_params()->CopyFrom(parameter);
+    }
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    com::openjproxy::grpc::CallResourceResponse response;
+    const auto status = connection->stub->callResource(&context, request, &response);
+    if (!status.ok()) {
+        return fail_grpc(handle, status, context);
+    }
+    if (response.has_session()) {
+        connection->session.CopyFrom(response.session());
+    }
+    if (output != nullptr) {
+        output->CopyFrom(response);
     }
     return SQL_SUCCESS;
 }
 
-SQLRETURN set_auto_commit(ConnectionHandle* connection, HandleBase* handle, bool auto_commit) {
-    if (connection->auto_commit == auto_commit) {
+SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
+    return invoke_session_rpc(connection, handle,
+        [connection](grpc::ClientContext* context, const SessionInfo& request,
+                     SessionInfo* response) {
+            return connection->stub->startTransaction(context, request, response);
+        });
+}
+
+SQLRETURN end_transaction(ConnectionHandle* connection, HandleBase* handle,
+                          SQLSMALLINT completion_type) {
+    if (!connection->connected || !connection->stub) {
+        return fail(handle, "ODBC connection is not open", "08003");
+    }
+    if (connection->auto_commit) {
         return SQL_SUCCESS;
     }
-    if (!auto_commit) {
-        const auto result = transaction_operation(connection, handle, TransactionAction::START);
-        if (SQL_SUCCEEDED(result)) {
-            connection->auto_commit = false;
-        }
-        return result;
+    const auto result = completion_type == SQL_COMMIT
+        ? invoke_session_rpc(connection, handle,
+            [connection](grpc::ClientContext* context, const SessionInfo& request,
+                         SessionInfo* response) {
+                return connection->stub->commitTransaction(context, request, response);
+            })
+        : invoke_session_rpc(connection, handle,
+            [connection](grpc::ClientContext* context, const SessionInfo& request,
+                         SessionInfo* response) {
+                return connection->stub->rollbackTransaction(context, request, response);
+            });
+    if (SQL_SUCCEEDED(result)) {
+        connection->savepoints.clear();
+        connection->savepoint_names.clear();
+    }
+    return result;
+}
+
+bool jdbc_transaction_isolation(SQLULEN isolation, std::int32_t* jdbc_isolation) {
+    switch (isolation) {
+        case SQL_TXN_READ_UNCOMMITTED:
+            *jdbc_isolation = 1;
+            return true;
+        case SQL_TXN_READ_COMMITTED:
+            *jdbc_isolation = 2;
+            return true;
+        case SQL_TXN_REPEATABLE_READ:
+            *jdbc_isolation = 4;
+            return true;
+        case SQL_TXN_SERIALIZABLE:
+            *jdbc_isolation = 8;
+            return true;
+        default:
+            return false;
+    }
+}
+
+SQLRETURN set_transaction_isolation(ConnectionHandle* connection, HandleBase* handle,
+                                    SQLULEN isolation) {
+    std::int32_t jdbc_isolation = 0;
+    if (!jdbc_transaction_isolation(isolation, &jdbc_isolation)) {
+        return fail(handle, "Unsupported transaction isolation level", "HY024");
     }
     ParameterValue parameter;
-    parameter.set_bool_value(true);
-    CallResourceResponse response;
-    const auto result = call_resource(connection, handle, ResourceType::RES_CONNECTION,
-                                      CallType::CALL_SET, "AutoCommit", {parameter}, &response);
+    parameter.set_int_value(jdbc_isolation);
+    com::openjproxy::grpc::CallResourceResponse response;
+    const auto result = call_resource(connection, handle, com::openjproxy::grpc::RES_CONNECTION,
+        "", com::openjproxy::grpc::CALL_SET, "TransactionIsolation", {parameter}, &response);
     if (SQL_SUCCEEDED(result)) {
-        connection->auto_commit = true;
-        connection->savepoints.clear();
+        connection->transaction_isolation = isolation;
+    }
+    return result;
+}
+
+SQLRETURN get_transaction_isolation(ConnectionHandle* connection, HandleBase* handle,
+                                    SQLULEN* isolation) {
+    com::openjproxy::grpc::CallResourceResponse response;
+    const auto result = call_resource(connection, handle, com::openjproxy::grpc::RES_CONNECTION,
+        "", com::openjproxy::grpc::CALL_GET, "TransactionIsolation", {}, &response);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    if (response.values_size() == 0 ||
+        response.values(0).value_case() != ParameterValue::kIntValue) {
+        return fail(handle, "OJP returned an invalid transaction isolation level", "HY000");
+    }
+    const auto jdbc_isolation = response.values(0).int_value();
+    switch (jdbc_isolation) {
+        case 1: *isolation = SQL_TXN_READ_UNCOMMITTED; break;
+        case 2: *isolation = SQL_TXN_READ_COMMITTED; break;
+        case 4: *isolation = SQL_TXN_REPEATABLE_READ; break;
+        case 8: *isolation = SQL_TXN_SERIALIZABLE; break;
+        default:
+            return fail(handle, "OJP returned an unsupported transaction isolation level", "HY000");
+    }
+    connection->transaction_isolation = *isolation;
+    return SQL_SUCCESS;
+}
+
+SQLRETURN set_auto_commit(ConnectionHandle* connection, HandleBase* handle, bool enabled) {
+    if (connection->auto_commit == enabled) {
+        return SQL_SUCCESS;
+    }
+    if (!connection->connected) {
+        connection->auto_commit = enabled;
+        return SQL_SUCCESS;
+    }
+    SQLRETURN result = SQL_SUCCESS;
+    if (enabled) {
+        ParameterValue parameter;
+        parameter.set_bool_value(true);
+        result = call_resource(connection, handle, com::openjproxy::grpc::RES_CONNECTION,
+            "", com::openjproxy::grpc::CALL_SET, "AutoCommit", {parameter}, nullptr);
+    } else {
+        result = start_transaction(connection, handle);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        connection->auto_commit = enabled;
+        if (enabled) {
+            connection->savepoints.clear();
+            connection->savepoint_names.clear();
+        }
     }
     return result;
 }
 
 enum class SavepointAction {
     NONE,
-    CREATE,
-    ROLLBACK_TO,
-    RELEASE
+    SET,
+    ROLLBACK,
+    RELEASE,
+    INVALID
 };
 
-struct SavepointCommand {
-    SavepointAction action = SavepointAction::NONE;
-    std::string name;
-};
-
-std::string uppercase(std::string value) {
+std::string uppercase_ascii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
         return static_cast<char>(std::toupper(character));
     });
     return value;
 }
 
-SavepointCommand parse_savepoint_command(const std::string& sql) {
-    std::string text = sql;
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
-        text.pop_back();
+SavepointAction parse_savepoint_statement(const std::string& sql, std::string* name) {
+    std::string normalized = sql;
+    const auto first = normalized.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return SavepointAction::NONE;
     }
-    if (!text.empty() && text.back() == ';') {
-        text.pop_back();
+    normalized.erase(0, first);
+    while (!normalized.empty() &&
+           std::isspace(static_cast<unsigned char>(normalized.back()))) {
+        normalized.pop_back();
     }
-    std::istringstream input(text);
-    std::vector<std::string> words;
-    for (std::string word; input >> word;) {
-        words.push_back(word);
-    }
-    if (words.empty()) {
-        return {};
-    }
-    auto name_at = [&words](std::size_t index) {
-        if (index >= words.size()) {
-            return std::string{};
+    if (!normalized.empty() && normalized.back() == ';') {
+        normalized.pop_back();
+        while (!normalized.empty() &&
+               std::isspace(static_cast<unsigned char>(normalized.back()))) {
+            normalized.pop_back();
         }
-        std::string name = words[index];
-        if (name.size() >= 2 &&
-            ((name.front() == '[' && name.back() == ']') ||
-             (name.front() == '"' && name.back() == '"'))) {
-            name = name.substr(1, name.size() - 2);
-        }
-        return name;
-    };
-    if (words.size() == 2 && uppercase(words[0]) == "SAVEPOINT") {
-        return {SavepointAction::CREATE, name_at(1)};
     }
-    if (words.size() == 3 && uppercase(words[0]) == "SAVE" &&
-        uppercase(words[1]) == "TRANSACTION") {
-        return {SavepointAction::CREATE, name_at(2)};
+
+    std::istringstream tokens_stream(normalized);
+    std::vector<std::string> tokens;
+    std::string token;
+    while (tokens_stream >> token) {
+        tokens.push_back(token);
     }
-    if (words.size() == 3 && uppercase(words[0]) == "RELEASE" &&
-        uppercase(words[1]) == "SAVEPOINT") {
-        return {SavepointAction::RELEASE, name_at(2)};
+    if (tokens.empty()) {
+        return SavepointAction::NONE;
     }
-    if (words.size() == 3 && uppercase(words[0]) == "ROLLBACK" &&
-        uppercase(words[1]) == "TO") {
-        return {SavepointAction::ROLLBACK_TO, name_at(2)};
+
+    const std::string command = uppercase_ascii(tokens[0]);
+    SavepointAction action = SavepointAction::NONE;
+    std::size_t name_index = 0;
+    if (command == "SAVEPOINT") {
+        action = SavepointAction::SET;
+        name_index = 1;
+    } else if (command == "SAVE" && tokens.size() > 1 &&
+               uppercase_ascii(tokens[1]) == "TRANSACTION") {
+        action = SavepointAction::SET;
+        name_index = 2;
+    } else if (command == "ROLLBACK" && tokens.size() > 1 &&
+               uppercase_ascii(tokens[1]) == "TO") {
+        action = SavepointAction::ROLLBACK;
+        name_index = tokens.size() > 2 && uppercase_ascii(tokens[2]) == "SAVEPOINT" ? 3 : 2;
+    } else if (command == "ROLLBACK" && tokens.size() > 1 &&
+               uppercase_ascii(tokens[1]) == "TRANSACTION") {
+        action = SavepointAction::ROLLBACK;
+        name_index = 2;
+    } else if (command == "RELEASE") {
+        action = SavepointAction::RELEASE;
+        name_index = tokens.size() > 1 && uppercase_ascii(tokens[1]) == "SAVEPOINT" ? 2 : 1;
+    } else {
+        return SavepointAction::NONE;
     }
-    if (words.size() == 4 && uppercase(words[0]) == "ROLLBACK" &&
-        uppercase(words[1]) == "TO" && uppercase(words[2]) == "SAVEPOINT") {
-        return {SavepointAction::ROLLBACK_TO, name_at(3)};
+    if (name_index + 1 != tokens.size()) {
+        return SavepointAction::INVALID;
     }
-    if (words.size() == 3 && uppercase(words[0]) == "ROLLBACK" &&
-        uppercase(words[1]) == "TRANSACTION") {
-        return {SavepointAction::ROLLBACK_TO, name_at(2)};
+
+    const std::string& identifier = tokens[name_index];
+    if (identifier.empty() ||
+        !(std::isalpha(static_cast<unsigned char>(identifier[0])) || identifier[0] == '_') ||
+        !std::all_of(identifier.begin() + 1, identifier.end(), [](unsigned char character) {
+            return std::isalnum(character) || character == '_' || character == '$';
+        })) {
+        return SavepointAction::INVALID;
     }
-    return {};
+    *name = uppercase_ascii(identifier);
+    return action;
 }
 
-SQLRETURN execute_savepoint_command(StatementHandle* statement,
-                                    const SavepointCommand& command) {
+SQLRETURN execute_savepoint_statement(StatementHandle* statement, SavepointAction action,
+                                      const std::string& name) {
     auto* connection = statement->connection;
-    if (command.name.empty()) {
-        return fail(statement, "Savepoint name is required", "3B001");
+    if (action == SavepointAction::INVALID) {
+        return fail(statement, "Invalid OJP savepoint statement", "42000");
     }
-    if (command.action == SavepointAction::CREATE) {
-        ParameterValue parameter;
-        parameter.set_string_value(command.name);
-        CallResourceResponse response;
-        const auto result = call_resource(connection, statement, ResourceType::RES_CONNECTION,
-                                          CallType::CALL_SET, "Savepoint", {parameter}, &response);
+    if (connection->auto_commit) {
+        return fail(statement, "Savepoints require autocommit to be disabled", "25000");
+    }
+
+    if (action == SavepointAction::SET) {
+        std::vector<ParameterValue> parameters(1);
+        parameters[0].set_string_value(name);
+        com::openjproxy::grpc::CallResourceResponse response;
+        const auto result = call_resource(connection, statement,
+            com::openjproxy::grpc::RES_CONNECTION, "", com::openjproxy::grpc::CALL_SET,
+            "Savepoint", parameters, &response);
         if (!SQL_SUCCEEDED(result)) {
             return result;
         }
-        if (response.values_size() == 0 ||
-            !response.values(0).has_string_value()) {
-            return fail(statement, "OJP returned an invalid savepoint handle", "HY000");
+        if (response.resourceuuid().empty()) {
+            return fail(statement, "OJP did not return a savepoint handle", "HY000");
         }
-        connection->savepoints[command.name] = response.values(0).string_value();
+        const auto previous = connection->savepoint_names.find(name);
+        if (previous != connection->savepoint_names.end()) {
+            connection->savepoints.erase(previous->second);
+        }
+        connection->savepoints.insert(response.resourceuuid());
+        connection->savepoint_names[name] = response.resourceuuid();
         statement->row_count = 0;
         return SQL_SUCCESS;
     }
-    const auto savepoint = connection->savepoints.find(command.name);
-    if (savepoint == connection->savepoints.end()) {
+
+    const auto found = connection->savepoint_names.find(name);
+    if (found == connection->savepoint_names.end() ||
+        connection->savepoints.count(found->second) == 0) {
         return fail(statement, "Savepoint does not exist or is no longer valid", "3B001");
     }
     ParameterValue parameter;
-    parameter.set_string_value(savepoint->second);
-    CallResourceResponse response;
-    const auto call_type = command.action == SavepointAction::ROLLBACK_TO
-        ? CallType::CALL_ROLLBACK : CallType::CALL_RELEASE;
-    const auto resource_name = command.action == SavepointAction::RELEASE ? "Savepoint" : "";
-    const auto result = call_resource(connection, statement, ResourceType::RES_CONNECTION,
-                                      call_type, resource_name, {parameter}, &response);
+    parameter.set_string_value(found->second);
+    const auto call_type = action == SavepointAction::ROLLBACK
+        ? com::openjproxy::grpc::CALL_ROLLBACK : com::openjproxy::grpc::CALL_RELEASE;
+    const std::string resource_name = action == SavepointAction::RELEASE ? "Savepoint" : "";
+    const auto result = call_resource(connection, statement,
+        com::openjproxy::grpc::RES_CONNECTION, "", call_type, resource_name, {parameter}, nullptr);
+    if (SQL_SUCCEEDED(result) && action == SavepointAction::RELEASE) {
+        connection->savepoints.erase(found->second);
+        connection->savepoint_names.erase(found);
+    }
     if (SQL_SUCCEEDED(result)) {
-        if (command.action == SavepointAction::RELEASE) {
-            connection->savepoints.erase(savepoint);
-        }
         statement->row_count = 0;
     }
     return result;
@@ -1054,9 +1167,11 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         return fail(statement, "ODBC connection is not open", "08003");
     }
 
-    const auto savepoint_command = parse_savepoint_command(statement->sql);
-    if (savepoint_command.action != SavepointAction::NONE) {
-        return execute_savepoint_command(statement, savepoint_command);
+    std::string savepoint_name;
+    const SavepointAction savepoint_action =
+        parse_savepoint_statement(statement->sql, &savepoint_name);
+    if (savepoint_action != SavepointAction::NONE) {
+        return execute_savepoint_statement(statement, savepoint_action, savepoint_name);
     }
 
     StatementRequest request;
@@ -1225,37 +1340,17 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         return fail_grpc(connection, status, context);
     }
     connection->session.CopyFrom(session);
-    connection->savepoints.clear();
     connection->connected = true;
-    if (connection->has_transaction_isolation) {
-        ParameterValue parameter;
-        parameter.set_int_value(static_cast<std::int32_t>(connection->transaction_isolation));
-        CallResourceResponse response;
-        const auto isolation_result = call_resource(
-            connection, connection, ResourceType::RES_CONNECTION, CallType::CALL_SET,
-            "TransactionIsolation", {parameter}, &response);
+    if (connection->transaction_isolation != 0) {
+        const auto isolation_result = set_transaction_isolation(
+            connection, connection, connection->transaction_isolation);
         if (!SQL_SUCCEEDED(isolation_result)) {
-            grpc::ClientContext terminate_context;
-            com::openjproxy::grpc::SessionTerminationStatus termination;
-            connection->stub->terminateSession(&terminate_context, connection->session,
-                                               &termination);
-            connection->connected = false;
-            connection->stub.reset();
-            connection->channel.reset();
             return isolation_result;
         }
     }
     if (!connection->auto_commit) {
-        const auto transaction_result = transaction_operation(
-            connection, connection, TransactionAction::START);
+        const auto transaction_result = start_transaction(connection, connection);
         if (!SQL_SUCCEEDED(transaction_result)) {
-            grpc::ClientContext terminate_context;
-            com::openjproxy::grpc::SessionTerminationStatus termination;
-            connection->stub->terminateSession(&terminate_context, connection->session,
-                                               &termination);
-            connection->connected = false;
-            connection->stub.reset();
-            connection->channel.reset();
             return transaction_result;
         }
     }
@@ -1277,9 +1372,12 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     const auto status = connection->stub->terminateSession(&context, connection->session, &response);
     // terminateSession is sent exactly once; the connection is unusable even if it fails.
     connection->connected = false;
-    connection->savepoints.clear();
     connection->stub.reset();
     connection->channel.reset();
+    connection->savepoints.clear();
+    connection->savepoint_names.clear();
+    connection->auto_commit = true;
+    connection->transaction_isolation = 0;
     if (!status.ok()) {
         return fail_grpc(connection, status, context);
     }
@@ -1410,30 +1508,6 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC connection) {
         return SQL_INVALID_HANDLE;
     }
     return disconnect(static_cast<ConnectionHandle*>(connection));
-}
-
-SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handle_type, SQLHANDLE handle,
-                            SQLSMALLINT completion_type) {
-    if (handle_type != SQL_HANDLE_DBC || handle == SQL_NULL_HANDLE ||
-        static_cast<HandleBase*>(handle)->type != SQL_HANDLE_DBC) {
-        return SQL_INVALID_HANDLE;
-    }
-    auto* target = static_cast<ConnectionHandle*>(handle);
-    clear_diagnostics(target);
-    if (completion_type != SQL_COMMIT && completion_type != SQL_ROLLBACK) {
-        return fail(target, "Invalid transaction completion type", "HY012");
-    }
-    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
-    if (!target->connected || !target->stub) {
-        return fail(target, "ODBC connection is not open", "08003");
-    }
-    const auto operation = completion_type == SQL_COMMIT
-        ? TransactionAction::COMMIT : TransactionAction::ROLLBACK;
-    return transaction_operation(target, target, operation);
-}
-
-SQLRETURN SQL_API SQLTransact(SQLHENV, SQLHDBC connection, SQLUSMALLINT completion_type) {
-    return SQLEndTran(SQL_HANDLE_DBC, connection, static_cast<SQLSMALLINT>(completion_type));
 }
 
 SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER length) {
@@ -1679,43 +1753,27 @@ SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
     }
     auto* target = static_cast<ConnectionHandle*>(connection);
     clear_diagnostics(target);
+    if (value == nullptr) {
+        return fail(target, "Connection attribute value is required", "HY009");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    const auto option = static_cast<SQLULEN>(reinterpret_cast<std::uintptr_t>(value));
     if (attribute == SQL_ATTR_AUTOCOMMIT) {
-        const auto auto_commit = reinterpret_cast<std::uintptr_t>(value);
-        if (auto_commit != SQL_AUTOCOMMIT_ON && auto_commit != SQL_AUTOCOMMIT_OFF) {
-            return fail(target, "Invalid autocommit value", "HY024");
+        if (option != SQL_AUTOCOMMIT_ON && option != SQL_AUTOCOMMIT_OFF) {
+            return fail(target, "Invalid autocommit option", "HY024");
         }
-        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
-        if (!target->connected || !target->stub) {
-            target->auto_commit = auto_commit == SQL_AUTOCOMMIT_ON;
-            return SQL_SUCCESS;
-        }
-        return set_auto_commit(target, target, auto_commit == SQL_AUTOCOMMIT_ON);
+        return set_auto_commit(target, target, option == SQL_AUTOCOMMIT_ON);
     }
     if (attribute == SQL_ATTR_TXN_ISOLATION) {
-        const auto isolation = reinterpret_cast<std::uintptr_t>(value);
-        if (isolation != SQL_TXN_READ_UNCOMMITTED &&
-            isolation != SQL_TXN_READ_COMMITTED &&
-            isolation != SQL_TXN_REPEATABLE_READ &&
-            isolation != SQL_TXN_SERIALIZABLE) {
-            return fail(target, "Transaction isolation level is not supported", "HY024");
+        std::int32_t jdbc_isolation = 0;
+        if (!jdbc_transaction_isolation(option, &jdbc_isolation)) {
+            return fail(target, "Unsupported transaction isolation level", "HY024");
         }
-        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
-        if (!target->connected || !target->stub) {
-            target->transaction_isolation = static_cast<SQLULEN>(isolation);
-            target->has_transaction_isolation = true;
+        if (!target->connected) {
+            target->transaction_isolation = option;
             return SQL_SUCCESS;
         }
-        ParameterValue parameter;
-        parameter.set_int_value(static_cast<std::int32_t>(isolation));
-        CallResourceResponse response;
-        const auto result = call_resource(target, target, ResourceType::RES_CONNECTION,
-                                          CallType::CALL_SET, "TransactionIsolation",
-                                          {parameter}, &response);
-        if (SQL_SUCCEEDED(result)) {
-            target->transaction_isolation = static_cast<SQLULEN>(isolation);
-            target->has_transaction_isolation = true;
-        }
-        return result;
+        return set_transaction_isolation(target, target, option);
     }
     return fail(target, "Connection attribute is not supported", "HYC00");
 }
@@ -1731,37 +1789,59 @@ SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
     if (value == nullptr) {
         return fail(target, "Connection attribute output is required", "HY009");
     }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
     if (attribute == SQL_ATTR_AUTOCOMMIT) {
         *static_cast<SQLULEN*>(value) =
             target->auto_commit ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF;
-        if (length != nullptr) {
-            *length = static_cast<SQLINTEGER>(sizeof(SQLULEN));
+    } else if (attribute == SQL_ATTR_TXN_ISOLATION) {
+        if (target->connected) {
+            const auto result = get_transaction_isolation(
+                target, target, static_cast<SQLULEN*>(value));
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+        } else {
+            *static_cast<SQLULEN*>(value) = target->transaction_isolation;
         }
-        return SQL_SUCCESS;
+    } else {
+        return fail(target, "Connection attribute is not supported", "HYC00");
     }
-    if (attribute == SQL_ATTR_TXN_ISOLATION) {
-        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
-        if (!target->connected || !target->stub) {
-            return fail(target, "ODBC connection is not open", "08003");
-        }
-        CallResourceResponse response;
-        const auto result = call_resource(target, target, ResourceType::RES_CONNECTION,
-                                          CallType::CALL_GET, "TransactionIsolation", {},
-                                          &response);
-        if (!SQL_SUCCEEDED(result)) {
-            return result;
-        }
-        if (response.values_size() == 0 || !response.values(0).has_int_value()) {
-            return fail(target, "OJP returned an invalid transaction isolation level", "HY000");
-        }
-        *static_cast<SQLULEN*>(value) =
-            static_cast<SQLULEN>(response.values(0).int_value());
-        if (length != nullptr) {
-            *length = static_cast<SQLINTEGER>(sizeof(SQLULEN));
-        }
-        return SQL_SUCCESS;
+    if (length != nullptr) {
+        *length = static_cast<SQLINTEGER>(sizeof(SQLULEN));
     }
-    return fail(target, "Connection attribute is not supported", "HYC00");
+    return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handle_type, SQLHANDLE handle,
+                             SQLSMALLINT completion_type) {
+    if (handle == SQL_NULL_HANDLE || static_cast<HandleBase*>(handle)->type != handle_type) {
+        return SQL_INVALID_HANDLE;
+    }
+    if (handle_type != SQL_HANDLE_DBC) {
+        return fail(static_cast<HandleBase*>(handle),
+                    "Transactions can only be ended on a connection handle", "HY092");
+    }
+    auto* target = static_cast<ConnectionHandle*>(handle);
+    clear_diagnostics(target);
+    if (completion_type != SQL_COMMIT && completion_type != SQL_ROLLBACK) {
+        return fail(target, "Invalid transaction completion type", "HY012");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    return end_transaction(target, target, completion_type);
+}
+
+SQLRETURN SQL_API SQLTransact(SQLHENV environment, SQLHDBC connection,
+                              SQLUSMALLINT completion_type) {
+    if (connection == SQL_NULL_HDBC) {
+        if (environment == SQL_NULL_HENV ||
+            static_cast<HandleBase*>(environment)->type != SQL_HANDLE_ENV) {
+            return SQL_INVALID_HANDLE;
+        }
+        return fail(static_cast<HandleBase*>(environment),
+                    "Environment-wide transactions are not supported", "HYC00");
+    }
+    return SQLEndTran(SQL_HANDLE_DBC, connection,
+                      static_cast<SQLSMALLINT>(completion_type));
 }
 
 SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statement, SQLINTEGER attribute,
@@ -1787,17 +1867,16 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
     auto* target = static_cast<ConnectionHandle*>(connection);
     clear_diagnostics(target);
     if (info_type == SQL_TXN_CAPABLE) {
-        if (value != nullptr) {
-            *static_cast<SQLUSMALLINT*>(value) = SQL_TC_ALL;
+        const SQLUSMALLINT numeric_value =
+            uppercase_ascii(target->url).find("SQLSERVER") != std::string::npos
+                ? SQL_TC_ALL : SQL_TC_DML;
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(numeric_value));
         }
-        return SQL_SUCCESS;
-    }
-    if (info_type == SQL_TXN_ISOLATION_OPTION) {
-        if (value != nullptr) {
-            *static_cast<SQLUINTEGER*>(value) =
-                SQL_TXN_READ_UNCOMMITTED | SQL_TXN_READ_COMMITTED |
-                SQL_TXN_REPEATABLE_READ | SQL_TXN_SERIALIZABLE;
+        if (value == nullptr) {
+            return SQL_SUCCESS;
         }
+        std::memcpy(value, &numeric_value, sizeof(numeric_value));
         return SQL_SUCCESS;
     }
     if (info_type == SQL_DEFAULT_TXN_ISOLATION) {
@@ -1805,21 +1884,26 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
             return SQL_SUCCESS;
         }
         std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
-        if (!target->connected || !target->stub) {
-            return fail(target, "ODBC connection is not open", "08003");
-        }
-        CallResourceResponse response;
-        const auto result = call_resource(target, target, ResourceType::RES_CONNECTION,
-                                          CallType::CALL_GET, "TransactionIsolation", {},
-                                          &response);
+        const auto result =
+            get_transaction_isolation(target, target, static_cast<SQLUINTEGER*>(value));
         if (!SQL_SUCCEEDED(result)) {
             return result;
         }
-        if (response.values_size() == 0 || !response.values(0).has_int_value()) {
-            return fail(target, "OJP returned an invalid transaction isolation level", "HY000");
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(SQLUINTEGER));
         }
-        *static_cast<SQLUINTEGER*>(value) =
-            static_cast<SQLUINTEGER>(response.values(0).int_value());
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_TXN_ISOLATION_OPTION) {
+        const SQLUINTEGER isolation_options =
+            SQL_TXN_READ_UNCOMMITTED | SQL_TXN_READ_COMMITTED |
+            SQL_TXN_REPEATABLE_READ | SQL_TXN_SERIALIZABLE;
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(isolation_options));
+        }
+        if (value != nullptr) {
+            std::memcpy(value, &isolation_options, sizeof(isolation_options));
+        }
         return SQL_SUCCESS;
     }
     std::string text;
@@ -1832,8 +1916,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         case SQL_ODBC_VER: text = "03.80"; break;
         case SQL_IDENTIFIER_QUOTE_CHAR: text = "\""; break;
         default:
-            return fail(target,
-                        "Requested SQLGetInfo value is not supported", "HYC00");
+            return fail(target, "Requested SQLGetInfo value is not supported", "HYC00");
     }
     if (output_length != nullptr) {
         *output_length = static_cast<SQLSMALLINT>(text.size());
@@ -1952,12 +2035,12 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
     const std::vector<SQLUSMALLINT> functions = {
         SQL_API_SQLALLOCHANDLE, SQL_API_SQLFREEHANDLE, SQL_API_SQLSETENVATTR,
         SQL_API_SQLDRIVERCONNECT, SQL_API_SQLCONNECT, SQL_API_SQLDISCONNECT,
-        SQL_API_SQLENDTRAN, SQL_API_SQLTRANSACT,
+        SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR, SQL_API_SQLENDTRAN,
+        SQL_API_SQLTRANSACT,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
-        SQL_API_SQLFREESTMT, SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR,
-        SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
+        SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};
     if (function_id == SQL_API_ALL_FUNCTIONS) {
         constexpr SQLUSMALLINT function_count = 100;

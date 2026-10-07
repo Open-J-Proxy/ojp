@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2 and L3 for H2 and SQL Server**, and **L4 for SQL Server** from the
+**L2 and L3 for H2 and SQL Server**, and **L4 for H2 and SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,14 +11,14 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L4 for SQL Server; L3 for H2; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. SQL Server covers typed parameters, result streaming, transactions, savepoints, and transaction isolation. |
+| Highest implemented level | **L4 for H2 and SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and SQL Server cover typed parameters, result streaming, transactions, savepoints, and transaction isolation. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L3** | `l1_integration_test.cpp`, `h2_l2_integration_test.cpp`, and `h2_l3_integration_test.cpp` exercise ODBC → one OJP server → H2. |
+| **H2** | **L4** | L1-L3 suites plus `h2_l4_integration_test.cpp` cover transaction isolation, commit/rollback, savepoint rollback/release, and expired handles. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
 | SQL Server | **L4** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l4_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
@@ -61,6 +61,13 @@ statement for full and empty results. The SQL Server suite also returns multiple
 closes its server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`.
 The client also uses `fetchNextRows` when the server marks a result as row-by-row.
 
+The H2 L4 suite maps ODBC autocommit and `SQLEndTran`/`SQLTransact` to the
+transaction RPCs, and maps `SQL_ATTR_TXN_ISOLATION` to connection resource calls.
+ODBC has no portable savepoint API, so the client accepts `SAVEPOINT name`,
+`ROLLBACK TO [SAVEPOINT] name`, and `RELEASE [SAVEPOINT] name` statements and
+implements them with OJP savepoint resource calls. These statements are
+intercepted by the client and are not sent to H2.
+
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:
 
@@ -97,19 +104,20 @@ Decimal results arrive as BigDecimalWire bytes
 driver, the client decodes result bytes that match this layout exactly as
 decimal text and returns other bytes as binary.
 
-## SQL Server L4 transaction coverage
+## L4 transaction coverage
 
-The L4 suite mirrors the transaction and savepoint behavior exercised by
-`SQLServerConnectionExtensiveTests` and `SQLServerSavepointTests` in the JDBC
-reference client. It verifies commit, rollback, autocommit transitions, nested
-savepoint rollback and release, and transaction-isolation set/get through the
-OJP server.
+The H2 L4 suite covers commit, rollback, autocommit transitions, savepoint
+rollback/release, isolation, and invalidated savepoint handles. The SQL Server
+suite follows transaction and savepoint cases in
+`SQLServerConnectionExtensiveTests` and `SQLServerSavepointTests` from the JDBC
+reference client, and verifies commit, rollback, autocommit transitions, nested
+savepoint rollback/release, and isolation through OJP.
 
-ODBC has no standard savepoint API. The client maps these OJP savepoint
-directives to the `callResource` operations specified in `CLIENT_SPEC_AI.md`:
-`SAVEPOINT name` (also SQL Server's `SAVE TRANSACTION name`), `ROLLBACK TO
-[SAVEPOINT] name` (also `ROLLBACK TRANSACTION name`), and `RELEASE SAVEPOINT
-name`. These are client directives and are not forwarded as SQL Server syntax.
+ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
+`SAVE TRANSACTION name`, `ROLLBACK TO [SAVEPOINT] name` and
+`ROLLBACK TRANSACTION name`, plus `RELEASE [SAVEPOINT] name` to the
+`callResource` operations in `CLIENT_SPEC_AI.md`. These directives are
+intercepted by the client and not forwarded to the database.
 
 Output parameters, wide-character ODBC entry points, complete metadata
 discovery, LOBs, configurable fetch-size pagination, session affinity,
@@ -136,8 +144,9 @@ Implemented rules:
 | 4.4.4 `StringValue` wrapper fields | `uuid_value`, `biginteger_value`, `url_value`, `rowid_value`, and `rowidlifetime_value` results are decoded as text |
 | 4.4.5 `PT_NULL` with a `java.sql.Types` code in `int_value` | Derived from the bound ODBC SQL type; unknown types send `0` (`Types.NULL`) |
 | 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
-| L4 transaction lifecycle | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
-| L4 savepoint semantics | Named savepoint directives map to `CALL_SET`, `CALL_ROLLBACK`, and `CALL_RELEASE`; local handles are invalidated on transaction completion |
+| L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
+| 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
+| L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
@@ -279,7 +288,8 @@ Each test is skipped when its corresponding `OJP_TEST_H2`,
 enabled, a missing endpoint or unavailable server fails the test instead of
 silently skipping it.
 
-The C++ ODBC H2 workflow job runs both `OjpOdbcH2L1Integration` and
-`OjpOdbcH2L2Integration` against the same OJP server. The C++ ODBC SQL Server
+The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
+`OjpOdbcH2L4Integration` against the same OJP server. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration`,
-`OjpOdbcSqlServerL2Integration`, and `OjpOdbcSqlServerL3Integration`.
+`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`, and
+`OjpOdbcSqlServerL4Integration`.

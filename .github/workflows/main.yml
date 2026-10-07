@@ -1,16 +1,18 @@
 # =============================================================================
-# Main CI Workflow with Fail-Fast Java Integration Tests
+# Main CI Workflow with Change-Selected, Fail-Fast Integration Tests
 # =============================================================================
 #
-# This workflow runs H2 integration coverage first. Database-specific integration
+# This workflow runs selected H2 integration coverage first. Database-specific integration
 # jobs start only after the H2 gate succeeds.
 #
 # WORKFLOW STRUCTURE:
+# 0. detect-changes: Shared suite and Java reactor selection
+# 0a. java-verify: Java 25 verification of selected modules
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
 # 1a. dotnet-crud-test: .NET ADO.NET H2 L1 tests (independent)
 # 1b. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
 # 1c. python-h2-l1: Python DB-API unit and H2 integration tests
-# 2. h2-integration-gate: Waits for every Main CI H2 job to pass
+# 2. h2-integration-gate: Waits for every selected Main CI H2 job to pass
 # 3. postgres-test: PostgreSQL database tests (needs: h2-integration-gate, resolve-version)
 # 4. mysql-test: MySQL database tests (needs: h2-integration-gate, resolve-version)
 # 5. mariadb-test: MariaDB database tests (needs: h2-integration-gate, resolve-version)
@@ -27,13 +29,15 @@
 # SEQUENTIAL EXECUTION:
 # Java and C++ ODBC database-specific jobs wait for the H2 integration gate.
 # The Java H2 matrix, .NET, Ruby, Python, and C++ ODBC H2 jobs run in parallel.
-# This ensures database-specific tests start only after every H2 job passes,
+# This ensures database-specific tests start only after every selected H2 job passes,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
 # - Resource efficiency (avoids running expensive tests when basics fail)
 # - Cost savings (reduces CI minutes when tests would fail anyway)
 #
 # Python tests build their own server and run alongside the Java H2 gate.
+# Dart client coverage is owned by the standalone Dart workflow.
+# Main CI Result checks selected suites and permits intentionally skipped jobs.
 #
 # This sequential execution works on ALL branches (PRs, main, feature branches)
 # because all jobs are defined in a single workflow file.
@@ -47,11 +51,48 @@ on:
     branches: [ main, 'lts/**' ]
   pull_request:
     branches: [ main, 'lts/**' ]
+  workflow_dispatch:
+    inputs:
+      full_suite:
+        description: Run all test suites
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    uses: ./.github/workflows/ci-test-selection.yml
+    with:
+      full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
+
+  java-verify:
+    name: Verify selected Java modules (JDK 25)
+    runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java_build == 'true' }}
+    env:
+      JAVA_MODULES: ${{ needs.detect-changes.outputs.java_modules }}
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+          cache: maven
+
+      - name: Install selected reactor and dependencies
+        run: |
+          test -n "$JAVA_MODULES"
+          mvn clean install -pl "$JAVA_MODULES" -am -DskipTests -Dgpg.skip=true
+
+      - name: Verify selected modules only
+        run: mvn verify -pl "$JAVA_MODULES" -Dgpg.skip=true
+
   # ===========================================================================
   # JOB 0: Resolve OJP image tag
   # ===========================================================================
@@ -64,6 +105,8 @@ jobs:
   resolve-version:
     name: Resolve OJP image tag
     runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' }}
     outputs:
       ojp_image: ${{ steps.version.outputs.ojp_image }}
     steps:
@@ -87,7 +130,7 @@ jobs:
   # JOB 1: Build & Test with H2 (Fast Fail-Fast Gate)
   # ===========================================================================
   #
-  # This job runs first and tests against H2 embedded database.
+  # When selected, this job follows Java verification and tests against H2 embedded database.
   # H2 requires no external services and runs in seconds, making it ideal
   # for catching basic issues before running expensive database-specific tests.
   #
@@ -98,7 +141,8 @@ jobs:
   build-test:
     name: Build & Test (H2 - Fast Fail-Fast)
     runs-on: ubuntu-latest
-    needs: [resolve-version]
+    needs: [detect-changes, java-verify, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.java-verify.result == 'success' && needs.resolve-version.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -121,12 +165,6 @@ jobs:
 
       - name: Build and Install (ojp-grpc-commons) with JDK 25
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
-
-      - name: Verify all modules with JDK 25
-        run: mvn clean verify -Dgpg.skip=true
-
-      - name: Test (ojp-grpc-commons) with JDK 25
-        run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
       # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
       - name: Download Open Source Drivers
@@ -165,24 +203,6 @@ jobs:
       - name: Test (ojp-jdbc-driver) with H2 only
         run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenableH2Tests=true
 
-      - name: Set up Dart for client tests
-        if: matrix.java-version == 25
-        uses: dart-lang/setup-dart@v1.8.1
-        with:
-          sdk: '3.13.5'
-
-      - name: Run all Dart client tests
-        if: matrix.java-version == 25
-        env:
-          OJP_TEST_H2: 'true'
-          OJP_TEST_H2_ADDR: 'localhost:1059'
-        run: |
-          dart pub get
-          dart format --output=none --set-exit-if-changed lib test
-          dart analyze
-          dart test --reporter=expanded
-        working-directory: ojp-client-dart-drift
-
       - name: Show ojp-server.log
         if: always()  # ensures it runs even if previous steps fail
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
@@ -193,6 +213,8 @@ jobs:
   dotnet-crud-test:
     name: .NET ADO.NET L1 Test against H2
     runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.dotnet == 'true' }}
     permissions:
       contents: read
 
@@ -274,6 +296,8 @@ jobs:
   ruby-dbi-test:
     name: Ruby DBI Client Tests (H2)
     runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.ruby == 'true' }}
     permissions:
       contents: read
 
@@ -357,6 +381,8 @@ jobs:
   python-h2-l1:
     name: Python DB-API Tests against H2
     runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.python == 'true' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -447,7 +473,7 @@ jobs:
   #
   # Database: PostgreSQL 17
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # SQL Enhancer Testing:
   # All PostgreSQL tests run twice per matrix configuration:
@@ -459,8 +485,9 @@ jobs:
   postgres-test:
     name: PostgreSQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -593,14 +620,15 @@ jobs:
   #
   # Database: MySQL 8.0
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # ===========================================================================
   mysql-test:
     name: MySQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -691,14 +719,15 @@ jobs:
   #
   # Database: MariaDB 10.11
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # ===========================================================================
   mariadb-test:
     name: MariaDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -790,14 +819,15 @@ jobs:
   #
   # Database: CockroachDB v24.3.4
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # ===========================================================================
   cockroachdb-test:
     name: CockroachDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -879,7 +909,7 @@ jobs:
   #
   # Database: IBM DB2 11.5.8.0
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # Note: DB2 container is large and takes longer to start up.
   #
@@ -887,8 +917,9 @@ jobs:
   db2-test:
     name: DB2 Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -1052,14 +1083,15 @@ jobs:
   # 4. Restarting servers and verifying recovery
   #
   # Database: PostgreSQL (for multinode connection pooling tests)
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # ===========================================================================
   multinode-test:
     name: Multinode Integration Test (Run ${{ matrix.run }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
     strategy:
       max-parallel: 1
       matrix:
@@ -1461,7 +1493,7 @@ jobs:
   # 4. Restarting servers and verifying XA recovery
   #
   # Database: PostgreSQL (with XA prepared transactions support)
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # NOTE: Connection count checks expect 20-27 connections (XA pool only, non-XA pool disabled).
   #
@@ -1469,8 +1501,9 @@ jobs:
   multinode-xa-test:
     name: Multinode XA Integration Test (Run ${{ matrix.run }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
     strategy:
       max-parallel: 1
       matrix:
@@ -1908,14 +1941,15 @@ jobs:
   #
   # Database: Oracle XE 21c
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # ===========================================================================
   oracle-test:
     name: Oracle Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
     
     permissions:
       contents: read
@@ -2079,14 +2113,15 @@ jobs:
   #
   # Database: SQL Server (via TestContainers)
   # Matrix strategy: Tests against Java 11, 17, 21, 25
-  # Execution: Runs after all Main CI H2 jobs succeed.
+  # Execution: Runs after all selected Main CI H2 jobs succeed.
   #
   # ===========================================================================
   sqlserver-tests:
     name: SQL Server Integration Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    # DEPENDENCY: This job waits until every Main CI H2 job succeeds.
-    needs: [h2-integration-gate, resolve-version]
+    # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
+    needs: [detect-changes, h2-integration-gate, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
     
     permissions:
       contents: read
@@ -2188,6 +2223,8 @@ jobs:
   cpp-odbc-test:
     name: C++ ODBC H2 L1 Test
     runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' }}
     permissions:
       contents: read
     steps:
@@ -2278,17 +2315,45 @@ jobs:
   # JOB 2: H2 Integration Gate
   # ===========================================================================
   #
-  # All independent H2 jobs run in parallel. This aggregate gate releases
-  # database-specific jobs only after the complete Main CI H2 phase succeeds.
+  # Selected independent H2 jobs run in parallel. This aggregate gate releases
+  # database-specific jobs only after the selected Main CI H2 phase succeeds.
   #
   # ===========================================================================
   h2-integration-gate:
-    name: All H2 Integration Tests Passed
+    name: Selected H2 Integration Tests Passed
     runs-on: ubuntu-latest
-    needs: [build-test, dotnet-crud-test, ruby-dbi-test, python-h2-l1, cpp-odbc-test]
+    needs: [detect-changes, build-test, dotnet-crud-test, ruby-dbi-test, python-h2-l1, cpp-odbc-test]
+    if: ${{ !cancelled() }}
     steps:
-      - name: Confirm H2 integration phase passed
-        run: echo "All Main CI H2 integration jobs passed"
+      - name: Check selected H2 integration results
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          SELECTED: ${{ toJSON(needs.detect-changes.outputs) }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.JOB_RESULTS);
+          const selected = JSON.parse(process.env.SELECTED);
+          let failed = needs['detect-changes'].result !== 'success';
+          const suites = {
+            'build-test': 'java',
+            'dotnet-crud-test': 'dotnet',
+            'ruby-dbi-test': 'ruby',
+            'python-h2-l1': 'python',
+            'cpp-odbc-test': 'cpp'
+          };
+          for (const [job, flag] of Object.entries(suites)) {
+            const result = needs[job].result;
+            const enabled = selected[flag];
+            const valid = enabled === 'true' ? result === 'success' :
+              enabled === 'false' && ['skipped', 'success'].includes(result);
+            console.log(`${job}: selected=${enabled}, result=${result}`);
+            failed ||= !valid;
+          }
+          if (failed) {
+            console.error('Change detection or selected H2 integration tests did not pass.');
+            process.exit(1);
+          }
+          NODE
 
   # ===========================================================================
   # JOB 13: C++ ODBC PostgreSQL L1 Integration Test
@@ -2301,7 +2366,8 @@ jobs:
   cpp-odbc-postgres-test:
     name: C++ ODBC PostgreSQL L1 Test
     runs-on: ubuntu-latest
-    needs: [h2-integration-gate]
+    needs: [detect-changes, h2-integration-gate]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' && needs.h2-integration-gate.result == 'success' }}
     permissions:
       contents: read
     steps:
@@ -2417,12 +2483,13 @@ jobs:
   # This job triggers a workflow in the ojp-framework-integration repository
   # to run integration tests with the latest OJP changes.
   #
-  # Note: This job waits for every Main CI H2 job to pass before notifying the
-  # integration repo.
+  # Note: This job waits for every selected Main CI H2 job to pass before notifying
+  # the integration repo, only for trusted push and manual events.
   #
   # ===========================================================================
   notify-integration:
-    needs: [h2-integration-gate]
+    needs: [detect-changes, h2-integration-gate]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.framework == 'true' && needs.h2-integration-gate.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       - name: Trigger OJP Framework Integration Repo Workflow
@@ -2431,3 +2498,79 @@ jobs:
           token: ${{ secrets.INTEGRATION_REPO_PAT }}
           repository: Open-J-Proxy/ojp-framework-integration
           event-type: ojp-updated
+
+  main-ci-result:
+    name: Main CI Result
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - detect-changes
+      - java-verify
+      - resolve-version
+      - build-test
+      - dotnet-crud-test
+      - ruby-dbi-test
+      - python-h2-l1
+      - cpp-odbc-test
+      - h2-integration-gate
+      - postgres-test
+      - mysql-test
+      - mariadb-test
+      - cockroachdb-test
+      - db2-test
+      - multinode-test
+      - multinode-xa-test
+      - oracle-test
+      - sqlserver-tests
+      - cpp-odbc-postgres-test
+      - notify-integration
+    steps:
+      - name: Check all selected suite results
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          SELECTED: ${{ toJSON(needs.detect-changes.outputs) }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.JOB_RESULTS);
+          const selected = JSON.parse(process.env.SELECTED);
+          let failed = false;
+          const suites = {
+            'java-verify': 'java_build',
+            'resolve-version': 'java',
+            'build-test': 'java',
+            'dotnet-crud-test': 'dotnet',
+            'ruby-dbi-test': 'ruby',
+            'python-h2-l1': 'python',
+            'cpp-odbc-test': 'cpp',
+            'postgres-test': 'java',
+            'mysql-test': 'java',
+            'mariadb-test': 'java',
+            'cockroachdb-test': 'java',
+            'db2-test': 'java',
+            'multinode-test': 'java',
+            'multinode-xa-test': 'java',
+            'oracle-test': 'java',
+            'sqlserver-tests': 'java',
+            'cpp-odbc-postgres-test': 'cpp',
+            'notify-integration': 'framework'
+          };
+          for (const [job, details] of Object.entries(needs)) {
+            let expected = 'true';
+            if (job in suites) {
+              expected = selected[suites[job]];
+            }
+            if (job === 'notify-integration' &&
+                !['push', 'workflow_dispatch'].includes(process.env.EVENT_NAME)) {
+              expected = 'false';
+            }
+            const valid = expected === 'true' ? details.result === 'success' :
+              expected === 'false' && ['skipped', 'success'].includes(details.result);
+            console.log(`${job}: selected=${expected}, result=${details.result}`);
+            failed ||= !valid;
+          }
+          if (failed) {
+            console.error('Main CI failed: change detection or a selected suite did not pass.');
+            process.exit(1);
+          }
+          NODE

@@ -2,16 +2,29 @@ name: PHP PDO CRUD Test (H2)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
+  workflow_dispatch:
+    inputs:
+      full_suite:
+        description: Run the full CI suite
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    uses: ./.github/workflows/ci-test-selection.yml
+    with:
+      full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
+
   php-pdo-crud-test:
     name: PHP PDO L1 CRUD against H2
+    needs: detect-changes
+    if: needs.detect-changes.outputs.php == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -89,3 +102,28 @@ jobs:
       - name: Show OJP server log
         if: always()
         run: cat /tmp/ojp-server.log
+
+  php-ci-result:
+    name: PHP CI Result
+    needs: [detect-changes, php-pdo-crud-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify selected suite result
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SELECTED: ${{ needs.detect-changes.outputs.php }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS);
+          const selected = process.env.SELECTED;
+          const result = needs['php-pdo-crud-test'].result;
+          if (needs['detect-changes'].result !== 'success' ||
+              !['true', 'false'].includes(selected) ||
+              (selected === 'true' && result !== 'success') ||
+              (selected === 'false' && !['skipped', 'success'].includes(result))) {
+            console.error('PHP CI failed:', JSON.stringify(needs), 'selected:', selected);
+            process.exit(1);
+          }
+          console.log(selected === 'true' ? 'PHP suite passed.' : 'PHP suite not selected.');
+          NODE

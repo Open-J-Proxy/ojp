@@ -39,11 +39,15 @@ row counts. The current parameter/value mapping covers null, booleans, signed
 integers, floats, doubles, strings, and binary values. Disable application-side
 connection pooling when using OJP.
 
-The H2 L2 suite covers typed decimal and temporal input parameters, both direct
-and prepared statement execution, basic result-column metadata, and retrieval
-of the generated identity value through H2 SQL. The ODBC API has no portable
-equivalent of JDBC `getGeneratedKeys()`, so generated identities are read with
-database SQL rather than a driver-specific generated-keys API.
+The H2 L2 suite covers typed decimal, temporal, integer, floating-point,
+boolean, text, and binary input parameters, both direct and prepared statement
+execution, basic result-column metadata, and retrieval of the generated identity
+value through H2 SQL. Unlike the JDBC H2 type suite, this ODBC suite does not
+cover Java-specific types, timezone-aware values, or arrays; those have no
+equivalent in the currently implemented ODBC parameter mapping. The ODBC API
+has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
+identities are read with database SQL rather than a driver-specific
+generated-keys API.
 
 Transactions, output parameters, wide-character ODBC entry points, complete
 metadata discovery, LOBs, pagination, session affinity, multinode routing,

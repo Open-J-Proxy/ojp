@@ -94,7 +94,7 @@ if(BUILD_TESTING)
     add_dependencies(ojp_odbc_h2_l2_integration_test ojp_odbc)
     add_test(NAME OjpOdbcH2L2Integration
         COMMAND ojp_odbc_h2_l2_integration_test
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l2_connection.csv"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l1_connection.csv"
             "OJP_TEST_H2"
             "OJP_TEST_H2_ADDR")
     add_test(NAME OjpOdbcPostgreSqlL1Integration

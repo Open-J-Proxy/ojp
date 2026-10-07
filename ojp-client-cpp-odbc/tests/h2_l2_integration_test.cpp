@@ -1,3 +1,4 @@
+// Verifies H2 typed parameters, prepared queries, generated IDs, and column metadata through ODBC.
 #include <sql.h>
 #include <sqlext.h>
 

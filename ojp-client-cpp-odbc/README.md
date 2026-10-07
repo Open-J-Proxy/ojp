@@ -141,11 +141,10 @@ driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
 including SQL Server's `42000` syntax-error SQLSTATE. Each test uses a unique
 table per run and verifies connection readiness, prepared INSERT/SELECT/UPDATE,
 DELETE, row counts, result values, empty results, SQL error diagnostics, and
-session termination. The separate H2 L2 suite uses
-[`h2_l2_connection.csv`](tests/testdata/h2_l2_connection.csv) and covers typed
-parameters, generated identity retrieval, and basic result metadata. Keeping
-L2 H2-specific avoids adding database-dependent branches to the shared L1
-executable.
+session termination. The separate H2 L2 suite reuses the H2 L1 connection
+fixture and covers typed parameters, generated identity retrieval, and basic
+result metadata. Keeping L2 H2-specific avoids adding database-dependent
+branches to the shared L1 executable.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with

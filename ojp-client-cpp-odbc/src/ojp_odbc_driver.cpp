@@ -70,7 +70,9 @@ struct ConnectionHandle final : HandleBase {
     SessionInfo session;
     std::mutex operation_mutex;
     std::map<std::string, std::string> savepoints;
+    SQLULEN transaction_isolation = SQL_TXN_READ_COMMITTED;
     bool auto_commit = true;
+    bool has_transaction_isolation = false;
     bool connected = false;
 };
 
@@ -872,7 +874,7 @@ enum class TransactionAction {
 
 SQLRETURN transaction_operation(ConnectionHandle* connection, HandleBase* handle,
                                 TransactionAction operation) {
-    if (connection->auto_commit) {
+    if (connection->auto_commit && operation != TransactionAction::START) {
         return SQL_SUCCESS;
     }
     grpc::ClientContext context;
@@ -1224,6 +1226,38 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     }
     connection->session.CopyFrom(session);
     connection->connected = true;
+    if (connection->has_transaction_isolation) {
+        ParameterValue parameter;
+        parameter.set_int_value(static_cast<std::int32_t>(connection->transaction_isolation));
+        CallResourceResponse response;
+        const auto isolation_result = call_resource(
+            connection, connection, ResourceType::RES_CONNECTION, CallType::CALL_SET,
+            "TransactionIsolation", {parameter}, &response);
+        if (!SQL_SUCCEEDED(isolation_result)) {
+            grpc::ClientContext terminate_context;
+            com::openjproxy::grpc::SessionTerminationStatus termination;
+            connection->stub->terminateSession(&terminate_context, connection->session,
+                                               &termination);
+            connection->connected = false;
+            connection->stub.reset();
+            connection->channel.reset();
+            return isolation_result;
+        }
+    }
+    if (!connection->auto_commit) {
+        const auto transaction_result = transaction_operation(
+            connection, connection, TransactionAction::START);
+        if (!SQL_SUCCEEDED(transaction_result)) {
+            grpc::ClientContext terminate_context;
+            com::openjproxy::grpc::SessionTerminationStatus termination;
+            connection->stub->terminateSession(&terminate_context, connection->session,
+                                               &termination);
+            connection->connected = false;
+            connection->stub.reset();
+            connection->channel.reset();
+            return transaction_result;
+        }
+    }
     return SQL_SUCCESS;
 }
 
@@ -1650,7 +1684,8 @@ SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
         }
         std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
         if (!target->connected || !target->stub) {
-            return fail(target, "ODBC connection is not open", "08003");
+            target->auto_commit = auto_commit == SQL_AUTOCOMMIT_ON;
+            return SQL_SUCCESS;
         }
         return set_auto_commit(target, target, auto_commit == SQL_AUTOCOMMIT_ON);
     }
@@ -1664,13 +1699,21 @@ SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
         }
         std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
         if (!target->connected || !target->stub) {
-            return fail(target, "ODBC connection is not open", "08003");
+            target->transaction_isolation = static_cast<SQLULEN>(isolation);
+            target->has_transaction_isolation = true;
+            return SQL_SUCCESS;
         }
         ParameterValue parameter;
         parameter.set_int_value(static_cast<std::int32_t>(isolation));
         CallResourceResponse response;
-        return call_resource(target, target, ResourceType::RES_CONNECTION, CallType::CALL_SET,
-                             "TransactionIsolation", {parameter}, &response);
+        const auto result = call_resource(target, target, ResourceType::RES_CONNECTION,
+                                          CallType::CALL_SET, "TransactionIsolation",
+                                          {parameter}, &response);
+        if (SQL_SUCCEEDED(result)) {
+            target->transaction_isolation = static_cast<SQLULEN>(isolation);
+            target->has_transaction_isolation = true;
+        }
+        return result;
     }
     return fail(target, "Connection attribute is not supported", "HYC00");
 }

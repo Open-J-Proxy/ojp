@@ -18,13 +18,14 @@
 # 8. multinode-xa-test: Multinode XA integration tests (needs: build-test, resolve-version)
 # 9. oracle-test: Oracle database tests (needs: build-test, resolve-version)
 # 10. sqlserver-tests: SQL Server tests (needs: build-test, resolve-version)
-# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 and PostgreSQL (independent)
+# 11. cpp-odbc-test: C++ ODBC L1 integration tests against H2 and PostgreSQL (needs: build-test)
 # 12. notify-integration: Triggers integration repo workflow (needs: build-test)
 # 13. python-h2-l1: Independent Python DB-API unit and H2 integration tests
 #
 # SEQUENTIAL EXECUTION:
 # Specialized Java database test jobs depend on build-test completing
-# successfully. .NET, Ruby, Python, and C++ client test jobs run independently.
+# successfully. The C++ ODBC job also waits for this H2 gate; .NET, Ruby, and
+# Python client test jobs run independently.
 # This ensures that expensive database setups only run if basic H2 tests pass,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
@@ -2181,7 +2182,7 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 11: C++ ODBC H2 L1 Integration Tests
+  # JOB 11: C++ ODBC L1 Integration Tests
   # ===========================================================================
   #
   # Builds the native ODBC client and runs its full CTest suite against the
@@ -2191,6 +2192,7 @@ jobs:
   cpp-odbc-test:
     name: C++ ODBC H2 and PostgreSQL L1 Tests
     runs-on: ubuntu-latest
+    needs: [build-test]
     permissions:
       contents: read
     services:
@@ -2269,15 +2271,24 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC L1 tests against H2 and PostgreSQL
+      - name: Run C++ ODBC H2 L1 tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
+        run: |
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcH2L1Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-h2-l1-test.log
+
+      - name: Run C++ ODBC PostgreSQL L1 tests
+        if: success()
+        env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
         run: |
-          ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-l1-test.log
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcPostgreSqlL1Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-postgresql-l1-test.log
 
       - name: Show ojp-server.log
         if: always()
@@ -2289,7 +2300,8 @@ jobs:
         with:
           name: cpp-odbc-l1-test-results
           path: |
-            /tmp/cpp-odbc-l1-test.log
+            /tmp/cpp-odbc-h2-l1-test.log
+            /tmp/cpp-odbc-postgresql-l1-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

@@ -596,8 +596,6 @@ std::int32_t jdbc_null_type(SQLSMALLINT sql_type) {
         case SQL_TYPE_TIMESTAMP:
             return sql_type;  // ODBC and java.sql.Types share these codes.
         case SQL_LONGVARBINARY: return 2004;  // Types.BLOB
-        case SQL_LONGVARCHAR:
-        case SQL_WLONGVARCHAR: return 2005;   // Types.CLOB
         case SQL_WCHAR: return -15;         // Types.NCHAR
         case SQL_WLONGVARCHAR: return -16;  // Types.LONGNVARCHAR
         case SQL_GUID: return 1;            // Types.CHAR

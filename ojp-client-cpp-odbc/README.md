@@ -106,29 +106,17 @@ Implemented rules:
 | 4.2 `ConnectionDetails` | `url`, `user`, `password`, `clientUUID`, `isXA=false` |
 | 4.3.1–4.3.2 send and replace `SessionInfo` | Sent with every request and replaced from every `executeQuery`, `executeUpdate`, `fetchNextRows`, and `callResource` response |
 | 4.3.4 `terminateSession` exactly once | Sent once by `SQLDisconnect`; the connection is unusable afterwards, even if the call fails |
+| 4.4.1 empty `statementUUID` for new statements | Always sent empty; prepared statements are not reused on the server |
 | 4.4.2 1-based parameter indexes | ODBC parameter numbers are passed through |
+| 4.4.3 `PT_BIG_DECIMAL` as BigDecimalWire `bytes_value` | Decimal parameters are encoded, and decimal results decoded, in this format |
 | 4.4.4 `StringValue` wrapper fields | `uuid_value`, `biginteger_value`, `url_value`, `rowid_value`, and `rowidlifetime_value` results are decoded as text |
+| 4.4.5 `PT_NULL` with a `java.sql.Types` code in `int_value` | Derived from the bound ODBC SQL type; unknown types send `0` (`Types.NULL`) |
 | 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
 the client pulls the remaining rows with `fetchNextRows`. Earlier versions
 returned only the first row.
-
-Where the spec and the server disagree, the client follows the server and the
-JDBC reference driver:
-
-- **4.4.1 `statementUUID`.** The spec asks for a new random UUID per request.
-  The server treats a non-empty `statementUUID` as the ID of a statement it
-  already created and looks it up, so a random value fails. Like the JDBC
-  `Statement`, the client leaves it empty.
-- **4.4.3 `PT_BIG_DECIMAL`.** The spec asks for `string_value = "<unscaled>
-  <scale>"`. The server casts the bound value to `BigDecimal` and only decodes
-  `bytes_value` in the BigDecimalWire format, which the JDBC driver also sends.
-  The client sends BigDecimalWire bytes.
-- **3.1 `PT_NULL`.** The spec describes `is_null` as the SQL NULL marker. The
-  server binds `PT_NULL` with `setNull(index, (int) value)`, so the client sends
-  a `java.sql.Types` code in `int_value`, as the JDBC driver does.
 
 Spec rules that belong to levels above L2 and are not implemented:
 

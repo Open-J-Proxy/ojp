@@ -598,8 +598,7 @@ for op_result in stub.executeQuery(StatementRequest(
         session       = session,
         sql           = "SELECT id, name FROM orders WHERE customer = ?",
         parameters    = [ParameterProto(index=1, type=PT_STRING,
-                                        values=[ParameterValue(string_value="alice")])],
-        statementUUID = str(uuid.uuid4()))):
+                                        values=[ParameterValue(string_value="alice")])])):
     qr = op_result.query_result
     if result_set_uuid is None:
         result_set_uuid = qr.resultSetUUID
@@ -624,8 +623,7 @@ resp = stub.executeUpdate(StatementRequest(
     parameters    = [
         ParameterProto(index=1, type=PT_STRING, values=[ParameterValue(string_value="alice")]),
         ParameterProto(index=2, type=PT_INT,    values=[ParameterValue(int_value=99)])
-    ],
-    statementUUID = str(uuid.uuid4())
+    ]
 ))
 session       = resp.session
 rows_affected = resp.value.int_value   # e.g., 1
@@ -687,7 +685,9 @@ All SQL is executed by populating a `StatementRequest` and calling either `execu
 
 **Parameterless SQL:** Set `sql` to the full query string and leave `parameters` empty.
 
-**Parameterized SQL:** Set `sql` with `?` positional placeholders and populate the `parameters` list with one `ParameterProto` per `?`. Assign a `statementUUID` (a random UUID per logical prepared-statement instance).
+**Parameterized SQL:** Set `sql` with `?` positional placeholders and populate the `parameters` list with one `ParameterProto` per `?`.
+
+**`statementUUID`:** Leave it empty for a new statement. The server treats a non-empty `statementUUID` as the ID of a statement it already holds in the session and looks it up, so a client-generated random UUID fails. When the server assigns a UUID to a prepared statement (`OpResult.uuid`, or `uuid_value` for add-batch results), the client may send it back to reuse that statement in the same session.
 
 **Stored-procedure calls:** First call `callResource` with `CallType.CALL_PREPARE` to register the procedure on the server and receive a `resourceUUID`. Then call `callResource` with `CallType.CALL_EXECUTE` to run it, passing IN parameters and retrieving OUT/INOUT values from `CallResourceResponse.values`.
 
@@ -715,16 +715,14 @@ resp = stub.executeUpdate(StatementRequest(
     parameters    = [
         ParameterProto(index=1, type=PT_STRING, values=[ParameterValue(string_value="Alice")]),
         ParameterProto(index=2, type=PT_INT,    values=[ParameterValue(int_value=42)])
-    ],
-    statementUUID = new_uuid()
+    ]
 ))
 session       = resp.session
 rows_affected = resp.value.int_value
 
 # Query
 for op_result in stub.executeQuery(StatementRequest(
-        session=session, sql="SELECT id, name FROM orders",
-        statementUUID=new_uuid())):
+        session=session, sql="SELECT id, name FROM orders")):
     for row in op_result.query_result.rows:
         id_val   = row.values[0].int_value
         name_val = row.values[1].string_value
@@ -746,7 +744,8 @@ session   = exec_resp.session
 ```
 
 > **Reference implementation:**
-> - `ojp-jdbc-driver` — [`Statement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java): `executeQuery(sql)` and `executeUpdate(sql)` delegate to `statementService`; holds `statementUUID` assigned lazily.
+> - `ojp-jdbc-driver` — [`Statement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java): `executeQuery(sql)` and `executeUpdate(sql)` delegate to `statementService`; sends an empty `statementUUID`.
+> - `ojp-server` — [`StatementFactory`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/statement/StatementFactory.java): a non-empty `statementUUID` is looked up as an existing session statement.
 > - `ojp-jdbc-driver` — [`PreparedStatement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/PreparedStatement.java): accumulates parameters in a `SortedMap<Integer, Parameter>`; all 28 `setXxx(index, value)` methods map to the corresponding `ParameterType` (see §7.2).
 > - `ojp-jdbc-driver` — [`CallableStatement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/CallableStatement.java): issues `callResource(CALL_PREPARE)` on construction; retrieves OUT/INOUT values via `callResource(CALL_EXECUTE)` after execution.
 
@@ -768,7 +767,7 @@ ParameterProto {
 
 | Proto enum value | Wire field in `ParameterValue` | Notes |
 |---|---|---|
-| `PT_NULL` | `is_null = true` | Explicit null |
+| `PT_NULL` | `int_value` | `java.sql.Types` code of the target column (for example `4` for `INTEGER`, `12` for `VARCHAR`, `0` when unknown); the server calls `setNull(index, code)`. `is_null` is not accepted for `PT_NULL`. |
 | `PT_BOOLEAN` | `bool_value` | |
 | `PT_BYTE` | `int_value` | Clamp to byte range |
 | `PT_SHORT` | `int_value` | Clamp to short range |
@@ -776,7 +775,7 @@ ParameterProto {
 | `PT_LONG` | `long_value` | |
 | `PT_FLOAT` | `float_value` | |
 | `PT_DOUBLE` | `double_value` | |
-| `PT_BIG_DECIMAL` | `string_value` | Encode as `"<unscaledInteger> <scale>"` — see §7.2.1 |
+| `PT_BIG_DECIMAL` | `bytes_value` | BigDecimalWire format — see §7.2.1 |
 | `PT_STRING` | `string_value` | |
 | `PT_BYTES` | `bytes_value` | Raw bytes |
 | `PT_DATE` | `date_value` | `google.type.Date` (year/month/day, no timezone) |
@@ -800,9 +799,7 @@ ParameterProto {
 
 #### 7.2.1 BigDecimal encoding
 
-BigDecimal is serialised as a space-separated string: `"<unscaledInteger> <scale>"`. Example: `BigDecimal("123.45")` yields `"12345 2"`.
-
-> **Note:** A separate binary wire format is documented in `documents/protocol/BIGDECIMAL_WIRE_FORMAT.md` for contexts where binary efficiency is needed.
+BigDecimal is sent in `bytes_value` using the BigDecimalWire format documented in [`BIGDECIMAL_WIRE_FORMAT.md`](../protocol/BIGDECIMAL_WIRE_FORMAT.md): byte `0x01`, big-endian int32 length, the unscaled integer as UTF-8 decimal digits (with a leading `-` if negative), then big-endian int32 scale. Example: `BigDecimal("123.45")` yields `01 00000005 "12345" 00000002`. The server decodes `PT_BIG_DECIMAL` only from this format, and decimal result values are returned in the same format.
 
 #### 7.2.2 Presence-aware fields
 
@@ -858,11 +855,11 @@ The OJP server must always run with `user.timezone=UTC`. Client libraries should
 
 `executeQuery` is a server-streaming RPC. The response stream contains one or more `OpResult` messages:
 
-1. **First `OpResult`**: contains the initial data batch in `query_result`: `resultSetUUID`, `labels` (ordered column names), `rows` (first batch of `ResultRow` objects), and `flag` (`"ROW_BY_ROW"` for one-row-per-message mode).
+1. **First `OpResult`**: contains the initial data batch in `query_result`: `resultSetUUID`, `labels` (ordered column names), `rows` (first batch of `ResultRow` objects), and `flag` (`"RESULT_SET_ROW_BY_ROW_MODE"` for one-row-per-message mode, used by SQL Server and DB2 when the result has binary or LOB columns).
 2. **Subsequent `OpResult` messages** (only in non-row-by-row streaming mode): additional batches until the stream closes.
 3. **`fetchNextRows`**: After the initial stream closes, call `fetchNextRows(ResultSetFetchRequest)` with `resultSetUUID` and a page size. Repeat until the response contains an empty `rows` list.
 
-Map each `ParameterValue` oneof to the host language's equivalent type following the inverse of the encoding table in §7.2. Pay attention to `is_null = true` for SQL NULL values.
+Map each `ParameterValue` oneof to the host language's equivalent type following the inverse of the encoding table in §7.2. Pay attention to `is_null = true` for SQL NULL values, and decode `bytes_value` that matches the BigDecimalWire layout as a decimal.
 
 **Cursor navigation** (scrollable result sets) — through `callResource` with `ResourceType.RES_RESULT_SET`:
 
@@ -1439,8 +1436,7 @@ def execute_update(sql, params):
                         "to avoid overloading the database")
     try:
         resp = stub.executeUpdate(StatementRequest(session=session, sql=sql,
-                                                   parameters=params,
-                                                   statementUUID=new_uuid()))
+                                                   parameters=params))
         session = resp.session
         throttle.update_from_session_info(session)
         return resp.value.int_value  # affected row count

@@ -1116,15 +1116,18 @@ SQLRETURN execute_savepoint_statement(StatementHandle* statement, SavepointActio
         if (!SQL_SUCCEEDED(result)) {
             return result;
         }
-        if (response.resourceuuid().empty()) {
+        if (response.values_size() == 0 ||
+            response.values(0).value_case() != ParameterValue::kStringValue ||
+            response.values(0).string_value().empty()) {
             return fail(statement, "OJP did not return a savepoint handle", "HY000");
         }
+        const auto& savepoint_uuid = response.values(0).string_value();
         const auto previous = connection->savepoint_names.find(name);
         if (previous != connection->savepoint_names.end()) {
             connection->savepoints.erase(previous->second);
         }
-        connection->savepoints.insert(response.resourceuuid());
-        connection->savepoint_names[name] = response.resourceuuid();
+        connection->savepoints.insert(savepoint_uuid);
+        connection->savepoint_names[name] = savepoint_uuid;
         statement->row_count = 0;
         return SQL_SUCCESS;
     }

@@ -234,6 +234,11 @@ result metadata. The SQL Server L2 suite does the same using the SQL Server
 fixture. The L2 suites are database-specific, so the shared L1 executable does
 not need database-dependent branches.
 
+The H2 and SQL Server L3 suites cover multi-block reads, result metadata,
+end-of-result behavior, empty results, and closing a result before reusing the
+statement. SQL Server L3 also selects multiple `VARBINARY` rows to exercise
+row-by-row server streaming through `fetchNextRows`.
+
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
 database-owner permissions, as in the JDBC integration-test container setup.
@@ -256,5 +261,5 @@ silently skipping it.
 
 The C++ ODBC H2 workflow job runs both `OjpOdbcH2L1Integration` and
 `OjpOdbcH2L2Integration` against the same OJP server. The C++ ODBC SQL Server
-workflow job runs both `OjpOdbcSqlServerL1Integration` and
-`OjpOdbcSqlServerL2Integration`.
+workflow job runs `OjpOdbcSqlServerL1Integration`,
+`OjpOdbcSqlServerL2Integration`, and `OjpOdbcSqlServerL3Integration`.

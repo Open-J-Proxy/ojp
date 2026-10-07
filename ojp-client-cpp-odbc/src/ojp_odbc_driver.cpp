@@ -839,8 +839,7 @@ SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& resu
 }
 
 template <typename Invoke>
-SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle,
-                             const std::string& operation, Invoke invoke) {
+SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, Invoke invoke) {
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
@@ -892,7 +891,7 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
 }
 
 SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
-    return invoke_session_rpc(connection, handle, "startTransaction",
+    return invoke_session_rpc(connection, handle,
         [connection](grpc::ClientContext* context, const SessionInfo& request,
                      SessionInfo* response) {
             return connection->stub->startTransaction(context, request, response);
@@ -901,16 +900,19 @@ SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
 
 SQLRETURN end_transaction(ConnectionHandle* connection, HandleBase* handle,
                           SQLSMALLINT completion_type) {
+    if (!connection->connected || !connection->stub) {
+        return fail(handle, "ODBC connection is not open", "08003");
+    }
     if (connection->auto_commit) {
         return SQL_SUCCESS;
     }
     const auto result = completion_type == SQL_COMMIT
-        ? invoke_session_rpc(connection, handle, "commitTransaction",
+        ? invoke_session_rpc(connection, handle,
             [connection](grpc::ClientContext* context, const SessionInfo& request,
                          SessionInfo* response) {
                 return connection->stub->commitTransaction(context, request, response);
             })
-        : invoke_session_rpc(connection, handle, "rollbackTransaction",
+        : invoke_session_rpc(connection, handle,
             [connection](grpc::ClientContext* context, const SessionInfo& request,
                          SessionInfo* response) {
                 return connection->stub->rollbackTransaction(context, request, response);
@@ -1108,6 +1110,10 @@ SQLRETURN execute_savepoint_statement(StatementHandle* statement, SavepointActio
         }
         if (response.resourceuuid().empty()) {
             return fail(statement, "OJP did not return a savepoint handle", "HY000");
+        }
+        const auto previous = connection->savepoint_names.find(name);
+        if (previous != connection->savepoint_names.end()) {
+            connection->savepoints.erase(previous->second);
         }
         connection->savepoints.insert(response.resourceuuid());
         connection->savepoint_names[name] = response.resourceuuid();
@@ -1850,6 +1856,17 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
         return SQL_INVALID_HANDLE;
     }
+    if (info_type == SQL_TXN_CAPABLE) {
+        const SQLUSMALLINT numeric_value = SQL_TC_DML;
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(numeric_value));
+        }
+        if (value == nullptr) {
+            return SQL_SUCCESS;
+        }
+        std::memcpy(value, &numeric_value, sizeof(numeric_value));
+        return SQL_SUCCESS;
+    }
     std::string text;
     switch (info_type) {
         case SQL_DRIVER_NAME: text = "libojp_odbc"; break;
@@ -1980,6 +1997,7 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
     const std::vector<SQLUSMALLINT> functions = {
         SQL_API_SQLALLOCHANDLE, SQL_API_SQLFREEHANDLE, SQL_API_SQLSETENVATTR,
         SQL_API_SQLDRIVERCONNECT, SQL_API_SQLCONNECT, SQL_API_SQLDISCONNECT,
+        SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR, SQL_API_SQLENDTRAN,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,

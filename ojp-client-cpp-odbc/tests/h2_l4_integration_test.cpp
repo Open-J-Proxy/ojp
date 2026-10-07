@@ -226,6 +226,14 @@ int run_integration_test(int argc, char** argv) {
         if (get_connect_option(connection, SQL_ATTR_TXN_ISOLATION) != SQL_TXN_READ_COMMITTED) {
             throw std::runtime_error("H2 default transaction isolation should be READ_COMMITTED");
         }
+        SQLUSMALLINT transaction_capability = SQL_TC_NONE;
+        SQLSMALLINT information_length = 0;
+        require_success(SQLGetInfo(connection, SQL_TXN_CAPABLE, &transaction_capability,
+                                   sizeof(transaction_capability), &information_length),
+                        "SQLGetInfo(transaction capability)", SQL_HANDLE_DBC, connection);
+        if (transaction_capability != SQL_TC_DML) {
+            throw std::runtime_error("H2 transaction capability should report DML transactions");
+        }
         set_connect_option(connection, SQL_ATTR_TXN_ISOLATION, SQL_TXN_SERIALIZABLE);
         if (get_connect_option(connection, SQL_ATTR_TXN_ISOLATION) != SQL_TXN_SERIALIZABLE) {
             throw std::runtime_error("transaction isolation did not change to SERIALIZABLE");
@@ -271,9 +279,14 @@ int run_integration_test(int argc, char** argv) {
                           SQL_NTS);
         require_sqlstate(stale_savepoint_result, statement, "3B001");
 
+        execute_direct(statement, "UPDATE " + table +
+                                  " SET label = 'AUTOCOMMIT_COMMITTED' WHERE id = 1");
         set_connect_option(connection, SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_ON);
         if (get_connect_option(connection, SQL_ATTR_AUTOCOMMIT) != SQL_AUTOCOMMIT_ON) {
             throw std::runtime_error("autocommit did not turn back on");
+        }
+        if (read_label(statement, table, 1) != "AUTOCOMMIT_COMMITTED") {
+            throw std::runtime_error("enabling autocommit did not commit the active transaction");
         }
         execute_direct(statement, "DROP TABLE " + table);
         table_created = false;

@@ -1753,7 +1753,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
     }
     auto* target = static_cast<ConnectionHandle*>(connection);
     clear_diagnostics(target);
-    if (value == nullptr) {
+    if (value == nullptr && attribute != SQL_ATTR_AUTOCOMMIT) {
         return fail(target, "Connection attribute value is required", "HY009");
     }
     std::lock_guard<std::mutex> connection_lock(target->operation_mutex);

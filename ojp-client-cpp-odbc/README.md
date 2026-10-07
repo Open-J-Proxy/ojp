@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2 for H2 and SQL Server**, **L3 for H2**, and **L4 for H2** from the
+**L2 for H2 and SQL Server**, **L3 for H2 and SQL Server**, and **L4 for H2** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,8 +11,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L4 for H2; L2 for SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 also covers typed parameters, multi-block result streaming, result-set lifecycle, and local transactions. |
+| Highest implemented level | **L4 for H2; L3 for SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, and local transactions; SQL Server adds typed parameters and multi-block result streaming with row-by-row binary fetching. |
 
 ### Current test-proven coverage by database
 
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L4** | L1-L3 suites plus `h2_l4_integration_test.cpp` cover transaction isolation, commit/rollback, savepoint rollback/release, and expired handles. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L2** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
+| SQL Server | **L3** | `l1_integration_test.cpp`, `sqlserver_l2_integration_test.cpp`, and `sqlserver_l3_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -52,12 +52,14 @@ has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
 identities are read with database SQL rather than a driver-specific
 generated-keys API.
 
-The H2 L3 suite retrieves 10,001 ordered rows through the server-streaming query
-protocol, checks result metadata and end-of-result behavior, and exercises
-closing a partially consumed result and reusing the statement for full and empty
-results. The client consumes every `executeQuery` stream and closes its
-server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`. The
-client also uses `fetchNextRows` when the server marks a result as row-by-row.
+The H2 and SQL Server L3 suites retrieve 10,001 ordered rows through the
+server-streaming query protocol, check result metadata and end-of-result
+behavior, and exercise closing a partially consumed result and reusing the
+statement for full and empty results. The SQL Server suite also returns multiple
+`VARBINARY` rows, exercising the server's row-by-row result mode and
+`fetchNextRows` pagination. The client consumes every `executeQuery` stream and
+closes its server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`.
+The client also uses `fetchNextRows` when the server marks a result as row-by-row.
 
 The H2 L4 suite maps ODBC autocommit and `SQLEndTran`/`SQLTransact` to the
 transaction RPCs, and maps `SQL_ATTR_TXN_ISOLATION` to connection resource calls.
@@ -162,6 +164,10 @@ cmake --build ojp-client-cpp-odbc/build
 The CMake build generates C++ bindings from the shared OJP proto source in the
 build directory; generated files are not checked in.
 
+Prebuilt binaries are not published yet. See the
+[ODBC driver distribution analysis](../documents/analysis/ODBC_DRIVER_DISTRIBUTION_ANALYSIS.md)
+for the proposed per-OS delivery plan.
+
 ## Using from a C++ ODBC application
 
 Register the driver with the ODBC Driver Manager as `OJP`, then use
@@ -240,6 +246,11 @@ result metadata. The SQL Server L2 suite does the same using the SQL Server
 fixture. The L2 suites are database-specific, so the shared L1 executable does
 not need database-dependent branches.
 
+The H2 and SQL Server L3 suites cover multi-block reads, result metadata,
+end-of-result behavior, empty results, and closing a result before reusing the
+statement. SQL Server L3 also selects multiple `VARBINARY` rows to exercise
+row-by-row server streaming through `fetchNextRows`.
+
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
 database-owner permissions, as in the JDBC integration-test container setup.
@@ -262,5 +273,5 @@ silently skipping it.
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
 `OjpOdbcH2L4Integration` against the same OJP server. The C++ ODBC SQL Server
-workflow job runs both `OjpOdbcSqlServerL1Integration` and
-`OjpOdbcSqlServerL2Integration`.
+workflow job runs `OjpOdbcSqlServerL1Integration`,
+`OjpOdbcSqlServerL2Integration`, and `OjpOdbcSqlServerL3Integration`.

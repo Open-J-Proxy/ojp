@@ -2,7 +2,25 @@
 
 This directory contains technical analysis documents for various OJP features and decisions.
 
-## Latest Analysis (September 2026)
+## Latest Analysis (October 2026)
+
+### 🆕 ODBC Driver Distribution
+
+**Question:** How should the OJP ODBC driver be delivered so users do not need to clone and compile it, and what differs between Windows, Linux, and macOS?
+
+**Quick Answer:** The driver is already a shared library. Make it self-contained (static dependencies, only `SQL*` symbols exported), publish per-OS/per-architecture archives on GitHub Releases, then add native installers (MSI, deb/rpm, Homebrew) that register the driver with each platform's ODBC Driver Manager.
+
+**Document:**
+- [ODBC_DRIVER_DISTRIBUTION_ANALYSIS.md](./ODBC_DRIVER_DISTRIBUTION_ANALYSIS.md)
+  - Current build and release gaps
+  - How ODBC drivers are delivered on Windows, Linux, and macOS
+  - Phased recommendation, concerns, and open questions
+
+**Key Takeaway:** The work is distribution, not a new artefact type: self-contained binaries first, installers and DSN/Unicode support later.
+
+---
+
+## Previous Latest Analysis (September 2026)
 
 ### 🆕 Database Total Connection Budget Control
 
@@ -189,5 +207,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-09-19  
+**Last Updated:** 2026-10-07
 **Maintained By:** OJP Core Team

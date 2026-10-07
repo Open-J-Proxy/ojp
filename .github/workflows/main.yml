@@ -2478,14 +2478,14 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC SQL Server L1 and L2 Integration Tests
+  # JOB 14: C++ ODBC SQL Server L1, L2, and L3 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the C++ ODBC PostgreSQL test after the aggregate H2 gate.
   #
   # ===========================================================================
   cpp-odbc-sqlserver-test:
-    name: C++ ODBC SQL Server L1/L2 Tests
+    name: C++ ODBC SQL Server L1/L2/L3 Tests
     runs-on: ubuntu-latest
     needs: [h2-integration-gate]
     permissions:
@@ -2591,15 +2591,15 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC SQL Server L1 and L2 tests
+      - name: Run C++ ODBC SQL Server L1, L2, and L3 tests
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServerL[12]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l2-test.log
+            -R '^OjpOdbcSqlServerL[123]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l2-l3-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2615,9 +2615,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-sqlserver-l1-l2-test-results
+          name: cpp-odbc-sqlserver-l1-l2-l3-test-results
           path: |
-            /tmp/cpp-odbc-sqlserver-l1-l2-test.log
+            /tmp/cpp-odbc-sqlserver-l1-l2-l3-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

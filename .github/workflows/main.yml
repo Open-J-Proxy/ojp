@@ -2591,15 +2591,15 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC SQL Server L1, L2, and L3 tests
+      - name: Run C++ ODBC SQL Server L1 through L4 tests
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServerL[123]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l2-l3-test.log
+            -R '^OjpOdbcSqlServerL[1234]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l2-l3-l4-test.log
 
       - name: Show OJP server log
         if: always()

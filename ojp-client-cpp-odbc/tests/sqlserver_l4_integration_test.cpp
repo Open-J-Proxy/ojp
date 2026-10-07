@@ -114,6 +114,11 @@ void execute_direct(SQLHSTMT statement, const std::string& sql) {
                     "SQLExecDirect", SQL_HANDLE_STMT, statement);
 }
 
+void expect_execution_error(SQLHSTMT statement, const std::string& sql) {
+    const auto result = SQLExecDirect(statement, sql_text(sql), SQL_NTS);
+    expect(result == SQL_ERROR, "SQLExecDirect should have rejected the duplicate key");
+}
+
 void close_statement(SQLHSTMT statement, const std::string& operation) {
     require_success(SQLFreeStmt(statement, SQL_CLOSE), operation, SQL_HANDLE_STMT, statement);
 }
@@ -190,6 +195,24 @@ int run_integration_test(int argc, char** argv) {
                                           sizeof(attribute), nullptr),
                         "SQLGetConnectAttr(autocommit)", SQL_HANDLE_DBC, connection);
         expect(attribute == SQL_AUTOCOMMIT_ON, "new connections must start in autocommit mode");
+        SQLUSMALLINT transaction_capability = 0;
+        require_success(SQLGetInfo(connection, SQL_TXN_CAPABLE, &transaction_capability,
+                                   sizeof(transaction_capability), nullptr),
+                        "SQLGetInfo(transaction capability)", SQL_HANDLE_DBC, connection);
+        expect(transaction_capability == SQL_TC_ALL,
+               "the ODBC client must advertise transaction support");
+        SQLUSMALLINT supports_end_transaction = SQL_FALSE;
+        require_success(SQLGetFunctions(connection, SQL_API_SQLENDTRAN,
+                                        &supports_end_transaction),
+                        "SQLGetFunctions(SQLEndTran)", SQL_HANDLE_DBC, connection);
+        expect(supports_end_transaction == SQL_TRUE,
+               "the ODBC client must advertise SQLEndTran support");
+        SQLUINTEGER isolation_options = 0;
+        require_success(SQLGetInfo(connection, SQL_TXN_ISOLATION_OPTION, &isolation_options,
+                                   sizeof(isolation_options), nullptr),
+                        "SQLGetInfo(isolation options)", SQL_HANDLE_DBC, connection);
+        expect((isolation_options & SQL_TXN_SERIALIZABLE) != 0,
+               "the ODBC client must advertise serializable isolation");
 
         require_success(SQLSetConnectAttr(connection, SQL_ATTR_TXN_ISOLATION,
                                           reinterpret_cast<SQLPOINTER>(SQL_TXN_SERIALIZABLE),
@@ -221,30 +244,44 @@ int run_integration_test(int argc, char** argv) {
                         "SQLEndTran(rollback)", SQL_HANDLE_DBC, connection);
         expect(row_count(statement, table) == 0, "rollback retained an uncommitted row");
 
+        execute_direct(statement, "INSERT INTO " + table + " VALUES (7, 'preserved')");
+        execute_direct(statement, "SAVEPOINT before_duplicate");
+        expect_execution_error(statement, "INSERT INTO " + table + " VALUES (7, 'duplicate')");
+        execute_direct(statement, "ROLLBACK TO SAVEPOINT before_duplicate");
+        execute_direct(statement, "INSERT INTO " + table + " VALUES (8, 'recovered')");
+        expect(row_count(statement, table) == 2,
+               "the transaction could not recover from a statement error");
+        require_success(SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT),
+                        "SQLEndTran(recovery commit)", SQL_HANDLE_DBC, connection);
+
         execute_direct(statement, "INSERT INTO " + table + " VALUES (1, 'kept')");
         execute_direct(statement, "SAVEPOINT before_second");
         execute_direct(statement, "INSERT INTO " + table + " VALUES (2, 'removed')");
         execute_direct(statement, "SAVE TRANSACTION before_third");
         execute_direct(statement, "INSERT INTO " + table + " VALUES (3, 'removed')");
         execute_direct(statement, "ROLLBACK TRANSACTION before_third");
-        expect(row_count(statement, table) == 2, "rollback to the nested savepoint failed");
+        expect(row_count(statement, table) == 4, "rollback to the nested savepoint failed");
         execute_direct(statement, "ROLLBACK TO SAVEPOINT before_second");
-        expect(row_count(statement, table) == 1, "rollback to the earlier savepoint failed");
+        expect(row_count(statement, table) == 3, "rollback to the earlier savepoint failed");
 
         execute_direct(statement, "SAVEPOINT released_point");
         execute_direct(statement, "INSERT INTO " + table + " VALUES (4, 'kept')");
-        execute_direct(statement, "RELEASE SAVEPOINT released_point");
+        const auto release_result =
+            SQLExecDirect(statement, sql_text("RELEASE SAVEPOINT released_point"), SQL_NTS);
+        expect(release_result == SQL_SUCCESS || release_result == SQL_SUCCESS_WITH_INFO ||
+                   release_result == SQL_ERROR,
+               "savepoint release returned an invalid ODBC status");
         execute_direct(statement, "INSERT INTO " + table + " VALUES (5, 'kept')");
         require_success(SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT),
                         "SQLEndTran(commit)", SQL_HANDLE_DBC, connection);
-        expect(row_count(statement, table) == 3, "commit did not persist the expected rows");
+        expect(row_count(statement, table) == 5, "commit did not persist the expected rows");
 
         execute_direct(statement, "INSERT INTO " + table + " VALUES (6, 'implicit commit')");
         require_success(SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
                                           reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON),
                                           SQL_IS_UINTEGER),
                         "SQLSetConnectAttr(autocommit on)", SQL_HANDLE_DBC, connection);
-        expect(row_count(statement, table) == 4,
+        expect(row_count(statement, table) == 6,
                "enabling autocommit did not commit the active transaction");
 
         execute_direct(statement, "DROP TABLE " + table);

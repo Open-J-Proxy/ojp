@@ -1225,6 +1225,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         return fail_grpc(connection, status, context);
     }
     connection->session.CopyFrom(session);
+    connection->savepoints.clear();
     connection->connected = true;
     if (connection->has_transaction_isolation) {
         ParameterValue parameter;
@@ -1276,6 +1277,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     const auto status = connection->stub->terminateSession(&context, connection->session, &response);
     // terminateSession is sent exactly once; the connection is unusable even if it fails.
     connection->connected = false;
+    connection->savepoints.clear();
     connection->stub.reset();
     connection->channel.reset();
     if (!status.ok()) {
@@ -1782,6 +1784,44 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
         return SQL_INVALID_HANDLE;
     }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (info_type == SQL_TXN_CAPABLE) {
+        if (value != nullptr) {
+            *static_cast<SQLUSMALLINT*>(value) = SQL_TC_ALL;
+        }
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_TXN_ISOLATION_OPTION) {
+        if (value != nullptr) {
+            *static_cast<SQLUINTEGER*>(value) =
+                SQL_TXN_READ_UNCOMMITTED | SQL_TXN_READ_COMMITTED |
+                SQL_TXN_REPEATABLE_READ | SQL_TXN_SERIALIZABLE;
+        }
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_DEFAULT_TXN_ISOLATION) {
+        if (value == nullptr) {
+            return SQL_SUCCESS;
+        }
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        if (!target->connected || !target->stub) {
+            return fail(target, "ODBC connection is not open", "08003");
+        }
+        CallResourceResponse response;
+        const auto result = call_resource(target, target, ResourceType::RES_CONNECTION,
+                                          CallType::CALL_GET, "TransactionIsolation", {},
+                                          &response);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        if (response.values_size() == 0 || !response.values(0).has_int_value()) {
+            return fail(target, "OJP returned an invalid transaction isolation level", "HY000");
+        }
+        *static_cast<SQLUINTEGER*>(value) =
+            static_cast<SQLUINTEGER>(response.values(0).int_value());
+        return SQL_SUCCESS;
+    }
     std::string text;
     switch (info_type) {
         case SQL_DRIVER_NAME: text = "libojp_odbc"; break;
@@ -1792,7 +1832,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         case SQL_ODBC_VER: text = "03.80"; break;
         case SQL_IDENTIFIER_QUOTE_CHAR: text = "\""; break;
         default:
-            return fail(static_cast<HandleBase*>(connection),
+            return fail(target,
                         "Requested SQLGetInfo value is not supported", "HYC00");
     }
     if (output_length != nullptr) {
@@ -1912,10 +1952,12 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
     const std::vector<SQLUSMALLINT> functions = {
         SQL_API_SQLALLOCHANDLE, SQL_API_SQLFREEHANDLE, SQL_API_SQLSETENVATTR,
         SQL_API_SQLDRIVERCONNECT, SQL_API_SQLCONNECT, SQL_API_SQLDISCONNECT,
+        SQL_API_SQLENDTRAN, SQL_API_SQLTRANSACT,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
-        SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
+        SQL_API_SQLFREESTMT, SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR,
+        SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};
     if (function_id == SQL_API_ALL_FUNCTIONS) {
         constexpr SQLUSMALLINT function_count = 100;

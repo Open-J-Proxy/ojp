@@ -95,7 +95,18 @@ if(BUILD_TESTING)
             "OJP_TEST_POSTGRESQL"
             "OJP_TEST_POSTGRESQL_ADDR"
             "42601")
-    set_tests_properties(OjpOdbcH2L1Integration OjpOdbcPostgreSqlL1Integration PROPERTIES
+    add_test(NAME OjpOdbcSqlServerL1Integration
+        COMMAND ojp_odbc_l1_integration_test
+            "SQL Server"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
+            "OJP_TEST_SQLSERVER"
+            "OJP_TEST_SQLSERVER_ADDR"
+            "42000")
+    set_tests_properties(
+        OjpOdbcH2L1Integration
+        OjpOdbcPostgreSqlL1Integration
+        OjpOdbcSqlServerL1Integration
+        PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
 endif()

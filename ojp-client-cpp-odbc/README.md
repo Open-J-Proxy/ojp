@@ -11,7 +11,7 @@ communicates with the server over gRPC.
 | Assessment | Value |
 |---|---|
 | Highest implemented level | **L1** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and PostgreSQL real-server integration suites are available. |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2, PostgreSQL, and SQL Server real-server integration suites are available. |
 
 ### Current test-proven coverage by database
 
@@ -19,10 +19,10 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → H2. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
+| SQL Server | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
-| SQL Server | Not established | No database-specific integration suite in this module. |
 | DB2 | Not established | No database-specific integration suite in this module. |
 | CockroachDB | Not established | No database-specific integration suite in this module. |
 
@@ -122,17 +122,24 @@ relevant handle to inspect errors.
 
 ## L1 integration tests
 
-The H2 and PostgreSQL tests read backend connection details from
-[`tests/testdata/h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv) and
-[`tests/testdata/postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
-then exercise the ODBC API through the Driver Manager against a running OJP
-server and the respective database. Each test uses a unique table per run and
-verifies connection readiness, prepared INSERT/SELECT/UPDATE, DELETE, row
-counts, result values, empty results, SQL error diagnostics, and session
-termination.
+The H2, PostgreSQL, and SQL Server tests read backend connection details from
+their respective fixtures:
+[`h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
+[`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
+and
+[`sqlserver_l1_connection.csv`](tests/testdata/sqlserver_l1_connection.csv).
+They exercise the ODBC API through the Driver Manager against a running OJP
+server and the respective database. The SQL Server fixture follows the OJP JDBC
+driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
+including SQL Server's `42000` syntax-error SQLSTATE. Each test uses a unique
+table per run and verifies connection readiness, prepared INSERT/SELECT/UPDATE,
+DELETE, row counts, result values, empty results, SQL error diagnostics, and
+session termination.
 
-Start OJP using Java 25 and UTC, with PostgreSQL reachable at the address in the
-CSV fixture. Then build and run both tests:
+Start OJP using Java 25 and UTC, with each database reachable at the address in
+its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
+database-owner permissions, as in the JDBC integration-test container setup.
+Then build and run the tests:
 
 ```sh
 cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
@@ -140,9 +147,11 @@ cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
 cmake --build ojp-client-cpp-odbc/build
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
+OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
   ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure
 ```
 
-Both tests are skipped when their corresponding `OJP_TEST_H2` or
-`OJP_TEST_POSTGRESQL` variable is unset or false. When enabled, a missing
-endpoint or unavailable server fails the test instead of silently skipping it.
+Each test is skipped when its corresponding `OJP_TEST_H2`,
+`OJP_TEST_POSTGRESQL`, or `OJP_TEST_SQLSERVER` variable is unset or false. When
+enabled, a missing endpoint or unavailable server fails the test instead of
+silently skipping it.

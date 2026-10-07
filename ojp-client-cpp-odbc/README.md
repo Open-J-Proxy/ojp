@@ -60,9 +60,9 @@ The SQL Server L2 suite mirrors the types in the JDBC driver's
 | `TINYINT` (value 255) | Bound as `SQL_C_SLONG`/`SQL_INTEGER`, like the JDBC test's `setInt`; SQL Server `TINYINT` is unsigned, so 255 does not fit `SQL_C_STINYINT` |
 | `BIT` | `SQL_C_BIT` |
 | `FLOAT`, `REAL` | `SQL_C_DOUBLE`, `SQL_C_FLOAT` |
-| `DECIMAL(10, 2)`, `MONEY`, `SMALLMONEY` | `SQL_C_NUMERIC` and decimal text parameters; read back through SQL `CAST`/`CONVERT` to text (see below) |
+| `DECIMAL(10, 2)`, `MONEY`, `SMALLMONEY` | `SQL_C_NUMERIC` and decimal text parameters, read back directly as decimal text |
 | `NVARCHAR`, `NTEXT`, `TEXT`, `NVARCHAR(MAX)`, `VARCHAR(MAX)` | `SQL_C_CHAR` with UTF-8 text, including Chinese characters and an emoji, and a 50 KB value |
-| `VARBINARY(1)`, `VARBINARY(4)`, `VARBINARY(MAX)` | `SQL_C_BINARY`, including a 10,000-byte value |
+| `VARBINARY(1)`, `VARBINARY(4)`, `VARBINARY(MAX)` | `SQL_C_BINARY`, including a 10,000-byte value, and a multi-row `VARBINARY` query (the server sends these rows one at a time) |
 | `DATE`, `TIME`, `DATETIME2`, `SMALLDATETIME` | `SQL_C_TYPE_DATE`, `SQL_C_TYPE_TIME`, `SQL_C_TYPE_TIMESTAMP` |
 | `DATETIMEOFFSET` (`OffsetDateTime`, `OffsetTime`, `Instant`) | UTC timestamp structs and offset text such as `2024-12-01 10:10:10 +02:00`; values are read back as UTC, and a text `CAST` confirms the stored offset |
 | `UNIQUEIDENTIFIER` | Generated with `NEWID()` and read back as GUID text |
@@ -75,9 +75,6 @@ These JDBC cases are not ported, and here is why:
   `java.sql.Date`, `Time`, and `Timestamp`: ODBC has one C struct per SQL type,
   so each pair maps to the same `DATE`, `TIME`, or `DATETIME2` binding.
 - **Arrays.** `createArrayOf` has no ODBC equivalent.
-- **Reading decimals directly.** OJP returns `DECIMAL` and `MONEY` results in
-  an internal binary decimal format that the client cannot decode yet. The
-  suite therefore converts them to text in SQL.
 - **Timezone-aware ODBC types.** The client does not implement SQL Server's
   driver-specific `SQL_SS_TIMESTAMPOFFSET` C type. Offsets are therefore sent as
   text.
@@ -85,11 +82,62 @@ These JDBC cases are not ported, and here is why:
 Generated SQL Server identities are read with `IDENT_CURRENT` for the table
 that the run creates.
 
+Decimal results arrive as BigDecimalWire bytes
+([format](../documents/protocol/BIGDECIMAL_WIRE_FORMAT.md)). Like the JDBC
+driver, the client decodes result bytes that match this layout exactly as
+decimal text and returns other bytes as binary.
+
 Transactions, output parameters, wide-character ODBC entry points, complete
 metadata discovery, LOBs, pagination, session affinity, multinode routing,
 health checking, and failover are not implemented. Use autocommit mode. The
 client uses one gRPC channel per ODBC connection and a process-stable client
 UUID.
+
+## Conformance with `CLIENT_SPEC_AI.md`
+
+The same driver code serves H2, PostgreSQL, and SQL Server, so these points
+apply to all three databases.
+
+Implemented rules:
+
+| Spec rule | Implementation |
+|---|---|
+| 4.1.1 process-stable UUID v4 `clientUUID` | Generated once per process |
+| 4.2 `ConnectionDetails` | `url`, `user`, `password`, `clientUUID`, `isXA=false` |
+| 4.3.1–4.3.2 send and replace `SessionInfo` | Sent with every request and replaced from every `executeQuery`, `executeUpdate`, `fetchNextRows`, and `callResource` response |
+| 4.3.4 `terminateSession` exactly once | Sent once by `SQLDisconnect`; the connection is unusable afterwards, even if the call fails |
+| 4.4.2 1-based parameter indexes | ODBC parameter numbers are passed through |
+| 4.4.4 `StringValue` wrapper fields | `uuid_value`, `biginteger_value`, `url_value`, `rowid_value`, and `rowidlifetime_value` results are decoded as text |
+| 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
+| Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
+
+In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
+the client pulls the remaining rows with `fetchNextRows`. Earlier versions
+returned only the first row.
+
+Where the spec and the server disagree, the client follows the server and the
+JDBC reference driver:
+
+- **4.4.1 `statementUUID`.** The spec asks for a new random UUID per request.
+  The server treats a non-empty `statementUUID` as the ID of a statement it
+  already created and looks it up, so a random value fails. Like the JDBC
+  `Statement`, the client leaves it empty.
+- **4.4.3 `PT_BIG_DECIMAL`.** The spec asks for `string_value = "<unscaled>
+  <scale>"`. The server casts the bound value to `BigDecimal` and only decodes
+  `bytes_value` in the BigDecimalWire format, which the JDBC driver also sends.
+  The client sends BigDecimalWire bytes.
+- **3.1 `PT_NULL`.** The spec describes `is_null` as the SQL NULL marker. The
+  server binds `PT_NULL` with `setNull(index, (int) value)`, so the client sends
+  a `java.sql.Types` code in `int_value`, as the JDBC driver does.
+
+Spec rules that belong to levels above L2 and are not implemented:
+
+- **L3:** pagination options beyond row-by-row fetching.
+- **L5:** `createLob` and `readLob`.
+- **L4 and L6:** transactions and session-affinity routing.
+- **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),
+  `connHash` caching and `NOT_FOUND` recovery (4.2), cluster health, and client
+  throttling (section 8).
 
 ## Build requirements
 

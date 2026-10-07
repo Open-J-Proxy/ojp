@@ -334,7 +334,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     close_and_reset(statement);
 
     prepare(statement, "SELECT id, val_int, val_varchar, val_double_precision, val_bigint,"
-        " val_tinyint, val_smallint, val_boolean, CAST(val_decimal AS VARCHAR(20)) AS val_decimal,"
+        " val_tinyint, val_smallint, val_boolean, val_decimal,"
         " val_float, val_byte, val_binary, val_date, val_time, val_timestamp, val_instant,"
         " val_offsetdatetime, CAST(val_offsetdatetime AS VARCHAR(40)) AS offset_text,"
         " val_offsettime FROM " + table + " WHERE id = ?");
@@ -408,6 +408,18 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect_null(statement, 9, SQL_C_CHAR);
     expect_null(statement, 10, SQL_C_CHAR);
     expect(SQLFetch(statement) == SQL_NO_DATA, "NULL row query returned too many rows");
+    close_and_reset(statement);
+
+    // VARBINARY columns make the server stream SQL Server rows one at a time.
+    execute_direct(statement, "SELECT val_int, val_byte FROM " + table + " ORDER BY id");
+    require_success(SQLFetch(statement), "SQLFetch(binary row 1)", SQL_HANDLE_STMT, statement);
+    expect(get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) == int_value,
+           "first VARBINARY row returned the wrong INT");
+    require_success(SQLFetch(statement), "SQLFetch(binary row 2)", SQL_HANDLE_STMT, statement);
+    expect(get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) == 2,
+           "second VARBINARY row returned the wrong INT");
+    expect_null(statement, 2, SQL_C_BINARY);
+    expect(SQLFetch(statement) == SQL_NO_DATA, "VARBINARY query returned too many rows");
     close_and_reset(statement);
 }
 
@@ -485,8 +497,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     SQLBIGINT generated_id = current_identity(statement, table);
 
     prepare(statement, "SELECT id, ntext_col, text_col,"
-        " CONVERT(VARCHAR(40), money_col, 2) AS money_text,"
-        " CONVERT(VARCHAR(40), smallmoney_col, 2) AS smallmoney_text, uniqueidentifier_col,"
+        " money_col, smallmoney_col, uniqueidentifier_col,"
         " datetimeoffset_col, datetime2_col, smalldatetime_col, nvarchar_max, varchar_max,"
         " varbinary_max, image_col, xml_col, CAST(geometry_col AS VARBINARY(MAX)) AS geometry_bytes,"
         " CAST(geography_col AS VARBINARY(MAX)) AS geography_bytes,"

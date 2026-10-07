@@ -300,7 +300,7 @@ int run_integration_test(int argc, char** argv) {
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(identity)",
                         SQL_HANDLE_STMT, statement);
 
-        const std::string select = "SELECT id AS ID, CAST(amount AS VARCHAR) AS AMOUNT_TEXT,"
+        const std::string select = "SELECT id AS ID, amount,"
             " business_date, business_time, created_at, tiny_value, small_value, integer_value,"
             " long_value, real_value, double_value, boolean_value, text_value, binary_value FROM " +
             table + " WHERE id = ?";

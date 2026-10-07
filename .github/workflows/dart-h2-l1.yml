@@ -11,16 +11,29 @@ name: Dart H2 L1 Integration
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'lts/**' ]
+  workflow_dispatch:
+    inputs:
+      full_suite:
+        description: Run the full CI suite
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    uses: ./.github/workflows/ci-test-selection.yml
+    with:
+      full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
+
   dart-h2-l1-integration:
     name: Dart H2 L1 Integration
+    needs: detect-changes
+    if: needs.detect-changes.outputs.dart == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -95,3 +108,28 @@ jobs:
           name: dart-h2-l1-test-results
           path: /tmp/ojp-server.log
           retention-days: 7
+
+  dart-ci-result:
+    name: Dart CI Result
+    needs: [detect-changes, dart-h2-l1-integration]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify selected suite result
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SELECTED: ${{ needs.detect-changes.outputs.dart }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS);
+          const selected = process.env.SELECTED;
+          const result = needs['dart-h2-l1-integration'].result;
+          if (needs['detect-changes'].result !== 'success' ||
+              !['true', 'false'].includes(selected) ||
+              (selected === 'true' && result !== 'success') ||
+              (selected === 'false' && !['skipped', 'success'].includes(result))) {
+            console.error('Dart CI failed:', JSON.stringify(needs), 'selected:', selected);
+            process.exit(1);
+          }
+          console.log(selected === 'true' ? 'Dart suite passed.' : 'Dart suite not selected.');
+          NODE

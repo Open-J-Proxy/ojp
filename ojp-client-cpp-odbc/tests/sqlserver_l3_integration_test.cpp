@@ -261,11 +261,11 @@ int run_integration_test(int argc, char** argv) {
         execute_direct(statement, "CREATE TABLE " + text_table +
                                       " (id INT PRIMARY KEY, label VARCHAR(32) NOT NULL)");
         execute_direct(statement,
-                       "WITH numbers AS (SELECT CAST(1 AS INT) AS n UNION ALL "
-                       "SELECT n + 1 FROM numbers WHERE n < " + std::to_string(total_rows) +
-                           ") INSERT INTO " + text_table +
-                           " (id, label) SELECT n, CONCAT('SQLSERVER_ROW_', n) FROM numbers "
-                           "OPTION (MAXRECURSION 0)");
+                       "INSERT INTO " + text_table +
+                           " (id, label) SELECT n, CONCAT('SQLSERVER_ROW_', n) FROM "
+                           "(SELECT TOP (" + std::to_string(total_rows) +
+                           ") ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n "
+                           "FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b) AS numbers");
         close_statement(statement, "SQLFreeStmt(insert)");
 
         execute_direct(statement, "SELECT id AS ID, label FROM " + text_table + " ORDER BY id");

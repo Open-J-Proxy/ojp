@@ -11,10 +11,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
+#include <iomanip>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <random>
+#include <sstream>
 #include <string>
 #include <variant>
 #include <vector>
@@ -312,6 +315,59 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             }
             return true;
         }
+        case google::protobuf::FieldDescriptor::CPPTYPE_MESSAGE: {
+            const auto& message = reflection->GetMessage(value, field);
+            const auto* message_reflection = message.GetReflection();
+            auto integer = [&message, message_reflection](const char* name) {
+                const auto* member = message.GetDescriptor()->FindFieldByName(name);
+                return member == nullptr ? 0 : message_reflection->GetInt32(message, member);
+            };
+            std::ostringstream text;
+            auto append_fraction = [&text](int nanos) {
+                if (nanos == 0) {
+                    return;
+                }
+                std::ostringstream fraction;
+                fraction << std::setfill('0') << std::setw(9) << nanos;
+                std::string digits = fraction.str();
+                while (!digits.empty() && digits.back() == '0') {
+                    digits.pop_back();
+                }
+                text << "." << digits;
+            };
+            if (field->name() == "date_value") {
+                text << std::setfill('0') << std::setw(4) << integer("year") << "-"
+                     << std::setw(2) << integer("month") << "-"
+                     << std::setw(2) << integer("day");
+            } else if (field->name() == "time_value") {
+                text << std::setfill('0') << std::setw(2) << integer("hours") << ":"
+                     << std::setw(2) << integer("minutes") << ":"
+                     << std::setw(2) << integer("seconds");
+                append_fraction(integer("nanos"));
+            } else if (field->name() == "timestamp_value") {
+                const auto* instant_field = message.GetDescriptor()->FindFieldByName("instant");
+                if (instant_field == nullptr) {
+                    return false;
+                }
+                const auto& instant = message_reflection->GetMessage(message, instant_field);
+                const auto* instant_reflection = instant.GetReflection();
+                const auto* seconds_field = instant.GetDescriptor()->FindFieldByName("seconds");
+                const auto* nanos_field = instant.GetDescriptor()->FindFieldByName("nanos");
+                const auto seconds = instant_reflection->GetInt64(instant, seconds_field);
+                const auto nanos = instant_reflection->GetInt32(instant, nanos_field);
+                const std::time_t timestamp = static_cast<std::time_t>(seconds);
+                std::tm utc_time{};
+                if (gmtime_r(&timestamp, &utc_time) == nullptr) {
+                    return false;
+                }
+                text << std::put_time(&utc_time, "%Y-%m-%d %H:%M:%S");
+                append_fraction(nanos);
+            } else {
+                return false;
+            }
+            *output = text.str();
+            return true;
+        }
         default:
             return false;
     }
@@ -465,7 +521,7 @@ SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_ty
         write_numeric(target_value, indicator, converted);
         return SQL_SUCCESS;
     }
-    return fail(handle, "ODBC C target type is not supported by the OJP L1 client", "07006");
+    return fail(handle, "ODBC C target type is not supported by the OJP client", "07006");
 }
 
 bool is_query_sql(const std::string& sql) {
@@ -509,11 +565,122 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
             case SQL_REAL: c_type = SQL_C_FLOAT; break;
             case SQL_FLOAT:
             case SQL_DOUBLE: c_type = SQL_C_DOUBLE; break;
+            case SQL_DECIMAL:
+            case SQL_NUMERIC: c_type = SQL_C_NUMERIC; break;
+            case SQL_TYPE_DATE: c_type = SQL_C_TYPE_DATE; break;
+            case SQL_TYPE_TIME: c_type = SQL_C_TYPE_TIME; break;
+            case SQL_TYPE_TIMESTAMP: c_type = SQL_C_TYPE_TIMESTAMP; break;
             default: c_type = SQL_C_CHAR; break;
         }
     }
     const auto* descriptor = value->GetDescriptor();
     const auto* reflection = value->GetReflection();
+    auto set_decimal = [&](const std::string& decimal_text) {
+        std::string digits;
+        int scale = 0;
+        bool after_decimal = false;
+        bool negative = false;
+        std::size_t index = 0;
+        if (!decimal_text.empty() && (decimal_text[0] == '-' || decimal_text[0] == '+')) {
+            negative = decimal_text[0] == '-';
+            index = 1;
+        }
+        for (; index < decimal_text.size(); ++index) {
+            const char character = decimal_text[index];
+            if (character == '.' && !after_decimal) {
+                after_decimal = true;
+            } else if (character >= '0' && character <= '9') {
+                digits.push_back(character);
+                if (after_decimal) {
+                    ++scale;
+                }
+            } else {
+                error->state = "22018";
+                error->message = "Invalid decimal parameter";
+                error->native_error = static_cast<SQLINTEGER>(parameter_index);
+                return false;
+            }
+        }
+        if (digits.empty()) {
+            error->state = "22018";
+            error->message = "Invalid decimal parameter";
+            error->native_error = static_cast<SQLINTEGER>(parameter_index);
+            return false;
+        }
+        const auto first_significant = digits.find_first_not_of('0');
+        digits = first_significant == std::string::npos ? "0" : digits.substr(first_significant);
+        std::string unscaled = negative && digits != "0" ? "-" + digits : digits;
+        std::string wire;
+        wire.push_back('\1');
+        const auto length = static_cast<std::uint32_t>(unscaled.size());
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            wire.push_back(static_cast<char>((length >> shift) & 0xff));
+        }
+        wire.append(unscaled);
+        const auto wire_scale = static_cast<std::uint32_t>(scale);
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            wire.push_back(static_cast<char>((wire_scale >> shift) & 0xff));
+        }
+        reflection->SetString(value, descriptor->FindFieldByName("bytes_value"), wire);
+        return true;
+    };
+    auto set_message_integer = [](google::protobuf::Message* message, const char* name,
+                                  std::int32_t number) {
+        const auto* field = message->GetDescriptor()->FindFieldByName(name);
+        if (field != nullptr) {
+            message->GetReflection()->SetInt32(message, field, number);
+        }
+    };
+    auto set_temporal_type = [&](SQLSMALLINT temporal_type) {
+        if (temporal_type == SQL_C_TYPE_DATE) {
+            const auto* date = reinterpret_cast<const SQL_DATE_STRUCT*>(data);
+            auto* date_value = reflection->MutableMessage(
+                value, descriptor->FindFieldByName("date_value"));
+            set_message_integer(date_value, "year", date->year);
+            set_message_integer(date_value, "month", date->month);
+            set_message_integer(date_value, "day", date->day);
+            return true;
+        }
+        if (temporal_type == SQL_C_TYPE_TIME) {
+            const auto* time = reinterpret_cast<const SQL_TIME_STRUCT*>(data);
+            auto* time_value = reflection->MutableMessage(
+                value, descriptor->FindFieldByName("time_value"));
+            set_message_integer(time_value, "hours", time->hour);
+            set_message_integer(time_value, "minutes", time->minute);
+            set_message_integer(time_value, "seconds", time->second);
+            return true;
+        }
+        if (temporal_type == SQL_C_TYPE_TIMESTAMP) {
+            const auto* timestamp = reinterpret_cast<const SQL_TIMESTAMP_STRUCT*>(data);
+            auto* timestamp_value = reflection->MutableMessage(
+                value, descriptor->FindFieldByName("timestamp_value"));
+            const auto* instant_field =
+                timestamp_value->GetDescriptor()->FindFieldByName("instant");
+            auto* instant = timestamp_value->GetReflection()->MutableMessage(
+                timestamp_value, instant_field);
+            const std::int64_t year = timestamp->year - (timestamp->month <= 2 ? 1 : 0);
+            const std::int64_t era = (year >= 0 ? year : year - 399) / 400;
+            const auto year_of_era = static_cast<std::uint32_t>(year - era * 400);
+            const auto adjusted_month = static_cast<std::int32_t>(timestamp->month) +
+                (timestamp->month > 2 ? -3 : 9);
+            const auto day_of_year = (153 * adjusted_month + 2) / 5 +
+                static_cast<std::int32_t>(timestamp->day) - 1;
+            const auto day_of_era = year_of_era * 365 + year_of_era / 4 -
+                year_of_era / 100 + static_cast<std::uint32_t>(day_of_year);
+            const std::int64_t days = era * 146097 + day_of_era - 719468;
+            const std::int64_t seconds = days * 86400 +
+                timestamp->hour * 3600 + timestamp->minute * 60 + timestamp->second;
+            set_message_integer(instant, "nanos", static_cast<std::int32_t>(timestamp->fraction));
+            const auto* seconds_field = instant->GetDescriptor()->FindFieldByName("seconds");
+            instant->GetReflection()->SetInt64(instant, seconds_field, seconds);
+            set_string_field(timestamp_value, "timezone", "UTC");
+            const auto* original_type =
+                timestamp_value->GetDescriptor()->FindFieldByName("original_type");
+            timestamp_value->GetReflection()->SetEnumValue(timestamp_value, original_type, 1);
+            return true;
+        }
+        return false;
+    };
     if (c_type == SQL_C_CHAR) {
         std::size_t text_length = length == SQL_NTS
             ? std::strlen(reinterpret_cast<const char*>(data))
@@ -521,10 +688,48 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         if (bound.buffer_length > 0 && length != SQL_NTS) {
             text_length = std::min(text_length, static_cast<std::size_t>(bound.buffer_length));
         }
+        if (bound.parameter_type == SQL_DECIMAL || bound.parameter_type == SQL_NUMERIC) {
+            return set_decimal(std::string(reinterpret_cast<const char*>(data), text_length));
+        }
         const auto* field = descriptor->FindFieldByName("string_value");
         reflection->SetString(value, field,
             std::string(reinterpret_cast<const char*>(data), text_length));
         return true;
+    }
+    if (c_type == SQL_C_NUMERIC) {
+        const auto* numeric = reinterpret_cast<const SQL_NUMERIC_STRUCT*>(data);
+        std::vector<unsigned int> decimal_digits(1, 0);
+        for (int byte_index = static_cast<int>(sizeof(numeric->val)) - 1; byte_index >= 0;
+             --byte_index) {
+            unsigned int carry = numeric->val[byte_index];
+            for (auto& digit : decimal_digits) {
+                const unsigned int value_in_base = digit * 256 + carry;
+                digit = value_in_base % 10;
+                carry = value_in_base / 10;
+            }
+            while (carry != 0) {
+                decimal_digits.push_back(carry % 10);
+                carry /= 10;
+            }
+        }
+        std::string digits;
+        for (auto digit = decimal_digits.rbegin(); digit != decimal_digits.rend(); ++digit) {
+            digits.push_back(static_cast<char>('0' + *digit));
+        }
+        std::string decimal = numeric->sign == 0 ? "-" : "";
+        const auto scale = static_cast<int>(numeric->scale);
+        if (scale > 0 && digits.size() <= static_cast<std::size_t>(scale)) {
+            decimal.append(static_cast<std::size_t>(scale) + 1 - digits.size(), '0');
+        }
+        decimal += digits;
+        if (scale > 0) {
+            decimal.insert(decimal.size() - static_cast<std::size_t>(scale), 1, '.');
+        }
+        return set_decimal(decimal);
+    }
+    if (c_type == SQL_C_TYPE_DATE || c_type == SQL_C_TYPE_TIME ||
+        c_type == SQL_C_TYPE_TIMESTAMP) {
+        return set_temporal_type(c_type);
     }
     auto set_integer = [&](const std::string& field_name, std::int64_t number) {
         const auto* field = descriptor->FindFieldByName(field_name);
@@ -568,7 +773,7 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         }
         default:
             error->state = "07006";
-            error->message = "ODBC C data type is not supported by the OJP L1 client";
+            error->message = "ODBC C data type is not supported by the OJP client";
             error->native_error = static_cast<SQLINTEGER>(parameter_index);
             return false;
     }
@@ -587,10 +792,15 @@ ParameterTypeProto parameter_type(const BoundParameter& bound) {
         case SQL_REAL: return static_cast<ParameterTypeProto>(6);      // PT_FLOAT
         case SQL_FLOAT:
         case SQL_DOUBLE: return static_cast<ParameterTypeProto>(7);   // PT_DOUBLE
+        case SQL_DECIMAL:
+        case SQL_NUMERIC: return static_cast<ParameterTypeProto>(8);   // PT_BIG_DECIMAL
         case SQL_BINARY:
         case SQL_VARBINARY:
         case SQL_LONGVARBINARY: return static_cast<ParameterTypeProto>(10); // PT_BYTES
         case SQL_BIT: return static_cast<ParameterTypeProto>(1);       // PT_BOOLEAN
+        case SQL_TYPE_DATE: return static_cast<ParameterTypeProto>(11); // PT_DATE
+        case SQL_TYPE_TIME: return static_cast<ParameterTypeProto>(12); // PT_TIME
+        case SQL_TYPE_TIMESTAMP: return static_cast<ParameterTypeProto>(13); // PT_TIMESTAMP
         default: return static_cast<ParameterTypeProto>(9);            // PT_STRING
     }
 }
@@ -652,7 +862,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                 for (const auto& column : row.columns()) {
                     Cell cell;
                     if (!decode_value(column, &cell)) {
-                        return fail(statement, "OJP returned a result type unsupported by L1", "HY000");
+                        return fail(statement, "OJP returned a result type unsupported by the ODBC client", "HY000");
                     }
                     decoded.push_back(std::move(cell));
                 }
@@ -1135,7 +1345,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
         reinterpret_cast<std::uintptr_t>(value) == SQL_AUTOCOMMIT_ON) {
         return SQL_SUCCESS;
     }
-    return fail(target, "Only autocommit mode is supported at L1", "HYC00");
+    return fail(target, "Only autocommit mode is supported", "HYC00");
 }
 
 SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,

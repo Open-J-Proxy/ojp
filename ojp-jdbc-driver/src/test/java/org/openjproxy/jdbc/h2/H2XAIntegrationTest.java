@@ -66,7 +66,7 @@ class H2XAIntegrationTest {
         verificationConnection = DriverManager.getConnection(url, user, password);
         try (Statement statement = verificationConnection.createStatement()) {
             statement.execute("CREATE TABLE " + tableName +
-                    " (id INT PRIMARY KEY, value VARCHAR(100))");
+                    " (id INT PRIMARY KEY, label VARCHAR(100))");
         }
 
         OjpXADataSource dataSource = new OjpXADataSource();

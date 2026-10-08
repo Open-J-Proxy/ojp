@@ -159,9 +159,10 @@ if(BUILD_TESTING)
     add_dependencies(ojp_odbc_h2_l9_integration_test ojp_odbc)
     add_test(NAME OjpOdbcH2L9Integration
         COMMAND ojp_odbc_h2_l9_integration_test
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l1_connection.csv"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l7_connection.csv"
             "OJP_TEST_H2_L9"
-            "OJP_TEST_H2_ADDR"
+            "OJP_TEST_H2_L9_ADDRS"
+            "OJP_TEST_H2_L9_TARGET_PID_FILE"
             "$<TARGET_FILE:ojp_odbc>")
     add_test(NAME OjpOdbcPostgreSqlL1Integration
         COMMAND ojp_odbc_l1_integration_test
@@ -266,8 +267,8 @@ if(BUILD_TESTING)
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
         TIMEOUT 120)
     set_tests_properties(OjpOdbcH2L9Integration PROPERTIES
-        ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc"
-        TIMEOUT 120)
+        ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
+        TIMEOUT 180)
     set_tests_properties(OjpOdbcSqlServerL8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
         TIMEOUT 180)

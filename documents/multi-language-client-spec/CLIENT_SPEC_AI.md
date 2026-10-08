@@ -578,6 +578,10 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | DB2 | L8 |
 | CockroachDB | L8 |
 
+The H2 Java reference client now has an XA lifecycle integration suite in
+`ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/h2/H2XAIntegrationTest.java`.
+H2 remains listed at L8 until the new suite passes CI.
+
 ### 12.3 Conformance reporting rules
 
 1. A client implementation MUST declare target level and tested-achieved level.

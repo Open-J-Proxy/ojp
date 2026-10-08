@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -13,7 +15,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <sys/types.h>
+#include <unistd.h>
 
 namespace {
 
@@ -141,6 +147,16 @@ bool enabled(const std::string& value) {
     return normalized == "true" || normalized == "1" || normalized == "yes";
 }
 
+bool disabled(const std::string& value) {
+    std::string normalized = value;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    return normalized.empty() || normalized == "false" || normalized == "0" ||
+        normalized == "no";
+}
+
 SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
                         const std::string& endpoint, bool xa) {
     SQLHDBC connection = SQL_NULL_HDBC;
@@ -153,6 +169,7 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         ";UID=" + brace_value(config.user) +
         ";P"
         "WD=" + brace_value(config.password) + ";" +
+        "OJP.LOADAWARE.SELECTION.ENABLED=false;" +
         (xa ? "OJP.XA=TRUE;" : "");
     require_success(SQLDriverConnect(connection, nullptr,
                                      reinterpret_cast<SQLCHAR*>(
@@ -218,27 +235,44 @@ void close_connection(SQLHDBC* connection) {
 }
 
 int run_integration_test(int argc, char** argv) {
-    if (argc != 5) {
+    if (argc != 6) {
         throw std::runtime_error(
-            "expected H2 CSV path, enable variable, endpoint variable, and ODBC driver path");
+            "expected H2 CSV path, enable variable, endpoint variable, target PID variable, and driver path");
     }
     const std::string enable_variable = argv[2];
     const std::string enabled_value = environment_value(enable_variable.c_str());
     if (!enabled(enabled_value)) {
-        if (!enabled_value.empty() && enabled_value != "false" &&
-            enabled_value != "0" && enabled_value != "no") {
+        if (!disabled(enabled_value)) {
             throw std::runtime_error(enable_variable + " must be true or false");
         }
         std::cout << "Skipped: set " << enable_variable << "=true to run the H2 L9 suite\n";
         return 77;
     }
-    const std::string endpoint = environment_value(argv[3]);
-    if (endpoint.empty()) {
+    const std::string endpoints = environment_value(argv[3]);
+    if (endpoints.empty()) {
         throw std::runtime_error(std::string(argv[3]) + " is required when " +
                                  enable_variable + "=true");
     }
+    std::vector<std::string> endpoint_list;
+    std::istringstream endpoint_stream(endpoints);
+    std::string endpoint;
+    while (std::getline(endpoint_stream, endpoint, ',')) {
+        if (endpoint.empty()) {
+            throw std::runtime_error(std::string(argv[3]) + " must contain non-empty endpoints");
+        }
+        endpoint_list.push_back(endpoint);
+    }
+    if (endpoint_list.size() < 2) {
+        throw std::runtime_error(std::string(argv[3]) + " must contain at least two OJP servers");
+    }
+    const std::string pid_file = environment_value(argv[4]);
+    if (pid_file.empty()) {
+        throw std::runtime_error(std::string(argv[4]) + " is required when " +
+                                 enable_variable + "=true");
+    }
     const DatabaseConfig config = read_connection_config(argv[1]);
-    const std::string table = "ojp_cpp_l9_" + std::to_string(std::rand());
+    const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::string table = "ojp_cpp_l9_" + std::to_string(timestamp);
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC regular_connection = SQL_NULL_HDBC;
     SQLHDBC xa_connection = SQL_NULL_HDBC;
@@ -254,16 +288,16 @@ int run_integration_test(int argc, char** argv) {
         require_success(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
-        regular_connection = open_connection(environment, config, endpoint, false);
+        regular_connection = open_connection(environment, config, endpoints, false);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, regular_connection,
                                        reinterpret_cast<SQLHANDLE*>(&regular_statement)),
                         "SQLAllocHandle(regular statement)", SQL_HANDLE_DBC, regular_connection);
         execute_direct(regular_statement, "CREATE TABLE " + table +
-                                          " (id INT PRIMARY KEY, value VARCHAR(100))");
+                                          " (id INT PRIMARY KEY, label VARCHAR(100))");
         table_created = true;
 
-        xa_connection = open_connection(environment, config, endpoint, true);
-        second_xa_connection = open_connection(environment, config, endpoint, true);
+        xa_connection = open_connection(environment, config, endpoints, true);
+        second_xa_connection = open_connection(environment, config, endpoints, true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, xa_connection,
                                        reinterpret_cast<SQLHANDLE*>(&xa_statement)),
                         "SQLAllocHandle(XA statement)", SQL_HANDLE_DBC, xa_connection);
@@ -275,7 +309,7 @@ int run_integration_test(int argc, char** argv) {
             throw std::runtime_error("OJP XA connections must have autocommit disabled");
         }
 
-        driver_module = dlopen(argv[4], RTLD_NOW | RTLD_LOCAL);
+        driver_module = dlopen(argv[5], RTLD_NOW | RTLD_LOCAL);
         if (driver_module == nullptr) {
             throw std::runtime_error(std::string("cannot load OJP driver XA API: ") + dlerror());
         }
@@ -363,6 +397,49 @@ int run_integration_test(int argc, char** argv) {
         const SQLRETURN forget_result = xa.forget(xa_connection, &two_phase_xid);
         if (!SQL_SUCCEEDED(forget_result) && forget_result != SQL_ERROR) {
             throw std::runtime_error("OjpXAForget returned an unexpected status");
+        }
+
+        const OjpXid unavailable_branch = xid_for(table + "_unavailable", "branch-4");
+        require_success(xa.start(xa_connection, &unavailable_branch, OJP_XA_TMNOFLAGS),
+                        "OjpXAStart(unavailable server)", SQL_HANDLE_DBC, xa_connection);
+        execute_direct(xa_statement, "INSERT INTO " + table + " VALUES (4, 'unavailable')");
+        std::ifstream pid_input(pid_file);
+        long target_pid = 0;
+        if (!(pid_input >> target_pid) || target_pid <= 0) {
+            throw std::runtime_error("H2 L9 target PID file does not contain a valid process ID");
+        }
+        if (kill(static_cast<pid_t>(target_pid), SIGTERM) != 0) {
+            throw std::runtime_error("unable to stop the OJP server hosting the XA branch");
+        }
+        bool target_stopped = false;
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            if (kill(static_cast<pid_t>(target_pid), 0) != 0) {
+                target_stopped = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (!target_stopped) {
+            throw std::runtime_error("OJP server hosting the XA branch did not stop");
+        }
+        const SQLRETURN xa_end_result =
+            xa.end(xa_connection, &unavailable_branch, OJP_XA_TMSUCCESS);
+        if (xa_end_result != SQL_ERROR) {
+            throw std::runtime_error("XA end should fail when its pinned OJP server is unavailable");
+        }
+        SQLCHAR error_state[6] = {};
+        SQLCHAR error_message[512] = {};
+        SQLINTEGER xa_error = 0;
+        SQLSMALLINT error_length = 0;
+        require_success(SQLGetDiagRec(SQL_HANDLE_DBC, xa_connection, 1, error_state, &xa_error,
+                                      error_message, sizeof(error_message), &error_length),
+                        "SQLGetDiagRec(XA affinity failure)", SQL_HANDLE_DBC, xa_connection);
+        if (std::string(reinterpret_cast<const char*>(error_state)) != "08S01" ||
+            xa_error != OJP_XA_XAER_RMFAIL) {
+            throw std::runtime_error("XA affinity failure must report XAER_RMFAIL without rerouting");
+        }
+        if (row_count(regular_statement, table, 1) != 1) {
+            throw std::runtime_error("the other OJP server became unavailable with the XA target");
         }
 
         execute_direct(regular_statement, "DROP TABLE " + table);

@@ -129,6 +129,7 @@ struct ClientRuntime {
     std::map<std::string, std::shared_ptr<EndpointRuntime>> endpoints;
     std::map<std::string, std::string> conn_hash_by_key;
     std::map<std::string, ConnectionDetails> details_by_conn_hash;
+    std::map<std::string, ConnectionDetails> xa_details_by_conn_hash;
     std::map<std::string, std::string> cluster_health_by_endpoints;
     std::atomic<std::uint64_t> round_robin_counter{0};
     std::atomic<bool> stop_health_checks{false};
@@ -532,6 +533,9 @@ void ensure_health_checker() {
                         endpoints.push_back(entry.second);
                     }
                     for (const auto& entry : runtime.details_by_conn_hash) {
+                        details.push_back(entry.second);
+                    }
+                    for (const auto& entry : runtime.xa_details_by_conn_hash) {
                         details.push_back(entry.second);
                     }
                 }
@@ -2423,14 +2427,21 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             return fail(connection, "Failed to connect to any configured OJP server: " +
                                         failure_message, "08S01");
         }
-        if (!connection->xa_mode && !session.connhash().empty()) {
+        if (connection->xa_mode && !session.isxa()) {
+            return fail(connection, "OJP server did not establish an XA connection", "HY000",
+                        OJP_XA_XAER_RMERR);
+        }
+        if (!session.connhash().empty()) {
             std::lock_guard<std::mutex> lock(runtime.mutex);
-            runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connhash();
-            runtime.details_by_conn_hash[session.connhash()] = details;
+            if (!connection->xa_mode) {
+                runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connhash();
+                runtime.details_by_conn_hash[session.connhash()] = details;
+            } else {
+                runtime.xa_details_by_conn_hash[session.connhash()] = details;
+            }
         }
     }
     session.set_targetserver(connection->endpoint);
-    session.set_isxa(connection->xa_mode);
     connection->session.CopyFrom(session);
     if (!session.sessionuuid().empty()) {
         std::lock_guard<std::mutex> routing_lock(connection->routing_mutex);
@@ -2605,6 +2616,11 @@ bool reconnect_xa_for_start(ConnectionHandle* connection, HandleBase* handle,
         if (!handle->diagnostics.empty()) {
             handle->diagnostics.back().native_error = OJP_XA_XAER_RMFAIL;
         }
+        return false;
+    }
+    if (!response.isxa()) {
+        fail(handle, "OJP server did not establish an XA connection", "HY000",
+             OJP_XA_XAER_RMERR);
         return false;
     }
     endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);

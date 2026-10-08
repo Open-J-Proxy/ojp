@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
@@ -81,6 +82,9 @@ struct ConnectionHandle final : HandleBase {
     std::string last_rpc_endpoint;
     SessionInfo session;
     ConnectionDetails connection_details;
+    int retry_attempts = 3;
+    int retry_delay_ms = 100;
+    bool load_aware = true;
     std::mutex operation_mutex;
     std::set<std::string> savepoints;
     std::map<std::string, std::string> savepoint_names;
@@ -373,6 +377,22 @@ bool parse_boolean_option(const std::string& value, bool* parsed) {
     return false;
 }
 
+bool parse_nonnegative_int_option(const std::string& value, int maximum, int* parsed) {
+    const std::string normalized = trim(value);
+    if (normalized.empty()) {
+        return false;
+    }
+    int number = 0;
+    const auto result = std::from_chars(
+        normalized.data(), normalized.data() + normalized.size(), number);
+    if (result.ec != std::errc{} || result.ptr != normalized.data() + normalized.size() ||
+        number < 0 || number > maximum) {
+        return false;
+    }
+    *parsed = number;
+    return true;
+}
+
 int health_check_interval_ms() {
     const char* value = std::getenv("OJP_HEALTH_CHECK_INTERVAL_MS");
     if (value == nullptr) {
@@ -386,9 +406,13 @@ int health_check_interval_ms() {
     }
 }
 
-std::string choose_endpoint(const std::vector<std::string>& endpoints, bool load_aware) {
+std::string choose_endpoint(const std::vector<std::string>& endpoints, bool load_aware,
+                            const std::set<std::string>& excluded = {}) {
     std::vector<std::shared_ptr<EndpointRuntime>> healthy;
     for (const auto& address : endpoints) {
+        if (excluded.find(address) != excluded.end()) {
+            continue;
+        }
         auto state = endpoint_runtime(address);
         if (state->healthy.load()) {
             healthy.push_back(std::move(state));
@@ -450,7 +474,8 @@ bool probe_endpoint(const std::shared_ptr<EndpointRuntime>& endpoint) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
     SessionInfo response;
-    return endpoint->stub->connect(&context, empty_details, &response).ok();
+    const auto status = endpoint->stub->connect(&context, empty_details, &response);
+    return status.ok() || status.error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED;
 }
 
 bool details_include_endpoint(const ConnectionDetails& details, const std::string& address) {
@@ -646,6 +671,31 @@ void note_transport_failure(ConnectionHandle* connection, const grpc::Status& st
     }
 }
 
+bool failover_stateless_connection(ConnectionHandle* connection,
+                                   const std::set<std::string>& attempted_endpoints) {
+    if (!connection->session.sessionuuid().empty()) {
+        return false;
+    }
+    const std::string endpoint =
+        choose_endpoint(connection->endpoints, connection->load_aware, attempted_endpoints);
+    if (endpoint.empty()) {
+        return false;
+    }
+    if (connection->endpoint != endpoint) {
+        endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
+        endpoint_runtime(endpoint)->active_connections.fetch_add(1);
+    }
+    connection->endpoint = endpoint;
+    const auto selected_endpoint = endpoint_runtime(endpoint);
+    connection->channel = selected_endpoint->channel;
+    connection->stub = selected_endpoint->stub;
+    const std::string health = cluster_health(connection->endpoints);
+    connection->session.set_targetserver(endpoint);
+    connection->session.set_clusterhealth(health);
+    connection->connection_details.set_clusterhealth(health);
+    return true;
+}
+
 bool recover_not_found(ConnectionHandle* connection) {
     if (!connection->session.sessionuuid().empty() || connection->session.connhash().empty()) {
         return false;
@@ -707,6 +757,41 @@ bool recover_not_found(ConnectionHandle* connection) {
         return true;
     }
     return false;
+}
+
+bool prepare_stateless_retry(ConnectionHandle* connection, const grpc::Status& status,
+                             const grpc::ClientContext& context,
+                             const SessionInfo& initial_request_session,
+                             std::set<std::string>* attempted_endpoints,
+                             bool* not_found_retried) {
+    note_transport_failure(connection, status, context);
+    if (!initial_request_session.sessionuuid().empty()) {
+        return false;
+    }
+    if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
+        if (*not_found_retried) {
+            return false;
+        }
+        connection->session.CopyFrom(initial_request_session);
+        if (!recover_not_found(connection)) {
+            return false;
+        }
+        *not_found_retried = true;
+    } else if (is_transport_failure(status, context)) {
+        const std::string failed_endpoint = connection->last_rpc_endpoint.empty()
+            ? connection->endpoint : connection->last_rpc_endpoint;
+        attempted_endpoints->insert(failed_endpoint);
+        connection->session.CopyFrom(initial_request_session);
+        if (!failover_stateless_connection(connection, *attempted_endpoints)) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if (connection->retry_delay_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(connection->retry_delay_ms));
+    }
+    return true;
 }
 
 void update_session(ConnectionHandle* connection, const SessionInfo& response,
@@ -1554,44 +1639,72 @@ SQLRETURN materialize_lob_cell(StatementHandle* statement, const Cell& cell,
 // (CLIENT_SPEC_AI.md section 4.5 rule 2).
 SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& result_set_uuid,
                            StatementHandle* statement) {
-    StatementService::Stub* stub = route_session_rpc(connection);
-    const SessionInfo request_session = connection->session;
     com::openjproxy::grpc::CallResourceRequest request;
-    request.mutable_session()->CopyFrom(connection->session);
     request.set_resourcetype(com::openjproxy::grpc::RES_RESULT_SET);
     request.set_resourceuuid(result_set_uuid);
     request.mutable_target()->set_calltype(com::openjproxy::grpc::CALL_CLOSE);
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    com::openjproxy::grpc::CallResourceResponse response;
-    const auto status = stub->callResource(&context, request, &response);
-    if (!status.ok()) {
-        note_transport_failure(connection, status, context);
-        return fail_grpc(statement, status, context);
+    const SessionInfo initial_request_session = connection->session;
+    std::set<std::string> attempted_endpoints;
+    bool not_found_retried = false;
+    for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
+        StatementService::Stub* stub = route_session_rpc(connection);
+        const SessionInfo request_session = connection->session;
+        request.mutable_session()->CopyFrom(request_session);
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        com::openjproxy::grpc::CallResourceResponse response;
+        const auto status = stub->callResource(&context, request, &response);
+        if (!status.ok()) {
+            if (attempt == connection->retry_attempts) {
+                note_transport_failure(connection, status, context);
+                return fail_grpc(statement, status, context);
+            }
+            if (!prepare_stateless_retry(connection, status, context, initial_request_session,
+                                         &attempted_endpoints, &not_found_retried)) {
+                return fail_grpc(statement, status, context);
+            }
+            continue;
+        }
+        if (response.has_session()) {
+            update_session(connection, response.session(), request_session);
+        }
+        return SQL_SUCCESS;
     }
-    if (response.has_session()) {
-        update_session(connection, response.session(), request_session);
-    }
-    return SQL_SUCCESS;
+    return fail(statement, "OJP resource close retries were exhausted", "08S01");
 }
 
 template <typename Invoke>
-SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, Invoke invoke) {
+SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, Invoke invoke,
+                             bool retry_when_stateless = false) {
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    StatementService::Stub* stub = route_session_rpc(connection);
-    const SessionInfo request_session = connection->session;
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    SessionInfo response;
-    const auto status = invoke(stub, &context, request_session, &response);
-    if (!status.ok()) {
-        note_transport_failure(connection, status, context);
-        return fail_grpc(handle, status, context);
+    const SessionInfo initial_request_session = connection->session;
+    std::set<std::string> attempted_endpoints;
+    bool not_found_retried = false;
+    const int retry_limit = retry_when_stateless ? connection->retry_attempts : 0;
+    for (int attempt = 0; attempt <= retry_limit; ++attempt) {
+        StatementService::Stub* stub = route_session_rpc(connection);
+        const SessionInfo request_session = connection->session;
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        SessionInfo response;
+        const auto status = invoke(stub, &context, request_session, &response);
+        if (!status.ok()) {
+            if (attempt == retry_limit) {
+                note_transport_failure(connection, status, context);
+                return fail_grpc(handle, status, context);
+            }
+            if (!prepare_stateless_retry(connection, status, context, initial_request_session,
+                                         &attempted_endpoints, &not_found_retried)) {
+                return fail_grpc(handle, status, context);
+            }
+            continue;
+        }
+        update_session(connection, response, request_session);
+        return SQL_SUCCESS;
     }
-    update_session(connection, response, request_session);
-    return SQL_SUCCESS;
+    return fail(handle, "OJP RPC retries were exhausted", "08S01");
 }
 
 SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
@@ -1604,10 +1717,8 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    StatementService::Stub* stub = route_session_rpc(connection);
-    const SessionInfo request_session = connection->session;
+    const SessionInfo initial_request_session = connection->session;
     com::openjproxy::grpc::CallResourceRequest request;
-    request.mutable_session()->CopyFrom(connection->session);
     request.set_resourcetype(resource_type);
     request.set_resourceuuid(resource_uuid);
     auto* target = request.mutable_target();
@@ -1616,21 +1727,36 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     for (const auto& parameter : parameters) {
         target->add_params()->CopyFrom(parameter);
     }
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    com::openjproxy::grpc::CallResourceResponse response;
-    const auto status = stub->callResource(&context, request, &response);
-    if (!status.ok()) {
-        note_transport_failure(connection, status, context);
-        return fail_grpc(handle, status, context);
+    std::set<std::string> attempted_endpoints;
+    bool not_found_retried = false;
+    for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
+        StatementService::Stub* stub = route_session_rpc(connection);
+        const SessionInfo request_session = connection->session;
+        request.mutable_session()->CopyFrom(request_session);
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        com::openjproxy::grpc::CallResourceResponse response;
+        const auto status = stub->callResource(&context, request, &response);
+        if (!status.ok()) {
+            if (attempt == connection->retry_attempts) {
+                note_transport_failure(connection, status, context);
+                return fail_grpc(handle, status, context);
+            }
+            if (!prepare_stateless_retry(connection, status, context, initial_request_session,
+                                         &attempted_endpoints, &not_found_retried)) {
+                return fail_grpc(handle, status, context);
+            }
+            continue;
+        }
+        if (response.has_session()) {
+            update_session(connection, response.session(), request_session);
+        }
+        if (output != nullptr) {
+            output->CopyFrom(response);
+        }
+        return SQL_SUCCESS;
     }
-    if (response.has_session()) {
-        update_session(connection, response.session(), request_session);
-    }
-    if (output != nullptr) {
-        output->CopyFrom(response);
-    }
-    return SQL_SUCCESS;
+    return fail(handle, "OJP resource call retries were exhausted", "08S01");
 }
 
 SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
@@ -1638,7 +1764,7 @@ SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
         [](StatementService::Stub* stub, grpc::ClientContext* context, const SessionInfo& request,
                      SessionInfo* response) {
             return stub->startTransaction(context, request, response);
-        });
+        }, true);
 }
 
 SQLRETURN end_transaction(ConnectionHandle* connection, HandleBase* handle,
@@ -1975,6 +2101,9 @@ SQLRETURN execute_statement(StatementHandle* statement) {
 
     StatementService::Stub* stub = route_session_rpc(connection);
     SessionInfo request_session = connection->session;
+    const SessionInfo initial_request_session = request_session;
+    std::set<std::string> attempted_endpoints;
+    bool not_found_retried = false;
     request.mutable_session()->CopyFrom(request_session);
 
     if (is_query_sql(statement->sql)) {
@@ -2013,7 +2142,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             return static_cast<std::size_t>(query.rows_size());
         };
 
-        for (int attempt = 0; attempt < 2; ++attempt) {
+        for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
             stub = route_session_rpc(connection);
             grpc::ClientContext context;
             context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
@@ -2026,9 +2155,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             if (status.ok()) {
                 break;
             }
-            note_transport_failure(connection, status, context);
-            if (attempt != 0 || status.error_code() != grpc::StatusCode::NOT_FOUND ||
-                !recover_not_found(connection)) {
+            if (attempt == connection->retry_attempts ||
+                !prepare_stateless_retry(connection, status, context, initial_request_session,
+                                         &attempted_endpoints, &not_found_retried)) {
+                if (attempt == connection->retry_attempts) {
+                    note_transport_failure(connection, status, context);
+                }
                 return fail_grpc(statement, status, context);
             }
             request_session.CopyFrom(connection->session);
@@ -2078,17 +2210,21 @@ SQLRETURN execute_statement(StatementHandle* statement) {
 
     grpc::Status status;
     OpResult result;
-    for (int attempt = 0; attempt < 2; ++attempt) {
+    for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
         stub = route_session_rpc(connection);
+        result.Clear();
         grpc::ClientContext context;
         context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
         status = stub->executeUpdate(&context, request, &result);
         if (status.ok()) {
             break;
         }
-        note_transport_failure(connection, status, context);
-        if (attempt != 0 || status.error_code() != grpc::StatusCode::NOT_FOUND ||
-            !recover_not_found(connection)) {
+        if (attempt == connection->retry_attempts ||
+            !prepare_stateless_retry(connection, status, context, initial_request_session,
+                                     &attempted_endpoints, &not_found_retried)) {
+            if (attempt == connection->retry_attempts) {
+                note_transport_failure(connection, status, context);
+            }
             return fail_grpc(statement, status, context);
         }
         request_session.CopyFrom(connection->session);
@@ -2137,12 +2273,29 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     if (connection->connected) {
         return fail(connection, "ODBC connection is already open", "08002");
     }
+    connection->retry_attempts = 3;
+    connection->retry_delay_ms = 100;
     bool load_aware = environment_boolean("OJP_LOADAWARE_SELECTION_ENABLED", true);
     const std::string load_aware_option = find("OJP.LOADAWARE.SELECTION.ENABLED");
     if (!load_aware_option.empty() &&
         !parse_boolean_option(load_aware_option, &load_aware)) {
         return fail(connection,
                     "OJP.LOADAWARE.SELECTION.ENABLED must be true or false", "IM012");
+    }
+    connection->load_aware = load_aware;
+    const std::string retry_attempts_option = find("OJP.MULTINODE.RETRY.ATTEMPTS");
+    if (!retry_attempts_option.empty() &&
+        !parse_nonnegative_int_option(retry_attempts_option, 10,
+                                      &connection->retry_attempts)) {
+        return fail(connection,
+                    "OJP.MULTINODE.RETRY.ATTEMPTS must be between 0 and 10", "IM012");
+    }
+    const std::string retry_delay_option = find("OJP.MULTINODE.RETRY.DELAY");
+    if (!retry_delay_option.empty() &&
+        !parse_nonnegative_int_option(retry_delay_option, 60000,
+                                      &connection->retry_delay_ms)) {
+        return fail(connection, "OJP.MULTINODE.RETRY.DELAY must be between 0 and 60000 ms",
+                    "IM012");
     }
     connection->client_uuid = make_client_uuid();
     connection->endpoint = choose_endpoint(connection->endpoints, load_aware);

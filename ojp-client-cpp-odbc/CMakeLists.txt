@@ -141,6 +141,15 @@ if(BUILD_TESTING)
         COMMAND ojp_odbc_h2_l7_integration_test
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l7_connection.csv"
             "OJP_TEST_H2_L7")
+    add_executable(ojp_odbc_h2_l8_integration_test
+        tests/h2_l8_integration_test.cpp)
+    target_link_libraries(ojp_odbc_h2_l8_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_h2_l8_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcH2L8Integration
+        COMMAND ojp_odbc_h2_l8_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l7_connection.csv"
+            "OJP_TEST_H2_L8"
+            "OJP_TEST_H2_L8_ADDRS")
     add_test(NAME OjpOdbcPostgreSqlL1Integration
         COMMAND ojp_odbc_l1_integration_test
             "PostgreSQL"
@@ -217,6 +226,7 @@ if(BUILD_TESTING)
         OjpOdbcH2L5Integration
         OjpOdbcH2L6Integration
         OjpOdbcH2L7Integration
+        OjpOdbcH2L8Integration
         OjpOdbcPostgreSqlL1Integration
         OjpOdbcSqlServerL1Integration
         OjpOdbcSqlServerL2Integration
@@ -228,4 +238,7 @@ if(BUILD_TESTING)
         PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
+    set_tests_properties(OjpOdbcH2L8Integration PROPERTIES
+        ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
+        TIMEOUT 120)
 endif()

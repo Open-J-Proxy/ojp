@@ -22,7 +22,7 @@
 # 9. multinode-xa-test: Multinode XA integration tests (needs: h2-integration-gate, resolve-version)
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
-# 12. cpp-odbc-test: C++ ODBC H2 L1-L7 tests (runs alongside build-test)
+# 12. cpp-odbc-test: C++ ODBC H2 L1-L8 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
 # 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L6 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
@@ -2215,14 +2215,14 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 11: C++ ODBC H2 L1-L7 Integration Tests
+  # JOB 11: C++ ODBC H2 L1-L8 Integration Tests
   # ===========================================================================
   #
   # This H2-only job runs in parallel with the main H2 build-test job.
   #
   # ===========================================================================
   cpp-odbc-test:
-    name: C++ ODBC H2 L1-L7 Tests
+    name: C++ ODBC H2 L1-L8 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' }}
@@ -2283,10 +2283,19 @@ jobs:
       - name: Start second OJP server for H2 multinode tests
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
-          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-server/ojp-libs \
-            -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
-            -jar "$jar" > /tmp/ojp-server-2.log 2>&1 &
-          echo "Second OJP server PID=$!"
+          nohup bash -c '
+            while true; do
+              java -Duser.timezone=UTC -Dojp.libs.path=./ojp-server/ojp-libs \
+                -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
+                -Dojp.server.maxConcurrentRequests=1 \
+                -jar "$1" >> /tmp/ojp-server-2.log 2>&1 &
+              server_pid=$!
+              echo "$server_pid" > /tmp/ojp-server-2.pid
+              wait "$server_pid" || true
+              sleep 1
+            done
+          ' _ "$jar" > /tmp/ojp-server-2-watchdog.log 2>&1 < /dev/null &
+          echo "Second OJP server watchdog PID=$!"
 
       - name: Wait for second OJP server to start
         run: |
@@ -2309,16 +2318,19 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC H2 L1-L7 tests
+      - name: Run C++ ODBC H2 L1-L8 tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
           OJP_TEST_H2_L7: 'true'
           OJP_TEST_H2_L7_ADDRS: 'localhost:1059,localhost:1060'
+          OJP_TEST_H2_L8: 'true'
+          OJP_TEST_H2_L8_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_H2_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcH2L[1-7]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-h2-l1-l7-test.log
+            -R '^OjpOdbcH2L[1-8]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-h2-l1-l8-test.log
 
       - name: Show ojp-server.log
         if: always()
@@ -2326,13 +2338,13 @@ jobs:
           cat /tmp/ojp-server.log
           cat /tmp/ojp-server-2.log
 
-      - name: Save C++ ODBC H2 L1-L7 test report and server logs
+      - name: Save C++ ODBC H2 L1-L8 test report and server logs
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-h2-l1-l7-test-results
+          name: cpp-odbc-h2-l1-l8-test-results
           path: |
-            /tmp/cpp-odbc-h2-l1-l7-test.log
+            /tmp/cpp-odbc-h2-l1-l8-test.log
             /tmp/ojp-server.log
             /tmp/ojp-server-2.log
           retention-days: 7

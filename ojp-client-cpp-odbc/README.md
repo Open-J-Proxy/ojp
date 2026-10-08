@@ -315,9 +315,13 @@ row-by-row server streaming through `fetchNextRows`.
 The H2 L5 suite additionally checks BLOB/CLOB input streams sent in multiple
 ODBC chunks, multi-block LOB reads, UTF-8 character preservation, and SQL NULL
 handling for both LOB types. H2 and SQL Server L6 verify temporary-table state
-across SQL operations and committed transactions. Both L7 suites use at least two
-OJP endpoints to check multinode CRUD, cached-pool reuse, and handling of an
-unavailable endpoint.
+across SQL operations and committed transactions. Both L7 suites use at least
+two OJP endpoints to check multinode CRUD, cached-pool reuse, and handling of an
+unavailable endpoint. H2 L8 stops and
+restarts the first configured OJP server to verify stateless operation failover,
+pool-exhaustion and SQL-error handling, and reuse of the recovered server. Run
+it only with disposable test servers; its PID file must identify the first
+endpoint, and a supervisor must restart that server after it exits.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -330,6 +334,8 @@ cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
 cmake --build ojp-client-cpp-odbc/build
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
 OJP_TEST_H2_L7=true OJP_TEST_H2_L7_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_H2_L8=true OJP_TEST_H2_L8_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_H2_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
@@ -342,9 +348,14 @@ fail the test instead of silently skipping it. Set
 `OJP_TEST_H2_L7_UNAVAILABLE_ADDR` or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
+The H2 L8 test requires a PID file for its first endpoint and restarts that
+server automatically through the test supervisor.
+The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
+`OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
+attempts, range 0–10; and 100 ms between attempts, range 0–60000).
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L7Integration`; L7 runs against two OJP servers. The C++ ODBC SQL Server
+`OjpOdbcH2L8Integration`; L7 and L8 run against two OJP servers. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration` through
 `OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
 `OjpOdbcSqlServerL4Integration`, `OjpOdbcSqlServerL5Integration`,

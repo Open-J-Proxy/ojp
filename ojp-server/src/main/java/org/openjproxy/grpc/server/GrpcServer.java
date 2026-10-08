@@ -111,6 +111,7 @@ public class GrpcServer {
                 .maxInboundMessageSize(config.getMaxRequestSize())
                 .keepAliveTime(config.getConnectionIdleTimeout(), TimeUnit.MILLISECONDS)
                 .addService(statementService)
+                .addService(new EchoServiceImpl())
                 .addService(OjpHealthManager.getHealthStatusManager().getHealthService())
                 .intercept(new IpWhitelistingInterceptor(config.getAllowedIps()))
                 .intercept(new ConcurrencyThrottleInterceptor(config.getMaxConcurrentRequests()))

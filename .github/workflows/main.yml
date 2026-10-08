@@ -2598,7 +2598,7 @@ jobs:
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServerL[1-5]Integration$' --output-on-failure \
+            -R '^OjpOdbcSqlServerL[1-6]Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l2-l3-l4-l5-test.log
 
       - name: Show OJP server log

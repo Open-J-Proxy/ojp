@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2-L4 for H2 and SQL Server**, and **L5 for H2 and SQL Server** from the
+**L2-L4 for H2 and SQL Server**, **L5 for H2 and SQL Server**, and **L6 for SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,8 +11,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L5 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, and BLOB/CLOB stream round trips; SQL Server covers typed parameters, result streaming, transactions, savepoints, transaction isolation, and BLOB stream round trips. |
+| Highest implemented level | **L6 for SQL Server; L5 for H2; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, and BLOB/CLOB stream round trips; SQL Server additionally covers session affinity via `sessionUUID`/`targetServer`, including local temporary tables across statements and transactions. |
 
 ### Current test-proven coverage by database
 
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L5** | L1-L4 suites plus `h2_l5_integration_test.cpp` cover chunked BLOB/CLOB writes and reads, UTF-8 CLOB data, data-at-execution, and NULL LOB parameters. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L5** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l5_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
+| SQL Server | **L6** | L1-L5 suites plus `sqlserver_l6_integration_test.cpp` verify local temporary-table persistence across statements and transactions through the sticky OJP session. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -164,16 +164,16 @@ Implemented rules:
 | L5 LOB lifecycle | `createLob` sends 64 KB `LT_BLOB`/`LT_CLOB` chunks, updates the session from returned references, and `readLob` concatenates response blocks |
 | L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
 | L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
+| L6 session affinity | Binds returned `sessionUUID` values to `targetServer`, routes subsequent session-scoped RPCs to that server, and removes bindings when terminating the session |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
 the client pulls the remaining rows with `fetchNextRows`. Earlier versions
 returned only the first row.
 
-Spec rules that belong to levels above L5 and are not implemented:
+Spec rules that belong to levels above L6 and are not implemented:
 
 - **L5 for PostgreSQL:** `createLob` and `readLob`.
-- **L6:** session-affinity routing.
 - **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),
   `connHash` caching and `NOT_FOUND` recovery (4.2), cluster health, and client
   throttling (section 8).

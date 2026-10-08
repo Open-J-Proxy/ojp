@@ -92,10 +92,10 @@ responses invalidate the cached pool and retry once after reconnecting.
 
 The SQL Server L7 suite covers the same multinode behavior with the SQL Server
 fixture, including multi-endpoint CRUD, cached pool reuse, and an unavailable
-endpoint. Health probes run every 5 seconds by default; configure a positive
-interval in milliseconds with `OJP.HEALTH.CHECK.INTERVAL` in the connection
-string or the `OJP_HEALTH_CHECK_INTERVAL` environment variable. Active sessions
-are never retried on another endpoint.
+endpoint. Health probes use the `connect` RPC every 5 seconds by default;
+configure a positive interval in milliseconds with the
+`OJP_HEALTH_CHECK_INTERVAL_MS` environment variable. Active sessions are never
+retried on another endpoint.
 
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:

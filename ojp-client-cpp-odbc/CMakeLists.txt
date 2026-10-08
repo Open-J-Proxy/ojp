@@ -25,15 +25,11 @@ set(GOOGLE_TYPE_TIME "${GOOGLEAPIS_PROTO_DIR}/google/type/timeofday.proto")
 set(PROTO_SRCS
     "${GENERATED_DIR}/StatementService.pb.cc"
     "${GENERATED_DIR}/StatementService.grpc.pb.cc"
-    "${GENERATED_DIR}/echo.pb.cc"
-    "${GENERATED_DIR}/echo.grpc.pb.cc"
     "${GENERATED_DIR}/google/type/date.pb.cc"
     "${GENERATED_DIR}/google/type/timeofday.pb.cc")
 set(PROTO_HDRS
     "${GENERATED_DIR}/StatementService.pb.h"
     "${GENERATED_DIR}/StatementService.grpc.pb.h"
-    "${GENERATED_DIR}/echo.pb.h"
-    "${GENERATED_DIR}/echo.grpc.pb.h"
     "${GENERATED_DIR}/google/type/date.pb.h"
     "${GENERATED_DIR}/google/type/timeofday.pb.h")
 set(PROTO_INCLUDE_ARGS)
@@ -49,8 +45,7 @@ add_custom_command(
         "--proto_path=${GOOGLEAPIS_PROTO_DIR}"
         ${PROTO_INCLUDE_ARGS}
         "--cpp_out=${GENERATED_DIR}"
-        "${PROTO_FILE}" "${OJP_PROTO_DIR}/echo.proto"
-        "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
+        "${PROTO_FILE}" "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
     COMMAND $<TARGET_FILE:protobuf::protoc>
         "--proto_path=${OJP_PROTO_DIR}"
         "--proto_path=${GOOGLEAPIS_PROTO_DIR}"
@@ -58,9 +53,7 @@ add_custom_command(
         "--grpc_out=${GENERATED_DIR}"
         "--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
         "${PROTO_FILE}"
-        "${OJP_PROTO_DIR}/echo.proto"
-    DEPENDS "${PROTO_FILE}" "${OJP_PROTO_DIR}/echo.proto"
-        "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
+    DEPENDS "${PROTO_FILE}" "${GOOGLE_TYPE_DATE}" "${GOOGLE_TYPE_TIME}"
     VERBATIM)
 
 add_library(ojp_odbc SHARED

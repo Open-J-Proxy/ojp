@@ -101,8 +101,10 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLCHAR detail[1024] = {};
         SQLINTEGER native_error = 0;
         SQLSMALLINT detail_length = 0;
-        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail, sizeof(detail),
-                          &detail_length) == SQL_SUCCESS) {
+        const SQLRETURN diagnostic_result =
+            SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail, sizeof(detail),
+                          &detail_length);
+        if (SQL_SUCCEEDED(diagnostic_result)) {
             message << " [" << state << ", " << native_error << "] "
                     << reinterpret_cast<const char*>(detail);
         }

@@ -2,6 +2,7 @@
 #include <sqlext.h>
 
 #include "StatementService.grpc.pb.h"
+#include "ojp_odbc_xa.h"
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -41,6 +43,23 @@ using com::openjproxy::grpc::ParameterValue;
 using com::openjproxy::grpc::SessionInfo;
 using com::openjproxy::grpc::StatementRequest;
 using com::openjproxy::grpc::StatementService;
+using com::openjproxy::grpc::XaCommitRequest;
+using com::openjproxy::grpc::XaEndRequest;
+using com::openjproxy::grpc::XaForgetRequest;
+using com::openjproxy::grpc::XaGetTransactionTimeoutRequest;
+using com::openjproxy::grpc::XaGetTransactionTimeoutResponse;
+using com::openjproxy::grpc::XaIsSameRMRequest;
+using com::openjproxy::grpc::XaIsSameRMResponse;
+using com::openjproxy::grpc::XaPrepareRequest;
+using com::openjproxy::grpc::XaPrepareResponse;
+using com::openjproxy::grpc::XaRecoverRequest;
+using com::openjproxy::grpc::XaRecoverResponse;
+using com::openjproxy::grpc::XaResponse;
+using com::openjproxy::grpc::XaRollbackRequest;
+using com::openjproxy::grpc::XaSetTransactionTimeoutRequest;
+using com::openjproxy::grpc::XaSetTransactionTimeoutResponse;
+using com::openjproxy::grpc::XaStartRequest;
+using com::openjproxy::grpc::XidProto;
 
 constexpr char kRowByRowMode[] = "RESULT_SET_ROW_BY_ROW_MODE";
 using StatementStub = StatementService::Stub;
@@ -73,6 +92,7 @@ struct ConnectionHandle final : HandleBase {
     std::string password;
     std::string client_uuid;
     std::string datasource_name = "default";
+    bool xa_mode = false;
     std::shared_ptr<grpc::Channel> channel;
     std::shared_ptr<StatementStub> stub;
     std::map<std::string, std::shared_ptr<grpc::Channel>> affinity_channels;
@@ -765,7 +785,7 @@ bool prepare_stateless_retry(ConnectionHandle* connection, const grpc::Status& s
                              std::set<std::string>* attempted_endpoints,
                              bool* not_found_retried) {
     note_transport_failure(connection, status, context);
-    if (!initial_request_session.sessionuuid().empty()) {
+    if (connection->xa_mode || !initial_request_session.sessionuuid().empty()) {
         return false;
     }
     if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
@@ -1772,6 +1792,9 @@ SQLRETURN end_transaction(ConnectionHandle* connection, HandleBase* handle,
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
+    if (connection->xa_mode) {
+        return fail(handle, "Use the OJP XA API to complete XA transactions", "HYC00");
+    }
     if (connection->auto_commit) {
         return SQL_SUCCESS;
     }
@@ -1855,6 +1878,13 @@ SQLRETURN get_transaction_isolation(ConnectionHandle* connection, HandleBase* ha
 }
 
 SQLRETURN set_auto_commit(ConnectionHandle* connection, HandleBase* handle, bool enabled) {
+    if (connection->xa_mode) {
+        if (enabled) {
+            return fail(handle, "Autocommit cannot be enabled for an OJP XA connection", "HY024");
+        }
+        connection->auto_commit = false;
+        return SQL_SUCCESS;
+    }
     if (connection->auto_commit == enabled) {
         return SQL_SUCCESS;
     }
@@ -2262,6 +2292,11 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         connection->user = find("USER");
     }
     connection->password = find("PWD");
+    const std::string xa_option = find("OJP.XA");
+    connection->xa_mode = false;
+    if (!xa_option.empty() && !parse_boolean_option(xa_option, &connection->xa_mode)) {
+        return fail(connection, "OJP.XA must be true or false", "IM012");
+    }
     connection->datasource_name = find("OJP.DATASOURCE.NAME");
     if (connection->datasource_name.empty()) {
         connection->datasource_name = "default";
@@ -2283,6 +2318,9 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
                     "OJP.LOADAWARE.SELECTION.ENABLED must be true or false", "IM012");
     }
     connection->load_aware = load_aware;
+    if (connection->xa_mode) {
+        connection->auto_commit = false;
+    }
     const std::string retry_attempts_option = find("OJP.MULTINODE.RETRY.ATTEMPTS");
     if (!retry_attempts_option.empty() &&
         !parse_nonnegative_int_option(retry_attempts_option, 10,
@@ -2312,7 +2350,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     details.set_user(connection->user);
     details.set_password(connection->password);
     details.set_clientuuid(connection->client_uuid);
-    details.set_isxa(false);
+    details.set_isxa(connection->xa_mode);
     for (const auto& address : connection->endpoints) {
         details.add_serverendpoints(address);
     }
@@ -2327,9 +2365,11 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     std::string cached_conn_hash;
     {
         std::lock_guard<std::mutex> lock(runtime.mutex);
-        const auto cached = runtime.conn_hash_by_key.find(connection_cache_key(connection));
-        if (cached != runtime.conn_hash_by_key.end()) {
-            cached_conn_hash = cached->second;
+        if (!connection->xa_mode) {
+            const auto cached = runtime.conn_hash_by_key.find(connection_cache_key(connection));
+            if (cached != runtime.conn_hash_by_key.end()) {
+                cached_conn_hash = cached->second;
+            }
         }
     }
     if (!cached_conn_hash.empty()) {
@@ -2338,9 +2378,11 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         session.set_isxa(false);
     } else {
         std::vector<std::string> ordered_endpoints{connection->endpoint};
-        for (const auto& address : connection->endpoints) {
-            if (address != connection->endpoint) {
-                ordered_endpoints.push_back(address);
+        if (!connection->xa_mode) {
+            for (const auto& address : connection->endpoints) {
+                if (address != connection->endpoint) {
+                    ordered_endpoints.push_back(address);
+                }
             }
         }
         bool connected_to_any = false;
@@ -2381,14 +2423,19 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             return fail(connection, "Failed to connect to any configured OJP server: " +
                                         failure_message, "08S01");
         }
-        if (!session.connhash().empty()) {
+        if (!connection->xa_mode && !session.connhash().empty()) {
             std::lock_guard<std::mutex> lock(runtime.mutex);
             runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connhash();
             runtime.details_by_conn_hash[session.connhash()] = details;
         }
     }
     session.set_targetserver(connection->endpoint);
+    session.set_isxa(connection->xa_mode);
     connection->session.CopyFrom(session);
+    if (!session.sessionuuid().empty()) {
+        std::lock_guard<std::mutex> routing_lock(connection->routing_mutex);
+        connection->session_to_server[session.sessionuuid()] = connection->endpoint;
+    }
     selected_endpoint = endpoint_runtime(connection->endpoint);
     selected_endpoint->active_connections.fetch_add(1);
     connection->connected = true;
@@ -2400,7 +2447,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             return isolation_result;
         }
     }
-    if (!connection->auto_commit) {
+    if (!connection->auto_commit && !connection->xa_mode) {
         const auto transaction_result = start_transaction(connection, connection);
         if (!SQL_SUCCEEDED(transaction_result)) {
             return transaction_result;
@@ -2438,6 +2485,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
         connection->affinity_channels.clear();
     }
     connection->auto_commit = true;
+    connection->xa_mode = false;
     connection->transaction_isolation = 0;
     if (!status.ok()) {
         return fail_grpc(connection, status, context);
@@ -2448,9 +2496,485 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     return SQL_SUCCESS;
 }
 
+SQLRETURN validate_xa_connection(ConnectionHandle* connection) {
+    if (!connection->connected || !connection->stub) {
+        return fail(connection, "ODBC connection is not open", "08003");
+    }
+    if (!connection->xa_mode || !connection->session.isxa()) {
+        return fail(connection, "Connection was not opened in OJP XA mode", "HYC00");
+    }
+    return SQL_SUCCESS;
+}
+
+SQLRETURN encode_xid(const OjpXid* xid, HandleBase* handle, XidProto* proto) {
+    if (xid == nullptr) {
+        return fail(handle, "XA transaction identifier is required", "HY009");
+    }
+    if (xid->global_transaction_id_length > OJP_XA_MAX_GTRID_SIZE ||
+        xid->branch_qualifier_length > OJP_XA_MAX_BQUAL_SIZE) {
+        return fail(handle, "XA transaction identifier exceeds the 64-byte limit", "HY090");
+    }
+    proto->set_formatid(xid->format_id);
+    proto->set_globaltransactionid(xid->global_transaction_id,
+                                  xid->global_transaction_id_length);
+    proto->set_branchqualifier(xid->branch_qualifier, xid->branch_qualifier_length);
+    return SQL_SUCCESS;
+}
+
+bool decode_xid(const XidProto& proto, OjpXid* xid) {
+    if (proto.globaltransactionid().size() > OJP_XA_MAX_GTRID_SIZE ||
+        proto.branchqualifier().size() > OJP_XA_MAX_BQUAL_SIZE) {
+        return false;
+    }
+    *xid = {};
+    xid->format_id = proto.formatid();
+    xid->global_transaction_id_length =
+        static_cast<std::uint32_t>(proto.globaltransactionid().size());
+    std::copy(proto.globaltransactionid().begin(), proto.globaltransactionid().end(),
+              xid->global_transaction_id);
+    xid->branch_qualifier_length =
+        static_cast<std::uint32_t>(proto.branchqualifier().size());
+    std::copy(proto.branchqualifier().begin(), proto.branchqualifier().end(),
+              xid->branch_qualifier);
+    return true;
+}
+
+template <typename Request, typename Response, typename Invoke>
+SQLRETURN perform_xa_rpc(ConnectionHandle* connection, HandleBase* handle,
+                         const SessionInfo& request_session, const Request& request,
+                         Response* response, Invoke invoke, bool* transport_failure = nullptr) {
+    if (transport_failure != nullptr) {
+        *transport_failure = false;
+    }
+    const SQLRETURN valid = validate_xa_connection(connection);
+    if (!SQL_SUCCEEDED(valid)) {
+        return valid;
+    }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    if (stub == nullptr) {
+        return fail(handle, "No OJP XA endpoint is available", "08S01", OJP_XA_XAER_RMFAIL);
+    }
+    const std::string target = connection->last_rpc_endpoint;
+    if (!endpoint_runtime(target)->healthy.load()) {
+        return fail(handle, "XA resource manager is unavailable; XA requests are not rerouted",
+                    "08S01", OJP_XA_XAER_RMFAIL);
+    }
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    const grpc::Status status = invoke(stub, &context, request, response);
+    if (!status.ok()) {
+        const bool is_transport = is_transport_failure(status, context);
+        if (transport_failure != nullptr) {
+            *transport_failure = is_transport;
+        }
+        note_transport_failure(connection, status, context);
+        const SQLRETURN failure = fail_grpc(handle, status, context);
+        if (is_transport && !handle->diagnostics.empty()) {
+            handle->diagnostics.back().native_error = OJP_XA_XAER_RMFAIL;
+        }
+        return failure;
+    }
+    if constexpr (!std::is_same_v<Response, XaIsSameRMResponse>) {
+        if (response->has_session()) {
+            update_session(connection, response->session(), request_session);
+        }
+    }
+    return SQL_SUCCESS;
+}
+
+bool reconnect_xa_for_start(ConnectionHandle* connection, HandleBase* handle,
+                            const std::string& failed_endpoint) {
+    const std::set<std::string> excluded{failed_endpoint};
+    const std::string next_endpoint =
+        choose_endpoint(connection->endpoints, connection->load_aware, excluded);
+    if (next_endpoint.empty()) {
+        return false;
+    }
+    auto endpoint = endpoint_runtime(next_endpoint);
+    ConnectionDetails details(connection->connection_details);
+    details.set_clusterhealth(cluster_health(connection->endpoints));
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    SessionInfo response;
+    const grpc::Status status = endpoint->stub->connect(&context, details, &response);
+    if (!status.ok()) {
+        if (is_transport_failure(status, context)) {
+            mark_endpoint_unhealthy(next_endpoint);
+        }
+        fail_grpc(handle, status, context);
+        if (!handle->diagnostics.empty()) {
+            handle->diagnostics.back().native_error = OJP_XA_XAER_RMFAIL;
+        }
+        return false;
+    }
+    endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
+    endpoint->active_connections.fetch_add(1);
+    connection->endpoint = next_endpoint;
+    connection->channel = endpoint->channel;
+    connection->stub = endpoint->stub;
+    connection->connection_details.CopyFrom(details);
+    response.set_targetserver(next_endpoint);
+    connection->session.CopyFrom(response);
+    if (!response.sessionuuid().empty()) {
+        std::lock_guard<std::mutex> routing_lock(connection->routing_mutex);
+        connection->session_to_server[response.sessionuuid()] = next_endpoint;
+    }
+    return true;
+}
+
 }  // namespace
 
 extern "C" {
+
+SQLRETURN SQL_API OjpXAStart(SQLHDBC connection, const OjpXid* xid, SQLINTEGER flags) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XidProto xid_proto;
+    SQLRETURN result = encode_xid(xid, target, &xid_proto);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    for (int attempt = 0; attempt <= target->retry_attempts; ++attempt) {
+        XaStartRequest request;
+        request.mutable_session()->CopyFrom(target->session);
+        request.mutable_xid()->CopyFrom(xid_proto);
+        request.set_flags(flags);
+        const SessionInfo request_session = request.session();
+        XaResponse response;
+        bool transport_failure = false;
+        result = perform_xa_rpc(target, target, request_session, request, &response,
+            [](StatementService::Stub* stub, grpc::ClientContext* context,
+               const XaStartRequest& xa_request, XaResponse* xa_response) {
+                return stub->xaStart(context, xa_request, xa_response);
+            }, &transport_failure);
+        if (SQL_SUCCEEDED(result)) {
+            if (!response.success()) {
+                return fail(target, response.message().empty() ? "XA start failed" : response.message(),
+                            "HY000", OJP_XA_XAER_RMERR);
+            }
+            return SQL_SUCCESS;
+        }
+        if (!transport_failure || !request_session.sessionuuid().empty() ||
+            attempt == target->retry_attempts) {
+            return result;
+        }
+        const std::string failed_endpoint = target->last_rpc_endpoint.empty()
+            ? target->endpoint : target->last_rpc_endpoint;
+        clear_diagnostics(target);
+        if (!reconnect_xa_for_start(target, target, failed_endpoint)) {
+            return SQL_ERROR;
+        }
+    }
+    return result;
+}
+
+SQLRETURN SQL_API OjpXAEnd(SQLHDBC connection, const OjpXid* xid, SQLINTEGER flags) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XidProto xid_proto;
+    SQLRETURN result = encode_xid(xid, target, &xid_proto);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    XaEndRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.mutable_xid()->CopyFrom(xid_proto);
+    request.set_flags(flags);
+    XaResponse response;
+    result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaEndRequest& xa_request, XaResponse* xa_response) {
+            return stub->xaEnd(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    return response.success()
+        ? SQL_SUCCESS
+        : fail(target, response.message().empty() ? "XA end failed" : response.message(),
+               "HY000", OJP_XA_XAER_RMERR);
+}
+
+SQLRETURN SQL_API OjpXAPrepare(SQLHDBC connection, const OjpXid* xid, SQLINTEGER* result_value) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (result_value == nullptr) {
+        return fail(target, "XA prepare result output is required", "HY009");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XidProto xid_proto;
+    SQLRETURN result = encode_xid(xid, target, &xid_proto);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    XaPrepareRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.mutable_xid()->CopyFrom(xid_proto);
+    XaPrepareResponse response;
+    result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaPrepareRequest& xa_request, XaPrepareResponse* xa_response) {
+            return stub->xaPrepare(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    if (response.result() != OJP_XA_XA_OK && response.result() != OJP_XA_XA_RDONLY) {
+        return fail(target, "OJP returned an invalid XA prepare result", "HY000",
+                    OJP_XA_XAER_RMERR);
+    }
+    *result_value = response.result();
+    return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API OjpXACommit(SQLHDBC connection, const OjpXid* xid, SQLSMALLINT one_phase) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (one_phase != SQL_FALSE && one_phase != SQL_TRUE) {
+        return fail(target, "one_phase must be SQL_TRUE or SQL_FALSE", "HY024");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XidProto xid_proto;
+    SQLRETURN result = encode_xid(xid, target, &xid_proto);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    XaCommitRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.mutable_xid()->CopyFrom(xid_proto);
+    request.set_onephase(one_phase == SQL_TRUE);
+    XaResponse response;
+    result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaCommitRequest& xa_request, XaResponse* xa_response) {
+            return stub->xaCommit(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    return response.success()
+        ? SQL_SUCCESS
+        : fail(target, response.message().empty() ? "XA commit failed" : response.message(),
+               "HY000", OJP_XA_XAER_RMERR);
+}
+
+SQLRETURN SQL_API OjpXARollback(SQLHDBC connection, const OjpXid* xid) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XidProto xid_proto;
+    SQLRETURN result = encode_xid(xid, target, &xid_proto);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    XaRollbackRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.mutable_xid()->CopyFrom(xid_proto);
+    XaResponse response;
+    result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaRollbackRequest& xa_request, XaResponse* xa_response) {
+            return stub->xaRollback(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    return response.success()
+        ? SQL_SUCCESS
+        : fail(target, response.message().empty() ? "XA rollback failed" : response.message(),
+               "HY000", OJP_XA_XAER_RMERR);
+}
+
+SQLRETURN SQL_API OjpXARecover(SQLHDBC connection, SQLINTEGER flags, OjpXid* xids,
+                               SQLSMALLINT capacity, SQLSMALLINT* count) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (count == nullptr || capacity < 0 || (capacity > 0 && xids == nullptr)) {
+        return fail(target, "XA recovery output buffer and capacity are invalid", "HY009");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XaRecoverRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.set_flag(flags);
+    XaRecoverResponse response;
+    SQLRETURN result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaRecoverRequest& xa_request, XaRecoverResponse* xa_response) {
+            return stub->xaRecover(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    if (response.xids_size() > std::numeric_limits<SQLSMALLINT>::max()) {
+        return fail(target, "OJP returned too many XA recovery identifiers", "HY000");
+    }
+    *count = static_cast<SQLSMALLINT>(response.xids_size());
+    if (response.xids_size() > capacity) {
+        return fail(target, "XA recovery output buffer is too small", "HY090");
+    }
+    for (int index = 0; index < response.xids_size(); ++index) {
+        if (!decode_xid(response.xids(index), &xids[index])) {
+            return fail(target, "OJP returned an oversized XA transaction identifier", "HY000");
+        }
+    }
+    return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API OjpXAForget(SQLHDBC connection, const OjpXid* xid) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XidProto xid_proto;
+    SQLRETURN result = encode_xid(xid, target, &xid_proto);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    XaForgetRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.mutable_xid()->CopyFrom(xid_proto);
+    XaResponse response;
+    result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaForgetRequest& xa_request, XaResponse* xa_response) {
+            return stub->xaForget(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    return response.success()
+        ? SQL_SUCCESS
+        : fail(target, response.message().empty() ? "XA forget failed" : response.message(),
+               "HY000", OJP_XA_XAER_RMERR);
+}
+
+SQLRETURN SQL_API OjpXASetTransactionTimeout(SQLHDBC connection, SQLINTEGER seconds,
+                                             SQLSMALLINT* success) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (seconds < 0 || success == nullptr) {
+        return fail(target, "XA timeout must be non-negative and have an output", "HY024");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XaSetTransactionTimeoutRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    request.set_seconds(seconds);
+    XaSetTransactionTimeoutResponse response;
+    const SQLRETURN result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaSetTransactionTimeoutRequest& xa_request,
+           XaSetTransactionTimeoutResponse* xa_response) {
+            return stub->xaSetTransactionTimeout(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    *success = response.success() ? SQL_TRUE : SQL_FALSE;
+    return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API OjpXAGetTransactionTimeout(SQLHDBC connection, SQLINTEGER* seconds) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (seconds == nullptr) {
+        return fail(target, "XA timeout output is required", "HY009");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    XaGetTransactionTimeoutRequest request;
+    request.mutable_session()->CopyFrom(target->session);
+    XaGetTransactionTimeoutResponse response;
+    const SQLRETURN result = perform_xa_rpc(target, target, request.session(), request, &response,
+        [](StatementService::Stub* stub, grpc::ClientContext* context,
+           const XaGetTransactionTimeoutRequest& xa_request,
+           XaGetTransactionTimeoutResponse* xa_response) {
+            return stub->xaGetTransactionTimeout(context, xa_request, xa_response);
+        });
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    *seconds = response.seconds();
+    return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API OjpXAIsSameRM(SQLHDBC connection, SQLHDBC other_connection,
+                                SQLSMALLINT* same_resource_manager) {
+    if (connection == SQL_NULL_HDBC || other_connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC ||
+        static_cast<HandleBase*>(other_connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    auto* other = static_cast<ConnectionHandle*>(other_connection);
+    clear_diagnostics(target);
+    if (same_resource_manager == nullptr) {
+        return fail(target, "XA resource-manager comparison output is required", "HY009");
+    }
+    const auto operation = [&]() -> SQLRETURN {
+        SQLRETURN result = validate_xa_connection(target);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        if (!other->connected || !other->stub || !other->xa_mode || !other->session.isxa()) {
+            return fail(target, "Both connections must be open OJP XA connections", "HYC00");
+        }
+        XaIsSameRMRequest request;
+        request.mutable_session1()->CopyFrom(target->session);
+        request.mutable_session2()->CopyFrom(other->session);
+        XaIsSameRMResponse response;
+        result = perform_xa_rpc(target, target, request.session1(), request, &response,
+            [](StatementService::Stub* stub, grpc::ClientContext* context,
+               const XaIsSameRMRequest& xa_request, XaIsSameRMResponse* xa_response) {
+                return stub->xaIsSameRM(context, xa_request, xa_response);
+            });
+        if (SQL_SUCCEEDED(result)) {
+            *same_resource_manager = response.issame() ? SQL_TRUE : SQL_FALSE;
+        }
+        return result;
+    };
+    if (target == other) {
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        return operation();
+    }
+    std::scoped_lock connection_locks(target->operation_mutex, other->operation_mutex);
+    return operation();
+}
 
 SQLRETURN SQL_API SQLAllocHandle(SQLSMALLINT handle_type, SQLHANDLE input_handle,
                                  SQLHANDLE* output_handle) {

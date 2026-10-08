@@ -60,8 +60,9 @@ add_library(ojp_odbc SHARED
     src/ojp_odbc_driver.cpp
     ${PROTO_SRCS}
     ${PROTO_HDRS})
-target_include_directories(ojp_odbc PRIVATE "${GENERATED_DIR}")
+target_include_directories(ojp_odbc PRIVATE "${GENERATED_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(ojp_odbc PRIVATE ${ODBC_INCLUDE_DIRS})
+target_compile_definitions(ojp_odbc PRIVATE OJP_ODBC_BUILD_DLL)
 target_link_libraries(ojp_odbc PRIVATE
     gRPC::grpc++
     protobuf::libprotobuf)
@@ -150,6 +151,18 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l7_connection.csv"
             "OJP_TEST_H2_L8"
             "OJP_TEST_H2_L8_ADDRS")
+    add_executable(ojp_odbc_h2_l9_integration_test
+        tests/h2_l9_integration_test.cpp)
+    target_include_directories(ojp_odbc_h2_l9_integration_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(ojp_odbc_h2_l9_integration_test PRIVATE ODBC::ODBC ${CMAKE_DL_LIBS})
+    add_dependencies(ojp_odbc_h2_l9_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcH2L9Integration
+        COMMAND ojp_odbc_h2_l9_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l1_connection.csv"
+            "OJP_TEST_H2_L9"
+            "OJP_TEST_H2_ADDR"
+            "$<TARGET_FILE:ojp_odbc>")
     add_test(NAME OjpOdbcPostgreSqlL1Integration
         COMMAND ojp_odbc_l1_integration_test
             "PostgreSQL"
@@ -236,6 +249,7 @@ if(BUILD_TESTING)
         OjpOdbcH2L6Integration
         OjpOdbcH2L7Integration
         OjpOdbcH2L8Integration
+        OjpOdbcH2L9Integration
         OjpOdbcPostgreSqlL1Integration
         OjpOdbcSqlServerL1Integration
         OjpOdbcSqlServerL2Integration
@@ -250,6 +264,9 @@ if(BUILD_TESTING)
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
     set_tests_properties(OjpOdbcH2L8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
+        TIMEOUT 120)
+    set_tests_properties(OjpOdbcH2L9Integration PROPERTIES
+        ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc"
         TIMEOUT 120)
     set_tests_properties(OjpOdbcSqlServerL8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"

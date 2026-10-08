@@ -227,7 +227,11 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
                         "SQLAllocHandle(overloaded statement)", SQL_HANDLE_DBC,
                         overloaded_connection);
 
-        const std::string long_query = "WAITFOR DELAY '00:00:10'; SELECT 1";
+        const std::string long_query =
+            "SELECT SUM(CONVERT(BIGINT, row_number)) FROM "
+            "(SELECT TOP (50000000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS row_number "
+            "FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b "
+            "CROSS JOIN sys.all_objects AS c) AS numbers";
         long_query_thread = std::thread([&] {
             query_started.store(true);
             long_query_result = SQLExecDirect(busy_statement, sql_text(long_query), SQL_NTS);

@@ -319,11 +319,18 @@ int run_integration_test(int argc, char** argv) {
         }
         const XaApi xa = load_xa_api(driver_module);
         SQLSMALLINT same_resource_manager = SQL_FALSE;
+        require_success(xa.is_same_rm(same_rm_connection, same_rm_connection,
+                                      &same_resource_manager),
+                        "OjpXAIsSameRM(same session)", SQL_HANDLE_DBC, same_rm_connection);
+        if (same_resource_manager != SQL_TRUE) {
+            throw std::runtime_error("an XA resource must share its resource manager with itself");
+        }
+        same_resource_manager = SQL_TRUE;
         require_success(xa.is_same_rm(same_rm_connection, second_xa_connection,
                                       &same_resource_manager),
                         "OjpXAIsSameRM", SQL_HANDLE_DBC, same_rm_connection);
-        if (same_resource_manager != SQL_TRUE) {
-            throw std::runtime_error("connections to the same H2 database must share an RM");
+        if (same_resource_manager != SQL_FALSE) {
+            throw std::runtime_error("H2 must report distinct XA resources as different RMs");
         }
 
         const OjpXid two_phase_xid = xid_for(table + "_two_phase", "branch-1");

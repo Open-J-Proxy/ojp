@@ -81,7 +81,8 @@ class H2XAIntegrationTest {
         assertNotNull(resource);
         assertFalse(connection.isClosed());
         assertFalse(connection.getAutoCommit());
-        assertTrue(resource.isSameRM(secondXaConnection.getXAResource()));
+        assertTrue(resource.isSameRM(resource));
+        assertFalse(resource.isSameRM(secondXaConnection.getXAResource()));
 
         Xid twoPhaseXid = new TestXid(1, "h2-two-phase".getBytes(), "branch-1".getBytes());
         resource.start(twoPhaseXid, XAResource.TMNOFLAGS);

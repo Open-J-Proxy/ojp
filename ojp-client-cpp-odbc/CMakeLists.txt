@@ -155,7 +155,8 @@ if(BUILD_TESTING)
         tests/h2_l9_integration_test.cpp)
     target_include_directories(ojp_odbc_h2_l9_integration_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    target_link_libraries(ojp_odbc_h2_l9_integration_test PRIVATE ODBC::ODBC ${CMAKE_DL_LIBS})
+    target_include_directories(ojp_odbc_h2_l9_integration_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_h2_l9_integration_test PRIVATE ojp_odbc ${CMAKE_DL_LIBS})
     add_dependencies(ojp_odbc_h2_l9_integration_test ojp_odbc)
     add_test(NAME OjpOdbcH2L9Integration
         COMMAND ojp_odbc_h2_l9_integration_test

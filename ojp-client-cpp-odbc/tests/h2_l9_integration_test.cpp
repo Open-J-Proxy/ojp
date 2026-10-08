@@ -278,6 +278,7 @@ int run_integration_test(int argc, char** argv) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC regular_connection = SQL_NULL_HDBC;
     SQLHDBC xa_connection = SQL_NULL_HDBC;
+    SQLHDBC same_rm_connection = SQL_NULL_HDBC;
     SQLHDBC second_xa_connection = SQL_NULL_HDBC;
     SQLHSTMT regular_statement = SQL_NULL_HSTMT;
     SQLHSTMT xa_statement = SQL_NULL_HSTMT;
@@ -299,7 +300,8 @@ int run_integration_test(int argc, char** argv) {
         table_created = true;
 
         xa_connection = open_connection(environment, config, endpoints, true);
-        second_xa_connection = open_connection(environment, config, endpoints, true);
+        same_rm_connection = open_connection(environment, config, endpoint_list.back(), true);
+        second_xa_connection = open_connection(environment, config, endpoint_list.back(), true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, xa_connection,
                                        reinterpret_cast<SQLHANDLE*>(&xa_statement)),
                         "SQLAllocHandle(XA statement)", SQL_HANDLE_DBC, xa_connection);
@@ -317,9 +319,9 @@ int run_integration_test(int argc, char** argv) {
         }
         const XaApi xa = load_xa_api(driver_module);
         SQLSMALLINT same_resource_manager = SQL_FALSE;
-        require_success(xa.is_same_rm(xa_connection, second_xa_connection,
+        require_success(xa.is_same_rm(same_rm_connection, second_xa_connection,
                                       &same_resource_manager),
-                        "OjpXAIsSameRM", SQL_HANDLE_DBC, xa_connection);
+                        "OjpXAIsSameRM", SQL_HANDLE_DBC, same_rm_connection);
         if (same_resource_manager != SQL_TRUE) {
             throw std::runtime_error("connections to the same H2 database must share an RM");
         }
@@ -453,6 +455,7 @@ int run_integration_test(int argc, char** argv) {
                         "SQLFreeHandle(regular statement)", SQL_HANDLE_DBC, regular_connection);
         regular_statement = SQL_NULL_HSTMT;
         close_connection(&second_xa_connection);
+        close_connection(&same_rm_connection);
         close_connection(&xa_connection);
         close_connection(&regular_connection);
         require_success(SQLFreeHandle(SQL_HANDLE_ENV, environment),
@@ -472,6 +475,7 @@ int run_integration_test(int argc, char** argv) {
             SQLFreeHandle(SQL_HANDLE_STMT, regular_statement);
         }
         close_connection(&second_xa_connection);
+        close_connection(&same_rm_connection);
         close_connection(&xa_connection);
         close_connection(&regular_connection);
         if (environment != SQL_NULL_HENV) {

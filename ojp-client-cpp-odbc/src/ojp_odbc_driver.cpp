@@ -84,7 +84,6 @@ struct BoundParameter {
     SQLPOINTER value = nullptr;
     SQLLEN buffer_length = 0;
     SQLLEN* indicator = nullptr;
-    bool data_at_execution = false;
     std::string streamed_data;
 };
 
@@ -112,12 +111,14 @@ struct StatementHandle final : HandleBase {
     std::map<SQLUSMALLINT, BoundColumn> bound_columns;
     std::vector<std::string> columns;
     std::vector<std::vector<Cell>> rows;
+    std::map<SQLUSMALLINT, std::size_t> get_data_offsets;
     SQLLEN row_count = -1;
     std::size_t row_index = 0;
-    std::vector<SQLUSMALLINT> data_at_execution_parameters;
-    std::size_t next_data_at_execution_parameter = 0;
-    SQLUSMALLINT current_data_at_execution_parameter = 0;
     bool has_result_set = false;
+    std::vector<SQLUSMALLINT> data_at_execution_parameters;
+    std::size_t data_at_execution_index = 0;
+    SQLUSMALLINT current_data_at_execution_parameter = 0;
+    bool waiting_for_data = false;
 };
 
 struct ParsedConnectionString {
@@ -839,8 +840,14 @@ bool is_lob_parameter_type(SQLSMALLINT sql_type) {
            sql_type == SQL_WLONGVARCHAR;
 }
 
+bool is_data_at_execution(const BoundParameter& bound) {
+    return bound.indicator != nullptr &&
+        (*bound.indicator == SQL_DATA_AT_EXEC ||
+         *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET);
+}
+
 bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diagnostic* error) {
-    if (bound.data_at_execution) {
+    if (is_data_at_execution(bound)) {
         if (bound.indicator != nullptr && *bound.indicator != SQL_DATA_AT_EXEC &&
             *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET) {
             const auto expected_length =
@@ -1399,11 +1406,22 @@ SQLRETURN execute_savepoint_statement(StatementHandle* statement, SavepointActio
     return result;
 }
 
+void reset_data_at_execution(StatementHandle* statement) {
+    statement->data_at_execution_parameters.clear();
+    statement->data_at_execution_index = 0;
+    statement->current_data_at_execution_parameter = 0;
+    statement->waiting_for_data = false;
+    for (auto& entry : statement->parameters) {
+        entry.second.streamed_data.clear();
+    }
+}
+
 SQLRETURN execute_statement(StatementHandle* statement) {
     auto* connection = statement->connection;
     clear_diagnostics(statement);
     statement->columns.clear();
     statement->rows.clear();
+    statement->get_data_offsets.clear();
     statement->row_index = 0;
     statement->row_count = -1;
     statement->has_result_set = false;
@@ -1453,7 +1471,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             value->set_string_value(lob_uuid);
             continue;
         }
-        if (bound.data_at_execution) {
+        if (is_data_at_execution(bound)) {
             return fail(statement, "Data-at-execution is only supported for LOB parameters", "HYC00");
         }
         parameter->set_type(parameter_type(bound));
@@ -1463,6 +1481,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                         parameter_error.native_error);
         }
     }
+    request.mutable_session()->CopyFrom(connection->session);
 
     if (is_query_sql(statement->sql)) {
         std::string result_set_uuid;
@@ -1790,6 +1809,7 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER len
         return fail(static_cast<HandleBase*>(statement), "SQL text is required", "HY009");
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    reset_data_at_execution(target);
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
                           : static_cast<std::size_t>(std::max<SQLINTEGER>(0, length)));
@@ -1806,6 +1826,7 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER length
         return fail(static_cast<HandleBase*>(statement), "SQL text is required", "HY009");
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    reset_data_at_execution(target);
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
                           : static_cast<std::size_t>(std::max<SQLINTEGER>(0, length)));
@@ -1823,6 +1844,9 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
     }
     auto* target = static_cast<StatementHandle*>(statement);
     clear_diagnostics(target);
+    if (!target->data_at_execution_parameters.empty()) {
+        return fail(target, "Cannot bind a parameter while data-at-execution is active", "HY010");
+    }
     if (parameter_number == 0) {
         return fail(target, "ODBC parameter numbers start at 1", "07009");
     }
@@ -1831,9 +1855,6 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
     }
     target->parameters[parameter_number] = {
         input_output_type, value_type, parameter_type, value, buffer_length, indicator};
-    target->parameters[parameter_number].data_at_execution =
-        indicator != nullptr &&
-        (*indicator == SQL_DATA_AT_EXEC || *indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET);
     return SQL_SUCCESS;
 }
 
@@ -1865,20 +1886,21 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statement) {
     }
     auto* target = static_cast<StatementHandle*>(statement);
     clear_diagnostics(target);
-    target->data_at_execution_parameters.clear();
-    target->next_data_at_execution_parameter = 0;
-    target->current_data_at_execution_parameter = 0;
-    for (auto& entry : target->parameters) {
-        auto& parameter = entry.second;
-        parameter.streamed_data.clear();
-        if (parameter.data_at_execution) {
-            if (!is_lob_parameter_type(parameter.parameter_type)) {
-                return fail(target, "Data-at-execution is only supported for LOB parameters", "HYC00");
+    if (target->waiting_for_data) {
+        return fail(target, "Data-at-execution is already active", "HY010");
+    }
+    reset_data_at_execution(target);
+    for (const auto& entry : target->parameters) {
+        if (is_data_at_execution(entry.second)) {
+            if (!is_lob_parameter_type(entry.second.parameter_type)) {
+                return fail(target, "Data-at-execution is supported only for LOB parameters",
+                            "HYC00");
             }
             target->data_at_execution_parameters.push_back(entry.first);
         }
     }
     if (!target->data_at_execution_parameters.empty()) {
+        target->waiting_for_data = true;
         return SQL_NEED_DATA;
     }
     return execute_statement(target);
@@ -1891,25 +1913,35 @@ SQLRETURN SQL_API SQLParamData(SQLHSTMT statement, SQLPOINTER* value) {
     }
     auto* target = static_cast<StatementHandle*>(statement);
     clear_diagnostics(target);
-    if (target->data_at_execution_parameters.empty()) {
-        return fail(target, "No data-at-execution parameter is pending", "HY010");
+    if (!target->waiting_for_data) {
+        return fail(target, "No data-at-execution operation is active", "HY010");
     }
     if (value == nullptr) {
-        return fail(target, "Parameter token output is required", "HY009");
+        return fail(target, "Data-at-execution token output is required", "HY009");
     }
     if (target->current_data_at_execution_parameter != 0) {
+        const auto previous = target->parameters.find(
+            target->current_data_at_execution_parameter);
+        if (previous == target->parameters.end()) {
+            return fail(target, "Data-at-execution parameter is no longer bound", "HY010");
+        }
         target->current_data_at_execution_parameter = 0;
-        ++target->next_data_at_execution_parameter;
     }
-    if (target->next_data_at_execution_parameter < target->data_at_execution_parameters.size()) {
+    if (target->data_at_execution_index < target->data_at_execution_parameters.size()) {
         const auto parameter_number =
-            target->data_at_execution_parameters[target->next_data_at_execution_parameter];
+            target->data_at_execution_parameters[target->data_at_execution_index++];
+        const auto parameter = target->parameters.find(parameter_number);
+        if (parameter == target->parameters.end()) {
+            return fail(target, "Data-at-execution parameter is no longer bound", "HY010");
+        }
         target->current_data_at_execution_parameter = parameter_number;
-        *value = target->parameters.at(parameter_number).value;
+        *value = parameter->second.value;
         return SQL_NEED_DATA;
     }
+
+    target->waiting_for_data = false;
     target->data_at_execution_parameters.clear();
-    target->next_data_at_execution_parameter = 0;
+    target->data_at_execution_index = 0;
     return execute_statement(target);
 }
 
@@ -1920,26 +1952,28 @@ SQLRETURN SQL_API SQLPutData(SQLHSTMT statement, SQLPOINTER data, SQLLEN length)
     }
     auto* target = static_cast<StatementHandle*>(statement);
     clear_diagnostics(target);
-    if (target->current_data_at_execution_parameter == 0) {
+    if (!target->waiting_for_data || target->current_data_at_execution_parameter == 0) {
         return fail(target, "SQLParamData must request a parameter before SQLPutData", "HY010");
     }
-    if (length == SQL_NULL_DATA ||
-        (length < 0 && length != SQL_NTS)) {
-        return fail(target, "LOB stream chunk length is invalid", "HY090");
+    auto parameter = target->parameters.find(target->current_data_at_execution_parameter);
+    if (parameter == target->parameters.end()) {
+        return fail(target, "Data-at-execution parameter is no longer bound", "HY010");
     }
+    auto& bound = parameter->second;
     if (length == SQL_NTS) {
-        const auto parameter_type = target->parameters.at(
-            target->current_data_at_execution_parameter).value_type;
-        if (parameter_type != SQL_C_CHAR || data == nullptr) {
-            return fail(target, "SQL_NTS requires a character LOB chunk", "HY090");
+        if (bound.value_type != SQL_C_CHAR || data == nullptr) {
+            return fail(target, "SQL_NTS is valid only for character LOB data", "HY090");
         }
         length = static_cast<SQLLEN>(std::strlen(static_cast<const char*>(data)));
+    }
+    if (length < 0) {
+        return fail(target, "LOB stream chunk length is invalid", "HY090");
     }
     if (length > 0 && data == nullptr) {
         return fail(target, "LOB stream chunk buffer is required", "HY009");
     }
     if (length > 0) {
-        auto& parameter = target->parameters.at(target->current_data_at_execution_parameter);
+        auto& parameter = bound;
         constexpr std::size_t kMaxLobSize =
             static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
         if (static_cast<std::size_t>(length) > kMaxLobSize - parameter.streamed_data.size()) {
@@ -1965,6 +1999,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
         return SQL_NO_DATA;
     }
     ++target->row_index;
+    target->get_data_offsets.clear();
     SQLRETURN result = SQL_SUCCESS;
     const auto& row = target->rows[target->row_index - 1];
     for (const auto& binding : target->bound_columns) {
@@ -2008,6 +2043,42 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
     const auto lob_result = materialize_lob_cell(target, cell, target_type, &materialized_cell);
     if (!SQL_SUCCEEDED(lob_result)) {
         return lob_result;
+    }
+    if (target_type == SQL_C_BINARY || target_type == SQL_C_CHAR) {
+        if (const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&materialized_cell)) {
+            const auto offset = target->get_data_offsets[column_number];
+            if (offset > bytes->size()) {
+                return SQL_NO_DATA;
+            }
+            if (target_value == nullptr) {
+                return fail(target, "Output buffer is required", "HY009");
+            }
+            if (buffer_length < 0) {
+                return fail(target, "Invalid binary output buffer length", "HY090");
+            }
+            const auto capacity = target_type == SQL_C_CHAR
+                ? (buffer_length > 0 ? static_cast<std::size_t>(buffer_length - 1) : 0)
+                : static_cast<std::size_t>(buffer_length);
+            const auto available = bytes->size() - offset;
+            const auto copy_count = std::min(capacity, available);
+            if (copy_count > 0) {
+                std::memcpy(target_value, bytes->data() + offset, copy_count);
+            }
+            if (target_type == SQL_C_CHAR && buffer_length > 0) {
+                static_cast<char*>(target_value)[copy_count] = '\0';
+            }
+            if (indicator != nullptr) {
+                *indicator = static_cast<SQLLEN>(bytes->size());
+            }
+            target->get_data_offsets[column_number] =
+                copy_count < available ? offset + copy_count : bytes->size() + 1;
+            if (copy_count < available) {
+                target->diagnostics.push_back(
+                    {"01004", 0, "Binary result was truncated"});
+                return SQL_SUCCESS_WITH_INFO;
+            }
+            return SQL_SUCCESS;
+        }
     }
     return write_cell(target, materialized_cell, target_type, target_value,
                       buffer_length, indicator);
@@ -2109,8 +2180,10 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
     clear_diagnostics(target);
     if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS) {
         if (option == SQL_CLOSE) {
+            reset_data_at_execution(target);
             target->columns.clear();
             target->rows.clear();
+            target->get_data_offsets.clear();
             target->row_count = -1;
             target->row_index = 0;
             target->has_result_set = false;
@@ -2118,9 +2191,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
             target->bound_columns.clear();
         } else {
             target->parameters.clear();
-            target->data_at_execution_parameters.clear();
-            target->next_data_at_execution_parameter = 0;
-            target->current_data_at_execution_parameter = 0;
+            reset_data_at_execution(target);
         }
         return SQL_SUCCESS;
     }
@@ -2422,7 +2493,8 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR, SQL_API_SQLENDTRAN,
         SQL_API_SQLTRANSACT,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
-        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
+        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLPARAMDATA, SQL_API_SQLPUTDATA,
+        SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
         SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};

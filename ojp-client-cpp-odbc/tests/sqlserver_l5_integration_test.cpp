@@ -122,6 +122,10 @@ void send_lob_data(SQLHSTMT statement, SQLPOINTER lob_token,
     expect(parameter_result == SQL_NEED_DATA && token == lob_token,
            "SQLParamData did not request the bound SQL Server LOB");
     constexpr std::size_t chunk_size = 48 * 1024;
+    if (bytes.empty()) {
+        require_success(SQLPutData(statement, nullptr, 0), "SQLPutData(empty LOB)",
+                        SQL_HANDLE_STMT, statement);
+    }
     for (std::size_t offset = 0; offset < bytes.size(); offset += chunk_size) {
         const auto length = std::min(chunk_size, bytes.size() - offset);
         require_success(SQLPutData(statement,

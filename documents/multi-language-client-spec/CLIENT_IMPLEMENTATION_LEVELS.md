@@ -91,7 +91,7 @@ These levels are based on each language client's own integration tests and are i
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L8** | L1-L7 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l8_integration_test.cpp` proves the current L8 behavior; the new L9 XA suite requires a passing CI run before raising this achieved level. |
-| **C++ ODBC** | SQL Server | **L8** | L1-L8 real-server coverage; the L9 XA suite and L10 multinode/XA suite are implemented but require passing CI runs before raising achieved coverage. |
+| **C++ ODBC** | SQL Server | **L8** | L1-L8 real-server coverage; the L9 XA suite and L10 multinode/XA suite are implemented. |
 | **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |

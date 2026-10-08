@@ -46,6 +46,8 @@ The C++ driver's H2 and SQL Server implementations extend through L9, but report
 
 Never store credentials in a form resource, source code, shared connection-definition file, or trace output.
 
+The C++ README provides the portable CMake/Ninja `release` preset, optional installation to a user-chosen prefix, platform registration, and an [ODBC compatibility table](../../ojp-client-cpp-odbc/README.md#using-other-languages-through-odbc). Linux Release build/install has been verified; Windows/macOS builds and runtime remain untested. The preset disables integration tests. Windows automatic symbol export is build support, not evidence of FireDAC or Unicode compatibility.
+
 ## DSN-less connection definition
 
 Use FireDAC's **generic ODBC** driver, not its MSSQL or another database-specific driver:
@@ -85,9 +87,11 @@ uses
   FireDAC.Stan.Error,
   FireDAC.Stan.Async,
   FireDAC.Comp.Client,
+  FireDAC.ConsoleUI.Wait,
   FireDAC.DApt,
   FireDAC.Phys.ODBC,
-  FireDAC.Phys.ODBCDef;
+  FireDAC.Phys.ODBCDef,
+  FireDAC.Phys.ODBCWrapper;
 
 function RequiredEnv(const Name: string): string;
 begin
@@ -104,12 +108,18 @@ end;
 procedure PrintSqlErrors(const Error: EFDDBEngineException);
 var
   I: Integer;
+  State: string;
 begin
   for I := 0 to Error.ErrorCount - 1 do
+  begin
+    State := '';
+    if Error.Errors[I] is TFDODBCNativeError then
+      State := TFDODBCNativeError(Error.Errors[I]).SQLState;
     Writeln(Format('SQLSTATE=%s NativeError=%d Message=%s', [
-      Error.Errors[I].SQLState,
+      State,
       Error.Errors[I].ErrorCode,
       Error.Errors[I].Message]));
+  end;
 end;
 
 procedure RunProbe;
@@ -158,11 +168,16 @@ begin
         begin
           try
             Query.Close;
+          except
+            on CleanupError: Exception do
+              Writeln('Query cleanup also failed: ' + CleanupError.Message);
+          end;
+          try
             if Connection.InTransaction then
               Connection.Rollback;
           except
             on CleanupError: Exception do
-              Writeln('Cleanup also failed: ' + CleanupError.Message);
+              Writeln('Rollback also failed: ' + CleanupError.Message);
           end;
           raise;
         end;
@@ -172,7 +187,17 @@ begin
     end;
   finally
     try
-      Connection.Close;
+      try
+        Connection.Close;
+      except
+        on CleanupError: Exception do
+        begin
+          Writeln('Connection cleanup failed: ' + CleanupError.Message);
+          if CleanupError is EFDDBEngineException then
+            PrintSqlErrors(EFDDBEngineException(CleanupError));
+          ExitCode := 1;
+        end;
+      end;
     finally
       Connection.Free;
     end;
@@ -222,6 +247,7 @@ Public FireDAC references (configuration semantics, **not** OJP validation):
 - [Connect to ODBC Data Source (FireDAC)](https://docwiki.embarcadero.com/RADStudio/en/Connect_to_ODBC_Data_Source_(FireDAC))
 - [TFDPhysODBCDriverLink](https://docwiki.embarcadero.com/Libraries/Florence/en/FireDAC.Phys.ODBC.TFDPhysODBCDriverLink) — generic ODBC driver and driver/advanced settings
 - [ODBCAdvanced](https://docwiki.embarcadero.com/Libraries/Florence/en/FireDAC.Phys.ODBCBase.TFDPhysODBCBaseDriverLink.ODBCAdvanced) — additional ODBC connection parameters
+- [TFDODBCNativeError](https://docwiki.embarcadero.com/Libraries/Sydney/en/FireDAC.Phys.ODBCWrapper.TFDODBCNativeError) — ODBC-specific SQLSTATE diagnostics
 - [Common Connection Parameters (FireDAC)](https://docwiki.embarcadero.com/RADStudio/Sydney/en/Common_Connection_Parameters_(FireDAC)) — connection definition and `Pooled`
 - [Using FireDAC Connection Pooling with RAD Server](https://blogs.embarcadero.com/using-firedac-connection-pooling-with-rad-server/) — FireDAC connection-definition pooling
 

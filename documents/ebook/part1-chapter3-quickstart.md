@@ -551,6 +551,7 @@ Implementation, an integration suite existing, and that suite passing CI are dif
 ### .NET: a native ADO.NET connection
 
 ```csharp
+using System;
 using Ojp.Client;
 
 var builder = new OjpConnectionStringBuilder {
@@ -650,7 +651,7 @@ require __DIR__ . '/vendor/autoload.php';
 $connection = new \OpenJProxy\PDO\OjpPDO(
     'ojp:host=localhost;port=1059;url=jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1',
     getenv('DB_USER'),
-    getenv('DB_PASSWORD') ?: ''
+    (string) getenv('DB_PASSWORD')
 );
 try {
     $query = $connection->prepare('SELECT 1 AS id');
@@ -706,13 +707,17 @@ This is a native gRPC executor, not an ODBC executor. Drift-generated SQL, migra
 
 Follow the [C++ build requirements](../../ojp-client-cpp-odbc/README.md#build-requirements) and register the built driver as `OJP` with your platform's Driver Manager. There are no published prebuilt binaries yet. Application and driver bitness must match.
 
+The README's CMake/Ninja `release` preset builds the driver with integration tests disabled; installation is optional and its prefix is user-chosen. Linux Release build/install has been verified, but Windows and macOS remain untested. Neither a portable preset nor Windows automatic symbol export establishes platform runtime or wrapper compatibility. Consult the [ODBC compatibility table](../../ojp-client-cpp-odbc/README.md#using-other-languages-through-odbc) before trying an experimental bridge.
+
+The latest Linux validation also passed the README's complete `SELECT 1` example and existing H2 L1, L2, L3, and L6 suites. H2 L4 `SQLTransact` rollback and L5 `SQLParamData` failed identically on the clean original baseline. These are pre-existing limitations, not regressions from the build/documentation changes; the historical level assessments below are not a claim that every suite or operation passes in every environment.
+
 Use `SQLDriverConnect`, not DSN-only `SQLConnect`, with:
 
 ```text
-DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};UID={sa};******;
+DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};UID={sa};PWD=;
 ```
 
-`SERVER` is the OJP endpoint, not the database host. `DATABASE` is the complete backend JDBC URL. ODBC braces preserve semicolons; double a literal closing brace inside a value. Populate credentials from the environment in real applications. The [C++ usage example](../../ojp-client-cpp-odbc/README.md#using-from-a-c-odbc-application) shows `SQLExecDirect`, `SQLFetch`, and `SQLGetData`; check every return code, inspect `SQLGetDiagRec`, and free statement/connection/environment handles on every path.
+`SERVER` is the OJP endpoint, not the database host. `DATABASE` is the complete backend JDBC URL. This template uses the default local H2 user and an empty password. In applications, populate `UID` and `PWD` from `DB_USER` and `DB_PASSWORD` at runtime, bracing both values. ODBC braces preserve semicolons; double a literal closing brace inside a value. The [C++ usage example](../../ojp-client-cpp-odbc/README.md#using-from-a-c-odbc-application) shows `SQLExecDirect`, `SQLFetch`, and `SQLGetData`; check every return code, inspect `SQLGetDiagRec`, and free statement/connection/environment handles on every path.
 
 | Level | Current C++ implementation and test boundary |
 |---|---|
@@ -961,6 +966,8 @@ public class TestConnection {
 You now have OJP up and running! You've successfully installed OJP Server using Docker, JAR, or built from source. The JDBC driver is now part of your project dependencies. You've updated your JDBC URL with the OJP prefix format and executed your first query through the proxy. Most importantly, you understand the common gotchas and how to avoid them, particularly around double-pooling.
 
 The key takeaways are straightforward. OJP requires only one change to your existing code: the JDBC URL format. Remember to disable application-level connection pooling to avoid resource waste. You can run OJP Server via Docker for the easiest setup, or use the standalone JAR when needed. Best of all, the driver is a standard JDBC implementation, so there's no special API to learn.
+
+Non-Java applications can evaluate the native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs, or the more advanced C++ ANSI ODBC driver. Choose using each client's individual test evidence and limitations, not assumed JDBC parity. Standard ODBC wrappers and FireDAC remain experimental, unverified integration paths.
 
 In the next chapter, we'll explore Kubernetes deployment with Helm charts for cloud-native environments.
 

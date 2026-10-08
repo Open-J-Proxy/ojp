@@ -24,8 +24,12 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 ### Part I: Foundation (5 chapters)
 - [Chapter 1: Introduction to OJP](part1-chapter1-introduction.md)
 - [Chapter 2: Architecture and Design](part1-chapter2-architecture.md)
+  - [Native clients and the ODBC bridge](part1-chapter2-architecture.md#native-clients-and-the-odbc-bridge)
 - [Chapter 2a: OJP as Smart Load Balancer and Automatic Failover](part1-chapter2a-smart-load-balancing.md)
 - [Chapter 3: Quick Start Guide](part1-chapter3-quickstart.md)
+  - [3.3.1 Basic Non-Java Clients](part1-chapter3-quickstart.md#331-basic-non-java-clients)
+  - [Native client maturity](part1-chapter3-quickstart.md#native-client-maturity)
+  - [C++: the ANSI ODBC driver and its levels](part1-chapter3-quickstart.md#c-the-ansi-odbc-driver-and-its-levels)
 - [Chapter 3a: Kubernetes Deployment with Helm](part1-chapter3a-kubernetes-helm.md)
 
 ### Part II: Configuration (4 chapters)
@@ -33,6 +37,8 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 - [Chapter 5: JDBC Configuration](part2-chapter5-jdbc-configuration.md)
 - [Chapter 6: Server Configuration](part2-chapter6-server-configuration.md)
 - [Chapter 7: Framework Integration](part2-chapter7-framework-integration.md)
+  - [7.9 Non-Java APIs and ODBC Bridges](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges)
+  - [Delphi FireDAC / ODBC guide — experimental, not validated](../guides/DELPHI_FIREDAC_ODBC.md)
 
 ### Part III: Advanced Features (7 chapters)
 - [Chapter 8: Slow Query Segregation](part3-chapter8-slow-query-segregation.md)
@@ -99,6 +105,12 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 4. Chapter 12: Connection Pool Provider SPI
 5. Appendix G: Troubleshooting
 
+### For Non-Java Applications
+
+1. [Basic Non-Java Clients](part1-chapter3-quickstart.md#331-basic-non-java-clients) — .NET, Python, Go, PHP, Ruby, Dart, and C++ examples with separate implementation/test boundaries.
+2. [Non-Java APIs and ODBC Bridges](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) — native APIs versus experimental wrapper routes.
+3. [Delphi FireDAC / ODBC](../guides/DELPHI_FIREDAC_ODBC.md) — unvalidated configuration probe, current blockers, and diagnostics.
+
 ### For Advanced Users
 1. Chapter 8: Slow Query Segregation
 2. Chapter 8a: Client-Side Throttling
@@ -126,11 +138,11 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 
 **Style**: Conversational narrative throughout (minimal bullet lists, flowing prose)
 
-**Audience**: Java developers (intermediate to advanced), DevOps engineers, DBAs, technical architects
+**Audience**: Java and non-Java application developers, DevOps engineers, DBAs, technical architects
 
 **Quality**: Multiple rounds of review feedback incorporated, technical accuracy validated against current codebase
 
-**Practicality**: Production-ready examples, real-world scenarios, complete working code including proprietary database setup
+**Practicality**: Java deployment examples, real-world scenarios, and basic native non-Java client examples. ODBC bridge examples are experimental compatibility probes, not verified production integrations.
 
 **Currency**: All features from main branch documented with current implementation
 

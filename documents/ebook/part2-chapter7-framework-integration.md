@@ -762,19 +762,23 @@ For basic native examples and individual maturity assessments, start with [Chapt
 
 An ODBC bridge is a **different route**: an existing language wrapper loads the C++ OJP driver through the platform's ODBC Driver Manager. It can potentially expose more of the C++ driver's implemented capabilities, but must first be compatible with the driver's actual API surface.
 
+> **All ODBC bridge examples in this section are experimental and not verified with OJP.** They are compatibility probes, not drop-in integrations or production-ready configurations. A successful Linux Release build/install does not validate any language wrapper; Windows and macOS builds and runtime integrations remain untested.
+
 ### Compatibility gate: investigate before adopting
 
 The driver currently exports ANSI functions only, not `SQLDriverConnectW`, `SQLPrepareW`, or other `W` entry points. It lacks `SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, and `SQLColumns`; `SQLGetInfo` supports only a subset of capability requests. Even `SQLSetStmtAttr` accepts only a single-row fetch array, not general statement options. Many wrappers call these functions during connection initialization or fetch setup, so **successful C++ tests do not guarantee any wrapper below works**.
 
 Use the [C++ build requirements](../../ojp-client-cpp-odbc/README.md#build-requirements), register `OJP`, and match application/driver/Driver Manager bitness. No prebuilt OJP ODBC binaries are currently published. Prefer DSN-less `SQLDriverConnect`; the driver's `SQLConnect` implementation rejects DSN-only use.
 
+The C++ README documents the portable CMake/Ninja `release` preset, optional installation to a user-chosen prefix, per-OS registration, and the [ODBC compatibility table](../../ojp-client-cpp-odbc/README.md#using-other-languages-through-odbc). The preset disables integration tests; building the shared library is not an integration-test result.
+
 The connection fields must be:
 
 ```text
-DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};UID={user-from-environment};******;
+DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};
 ```
 
-Build this string at runtime; placeholders above are not credentials to copy. Brace every value and escape a literal `}` as `}}`. `SERVER` identifies OJP; `DATABASE` contains the complete backend JDBC URL. Never log a credential-bearing string. Disable application/framework pooling and Driver Manager pooling separately; a wrapper option alone may not disable the manager's process-level pool.
+Build this string at runtime and append the `UID` and `PWD` attributes from environment credentials. Brace every value and escape a literal `}` as `}}`. `SERVER` identifies OJP; `DATABASE` contains the complete backend JDBC URL. Never log a credential-bearing string. Disable application/framework pooling and Driver Manager pooling separately; a wrapper option alone may not disable the manager's process-level pool.
 
 ### Candidate bridges by ecosystem
 
@@ -793,6 +797,7 @@ Build this string at runtime; placeholders above are not credentials to copy. Br
 If `System.Data.Odbc` is already available in your project, construct a DSN-less connection using its builder. This is a compatibility probe, not a known-working replacement for the native provider:
 
 ```csharp
+using System;
 using System.Data.Odbc;
 
 var builder = new OdbcConnectionStringBuilder {

@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>

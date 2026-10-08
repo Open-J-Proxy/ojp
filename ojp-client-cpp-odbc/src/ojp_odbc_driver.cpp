@@ -1591,6 +1591,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         // SQL Server and DB2 send one row at a time when the result has binary or LOB
         // columns; the remaining rows must be pulled with fetchNextRows.
         while (row_by_row && !result_set_uuid.empty()) {
+            StatementService::Stub* fetch_stub = route_session_rpc(connection);
             com::openjproxy::grpc::ResultSetFetchRequest fetch;
             fetch.mutable_session()->CopyFrom(connection->session);
             fetch.set_resultsetuuid(result_set_uuid);
@@ -1598,7 +1599,6 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             grpc::ClientContext fetch_context;
             fetch_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
             OpResult next;
-            StatementService::Stub* fetch_stub = route_session_rpc(connection);
             const auto fetch_status = fetch_stub->fetchNextRows(&fetch_context, fetch, &next);
             if (!fetch_status.ok()) {
                 return fail_grpc(statement, fetch_status, fetch_context);
@@ -1731,12 +1731,12 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     connection->channel.reset();
     connection->savepoints.clear();
     connection->savepoint_names.clear();
-    if (!request_session.sessionuuid().empty()) {
+    {
         std::lock_guard<std::mutex> routing_lock(connection->routing_mutex);
-        connection->session_to_server.erase(request_session.sessionuuid());
+        connection->session_to_server.clear();
+        connection->affinity_stubs.clear();
+        connection->affinity_channels.clear();
     }
-    connection->affinity_stubs.clear();
-    connection->affinity_channels.clear();
     connection->auto_commit = true;
     connection->transaction_isolation = 0;
     if (!status.ok()) {

@@ -24,7 +24,7 @@
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L6 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
-# 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L5 tests (needs: h2-integration-gate)
+# 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L6 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
 # SEQUENTIAL EXECUTION:
@@ -2478,14 +2478,14 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC SQL Server L1-L5 Integration Tests
+  # JOB 14: C++ ODBC SQL Server L1-L6 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the C++ ODBC PostgreSQL test after the aggregate H2 gate.
   #
   # ===========================================================================
   cpp-odbc-sqlserver-test:
-    name: C++ ODBC SQL Server L1-L5 Tests
+    name: C++ ODBC SQL Server L1-L6 Tests
     runs-on: ubuntu-latest
     needs: [h2-integration-gate]
     permissions:
@@ -2591,7 +2591,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC SQL Server L1 through L5 tests
+      - name: Run C++ ODBC SQL Server L1 through L6 tests
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
@@ -2599,7 +2599,7 @@ jobs:
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
             -R '^OjpOdbcSqlServerL[1-6]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l2-l3-l4-l5-test.log
+            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l6-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2615,9 +2615,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-sqlserver-l1-l2-l3-l4-l5-test-results
+          name: cpp-odbc-sqlserver-l1-l6-test-results
           path: |
-            /tmp/cpp-odbc-sqlserver-l1-l2-l3-l4-l5-test.log
+            /tmp/cpp-odbc-sqlserver-l1-l6-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

@@ -156,6 +156,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
             "OJP_TEST_SQLSERVER"
             "OJP_TEST_SQLSERVER_ADDR")
+    add_executable(ojp_odbc_sqlserver_l5_integration_test
+        tests/sqlserver_l5_integration_test.cpp)
+    target_link_libraries(ojp_odbc_sqlserver_l5_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_sqlserver_l5_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcSqlServerL5Integration
+        COMMAND ojp_odbc_sqlserver_l5_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
+            "OJP_TEST_SQLSERVER"
+            "OJP_TEST_SQLSERVER_ADDR")
     set_tests_properties(
         OjpOdbcH2L1Integration
         OjpOdbcH2L2Integration
@@ -166,6 +175,7 @@ if(BUILD_TESTING)
         OjpOdbcSqlServerL2Integration
         OjpOdbcSqlServerL3Integration
         OjpOdbcSqlServerL4Integration
+        OjpOdbcSqlServerL5Integration
         PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")

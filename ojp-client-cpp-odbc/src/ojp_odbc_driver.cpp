@@ -10,6 +10,7 @@
 #include <cstring>
 #include <ctime>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -68,6 +69,7 @@ struct ConnectionHandle final : HandleBase {
     std::mutex operation_mutex;
     std::set<std::string> savepoints;
     std::map<std::string, std::string> savepoint_names;
+    std::map<std::string, com::openjproxy::grpc::LobReference> lob_references;
     SQLULEN transaction_isolation = 0;
     bool auto_commit = true;
     bool connected = false;
@@ -80,6 +82,9 @@ struct BoundParameter {
     SQLPOINTER value = nullptr;
     SQLLEN buffer_length = 0;
     SQLLEN* indicator = nullptr;
+    std::vector<std::uint8_t> streamed_data;
+    bool streamed_data_set = false;
+    bool streamed_null = false;
 };
 
 struct BoundColumn {
@@ -102,9 +107,14 @@ struct StatementHandle final : HandleBase {
     std::map<SQLUSMALLINT, BoundColumn> bound_columns;
     std::vector<std::string> columns;
     std::vector<std::vector<Cell>> rows;
+    std::map<SQLUSMALLINT, std::size_t> get_data_offsets;
     SQLLEN row_count = -1;
     std::size_t row_index = 0;
     bool has_result_set = false;
+    std::vector<SQLUSMALLINT> data_at_execution_parameters;
+    std::size_t data_at_execution_index = 0;
+    SQLUSMALLINT current_data_at_execution_parameter = 0;
+    bool waiting_for_data = false;
 };
 
 struct ParsedConnectionString {
@@ -1154,11 +1164,195 @@ SQLRETURN execute_savepoint_statement(StatementHandle* statement, SavepointActio
     return result;
 }
 
+bool is_data_at_execution(const BoundParameter& parameter) {
+    return parameter.indicator != nullptr &&
+        (*parameter.indicator == SQL_DATA_AT_EXEC ||
+         *parameter.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET);
+}
+
+bool is_lob_parameter(const BoundParameter& parameter) {
+    return parameter.parameter_type == SQL_LONGVARBINARY;
+}
+
+bool is_null_parameter(const BoundParameter& parameter) {
+    return parameter.streamed_data_set
+        ? parameter.streamed_null
+        : parameter.value == nullptr ||
+              (parameter.indicator != nullptr && *parameter.indicator == SQL_NULL_DATA);
+}
+
+bool parameter_bytes(const BoundParameter& parameter, std::vector<std::uint8_t>* bytes) {
+    if (parameter.streamed_data_set) {
+        *bytes = parameter.streamed_data;
+        return true;
+    }
+    if (parameter.value == nullptr) {
+        return false;
+    }
+
+    SQLLEN length = parameter.buffer_length;
+    if (parameter.indicator != nullptr) {
+        if (*parameter.indicator == SQL_NTS &&
+            (parameter.value_type == SQL_C_CHAR || parameter.value_type == SQL_C_DEFAULT)) {
+            const auto* data = static_cast<const char*>(parameter.value);
+            const auto* terminator = parameter.buffer_length > 0
+                ? static_cast<const char*>(std::memchr(data, '\0',
+                    static_cast<std::size_t>(parameter.buffer_length)))
+                : nullptr;
+            length = terminator == nullptr
+                ? (parameter.buffer_length > 0 ? parameter.buffer_length :
+                   static_cast<SQLLEN>(std::strlen(data)))
+                : static_cast<SQLLEN>(terminator - data);
+        } else if (*parameter.indicator >= 0) {
+            length = *parameter.indicator;
+        }
+    }
+    if (parameter.buffer_length > 0 && length > parameter.buffer_length) {
+        length = parameter.buffer_length;
+    }
+    if (length < 0) {
+        return false;
+    }
+    const auto* data = static_cast<const std::uint8_t*>(parameter.value);
+    bytes->assign(data, data + length);
+    return true;
+}
+
+SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle,
+                     const std::vector<std::uint8_t>& bytes,
+                     com::openjproxy::grpc::LobType lob_type,
+                     com::openjproxy::grpc::LobReference* lob_reference) {
+    using com::openjproxy::grpc::LobDataBlock;
+    using com::openjproxy::grpc::LobReference;
+    if (bytes.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+        return fail(handle, "LOB exceeds the maximum supported length", "22001");
+    }
+
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    auto stream = connection->stub->createLob(&context);
+    if (!stream) {
+        return fail(handle, "Unable to open the OJP LOB upload stream", "HY000");
+    }
+
+    constexpr std::size_t chunk_size = 64 * 1024;
+    std::size_t offset = 0;
+    bool received_reference = false;
+    LobReference response;
+    do {
+        const auto block_size = std::min(chunk_size, bytes.size() - offset);
+        LobDataBlock block;
+        block.mutable_session()->CopyFrom(connection->session);
+        block.set_position(static_cast<std::int64_t>(offset) + 1);
+        block.set_lobtype(lob_type);
+        if (block_size > 0) {
+            block.set_data(bytes.data() + offset, block_size);
+        }
+        if (!stream->Write(block)) {
+            stream->WritesDone();
+            return fail_grpc(handle, stream->Finish(), context);
+        }
+        if (!received_reference) {
+            if (!stream->Read(&response)) {
+                stream->WritesDone();
+                const auto status = stream->Finish();
+                if (!status.ok()) {
+                    return fail_grpc(handle, status, context);
+                }
+                return fail(handle, "OJP did not return a LOB reference", "HY000");
+            }
+            if (response.has_session()) {
+                connection->session.CopyFrom(response.session());
+            }
+            if (response.uuid().empty()) {
+                stream->WritesDone();
+                const auto status = stream->Finish();
+                if (!status.ok()) {
+                    return fail_grpc(handle, status, context);
+                }
+                return fail(handle, "OJP returned an empty LOB reference", "HY000");
+            }
+            *lob_reference = response;
+            received_reference = true;
+        }
+        offset += block_size;
+    } while (offset < bytes.size());
+
+    stream->WritesDone();
+    while (stream->Read(&response)) {
+        if (response.has_session()) {
+            connection->session.CopyFrom(response.session());
+        }
+        if (!response.uuid().empty()) {
+            *lob_reference = response;
+            received_reference = true;
+        }
+    }
+    const auto status = stream->Finish();
+    if (!status.ok()) {
+        return fail_grpc(handle, status, context);
+    }
+    if (!received_reference) {
+        return fail(handle, "OJP did not return a LOB reference", "HY000");
+    }
+    lob_reference->mutable_session()->CopyFrom(connection->session);
+    connection->lob_references[lob_reference->uuid()] = *lob_reference;
+    return SQL_SUCCESS;
+}
+
+SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle,
+                   const com::openjproxy::grpc::LobReference& reference,
+                   std::int64_t position, std::int32_t length,
+                   std::vector<std::uint8_t>* bytes) {
+    using com::openjproxy::grpc::LobDataBlock;
+    using com::openjproxy::grpc::ReadLobRequest;
+    if (reference.uuid().empty()) {
+        return fail(handle, "LOB reference is empty", "HY000");
+    }
+    if (position < 1 || length < 0) {
+        return fail(handle, "Invalid LOB read position or length", "HY090");
+    }
+    ReadLobRequest request;
+    request.mutable_lobreference()->CopyFrom(reference);
+    request.mutable_lobreference()->mutable_session()->CopyFrom(connection->session);
+    request.set_position(position);
+    request.set_length(length);
+
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    auto reader = connection->stub->readLob(&context, request);
+    LobDataBlock block;
+    while (reader->Read(&block)) {
+        if (block.has_session()) {
+            connection->session.CopyFrom(block.session());
+        }
+        bytes->insert(bytes->end(), block.data().begin(), block.data().end());
+    }
+    const auto status = reader->Finish();
+    if (!status.ok()) {
+        return fail_grpc(handle, status, context);
+    }
+    return SQL_SUCCESS;
+}
+
+void reset_data_at_execution(StatementHandle* statement) {
+    statement->data_at_execution_parameters.clear();
+    statement->data_at_execution_index = 0;
+    statement->current_data_at_execution_parameter = 0;
+    statement->waiting_for_data = false;
+    for (auto& entry : statement->parameters) {
+        entry.second.streamed_data.clear();
+        entry.second.streamed_data_set = false;
+        entry.second.streamed_null = false;
+    }
+}
+
 SQLRETURN execute_statement(StatementHandle* statement) {
     auto* connection = statement->connection;
     clear_diagnostics(statement);
     statement->columns.clear();
     statement->rows.clear();
+    statement->get_data_offsets.clear();
     statement->row_index = 0;
     statement->row_count = -1;
     statement->has_result_set = false;
@@ -1187,6 +1381,40 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
         auto* parameter = request.add_parameters();
         parameter->set_index(static_cast<std::int32_t>(entry.first));
+        if (is_null_parameter(bound)) {
+            parameter->set_type(com::openjproxy::grpc::PT_NULL);
+            auto* value = parameter->add_values();
+            if (bound.streamed_null) {
+                value->set_int_value(jdbc_null_type(bound.parameter_type));
+            } else {
+                Diagnostic parameter_error;
+                if (!set_parameter_value(value, bound, entry.first, &parameter_error)) {
+                    return fail(statement, parameter_error.message, parameter_error.state,
+                                parameter_error.native_error);
+                }
+            }
+            continue;
+        }
+        if (is_lob_parameter(bound)) {
+            std::vector<std::uint8_t> bytes;
+            if (!parameter_bytes(bound, &bytes)) {
+                return fail(statement, "Invalid LOB parameter length", "HY090");
+            }
+            constexpr auto lob_type = com::openjproxy::grpc::LT_BLOB;
+            com::openjproxy::grpc::LobReference lob_reference;
+            const auto lob_result = create_lob(connection, statement, bytes, lob_type,
+                                               &lob_reference);
+            if (!SQL_SUCCEEDED(lob_result)) {
+                return lob_result;
+            }
+            parameter->set_type(com::openjproxy::grpc::PT_BLOB);
+            parameter->add_values()->set_string_value(lob_reference.uuid());
+            continue;
+        }
+        if (bound.streamed_data_set) {
+            return fail(statement, "Data-at-execution is supported only for LOB parameters",
+                        "HYC00");
+        }
         parameter->set_type(parameter_type(bound));
         auto* value = parameter->add_values();
         Diagnostic parameter_error;
@@ -1379,6 +1607,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     connection->channel.reset();
     connection->savepoints.clear();
     connection->savepoint_names.clear();
+    connection->lob_references.clear();
     connection->auto_commit = true;
     connection->transaction_isolation = 0;
     if (!status.ok()) {
@@ -1522,6 +1751,7 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER len
         return fail(static_cast<HandleBase*>(statement), "SQL text is required", "HY009");
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    reset_data_at_execution(target);
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
                           : static_cast<std::size_t>(std::max<SQLINTEGER>(0, length)));
@@ -1538,6 +1768,7 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER length
         return fail(static_cast<HandleBase*>(statement), "SQL text is required", "HY009");
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    reset_data_at_execution(target);
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
                           : static_cast<std::size_t>(std::max<SQLINTEGER>(0, length)));
@@ -1555,6 +1786,9 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
     }
     auto* target = static_cast<StatementHandle*>(statement);
     clear_diagnostics(target);
+    if (target->waiting_for_data) {
+        return fail(target, "Cannot bind a parameter while data-at-execution is active", "HY010");
+    }
     if (parameter_number == 0) {
         return fail(target, "ODBC parameter numbers start at 1", "07009");
     }
@@ -1592,7 +1826,111 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statement) {
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
         return SQL_INVALID_HANDLE;
     }
-    return execute_statement(static_cast<StatementHandle*>(statement));
+    auto* target = static_cast<StatementHandle*>(statement);
+    clear_diagnostics(target);
+    if (target->waiting_for_data) {
+        return fail(target, "Data-at-execution is already active", "HY010");
+    }
+    reset_data_at_execution(target);
+    for (const auto& entry : target->parameters) {
+        if (is_data_at_execution(entry.second)) {
+            if (!is_lob_parameter(entry.second)) {
+                return fail(target, "Data-at-execution is supported only for LOB parameters",
+                            "HYC00");
+            }
+            target->data_at_execution_parameters.push_back(entry.first);
+        }
+    }
+    if (!target->data_at_execution_parameters.empty()) {
+        target->waiting_for_data = true;
+        return SQL_NEED_DATA;
+    }
+    return execute_statement(target);
+}
+
+SQLRETURN SQL_API SQLParamData(SQLHSTMT statement, SQLPOINTER* value) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    clear_diagnostics(target);
+    if (!target->waiting_for_data) {
+        return fail(target, "No data-at-execution operation is active", "HY010");
+    }
+    if (value == nullptr) {
+        return fail(target, "Data-at-execution token output is required", "HY009");
+    }
+    if (target->current_data_at_execution_parameter != 0) {
+        const auto previous = target->parameters.find(
+            target->current_data_at_execution_parameter);
+        if (previous == target->parameters.end()) {
+            return fail(target, "Data-at-execution parameter is no longer bound", "HY010");
+        }
+        previous->second.streamed_data_set = true;
+        target->current_data_at_execution_parameter = 0;
+    }
+    if (target->data_at_execution_index < target->data_at_execution_parameters.size()) {
+        const auto parameter_number =
+            target->data_at_execution_parameters[target->data_at_execution_index++];
+        const auto parameter = target->parameters.find(parameter_number);
+        if (parameter == target->parameters.end()) {
+            return fail(target, "Data-at-execution parameter is no longer bound", "HY010");
+        }
+        target->current_data_at_execution_parameter = parameter_number;
+        *value = parameter->second.value;
+        return SQL_NEED_DATA;
+    }
+
+    target->waiting_for_data = false;
+    target->data_at_execution_parameters.clear();
+    target->data_at_execution_index = 0;
+    return execute_statement(target);
+}
+
+SQLRETURN SQL_API SQLPutData(SQLHSTMT statement, SQLPOINTER data, SQLLEN length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    clear_diagnostics(target);
+    if (!target->waiting_for_data || target->current_data_at_execution_parameter == 0) {
+        return fail(target, "SQLParamData must request a parameter before SQLPutData", "HY010");
+    }
+    auto parameter = target->parameters.find(target->current_data_at_execution_parameter);
+    if (parameter == target->parameters.end()) {
+        return fail(target, "Data-at-execution parameter is no longer bound", "HY010");
+    }
+    auto& bound = parameter->second;
+    if (bound.streamed_null) {
+        return fail(target, "No data may follow a NULL parameter value", "HY010");
+    }
+    if (length == SQL_NULL_DATA) {
+        bound.streamed_data.clear();
+        bound.streamed_null = true;
+        return SQL_SUCCESS;
+    }
+    if (length == SQL_NTS) {
+        if (bound.value_type != SQL_C_CHAR || data == nullptr) {
+            return fail(target, "SQL_NTS is valid only for non-null character data", "HY090");
+        }
+        length = static_cast<SQLLEN>(std::strlen(static_cast<const char*>(data)));
+    }
+    if (length < 0 || (data == nullptr && length > 0)) {
+        return fail(target, "Invalid SQLPutData buffer length or pointer", "HY090");
+    }
+    const auto incoming_size = static_cast<std::size_t>(length);
+    const auto maximum_size =
+        static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+    if (incoming_size > maximum_size - bound.streamed_data.size()) {
+        return fail(target, "LOB exceeds the maximum supported length", "22001");
+    }
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    if (incoming_size > 0) {
+        bound.streamed_data.insert(bound.streamed_data.end(), bytes, bytes + incoming_size);
+    }
+    return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
@@ -1609,6 +1947,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
         return SQL_NO_DATA;
     }
     ++target->row_index;
+    target->get_data_offsets.clear();
     SQLRETURN result = SQL_SUCCESS;
     const auto& row = target->rows[target->row_index - 1];
     for (const auto& binding : target->bound_columns) {
@@ -1641,7 +1980,99 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
         column_number == 0 || column_number > target->rows[target->row_index - 1].size()) {
         return fail(target, "No current row or invalid column number", "07009");
     }
-    const Cell& cell = target->rows[target->row_index - 1][column_number - 1];
+    Cell cell = target->rows[target->row_index - 1][column_number - 1];
+    if (target_type == SQL_C_BINARY || target_type == SQL_C_CHAR) {
+        if (const auto* reference_uuid = std::get_if<std::string>(&cell)) {
+            const auto reference = target->connection->lob_references.find(*reference_uuid);
+            if (reference != target->connection->lob_references.end()) {
+                const auto offset = target->get_data_offsets[column_number];
+                const auto total = static_cast<std::size_t>(
+                    std::max<std::int32_t>(0, reference->second.byteswritten()));
+                if (offset > total) {
+                    return SQL_NO_DATA;
+                }
+                if (target_value == nullptr) {
+                    return fail(target, "Output buffer is required", "HY009");
+                }
+                if (buffer_length < 0) {
+                    return fail(target, "Invalid LOB output buffer length", "HY090");
+                }
+                const auto capacity = target_type == SQL_C_CHAR
+                    ? (buffer_length > 0 ? static_cast<std::size_t>(buffer_length - 1) : 0)
+                    : static_cast<std::size_t>(buffer_length);
+                const auto available = total - offset;
+                const auto requested = std::min(capacity, available);
+                std::vector<std::uint8_t> bytes;
+                if (requested > 0) {
+                    const auto read_result = read_lob(
+                        target->connection, target, reference->second,
+                        static_cast<std::int64_t>(offset) + 1,
+                        static_cast<std::int32_t>(requested), &bytes);
+                    if (!SQL_SUCCEEDED(read_result)) {
+                        return read_result;
+                    }
+                    if (bytes.size() != requested) {
+                        return fail(target, "OJP returned an incomplete LOB block", "HY000");
+                    }
+                }
+                if (target_type == SQL_C_CHAR) {
+                    if (requested > 0) {
+                        std::memcpy(target_value, bytes.data(), requested);
+                    }
+                    if (buffer_length > 0) {
+                        static_cast<char*>(target_value)[requested] = '\0';
+                    }
+                } else if (requested > 0) {
+                    std::memcpy(target_value, bytes.data(), requested);
+                }
+                if (indicator != nullptr) {
+                    *indicator = static_cast<SQLLEN>(total);
+                }
+                target->get_data_offsets[column_number] =
+                    requested < available ? offset + requested : total + 1;
+                if (requested < available) {
+                    target->diagnostics.push_back(
+                        {"01004", 0, "LOB result was truncated"});
+                    return SQL_SUCCESS_WITH_INFO;
+                }
+                return SQL_SUCCESS;
+            }
+        }
+        if (const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&cell)) {
+            const auto offset = target->get_data_offsets[column_number];
+            if (offset > bytes->size()) {
+                return SQL_NO_DATA;
+            }
+            if (target_value == nullptr) {
+                return fail(target, "Output buffer is required", "HY009");
+            }
+            if (buffer_length < 0) {
+                return fail(target, "Invalid binary output buffer length", "HY090");
+            }
+            const auto capacity = target_type == SQL_C_CHAR
+                ? (buffer_length > 0 ? static_cast<std::size_t>(buffer_length - 1) : 0)
+                : static_cast<std::size_t>(buffer_length);
+            const auto available = bytes->size() - offset;
+            const auto copy_count = std::min(capacity, available);
+            if (copy_count > 0) {
+                std::memcpy(target_value, bytes->data() + offset, copy_count);
+            }
+            if (target_type == SQL_C_CHAR && buffer_length > 0) {
+                static_cast<char*>(target_value)[copy_count] = '\0';
+            }
+            if (indicator != nullptr) {
+                *indicator = static_cast<SQLLEN>(bytes->size());
+            }
+            target->get_data_offsets[column_number] =
+                copy_count < available ? offset + copy_count : bytes->size() + 1;
+            if (copy_count < available) {
+                target->diagnostics.push_back(
+                    {"01004", 0, "Binary result was truncated"});
+                return SQL_SUCCESS_WITH_INFO;
+            }
+            return SQL_SUCCESS;
+        }
+    }
     return write_cell(target, cell, target_type, target_value, buffer_length, indicator);
 }
 
@@ -1733,8 +2164,10 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
     clear_diagnostics(target);
     if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS) {
         if (option == SQL_CLOSE) {
+            reset_data_at_execution(target);
             target->columns.clear();
             target->rows.clear();
+            target->get_data_offsets.clear();
             target->row_count = -1;
             target->row_index = 0;
             target->has_result_set = false;
@@ -1742,6 +2175,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
             target->bound_columns.clear();
         } else {
             target->parameters.clear();
+            reset_data_at_execution(target);
         }
         return SQL_SUCCESS;
     }
@@ -2043,7 +2477,8 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR, SQL_API_SQLENDTRAN,
         SQL_API_SQLTRANSACT,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
-        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
+        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLPARAMDATA, SQL_API_SQLPUTDATA,
+        SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
         SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};

@@ -2,7 +2,8 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2 and L3 for H2 and SQL Server**, and **L4 for H2 and SQL Server** from the
+**L2 and L3 for H2 and SQL Server**, **L4 for H2 and SQL Server**, and
+**L5 for SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,8 +12,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L4 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and SQL Server cover typed parameters, result streaming, transactions, savepoints, and transaction isolation. |
+| Highest implemented level | **L5 for SQL Server; L4 for H2; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, result streaming, transactions, savepoints, and isolation; SQL Server additionally covers LOB streams. |
 
 ### Current test-proven coverage by database
 
@@ -20,7 +21,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L4** | L1-L3 suites plus `h2_l4_integration_test.cpp` cover transaction isolation, commit/rollback, savepoint rollback/release, and expired handles. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L4** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l4_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
+| SQL Server | **L5** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l5_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -99,6 +100,15 @@ These JDBC cases are not ported, and here is why:
 Generated SQL Server identities are read with `IDENT_CURRENT` for the table
 that the run creates.
 
+## L5 LOB coverage
+
+The SQL Server L5 suite streams `SQL_LONGVARBINARY` parameters through
+`SQLParamData`/`SQLPutData`, which the driver forwards to `createLob` in 64 KiB
+chunks. The integration test round-trips large, small, empty, and NULL
+`VARBINARY(MAX)` values through SQL Server and verifies the returned bytes.
+`readLob` is also supported for LOB references returned by the server; SQL
+Server query results are currently hydrated as binary values by the server.
+
 Decimal results arrive as BigDecimalWire bytes
 ([format](../documents/protocol/BIGDECIMAL_WIRE_FORMAT.md)). Like the JDBC
 driver, the client decodes result bytes that match this layout exactly as
@@ -120,7 +130,7 @@ ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
 intercepted by the client and not forwarded to the database.
 
 Output parameters, wide-character ODBC entry points, complete metadata
-discovery, LOBs, configurable fetch-size pagination, session affinity,
+discovery, H2/PostgreSQL LOB support, configurable fetch-size pagination, session affinity,
 multinode routing, health checking, and failover are not implemented. The
 client uses one gRPC channel per ODBC connection and a process-stable client
 UUID.
@@ -147,15 +157,17 @@ Implemented rules:
 | L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
 | 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
 | L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
+| L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
 the client pulls the remaining rows with `fetchNextRows`. Earlier versions
 returned only the first row.
 
-Spec rules that belong to levels above L4 and are not implemented:
+Spec rules that belong to levels above L4 and are not implemented for all
+currently tested databases:
 
-- **L5:** `createLob` and `readLob`.
+- **L5 for H2 and PostgreSQL:** `createLob` and `readLob`.
 - **L6:** session-affinity routing.
 - **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),
   `connHash` caching and `NOT_FOUND` recovery (4.2), cluster health, and client
@@ -289,7 +301,5 @@ enabled, a missing endpoint or unavailable server fails the test instead of
 silently skipping it.
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L4Integration` against the same OJP server. The C++ ODBC SQL Server
-workflow job runs `OjpOdbcSqlServerL1Integration`,
-`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`, and
-`OjpOdbcSqlServerL4Integration`.
+`OjpOdbcH2L4Integration` against the same OJP server. The C++ ODBC SQL Server workflow job runs
+`OjpOdbcSqlServerL1Integration` through `OjpOdbcSqlServerL5Integration`.

@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2-L4 for H2 and SQL Server**, and **L5 for H2 and SQL Server** from the
+**L2-L5 for H2 and SQL Server**, and **L6 for H2** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,14 +11,14 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L5 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, and BLOB/CLOB stream round trips; SQL Server covers typed parameters, result streaming, transactions, savepoints, transaction isolation, and BLOB stream round trips. |
+| Highest implemented level | **L6 for H2; L5 for SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, BLOB/CLOB stream round trips, and session-affinity routing; SQL Server additionally covers BLOB stream round trips. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L5** | L1-L4 suites plus `h2_l5_integration_test.cpp` cover chunked BLOB/CLOB writes and reads, UTF-8 CLOB data, data-at-execution, and NULL LOB parameters. |
+| **H2** | **L6** | L1-L5 suites plus `h2_l6_integration_test.cpp` cover temporary-table affinity across statements and transactions. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
 | SQL Server | **L5** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l5_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
@@ -74,6 +74,11 @@ CLOB chunks through `createLob`, then sends the returned handle as a `PT_BLOB`
 or `PT_CLOB` parameter. `SQLGetData` hydrates BLOB and CLOB references through
 `readLob`; the suite verifies a 180 KB binary value, multi-byte UTF-8 CLOB data,
 and typed NULL LOB parameters.
+
+The H2 L6 suite verifies session affinity with a local temporary table across
+multiple statements, CRUD operations, and transaction boundaries. Session UUIDs
+are bound to their target server; all session-scoped RPCs use that binding, and
+an RPC failure is surfaced without retrying on another server.
 
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:
@@ -136,9 +141,9 @@ ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
 intercepted by the client and not forwarded to the database.
 
 Output parameters, wide-character ODBC entry points, complete metadata
-discovery, configurable fetch-size pagination, session affinity, multinode
-routing, health checking, and failover are not implemented. The client uses one
-gRPC channel per ODBC connection and a process-stable client UUID.
+discovery, configurable fetch-size pagination, multinode load balancing, health
+checking, and failover are not implemented. The client uses a gRPC channel for
+the configured endpoint and routes sticky sessions only to their bound target.
 
 ## Conformance with `CLIENT_SPEC_AI.md`
 
@@ -162,6 +167,7 @@ Implemented rules:
 | L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
 | 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
 | L5 LOB lifecycle | `createLob` sends 64 KB `LT_BLOB`/`LT_CLOB` chunks, updates the session from returned references, and `readLob` concatenates response blocks |
+| L6 session affinity | A thread-safe `sessionUUID → targetServer` binding routes session-scoped RPCs exclusively to the bound endpoint; failed calls are surfaced without retry or reroute |
 | L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
 | L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
@@ -170,10 +176,9 @@ In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
 the client pulls the remaining rows with `fetchNextRows`. Earlier versions
 returned only the first row.
 
-Spec rules that belong to levels above L5 and are not implemented:
+Spec rules that belong to levels above L6 and are not implemented:
 
 - **L5 for PostgreSQL:** `createLob` and `readLob`.
-- **L6:** session-affinity routing.
 - **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),
   `connHash` caching and `NOT_FOUND` recovery (4.2), cluster health, and client
   throttling (section 8).
@@ -287,7 +292,8 @@ row-by-row server streaming through `fetchNextRows`.
 
 The H2 L5 suite additionally checks BLOB/CLOB input streams sent in multiple
 ODBC chunks, multi-block LOB reads, UTF-8 character preservation, and SQL NULL
-handling for both LOB types.
+handling for both LOB types. H2 L6 checks temporary-table state across separate
+SQL operations and committed transactions.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -310,7 +316,7 @@ enabled, a missing endpoint or unavailable server fails the test instead of
 silently skipping it.
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L5Integration` against the same OJP server. The C++ ODBC SQL Server
+`OjpOdbcH2L6Integration` against the same OJP server. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration` through
-`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`, and
-`OjpOdbcSqlServerL5Integration`.
+`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
+`OjpOdbcSqlServerL4Integration`, and `OjpOdbcSqlServerL5Integration`.

@@ -22,7 +22,7 @@
 # 9. multinode-xa-test: Multinode XA integration tests (needs: h2-integration-gate, resolve-version)
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
-# 12. cpp-odbc-test: C++ ODBC H2 L1-L5 tests (runs alongside build-test)
+# 12. cpp-odbc-test: C++ ODBC H2 L1-L6 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
 # 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L5 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
@@ -2215,14 +2215,14 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 11: C++ ODBC H2 L1-L5 Integration Tests
+  # JOB 11: C++ ODBC H2 L1-L6 Integration Tests
   # ===========================================================================
   #
   # This H2-only job runs in parallel with the main H2 build-test job.
   #
   # ===========================================================================
   cpp-odbc-test:
-    name: C++ ODBC H2 L1-L5 Tests
+    name: C++ ODBC H2 L1-L6 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' }}
@@ -2289,26 +2289,26 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC H2 L1-L5 tests
+      - name: Run C++ ODBC H2 L1-L6 tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcH2L[1-5]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-h2-l1-l5-test.log
+            -R '^OjpOdbcH2L[1-6]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-h2-l1-l6-test.log
 
       - name: Show ojp-server.log
         if: always()
         run: cat /tmp/ojp-server.log
 
-      - name: Save C++ ODBC H2 L1-L5 test report and server log
+      - name: Save C++ ODBC H2 L1-L6 test report and server log
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-h2-l1-l5-test-results
+          name: cpp-odbc-h2-l1-l6-test-results
           path: |
-            /tmp/cpp-odbc-h2-l1-l5-test.log
+            /tmp/cpp-odbc-h2-l1-l6-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

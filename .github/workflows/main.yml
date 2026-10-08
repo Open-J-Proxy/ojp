@@ -2515,14 +2515,14 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC SQL Server L1-L7 Integration Tests
+  # JOB 14: C++ ODBC SQL Server L1-L8 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the C++ ODBC PostgreSQL test after the aggregate H2 gate.
   #
   # ===========================================================================
   cpp-odbc-sqlserver-test:
-    name: C++ ODBC SQL Server L1-L7 Tests
+    name: C++ ODBC SQL Server L1-L8 Tests
     runs-on: ubuntu-latest
     needs: [h2-integration-gate]
     permissions:

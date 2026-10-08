@@ -2518,14 +2518,14 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC SQL Server L1-L8 Integration Tests
+  # JOB 14: C++ ODBC SQL Server L1-L9 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the C++ ODBC PostgreSQL test after the aggregate H2 gate.
   #
   # ===========================================================================
   cpp-odbc-sqlserver-test:
-    name: C++ ODBC SQL Server L1-L8 Tests
+    name: C++ ODBC SQL Server L1-L9 Tests
     runs-on: ubuntu-latest
     needs: [h2-integration-gate]
     permissions:
@@ -2602,6 +2602,14 @@ jobs:
             /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
             -P 'TestPassword123!' -C -b -d defaultdb -Q \
             "IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'testuser') BEGIN CREATE USER testuser FOR LOGIN testuser; ALTER ROLE db_owner ADD MEMBER testuser; END"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -d master -Q \
+            "EXEC sp_sqljdbc_xa_install;"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -d master -Q \
+            "IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'testuser') CREATE USER testuser FOR LOGIN testuser; GRANT EXECUTE ON xp_sqljdbc_xa_init TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_start TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_end TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_prepare TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_commit TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_rollback TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_recover TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_forget TO testuser; IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'SqlJDBCXAUser' AND type = 'R') CREATE ROLE [SqlJDBCXAUser]; ALTER ROLE [SqlJDBCXAUser] ADD MEMBER testuser;"
 
       - name: Start OJP server (background)
         run: |
@@ -2660,7 +2668,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC SQL Server L1 through L8 tests
+      - name: Run C++ ODBC SQL Server L1 through L9 tests
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
@@ -2668,11 +2676,14 @@ jobs:
           OJP_TEST_SQLSERVER_L8: 'true'
           OJP_TEST_SQLSERVER_L8_ADDRS: 'localhost:1060,localhost:1059'
           OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
+          OJP_TEST_SQLSERVER_L9: 'true'
+          OJP_TEST_SQLSERVER_L9_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_SQLSERVER_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServerL[1-8]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l8-test.log
+            -R '^OjpOdbcSqlServerL[1-9]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l9-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2690,9 +2701,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-sqlserver-l1-l8-test-results
+          name: cpp-odbc-sqlserver-l1-l9-test-results
           path: |
-            /tmp/cpp-odbc-sqlserver-l1-l8-test.log
+            /tmp/cpp-odbc-sqlserver-l1-l9-test.log
             /tmp/ojp-server.log
             /tmp/ojp-server-2.log
           retention-days: 7

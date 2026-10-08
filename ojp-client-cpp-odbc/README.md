@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access an OJP
 server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2 for H2 and SQL Server**, **L3 for H2 and SQL Server**, and **L4 for H2** from the
+**L2 and L3 for H2 and SQL Server**, and **L4 for H2 and SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,8 +11,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L4 for H2; L3 for SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, and local transactions; SQL Server adds typed parameters and multi-block result streaming with row-by-row binary fetching. |
+| Highest implemented level | **L4 for H2 and SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 and SQL Server cover typed parameters, result streaming, transactions, savepoints, and transaction isolation. |
 
 ### Current test-proven coverage by database
 
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L4** | L1-L3 suites plus `h2_l4_integration_test.cpp` cover transaction isolation, commit/rollback, savepoint rollback/release, and expired handles. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L3** | `l1_integration_test.cpp`, `sqlserver_l2_integration_test.cpp`, and `sqlserver_l3_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
+| SQL Server | **L4** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l4_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -104,10 +104,26 @@ Decimal results arrive as BigDecimalWire bytes
 driver, the client decodes result bytes that match this layout exactly as
 decimal text and returns other bytes as binary.
 
+## L4 transaction coverage
+
+The H2 L4 suite covers commit, rollback, autocommit transitions, savepoint
+rollback/release, isolation, and invalidated savepoint handles. The SQL Server
+suite follows transaction and savepoint cases in
+`SQLServerConnectionExtensiveTests` and `SQLServerSavepointTests` from the JDBC
+reference client, and verifies commit, rollback, autocommit transitions, nested
+savepoint rollback/release, and isolation through OJP.
+
+ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
+`SAVE TRANSACTION name`, `ROLLBACK TO [SAVEPOINT] name` and
+`ROLLBACK TRANSACTION name`, plus `RELEASE [SAVEPOINT] name` to the
+`callResource` operations in `CLIENT_SPEC_AI.md`. These directives are
+intercepted by the client and not forwarded to the database.
+
 Output parameters, wide-character ODBC entry points, complete metadata
 discovery, LOBs, configurable fetch-size pagination, session affinity,
-multinode routing, health checking, and failover are not implemented. The client
-uses one gRPC channel per ODBC connection and a process-stable client UUID.
+multinode routing, health checking, and failover are not implemented. The
+client uses one gRPC channel per ODBC connection and a process-stable client
+UUID.
 
 ## Conformance with `CLIENT_SPEC_AI.md`
 
@@ -130,6 +146,7 @@ Implemented rules:
 | 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
 | L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
 | 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
+| L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
@@ -274,4 +291,5 @@ silently skipping it.
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
 `OjpOdbcH2L4Integration` against the same OJP server. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration`,
-`OjpOdbcSqlServerL2Integration`, and `OjpOdbcSqlServerL3Integration`.
+`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`, and
+`OjpOdbcSqlServerL4Integration`.

@@ -84,7 +84,6 @@ struct BoundParameter {
     SQLPOINTER value = nullptr;
     SQLLEN buffer_length = 0;
     SQLLEN* indicator = nullptr;
-    bool data_at_execution = false;
     std::string streamed_data;
 };
 
@@ -841,8 +840,14 @@ bool is_lob_parameter_type(SQLSMALLINT sql_type) {
            sql_type == SQL_WLONGVARCHAR;
 }
 
+bool is_data_at_execution(const BoundParameter& bound) {
+    return bound.indicator != nullptr &&
+        (*bound.indicator == SQL_DATA_AT_EXEC ||
+         *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET);
+}
+
 bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diagnostic* error) {
-    if (bound.data_at_execution) {
+    if (is_data_at_execution(bound)) {
         if (bound.indicator != nullptr && *bound.indicator != SQL_DATA_AT_EXEC &&
             *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET) {
             const auto expected_length =
@@ -1466,7 +1471,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             value->set_string_value(lob_uuid);
             continue;
         }
-        if (bound.data_at_execution) {
+        if (is_data_at_execution(bound)) {
             return fail(statement, "Data-at-execution is only supported for LOB parameters", "HYC00");
         }
         parameter->set_type(parameter_type(bound));
@@ -1849,9 +1854,6 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
     }
     target->parameters[parameter_number] = {
         input_output_type, value_type, parameter_type, value, buffer_length, indicator};
-    target->parameters[parameter_number].data_at_execution =
-        indicator != nullptr &&
-        (*indicator == SQL_DATA_AT_EXEC || *indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET);
     return SQL_SUCCESS;
 }
 
@@ -1888,7 +1890,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statement) {
     }
     reset_data_at_execution(target);
     for (const auto& entry : target->parameters) {
-        if (entry.second.data_at_execution) {
+        if (is_data_at_execution(entry.second)) {
             if (!is_lob_parameter_type(entry.second.parameter_type)) {
                 return fail(target, "Data-at-execution is supported only for LOB parameters",
                             "HYC00");

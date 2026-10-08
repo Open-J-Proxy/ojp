@@ -4,8 +4,10 @@
 #include "StatementService.grpc.pb.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
@@ -18,6 +20,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -39,6 +42,7 @@ using com::openjproxy::grpc::StatementRequest;
 using com::openjproxy::grpc::StatementService;
 
 constexpr char kRowByRowMode[] = "RESULT_SET_ROW_BY_ROW_MODE";
+using StatementStub = StatementService::Stub;
 
 struct Diagnostic {
     std::string state = "HY000";
@@ -62,23 +66,60 @@ struct ConnectionHandle final : HandleBase {
     ConnectionHandle() : HandleBase(SQL_HANDLE_DBC) {}
 
     std::string endpoint;
+    std::vector<std::string> endpoints;
     std::string url;
     std::string user;
     std::string password;
     std::string client_uuid;
+    std::string datasource_name = "default";
     std::shared_ptr<grpc::Channel> channel;
-    std::unique_ptr<StatementService::Stub> stub;
+    std::shared_ptr<StatementStub> stub;
     std::map<std::string, std::shared_ptr<grpc::Channel>> affinity_channels;
-    std::map<std::string, std::unique_ptr<StatementService::Stub>> affinity_stubs;
+    std::map<std::string, std::shared_ptr<StatementStub>> affinity_stubs;
     std::map<std::string, std::string> session_to_server;
     std::mutex routing_mutex;
+    std::string last_rpc_endpoint;
     SessionInfo session;
+    ConnectionDetails connection_details;
     std::mutex operation_mutex;
     std::set<std::string> savepoints;
     std::map<std::string, std::string> savepoint_names;
     SQLULEN transaction_isolation = 0;
     bool auto_commit = true;
     bool connected = false;
+};
+
+struct EndpointRuntime {
+    explicit EndpointRuntime(std::string address_value) : address(std::move(address_value)) {}
+
+    std::string address;
+    std::shared_ptr<grpc::Channel> channel;
+    std::shared_ptr<StatementStub> stub;
+    std::atomic<bool> healthy{true};
+    std::atomic<int> active_connections{0};
+    std::atomic<std::int64_t> last_failure_ms{0};
+};
+
+struct ClientRuntime {
+    std::mutex mutex;
+    std::map<std::string, std::shared_ptr<EndpointRuntime>> endpoints;
+    std::map<std::string, std::string> conn_hash_by_key;
+    std::map<std::string, ConnectionDetails> details_by_conn_hash;
+    std::map<std::string, std::string> cluster_health_by_endpoints;
+    std::atomic<std::uint64_t> round_robin_counter{0};
+    std::atomic<bool> stop_health_checks{false};
+    std::once_flag health_check_once;
+    std::mutex health_check_wait_mutex;
+    std::condition_variable health_check_cv;
+    std::thread health_check_thread;
+
+    ~ClientRuntime() {
+        stop_health_checks.store(true);
+        health_check_cv.notify_all();
+        if (health_check_thread.joinable()) {
+            health_check_thread.join();
+        }
+    }
 };
 
 struct BoundParameter {
@@ -228,6 +269,301 @@ std::string make_client_uuid() {
     return uuid;
 }
 
+ClientRuntime& client_runtime() {
+    static ClientRuntime runtime;
+    return runtime;
+}
+
+std::shared_ptr<EndpointRuntime> endpoint_runtime(const std::string& address) {
+    ClientRuntime& runtime = client_runtime();
+    std::lock_guard<std::mutex> lock(runtime.mutex);
+    auto endpoint = runtime.endpoints.find(address);
+    if (endpoint != runtime.endpoints.end()) {
+        return endpoint->second;
+    }
+    auto state = std::make_shared<EndpointRuntime>(address);
+    state->channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+    state->stub = std::shared_ptr<StatementStub>(StatementService::NewStub(state->channel).release());
+    runtime.endpoints.emplace(address, state);
+    return state;
+}
+
+std::string trim(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+bool parse_endpoint_list(std::string value, std::vector<std::string>* endpoints) {
+    value = trim(std::move(value));
+    if (value.size() >= 2 && value.front() == '[' && value.back() == ']') {
+        value = value.substr(1, value.size() - 2);
+    }
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const auto separator = value.find(',', start);
+        std::string address = trim(value.substr(
+            start, separator == std::string::npos ? separator : separator - start));
+        if (address.empty()) {
+            return false;
+        }
+        if (std::find(endpoints->begin(), endpoints->end(), address) == endpoints->end()) {
+            endpoints->push_back(std::move(address));
+        }
+        if (separator == std::string::npos) {
+            break;
+        }
+        start = separator + 1;
+    }
+    return !endpoints->empty();
+}
+
+std::string cluster_health(const std::vector<std::string>& endpoints) {
+    std::ostringstream health;
+    bool first = true;
+    for (const auto& address : endpoints) {
+        if (!first) {
+            health << ';';
+        }
+        first = false;
+        health << address << (endpoint_runtime(address)->healthy.load() ? "(UP)" : "(DOWN)");
+    }
+    return health.str();
+}
+
+std::string connection_cache_key(const ConnectionHandle* connection) {
+    return connection->url + "|" + connection->user + "|" + connection->password + "|" +
+           connection->datasource_name;
+}
+
+bool environment_boolean(const char* name, bool fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return fallback;
+    }
+    std::string normalized(value);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    normalized = trim(std::move(normalized));
+    return normalized.empty() ? fallback
+        : (normalized == "true" || normalized == "1" || normalized == "yes");
+}
+
+bool parse_boolean_option(const std::string& value, bool* parsed) {
+    std::string normalized = value;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    normalized = trim(std::move(normalized));
+    if (normalized == "true" || normalized == "1" || normalized == "yes") {
+        *parsed = true;
+        return true;
+    }
+    if (normalized == "false" || normalized == "0" || normalized == "no") {
+        *parsed = false;
+        return true;
+    }
+    return false;
+}
+
+int health_check_interval_ms() {
+    const char* value = std::getenv("OJP_HEALTH_CHECK_INTERVAL_MS");
+    if (value == nullptr) {
+        return 5000;
+    }
+    try {
+        const int parsed = std::stoi(value);
+        return parsed > 0 ? parsed : 5000;
+    } catch (...) {
+        return 5000;
+    }
+}
+
+std::string choose_endpoint(const std::vector<std::string>& endpoints, bool load_aware) {
+    std::vector<std::shared_ptr<EndpointRuntime>> healthy;
+    for (const auto& address : endpoints) {
+        auto state = endpoint_runtime(address);
+        if (state->healthy.load()) {
+            healthy.push_back(std::move(state));
+        }
+    }
+    if (healthy.empty()) {
+        return {};
+    }
+    ClientRuntime& runtime = client_runtime();
+    if (!load_aware) {
+        const auto index = runtime.round_robin_counter.fetch_add(1) % healthy.size();
+        return healthy[static_cast<std::size_t>(index)]->address;
+    }
+    int minimum = healthy.front()->active_connections.load();
+    for (const auto& state : healthy) {
+        minimum = std::min(minimum, state->active_connections.load());
+    }
+    std::vector<std::shared_ptr<EndpointRuntime>> least_loaded;
+    for (const auto& state : healthy) {
+        if (state->active_connections.load() == minimum) {
+            least_loaded.push_back(state);
+        }
+    }
+    const auto index = runtime.round_robin_counter.fetch_add(1) % least_loaded.size();
+    return least_loaded[static_cast<std::size_t>(index)]->address;
+}
+
+void mark_endpoint_unhealthy(const std::string& address) {
+    auto state = endpoint_runtime(address);
+    state->healthy.store(false);
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    state->last_failure_ms.store(now);
+    client_runtime().health_check_cv.notify_all();
+}
+
+bool is_transport_failure(const grpc::Status& status, const grpc::ClientContext& context) {
+    if (!status.error_details().empty()) {
+        return false;
+    }
+    if (status.error_code() == grpc::StatusCode::UNAVAILABLE ||
+        status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED) {
+        return true;
+    }
+    if (status.error_code() == grpc::StatusCode::UNKNOWN) {
+        return status.error_message().find("connection") != std::string::npos;
+    }
+    if (status.error_code() == grpc::StatusCode::INTERNAL) {
+        const auto& metadata = context.GetServerTrailingMetadata();
+        return std::none_of(metadata.begin(), metadata.end(), [](const auto& item) {
+            return item.first.find("sqlerrorresponse-bin") != std::string::npos;
+        });
+    }
+    return false;
+}
+
+bool probe_endpoint(const std::shared_ptr<EndpointRuntime>& endpoint) {
+    ConnectionDetails empty_details;
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
+    SessionInfo response;
+    return endpoint->stub->connect(&context, empty_details, &response).ok();
+}
+
+bool details_include_endpoint(const ConnectionDetails& details, const std::string& address) {
+    return std::find(details.serverendpoints().begin(), details.serverendpoints().end(),
+                     address) != details.serverendpoints().end();
+}
+
+template <typename Endpoints>
+std::string endpoint_set_key(const Endpoints& endpoints) {
+    std::ostringstream key;
+    for (const auto& endpoint : endpoints) {
+        key << endpoint << ';';
+    }
+    return key.str();
+}
+
+void ensure_health_checker() {
+    ClientRuntime& runtime = client_runtime();
+    std::call_once(runtime.health_check_once, [&runtime] {
+        runtime.health_check_thread = std::thread([&runtime] {
+            const auto interval = std::chrono::milliseconds(health_check_interval_ms());
+            while (!runtime.stop_health_checks.load()) {
+            std::unique_lock<std::mutex> wait_lock(runtime.health_check_wait_mutex);
+            runtime.health_check_cv.wait_for(wait_lock, interval);
+                wait_lock.unlock();
+                if (runtime.stop_health_checks.load()) {
+                    break;
+                }
+                std::vector<std::shared_ptr<EndpointRuntime>> endpoints;
+                std::vector<ConnectionDetails> details;
+                {
+                    std::lock_guard<std::mutex> lock(runtime.mutex);
+                    for (const auto& entry : runtime.endpoints) {
+                        endpoints.push_back(entry.second);
+                    }
+                    for (const auto& entry : runtime.details_by_conn_hash) {
+                        details.push_back(entry.second);
+                    }
+                }
+                if (details.empty()) {
+                    continue;
+                }
+                const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                for (const auto& endpoint : endpoints) {
+                    if (endpoint->healthy.load()) {
+                        if (!probe_endpoint(endpoint)) {
+                            mark_endpoint_unhealthy(endpoint->address);
+                        }
+                        continue;
+                    }
+                    if (now - endpoint->last_failure_ms.load() < interval.count()) {
+                        continue;
+                    }
+                    if (!probe_endpoint(endpoint)) {
+                        endpoint->last_failure_ms.store(now);
+                        continue;
+                    }
+                    bool pools_ready = true;
+                    for (const auto& stored_details : details) {
+                        if (!details_include_endpoint(stored_details, endpoint->address)) {
+                            continue;
+                        }
+                        ConnectionDetails recovery_details(stored_details);
+                        recovery_details.set_clusterhealth(
+                            cluster_health(stored_details.serverendpoints()));
+                        grpc::ClientContext recovery_context;
+                        recovery_context.set_deadline(
+                            std::chrono::system_clock::now() + std::chrono::seconds(30));
+                        SessionInfo response;
+                        if (!endpoint->stub->connect(&recovery_context, recovery_details,
+                                                     &response).ok()) {
+                            pools_ready = false;
+                            break;
+                        }
+                    }
+                    if (pools_ready) {
+                        endpoint->healthy.store(true);
+                        endpoint->last_failure_ms.store(0);
+                    } else {
+                        endpoint->last_failure_ms.store(now);
+                    }
+                }
+                for (const auto& stored_details : details) {
+                    const std::string health = cluster_health(stored_details.serverendpoints());
+                    const std::string endpoints_key =
+                        endpoint_set_key(stored_details.serverendpoints());
+                    const auto previous = runtime.cluster_health_by_endpoints.find(endpoints_key);
+                    const bool health_changed =
+                        previous == runtime.cluster_health_by_endpoints.end() ||
+                        previous->second != health;
+                    if (!health_changed) {
+                        continue;
+                    }
+                    runtime.cluster_health_by_endpoints[endpoints_key] = health;
+                    ConnectionDetails updated(stored_details);
+                    updated.set_clusterhealth(health);
+                    for (const auto& endpoint : endpoints) {
+                        if (!endpoint->healthy.load() ||
+                            !details_include_endpoint(stored_details, endpoint->address)) {
+                            continue;
+                        }
+                        grpc::ClientContext context;
+                        context.set_deadline(
+                            std::chrono::system_clock::now() + std::chrono::seconds(30));
+                        SessionInfo response;
+                        endpoint->stub->connect(&context, updated, &response);
+                    }
+                }
+            }
+        });
+    });
+}
+
 void clear_diagnostics(HandleBase* handle) {
     if (handle != nullptr) {
         handle->diagnostics.clear();
@@ -287,18 +623,89 @@ StatementService::Stub* route_session_rpc(ConnectionHandle* connection) {
     } else if (connection->session.targetserver().empty()) {
         connection->session.set_targetserver(target);
     }
+    connection->last_rpc_endpoint = target;
 
     if (target == connection->endpoint) {
         return connection->stub.get();
     }
     auto stub = connection->affinity_stubs.find(target);
     if (stub == connection->affinity_stubs.end()) {
-        auto channel = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
-        auto routed_stub = StatementService::NewStub(channel);
-        connection->affinity_channels.emplace(target, std::move(channel));
-        stub = connection->affinity_stubs.emplace(target, std::move(routed_stub)).first;
+        auto endpoint = endpoint_runtime(target);
+        connection->affinity_channels.emplace(target, endpoint->channel);
+        stub = connection->affinity_stubs.emplace(target, endpoint->stub).first;
     }
     return stub->second.get();
+}
+
+void note_transport_failure(ConnectionHandle* connection, const grpc::Status& status,
+                            const grpc::ClientContext& context) {
+    if (is_transport_failure(status, context)) {
+        mark_endpoint_unhealthy(connection->last_rpc_endpoint.empty()
+                                    ? connection->endpoint : connection->last_rpc_endpoint);
+    }
+}
+
+bool recover_not_found(ConnectionHandle* connection) {
+    if (!connection->session.sessionuuid().empty() || connection->session.connhash().empty()) {
+        return false;
+    }
+    ClientRuntime& runtime = client_runtime();
+    const std::string old_conn_hash = connection->session.connhash();
+    ConnectionDetails details;
+    {
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        const auto stored = runtime.details_by_conn_hash.find(old_conn_hash);
+        if (stored == runtime.details_by_conn_hash.end()) {
+            return false;
+        }
+        details.CopyFrom(stored->second);
+        runtime.conn_hash_by_key.erase(connection_cache_key(connection));
+    }
+    details.set_clusterhealth(cluster_health(connection->endpoints));
+    std::vector<std::string> candidates{connection->endpoint};
+    for (const auto& address : connection->endpoints) {
+        if (address != connection->endpoint) {
+            candidates.push_back(address);
+        }
+    }
+    for (const auto& address : candidates) {
+        auto endpoint = endpoint_runtime(address);
+        if (!endpoint->healthy.load()) {
+            continue;
+        }
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        SessionInfo response;
+        const auto status = endpoint->stub->connect(&context, details, &response);
+        if (!status.ok()) {
+            if (is_transport_failure(status, context)) {
+                mark_endpoint_unhealthy(address);
+            }
+            continue;
+        }
+        if (connection->endpoint != address) {
+            endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
+            endpoint->active_connections.fetch_add(1);
+        }
+        connection->endpoint = address;
+        connection->channel = endpoint->channel;
+        connection->stub = endpoint->stub;
+        connection->connection_details.CopyFrom(details);
+        response.set_targetserver(address);
+        connection->session.CopyFrom(response);
+        {
+            std::lock_guard<std::mutex> lock(runtime.mutex);
+            if (!response.connhash().empty()) {
+                runtime.conn_hash_by_key[connection_cache_key(connection)] = response.connhash();
+                runtime.details_by_conn_hash[response.connhash()] = details;
+                if (response.connhash() != old_conn_hash) {
+                    runtime.details_by_conn_hash.erase(old_conn_hash);
+                }
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 void update_session(ConnectionHandle* connection, const SessionInfo& response,
@@ -998,7 +1405,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
         return fail(handle, "LOB input exceeds the supported size", "22001");
     }
     StatementService::Stub* stub = route_session_rpc(connection);
-    const SessionInfo request_session = connection->session;
+    SessionInfo request_session = connection->session;
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     auto writer = stub->createLob(&context);
@@ -1018,6 +1425,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
         block.set_data(data.data() + offset, end - offset);
         if (!writer->Write(block)) {
             const auto status = writer->Finish();
+            note_transport_failure(connection, status, context);
             return status.ok() ? fail(handle, "OJP closed the LOB upload stream", "08S01")
                                : fail_grpc(handle, status, context);
         }
@@ -1029,6 +1437,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
         if (!received_reference) {
             if (!writer->Read(&reference)) {
                 const auto status = writer->Finish();
+                note_transport_failure(connection, status, context);
                 return status.ok() ? fail(handle, "OJP did not return a LOB reference", "HY000")
                                    : fail_grpc(handle, status, context);
             }
@@ -1038,6 +1447,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     }
     if (!writer->WritesDone()) {
         const auto status = writer->Finish();
+        note_transport_failure(connection, status, context);
         return status.ok() ? fail(handle, "Unable to finish the LOB upload stream", "08S01")
                            : fail_grpc(handle, status, context);
     }
@@ -1046,6 +1456,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     }
     const auto status = writer->Finish();
     if (!status.ok()) {
+        note_transport_failure(connection, status, context);
         return fail_grpc(handle, status, context);
     }
     if (!received_reference || reference.uuid().empty()) {
@@ -1086,6 +1497,7 @@ SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle, const std::
     }
     const auto status = reader->Finish();
     if (!status.ok()) {
+        note_transport_failure(connection, status, context);
         return fail_grpc(handle, status, context);
     }
     return SQL_SUCCESS;
@@ -1153,6 +1565,7 @@ SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& resu
     com::openjproxy::grpc::CallResourceResponse response;
     const auto status = stub->callResource(&context, request, &response);
     if (!status.ok()) {
+        note_transport_failure(connection, status, context);
         return fail_grpc(statement, status, context);
     }
     if (response.has_session()) {
@@ -1173,6 +1586,7 @@ SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, I
     SessionInfo response;
     const auto status = invoke(stub, &context, request_session, &response);
     if (!status.ok()) {
+        note_transport_failure(connection, status, context);
         return fail_grpc(handle, status, context);
     }
     update_session(connection, response, request_session);
@@ -1206,6 +1620,7 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     com::openjproxy::grpc::CallResourceResponse response;
     const auto status = stub->callResource(&context, request, &response);
     if (!status.ok()) {
+        note_transport_failure(connection, status, context);
         return fail_grpc(handle, status, context);
     }
     if (response.has_session()) {
@@ -1597,16 +2012,31 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             return static_cast<std::size_t>(query.rows_size());
         };
 
-        grpc::ClientContext context;
-        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-        auto reader = stub->executeQuery(&context, request);
-        OpResult result;
-        while (reader->Read(&result)) {
-            append_result(result);
-        }
-        const auto status = reader->Finish();
-        if (!status.ok()) {
-            return fail_grpc(statement, status, context);
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            stub = route_session_rpc(connection);
+            grpc::ClientContext context;
+            context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            auto reader = stub->executeQuery(&context, request);
+            OpResult result;
+            while (reader->Read(&result)) {
+                append_result(result);
+            }
+            const auto status = reader->Finish();
+            if (status.ok()) {
+                break;
+            }
+            note_transport_failure(connection, status, context);
+            if (attempt != 0 || status.error_code() != grpc::StatusCode::NOT_FOUND ||
+                !recover_not_found(connection)) {
+                return fail_grpc(statement, status, context);
+            }
+            request_session.CopyFrom(connection->session);
+            request.mutable_session()->CopyFrom(request_session);
+            statement->rows.clear();
+            statement->columns.clear();
+            result_set_uuid.clear();
+            row_by_row = false;
+            decoded_all = true;
         }
         // SQL Server and DB2 send one row at a time when the result has binary or LOB
         // columns; the remaining rows must be pulled with fetchNextRows.
@@ -1621,6 +2051,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             OpResult next;
             const auto fetch_status = fetch_stub->fetchNextRows(&fetch_context, fetch, &next);
             if (!fetch_status.ok()) {
+                note_transport_failure(connection, fetch_status, fetch_context);
                 return fail_grpc(statement, fetch_status, fetch_context);
             }
             if (next.has_session()) {
@@ -1644,12 +2075,23 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         return SQL_SUCCESS;
     }
 
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    grpc::Status status;
     OpResult result;
-    const auto status = stub->executeUpdate(&context, request, &result);
-    if (!status.ok()) {
-        return fail_grpc(statement, status, context);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        stub = route_session_rpc(connection);
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        status = stub->executeUpdate(&context, request, &result);
+        if (status.ok()) {
+            break;
+        }
+        note_transport_failure(connection, status, context);
+        if (attempt != 0 || status.error_code() != grpc::StatusCode::NOT_FOUND ||
+            !recover_not_found(connection)) {
+            return fail_grpc(statement, status, context);
+        }
+        request_session.CopyFrom(connection->session);
+        request.mutable_session()->CopyFrom(request_session);
     }
     if (result.has_session()) {
         update_session(connection, result.session(), request_session);
@@ -1672,10 +2114,8 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         const auto entry = parsed.values.find(key);
         return entry == parsed.values.end() ? std::string{} : entry->second;
     };
-    connection->endpoint = find("SERVER");
-    if (connection->endpoint.empty()) {
-        connection->endpoint = find("ENDPOINT");
-    }
+    const std::string configured_endpoints = find("SERVER").empty()
+        ? find("ENDPOINT") : find("SERVER");
     connection->url = find("DATABASE");
     if (connection->url.empty()) {
         connection->url = find("URL");
@@ -1685,15 +2125,33 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         connection->user = find("USER");
     }
     connection->password = find("PWD");
-    if (connection->endpoint.empty() || connection->url.empty()) {
+    connection->datasource_name = find("OJP.DATASOURCE.NAME");
+    if (connection->datasource_name.empty()) {
+        connection->datasource_name = "default";
+    }
+    if (!parse_endpoint_list(configured_endpoints, &connection->endpoints) ||
+        connection->url.empty()) {
         return fail(connection, "Connection string requires SERVER and DATABASE fields", "IM002");
     }
     if (connection->connected) {
         return fail(connection, "ODBC connection is already open", "08002");
     }
+    bool load_aware = environment_boolean("OJP_LOADAWARE_SELECTION_ENABLED", true);
+    const std::string load_aware_option = find("OJP.LOADAWARE.SELECTION.ENABLED");
+    if (!load_aware_option.empty() &&
+        !parse_boolean_option(load_aware_option, &load_aware)) {
+        return fail(connection,
+                    "OJP.LOADAWARE.SELECTION.ENABLED must be true or false", "IM012");
+    }
     connection->client_uuid = make_client_uuid();
-    connection->channel = grpc::CreateChannel(connection->endpoint, grpc::InsecureChannelCredentials());
-    connection->stub = StatementService::NewStub(connection->channel);
+    connection->endpoint = choose_endpoint(connection->endpoints, load_aware);
+    if (connection->endpoint.empty()) {
+        return fail(connection, "No healthy OJP servers are available", "08S01");
+    }
+
+    auto selected_endpoint = endpoint_runtime(connection->endpoint);
+    connection->channel = selected_endpoint->channel;
+    connection->stub = selected_endpoint->stub;
 
     ConnectionDetails details;
     details.set_url(connection->url);
@@ -1701,19 +2159,86 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     details.set_password(connection->password);
     details.set_clientuuid(connection->client_uuid);
     details.set_isxa(false);
-
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    SessionInfo session;
-    const auto status = connection->stub->connect(&context, details, &session);
-    if (!status.ok()) {
-        connection->stub.reset();
-        connection->channel.reset();
-        return fail_grpc(connection, status, context);
+    for (const auto& address : connection->endpoints) {
+        details.add_serverendpoints(address);
     }
+    details.set_clusterhealth(cluster_health(connection->endpoints));
+    auto* datasource_property = details.add_properties();
+    datasource_property->set_key("ojp.datasource.name");
+    datasource_property->set_stringvalue(connection->datasource_name);
+    connection->connection_details.CopyFrom(details);
+
+    ClientRuntime& runtime = client_runtime();
+    SessionInfo session;
+    std::string cached_conn_hash;
+    {
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        const auto cached = runtime.conn_hash_by_key.find(connection_cache_key(connection));
+        if (cached != runtime.conn_hash_by_key.end()) {
+            cached_conn_hash = cached->second;
+        }
+    }
+    if (!cached_conn_hash.empty()) {
+        session.set_connhash(cached_conn_hash);
+        session.set_clientuuid(connection->client_uuid);
+        session.set_isxa(false);
+    } else {
+        std::vector<std::string> ordered_endpoints{connection->endpoint};
+        for (const auto& address : connection->endpoints) {
+            if (address != connection->endpoint) {
+                ordered_endpoints.push_back(address);
+            }
+        }
+        bool connected_to_any = false;
+        std::string failure_message;
+        for (const auto& address : ordered_endpoints) {
+            auto endpoint = endpoint_runtime(address);
+            if (!endpoint->healthy.load() &&
+                std::find(connection->endpoints.begin(), connection->endpoints.end(), address) !=
+                    connection->endpoints.end()) {
+                continue;
+            }
+            ConnectionDetails endpoint_details(details);
+            endpoint_details.set_clusterhealth(cluster_health(connection->endpoints));
+            grpc::ClientContext context;
+            context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            SessionInfo response;
+            const auto status = endpoint->stub->connect(&context, endpoint_details, &response);
+            if (!status.ok()) {
+                if (is_transport_failure(status, context)) {
+                    mark_endpoint_unhealthy(address);
+                }
+                failure_message = status.error_message();
+                continue;
+            }
+            endpoint->healthy.store(true);
+            endpoint->last_failure_ms.store(0);
+            if (!connected_to_any || address == connection->endpoint) {
+                session.CopyFrom(response);
+                connection->endpoint = address;
+                connection->channel = endpoint->channel;
+                connection->stub = endpoint->stub;
+                connected_to_any = true;
+            }
+        }
+        if (!connected_to_any) {
+            connection->stub.reset();
+            connection->channel.reset();
+            return fail(connection, "Failed to connect to any configured OJP server: " +
+                                        failure_message, "08S01");
+        }
+        if (!session.connHash().empty()) {
+            std::lock_guard<std::mutex> lock(runtime.mutex);
+            runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connHash();
+            runtime.details_by_conn_hash[session.connHash()] = details;
+        }
+    }
+    session.set_targetserver(connection->endpoint);
     connection->session.CopyFrom(session);
-    connection->session.set_targetserver(connection->endpoint);
+    selected_endpoint = endpoint_runtime(connection->endpoint);
+    selected_endpoint->active_connections.fetch_add(1);
     connection->connected = true;
+    ensure_health_checker();
     if (connection->transaction_isolation != 0) {
         const auto isolation_result = set_transaction_isolation(
             connection, connection, connection->transaction_isolation);
@@ -1747,6 +2272,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     const auto status = stub->terminateSession(&context, request_session, &response);
     // terminateSession is sent exactly once; the connection is unusable even if it fails.
     connection->connected = false;
+    endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
     connection->stub.reset();
     connection->channel.reset();
     connection->savepoints.clear();

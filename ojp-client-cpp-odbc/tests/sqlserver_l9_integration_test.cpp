@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <sys/types.h>
@@ -448,15 +449,22 @@ int run_integration_test(int argc, char** argv) {
         SQLSMALLINT timeout_set = SQL_FALSE;
         require_success(xa.set_timeout(xa_connection, 30, &timeout_set),
                         "OjpXASetTransactionTimeout", SQL_HANDLE_DBC, xa_connection);
+        if (timeout_set != SQL_TRUE) {
+            throw std::runtime_error("SQL Server XA transaction timeout should be set");
+        }
         SQLINTEGER timeout = -1;
         require_success(xa.get_timeout(xa_connection, &timeout),
                         "OjpXAGetTransactionTimeout", SQL_HANDLE_DBC, xa_connection);
-        if ((timeout_set == SQL_TRUE && timeout != 30) ||
-            (timeout_set == SQL_FALSE && timeout != 0)) {
+        if (timeout != 30) {
             throw std::runtime_error("SQL Server XA timeout did not match the set/get result");
         }
         require_success(xa.set_timeout(xa_connection, 0, &timeout_set),
                         "OjpXASetTransactionTimeout(reset)", SQL_HANDLE_DBC, xa_connection);
+        require_success(xa.get_timeout(xa_connection, &timeout),
+                        "OjpXAGetTransactionTimeout(reset)", SQL_HANDLE_DBC, xa_connection);
+        if (timeout != 0) {
+            throw std::runtime_error("SQL Server XA transaction timeout was not reset");
+        }
 
         const SQLRETURN forget_result = xa.forget(xa_connection, &two_phase_xid);
         if (!SQL_SUCCEEDED(forget_result) && forget_result != SQL_ERROR) {

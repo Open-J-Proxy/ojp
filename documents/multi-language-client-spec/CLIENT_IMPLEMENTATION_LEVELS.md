@@ -69,7 +69,7 @@ These entries describe the levels targeted by the language client modules; they 
 | Client | Database | Target level | Evidence |
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L9** | H2 L9 adds XA lifecycle and resource-manager integration; the suite is pending a passing CI run. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L8** | SQL Server L6 verifies session affinity; L7 adds multi-endpoint routing, cached-pool reuse, and unavailable-endpoint handling; `sqlserver_l8_integration_test.cpp` covers failover, pool-exhaustion safety, SQL-error classification, and recovered-node reuse. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L9** | SQL Server L6-L8 cover session affinity, multinode routing, failover/recovery, pool-exhaustion safety, and SQL-error classification; `sqlserver_l9_integration_test.cpp` adds XA lifecycle, recovery, and affinity/error behavior. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L1** | Shared real-server L1 suite covers connectivity, CRUD, diagnostics, and lifecycle. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
@@ -91,7 +91,7 @@ These levels are based on each language client's own integration tests and are i
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L8** | L1-L7 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l8_integration_test.cpp` proves the current L8 behavior; the new L9 XA suite requires a passing CI run before raising this achieved level. |
-| **C++ ODBC** | SQL Server | **L8** | L1-L7 real-server coverage plus `ojp-client-cpp-odbc/tests/sqlserver_l8_integration_test.cpp` for stateless failover, pool-exhaustion safety, SQL-error classification, and recovered-node reuse. |
+| **C++ ODBC** | SQL Server | **L8** | L1-L8 real-server coverage plus `ojp-client-cpp-odbc/tests/sqlserver_l9_integration_test.cpp` for XA lifecycle, recovery, and affinity/error behavior; L9 requires a passing CI run to become test-proven. |
 | **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
@@ -124,7 +124,7 @@ The following table records the implemented target level and its real-server int
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; L9 requires a passing CI run to become test-proven. |
-| **C++ ODBC** | SQL Server | **L8** | `ojp-client-cpp-odbc/tests/sqlserver_l8_integration_test.cpp` adds failover, pool-exhaustion safety, SQL-error classification, and recovered-node reuse to the SQL Server L1-L7 suites. |
+| **C++ ODBC** | SQL Server | **L9** | `ojp-client-cpp-odbc/tests/sqlserver_l9_integration_test.cpp` adds XA lifecycle, recovery, and affinity/error behavior to the SQL Server L1-L8 suites. |
 | **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |

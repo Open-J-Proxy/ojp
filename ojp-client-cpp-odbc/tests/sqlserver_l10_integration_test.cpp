@@ -5,6 +5,7 @@
 #include "ojp_odbc_xa.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
 #include <csignal>
@@ -12,13 +13,17 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <netdb.h>
+#include <poll.h>
 #include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/socket.h>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -328,40 +333,78 @@ void close_connection(SQLHDBC* connection) {
     }
 }
 
-void wait_for_endpoint(SQLHENV environment, const DatabaseConfig& config,
-                       const std::string& endpoint) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    std::string last_error;
-    while (std::chrono::steady_clock::now() < deadline) {
-        SQLHDBC connection = SQL_NULL_HDBC;
-        SQLHSTMT statement = SQL_NULL_HSTMT;
-        try {
-            connection = open_connection(environment, config, endpoint);
-            require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
-                                           reinterpret_cast<SQLHANDLE*>(&statement)),
-                            "SQLAllocHandle(readiness statement)", SQL_HANDLE_DBC, connection);
-            execute_direct(statement, "SELECT 1");
-            require_success(SQLFetch(statement), "SQLFetch(readiness)", SQL_HANDLE_STMT, statement);
-            SQLINTEGER value = 0;
-            SQLLEN value_length = 0;
-            require_success(SQLGetData(statement, 1, SQL_C_SLONG, &value, sizeof(value), &value_length),
-                            "SQLGetData(readiness)", SQL_HANDLE_STMT, statement);
-            if (value != 1) {
-                throw std::runtime_error("SQL Server endpoint readiness query returned an unexpected result");
-            }
-            SQLFreeHandle(SQL_HANDLE_STMT, statement);
-            close_connection(&connection);
-            return;
-        } catch (const std::exception& error) {
-            last_error = error.what();
-            if (statement != SQL_NULL_HSTMT) {
-                SQLFreeHandle(SQL_HANDLE_STMT, statement);
-            }
-            close_connection(&connection);
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+bool endpoint_accepts_connections(const std::string& endpoint) {
+    std::string host;
+    std::string port;
+    if (!endpoint.empty() && endpoint.front() == '[') {
+        const auto host_end = endpoint.find(']');
+        if (host_end == std::string::npos || host_end + 1 >= endpoint.size() ||
+            endpoint[host_end + 1] != ':') {
+            return false;
         }
+        host = endpoint.substr(1, host_end - 1);
+        port = endpoint.substr(host_end + 2);
+    } else {
+        const auto separator = endpoint.rfind(':');
+        if (separator == std::string::npos) {
+            return false;
+        }
+        host = endpoint.substr(0, separator);
+        port = endpoint.substr(separator + 1);
     }
-    throw std::runtime_error("SQL Server L10 endpoint did not become available: " + last_error);
+    if (host.empty() || port.empty()) {
+        return false;
+    }
+
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* addresses = nullptr;
+    if (getaddrinfo(host.c_str(), port.c_str(), &hints, &addresses) != 0) {
+        return false;
+    }
+
+    bool connected = false;
+    for (addrinfo* address = addresses; address != nullptr && !connected;
+         address = address->ai_next) {
+        const int socket_fd = socket(address->ai_family, address->ai_socktype,
+                                     address->ai_protocol);
+        if (socket_fd < 0) {
+            continue;
+        }
+        const int flags = fcntl(socket_fd, F_GETFL, 0);
+        if (flags < 0 || fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+            close(socket_fd);
+            continue;
+        }
+        const int result = connect(socket_fd, address->ai_addr, address->ai_addrlen);
+        if (result == 0) {
+            connected = true;
+        } else if (errno == EINPROGRESS) {
+            pollfd descriptor{socket_fd, POLLOUT, 0};
+            if (poll(&descriptor, 1, 250) > 0) {
+                int socket_error = 0;
+                socklen_t error_length = sizeof(socket_error);
+                connected = getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_error,
+                                       &error_length) == 0 &&
+                    socket_error == 0;
+            }
+        }
+        close(socket_fd);
+    }
+    freeaddrinfo(addresses);
+    return connected;
+}
+
+void wait_for_endpoint(const std::string& endpoint) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (endpoint_accepts_connections(endpoint)) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    throw std::runtime_error("SQL Server L10 endpoint did not open a TCP listener: " + endpoint);
 }
 
 int run_integration_test(int argc, char** argv) {
@@ -405,7 +448,7 @@ int run_integration_test(int argc, char** argv) {
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
 
-        wait_for_endpoint(environment, config, endpoints.front());
+        wait_for_endpoint(endpoints.front());
         failover_connection = open_connection(environment, config,
                                                endpoints[0] + "," + endpoints[1]);
         xa_connection = open_connection(environment, config, endpoints[0], true);

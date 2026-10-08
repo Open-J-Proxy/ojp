@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access OJP
 servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2-L5 for H2 and SQL Server**, and **L6-L7 for H2** from the
+**L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and **L7 for H2** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,8 +11,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L7 for H2; L5 for SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, BLOB/CLOB round trips, session affinity, and multinode behavior; SQL Server additionally covers BLOB stream round trips. |
+| Highest implemented level | **L7 for H2; L6 for SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, BLOB/CLOB round trips, session affinity, and multinode behavior; SQL Server adds LOB round trips and session affinity. |
 
 ### Current test-proven coverage by database
 
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L7** | L1-L6 suites plus `h2_l7_integration_test.cpp` cover multiple OJP endpoints and shared H2 data across nodes. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L5** | `l1_integration_test.cpp` and `sqlserver_l2_integration_test.cpp` through `sqlserver_l5_integration_test.cpp` exercise ODBC → one OJP server → SQL Server. |
+| SQL Server | **L6** | L1-L5 suites plus `sqlserver_l6_integration_test.cpp` verify local temporary-table persistence across statements and transactions through the sticky OJP session. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -177,10 +177,10 @@ Implemented rules:
 | L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
 | 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
 | L5 LOB lifecycle | `createLob` sends 64 KB `LT_BLOB`/`LT_CLOB` chunks, updates the session from returned references, and `readLob` concatenates response blocks |
-| L6 session affinity | A thread-safe `sessionUUID → targetServer` binding routes session-scoped RPCs exclusively to the bound endpoint; failed calls are surfaced without retry or reroute |
-| L7 multinode operations | Shared endpoint channels, least-connections/round-robin selection, health probes and cluster-health propagation, connHash caching, and stateless `NOT_FOUND` reconnect/retry |
 | L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
 | L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
+| L6 session affinity | H2 and SQL Server route session-scoped RPCs exclusively to the bound `targetServer`; failures are surfaced without retry or reroute |
+| L7 multinode operations | Shared endpoint channels, least-connections/round-robin selection, health probes and cluster-health propagation, connHash caching, and stateless `NOT_FOUND` reconnect/retry |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),

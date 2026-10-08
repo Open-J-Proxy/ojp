@@ -1,8 +1,8 @@
 # OJP C++ ODBC Client
 
-This module provides an ANSI ODBC driver for applications that access an OJP
-server from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2-L5 for H2 and SQL Server**, and **L6 for H2 and SQL Server** from the
+This module provides an ANSI ODBC driver for applications that access OJP
+servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
+**L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and **L7 for H2** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -11,14 +11,14 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L6 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD start at one configured OJP endpoint per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, and BLOB/CLOB stream round trips; H2 and SQL Server route session-bound calls using `sessionUUID`/`targetServer`, including local temporary tables across statements and transactions. |
+| Highest implemented level | **L7 for H2; L6 for SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD are implemented. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, BLOB/CLOB round trips, session affinity, and multinode behavior; SQL Server adds LOB round trips and session affinity. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L6** | L1-L5 suites plus `h2_l6_integration_test.cpp` cover temporary-table affinity across statements and transactions. |
+| **H2** | **L7** | L1-L6 suites plus `h2_l7_integration_test.cpp` cover multiple OJP endpoints and shared H2 data across nodes. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
 | SQL Server | **L6** | L1-L5 suites plus `sqlserver_l6_integration_test.cpp` verify local temporary-table persistence across statements and transactions through the sticky OJP session. |
 | MySQL | Not established | No database-specific integration suite in this module. |
@@ -79,6 +79,15 @@ The H2 L6 suite verifies session affinity with a local temporary table across
 multiple statements, CRUD operations, and transaction boundaries. Session UUIDs
 are bound to their target server; all session-scoped RPCs use that binding, and
 an RPC failure is surfaced without retrying on another server.
+
+The H2 L7 suite connects through multiple OJP endpoints, checks shared-pool
+connection reuse and cluster CRUD, and includes an unavailable endpoint to
+verify it is marked down and excluded from subsequent selection. The client
+balances new connections by least active connections by default, with round-robin
+available through `OJP.LOADAWARE.SELECTION.ENABLED=false`. Endpoint channels are
+shared process-wide; background health checks propagate topology and recreate
+pools before a recovered endpoint is marked healthy. Stateless `NOT_FOUND`
+responses invalidate the cached pool and retry once after reconnecting.
 
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:
@@ -141,9 +150,10 @@ ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
 intercepted by the client and not forwarded to the database.
 
 Output parameters, wide-character ODBC entry points, complete metadata
-discovery, configurable fetch-size pagination, multinode load balancing, health
-checking, and failover are not implemented. The client uses a gRPC channel for
-the configured endpoint and routes sticky sessions only to their bound target.
+discovery, configurable fetch-size pagination, and client throttling (spec
+section 8) are not implemented. The client shares gRPC channels across
+configured endpoints, balances new connections, monitors endpoint health, and
+routes sticky sessions only to their bound target.
 
 ## Conformance with `CLIENT_SPEC_AI.md`
 
@@ -169,19 +179,19 @@ Implemented rules:
 | L5 LOB lifecycle | `createLob` sends 64 KB `LT_BLOB`/`LT_CLOB` chunks, updates the session from returned references, and `readLob` concatenates response blocks |
 | L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
 | L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
-| L6 session affinity | A thread-safe `sessionUUID → targetServer` binding routes session-scoped RPCs exclusively to the bound endpoint; failed calls are surfaced without retry or reroute |
+| L6 session affinity | H2 and SQL Server route session-scoped RPCs exclusively to the bound `targetServer`; failures are surfaced without retry or reroute |
+| L7 multinode operations | Shared endpoint channels, least-connections/round-robin selection, health probes and cluster-health propagation, connHash caching, and stateless `NOT_FOUND` reconnect/retry |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
 the client pulls the remaining rows with `fetchNextRows`. Earlier versions
 returned only the first row.
 
-Spec rules that belong to levels above L6 and are not implemented:
+Spec rules outside the implemented levels or still incomplete:
 
 - **L5 for PostgreSQL:** `createLob` and `readLob`.
-- **L7 and L8:** shared channels per endpoint (4.1.2), health checks (4.1.4),
-  `connHash` caching and `NOT_FOUND` recovery (4.2), cluster health, and client
-  throttling (section 8).
+- **L8:** full resilience/recovery/redistribution behavior.
+- **Section 8:** client-side admission throttling.
 
 ## Build requirements
 
@@ -212,7 +222,8 @@ for the proposed per-OS delivery plan.
 Register the driver with the ODBC Driver Manager as `OJP`, then use
 `SQLDriverConnect` with these connection fields:
 
-- `SERVER`: OJP server `host:port`
+- `SERVER`: one OJP server `host:port` or a comma-separated cluster such as
+  `host1:port1,host2:port2`
 - `DATABASE`: the backend JDBC URL (quote values containing semicolons with
   ODBC braces)
 - `UID` and `PWD`: backend credentials
@@ -271,6 +282,9 @@ their respective fixtures:
 [`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
 and
 [`sqlserver_l1_connection.csv`](tests/testdata/sqlserver_l1_connection.csv).
+The H2 L7 multinode suite uses
+[`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
+H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
 They exercise the ODBC API through the Driver Manager against a running OJP
 server and the respective database. The SQL Server fixture follows the OJP JDBC
 driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
@@ -293,7 +307,9 @@ row-by-row server streaming through `fetchNextRows`.
 The H2 L5 suite additionally checks BLOB/CLOB input streams sent in multiple
 ODBC chunks, multi-block LOB reads, UTF-8 character preservation, and SQL NULL
 handling for both LOB types. H2 L6 checks temporary-table state across separate
-SQL operations and committed transactions.
+SQL operations and committed transactions. H2 L7 needs at least two OJP server
+endpoints and checks CRUD using a cluster connection string, including recovery
+from an unavailable endpoint.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -305,18 +321,20 @@ cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
   -DGOOGLEAPIS_PROTO_DIR=/path/to/googleapis
 cmake --build ojp-client-cpp-odbc/build
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
+OJP_TEST_H2_L7=true OJP_TEST_H2_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
   ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure
 ```
 
-Each test is skipped when its corresponding `OJP_TEST_H2`,
-`OJP_TEST_POSTGRESQL`, or `OJP_TEST_SQLSERVER` variable is unset or false. When
-enabled, a missing endpoint or unavailable server fails the test instead of
-silently skipping it.
+Each test is skipped when its corresponding enable variable is unset or false.
+When enabled, missing endpoint configuration or unavailable required servers
+fail the test instead of silently skipping it. Set
+`OJP_TEST_H2_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
+(`127.0.0.1:1`) in the L7 test.
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L6Integration` against the same OJP server. The C++ ODBC SQL Server
+`OjpOdbcH2L7Integration`; L7 runs against two OJP servers. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration` through
 `OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
 `OjpOdbcSqlServerL4Integration`, and `OjpOdbcSqlServerL5Integration`.

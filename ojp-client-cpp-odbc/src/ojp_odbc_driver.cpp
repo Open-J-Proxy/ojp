@@ -1980,7 +1980,7 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
         column_number == 0 || column_number > target->rows[target->row_index - 1].size()) {
         return fail(target, "No current row or invalid column number", "07009");
     }
-    Cell cell = target->rows[target->row_index - 1][column_number - 1];
+    const Cell& cell = target->rows[target->row_index - 1][column_number - 1];
     if (target_type == SQL_C_BINARY || target_type == SQL_C_CHAR) {
         if (const auto* reference_uuid = std::get_if<std::string>(&cell)) {
             const auto reference = target->connection->lob_references.find(*reference_uuid);

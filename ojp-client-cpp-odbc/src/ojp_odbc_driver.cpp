@@ -321,7 +321,8 @@ bool parse_endpoint_list(std::string value, std::vector<std::string>* endpoints)
     return !endpoints->empty();
 }
 
-std::string cluster_health(const std::vector<std::string>& endpoints) {
+template <typename Endpoints>
+std::string cluster_health(const Endpoints& endpoints) {
     std::ostringstream health;
     bool first = true;
     for (const auto& address : endpoints) {
@@ -1973,7 +1974,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     request.mutable_session()->CopyFrom(connection->session);
 
     StatementService::Stub* stub = route_session_rpc(connection);
-    const SessionInfo request_session = connection->session;
+    SessionInfo request_session = connection->session;
     request.mutable_session()->CopyFrom(request_session);
 
     if (is_query_sql(statement->sql)) {
@@ -2165,7 +2166,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     details.set_clusterhealth(cluster_health(connection->endpoints));
     auto* datasource_property = details.add_properties();
     datasource_property->set_key("ojp.datasource.name");
-    datasource_property->set_stringvalue(connection->datasource_name);
+    datasource_property->set_string_value(connection->datasource_name);
     connection->connection_details.CopyFrom(details);
 
     ClientRuntime& runtime = client_runtime();

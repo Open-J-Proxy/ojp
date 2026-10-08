@@ -120,6 +120,8 @@ Use the source links at the end of each flow to verify behavior in the current c
 - [Micronaut Integration](java-frameworks/micronaut/README.md)
 - [Quarkus Integration](java-frameworks/quarkus/README.md)
 - [Jakarta EE Integration](java-frameworks/jakarta-ee/README.md)
+- [Non-Java APIs and ODBC bridges](ebook/part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) - Candidate language integrations and compatibility limits
+- [Delphi FireDAC / ODBC](guides/DELPHI_FIREDAC_ODBC.md) - Experimental, unvalidated DSN-less configuration and validation checklist
 
 ### Multi-language Clients
 
@@ -132,6 +134,10 @@ Use the source links at the end of each flow to verify behavior in the current c
 - [C++ ODBC client](../ojp-client-cpp-odbc/README.md) - ODBC driver
 
 These clients have different capabilities from the Java driver. Consult [Client Implementation Levels](multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) for L1–L10 capabilities, tested scope, and integration-test evidence rather than assuming feature parity.
+
+Start with [basic examples for all clients](ebook/part1-chapter3-quickstart.md#331-basic-non-java-clients) and its [per-client maturity matrix](ebook/part1-chapter3-quickstart.md#native-client-maturity). The native .NET, Python, Go, PHP, Ruby, and Dart clients target H2 L1; their CI evidence and limitations differ. C++ ODBC implements H2/SQL Server through L9 with reported test-proven L8, and PostgreSQL L1. See its [build requirements](../ojp-client-cpp-odbc/README.md#build-requirements) before building the driver.
+
+ODBC is a separate possible route through `System.Data.Odbc`, `pyodbc`, `PDO_ODBC`, Ruby ODBC, or an external Go ODBC adapter. These wrappers are not validated by the C++ test suites. ANSI-only exports and incomplete metadata can prevent them from connecting; Dart has no drop-in Drift ODBC integration here. See the [bridge guidance](ebook/part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) before choosing this route.
 
 ### Telemetry
 

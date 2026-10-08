@@ -143,6 +143,82 @@ encryption. Use only a trusted local/private environment or an externally
 secured transport. TLS and authentication configuration are not implemented.
 Do not enable the experimental SQL enhancer.
 
+Experimental ODBC alternative: pyodbc
+-------------------------------------
+
+The native ``ojp`` client remains an early, H2-focused L1 implementation.
+Another DB-API route is ``pyodbc`` → OJP C++ ODBC driver → OJP server.
+This is a practical bridge candidate, not a tested replacement or a claim
+that the ODBC driver's implementation levels transfer to Python.
+
+A successful Linux driver build/install does not verify this bridge.
+Windows and macOS driver builds and these wrapper integrations remain untested.
+
+Build and register the driver as ``OJP`` with your platform's ODBC driver
+manager; see `build requirements and registration
+<../ojp-client-cpp-odbc/README.md#build-requirements>`_. An independently
+installed ``pyodbc`` and matching-architecture driver manager/driver are
+required; they are not dependencies of this native client. Start the server
+with Java 25, UTC, and its H2 JDBC driver available.
+
+Use a complete DSN-less connection string::
+
+    DRIVER={OJP};SERVER=localhost:1059;DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};UID={environment-user};PWD=;
+
+``SERVER`` is the OJP endpoint, ``DATABASE`` is the backend JDBC URL, and
+``UID``/``PWD`` are database credentials. The template shows an empty password;
+the example below reads both credentials from the environment.
+``ENDPOINT``, ``URL``, and ``USER``
+are accepted aliases for ``SERVER``, ``DATABASE``, and ``UID``. The driver
+manager resolves ``DRIVER``. Braces preserve JDBC semicolons; double literal
+``}`` characters. ``SQLConnect`` and DSN-only connections are unsupported;
+the wrapper must use ``SQLDriverConnect`` with endpoint and URL supplied.
+
+The driver is **ANSI-only**, with no Unicode ``W`` exports. Use ``ansi=True``
+to request ANSI connection calls and UTF-8 for character data. These settings
+do not guarantee that every pyodbc operation avoids Unicode calls. The driver
+has limited ``SQLGetInfo`` and no ``SQLGetStmtAttr``, ``SQLMoreResults``,
+``SQLColAttribute``, ``SQLTables``, or ``SQLColumns``. pyodbc may require
+missing functions during connection, execution, fetching, or metadata access.
+Validate your exact pyodbc/driver-manager versions before adoption.
+
+Illustrative query, with ``DB_USER`` and ``DB_PASSWORD`` set in the environment
+(the password may be empty for a suitably configured H2)::
+
+    import os
+    import pyodbc
+
+    # This must happen before the process opens its first ODBC connection.
+    pyodbc.pooling = False
+
+    def brace(value):
+        return "{" + value.replace("}", "}}") + "}"
+
+    text = (
+        "DRIVER={OJP};SERVER=localhost:1059;"
+        "DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};"
+        "UID=" + brace(os.environ["DB_USER"]) + ";"
+        'PWD=' + brace(os.environ["DB_PASSWORD"]) + ";"
+    )
+    connection = pyodbc.connect(text, ansi=True, autocommit=True)
+    try:
+        connection.setencoding(encoding="utf-8")
+        connection.setdecoding(pyodbc.SQL_CHAR, encoding="utf-8")
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT 1")
+            print(cursor.fetchone()[0])
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+This is runnable API usage, not evidence of a passing OJP bridge test.
+Do not enable application/framework or driver-manager pooling: OJP owns the
+database pools. Do not log credential-bearing connection strings. The ODBC
+route does not add transport security; use the same trusted/private or
+externally secured deployment boundary as the native client.
+
 Development and tests
 ---------------------
 

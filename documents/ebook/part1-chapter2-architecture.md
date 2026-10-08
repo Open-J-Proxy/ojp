@@ -8,7 +8,7 @@ Before the deep dive, see the [system picture](https://github.com/Open-J-Proxy/o
 
 ## 2.1 System Components
 
-OJP's architecture consists of three main components that work together to provide transparent connection management:
+OJP's architecture consists of three main components that work together to provide transparent connection management: client adapters, the shared gRPC contract, and the server. JDBC is the Java reference adapter, not a requirement on non-Java application machines.
 
 ```mermaid
 graph TB
@@ -48,6 +48,24 @@ graph TB
     style GRPC fill:#90caf9
     style HIKARI fill:#ff8a65
 ```
+
+### Native clients and the ODBC bridge
+
+There are two non-Java application paths:
+
+```text
+Language API → native OJP client → gRPC/HTTP2 → ojp-server → JDBC → Database
+Language API / FireDAC → ODBC wrapper → Driver Manager → OJP C++ ODBC driver
+                                                       → gRPC/HTTP2 → ojp-server → JDBC → Database
+```
+
+Native clients expose .NET ADO.NET, Python DB-API 2.0, Go `database/sql`, PHP's PDO-compatible API, Ruby DBI, and Dart's Drift executor. Each currently targets single-server L1 connectivity and CRUD, with its own limits and test evidence. Python and Go also implement basic local transactions; this does not establish full L4 conformance. The Java JDBC client has broader, database-specific coverage. See the [quick-start client matrix](part1-chapter3-quickstart.md#native-client-maturity) rather than assuming protocol sharing means feature parity.
+
+The C++ driver exposes ANSI ODBC to C++ and potentially to other languages through an ODBC wrapper. Its H2 and SQL Server implementations extend through L9, but reported test-proven coverage remains L8; PostgreSQL is L1. L9 XA uses the OJP-specific C API in `ojp_odbc_xa.h`, not transparent enlistment through ordinary ODBC wrappers. L8 covers current stateless recovery, not every redistribution scenario.
+
+An ODBC wrapper adds its own compatibility requirements. The driver has no wide-character (`W`) exports, incomplete metadata/capability discovery, and no DSN-only `SQLConnect` support. A wrapper can fail during connection setup before any SQL reaches the server. [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) explains candidate bridges; [Delphi FireDAC](../guides/DELPHI_FIREDAC_ODBC.md) is explicitly experimental and unvalidated.
+
+Both paths still use the server's JDBC drivers and pools. Disable local/framework/Driver Manager pooling and close application resources promptly. The early native clients and C++ ODBC transport currently use plaintext gRPC; they do not inherit the Java driver's TLS configuration. Use a trusted private environment or an externally secured transport, and do not enable the experimental SQL enhancer.
 
 ### ojp-server: The gRPC Server
 

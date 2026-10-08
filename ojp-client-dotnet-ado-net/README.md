@@ -73,6 +73,75 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 The client supports one endpoint and plaintext gRPC only. Transactions, paging/fetch-next-rows, LOBs, metadata, multinode routing/failover, and broader parameter types are outside this L1 implementation. Do not add an application-side connection pool when using OJP.
 
+## Experimental ODBC alternative: `System.Data.Odbc`
+
+The native gRPC provider above is an early L1 implementation. A separate route
+is .NET's standard `System.Data.Odbc` API → OJP C++ ODBC driver → OJP server.
+This is a **bridge candidate requiring conformance testing**, not a working
+replacement promised today. ODBC driver implementation levels do not establish
+compatibility with a particular language wrapper.
+
+A successful Linux driver build/install does not verify this bridge.
+Windows and macOS driver builds and these wrapper integrations remain untested.
+
+Build the driver and register it as `OJP` with the platform's ODBC driver manager;
+see [build requirements and registration](../ojp-client-cpp-odbc/README.md#build-requirements).
+The application needs `System.Data.Odbc` and a matching-architecture driver
+manager and driver. Disable driver-manager connection pooling before any
+connections and do not add framework pooling; the server owns database pools.
+Start the server using Java 25 and UTC, with its H2 JDBC driver available.
+
+Use a complete, DSN-less connection string, not the native provider's OJP URL:
+
+```text
+DRIVER={OJP};SERVER=localhost:1059;DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};UID={environment-user};PWD=;
+```
+
+`SERVER` is the OJP endpoint, `DATABASE` is the backend JDBC URL, and `UID`/`PWD`
+are database credentials; the template shows an empty password, while the
+example below reads both credentials from the environment. Braces preserve
+JDBC semicolons; escape a literal
+`}` as `}}`. The driver accepts `ENDPOINT`, `URL`, and `USER` as aliases for
+`SERVER`, `DATABASE`, and `UID`; the driver manager resolves `DRIVER`.
+`SQLConnect` and DSN-only connections are unsupported: use `SQLDriverConnect`
+with endpoint and backend URL explicitly supplied.
+
+**Compatibility blocker:** the driver is ANSI-only and exports no `W` entry
+points. `System.Data.Odbc` normally makes Unicode calls such as
+`SQLDriverConnectW`; driver-manager translation is platform-dependent and
+cannot be assumed to make this provider work. `SQLGetInfo` is limited, and
+`SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, and
+`SQLColumns` are absent. Wrappers may need these even for a simple query.
+FireDAC is likewise only an experimental bridge candidate, not a verified
+working integration.
+
+This complete C# query illustrates the standard API **after** those compatibility
+requirements have been resolved and tested. Set `DB_USER` and `DB_PASSWORD`
+in the environment (an empty password is valid for a suitably configured H2).
+It is not expected to establish current .NET compatibility:
+
+```csharp
+using System;
+using System.Data.Odbc;
+
+static string Required(string name) =>
+    Environment.GetEnvironmentVariable(name)
+    ?? throw new InvalidOperationException($"Set {name}");
+var text = new OdbcConnectionStringBuilder { Driver = "OJP" };
+text["SERVER"] = "localhost:1059";
+text["DATABASE"] = "jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1";
+text["UID"] = Required("DB_USER");
+text["PWD"] = Required("DB_PASSWORD");
+using var connection = new OdbcConnection(text.ConnectionString);
+connection.Open();
+using var command = connection.CreateCommand();
+command.CommandText = "SELECT 1";
+Console.WriteLine(command.ExecuteScalar());
+```
+
+Do not log the connection string; it contains credentials. Use a trusted/private
+network or externally secured transport; ODBC does not add gRPC encryption.
+
 ## Build and tests
 
 The projects target .NET 8. From this directory:

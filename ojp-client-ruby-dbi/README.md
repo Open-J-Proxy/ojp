@@ -87,6 +87,77 @@ end
 
 The JDBC URL is sent unchanged to `ojp-server`. Do not add an application-side connection pool; the OJP server owns the database pool. Positional parameters currently support NULL, booleans, integers, floats, strings, and timestamps. Transactions, LOBs, result pagination, multinode routing/failover, and XA are not implemented in this client.
 
+## Experimental ODBC alternative: Ruby ODBC
+
+The native driver has a single-endpoint L1 API and an H2 suite, not full DBI
+or database coverage. An alternative is the separately installed `ruby-odbc`
+binding (`require "odbc"`) → OJP C++ ODBC driver → OJP server.
+It is a bridge candidate requiring conformance testing, not a verified
+replacement. A DBI ODBC adapter is another possibility only if it uses full
+driver connection strings; a DSN-only `SQLConnect` path will not work.
+
+A successful Linux driver build/install does not verify this bridge.
+Windows and macOS driver builds and these wrapper integrations remain untested.
+
+Build and register the driver as `OJP`; see
+[build requirements and registration](../ojp-client-cpp-odbc/README.md#build-requirements).
+The Ruby binding and the platform's driver manager/driver must have matching
+architecture and support ANSI calls. Start the OJP server with Java 25, UTC,
+and its H2 JDBC driver available. Disable driver-manager pooling before
+connections and do not add application/framework pooling.
+
+The complete DSN-less connection string is:
+
+```text
+DRIVER={OJP};SERVER=localhost:1059;DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};UID={environment-user};PWD=;
+```
+
+`SERVER` targets OJP; `DATABASE` is the backend JDBC URL; `UID`/`PWD` hold
+database credentials. The template shows an empty password; the example below
+reads both credentials from the environment.
+The parser also accepts `ENDPOINT`, `URL`, and `USER`
+as aliases for `SERVER`, `DATABASE`, and `UID`. The driver manager resolves
+`DRIVER`. Braces preserve embedded JDBC semicolons; double a literal `}`.
+`SQLConnect` and DSN-only connections are unsupported: use `drvconnect`
+(`SQLDriverConnect`) with the endpoint and URL explicitly supplied.
+
+OJP's driver is **ANSI-only**, with no `W` exports. Unicode-only Ruby ODBC
+builds are not compatible without verified driver-manager translation.
+`SQLGetInfo` is limited; `SQLGetStmtAttr`, `SQLMoreResults`,
+`SQLColAttribute`, `SQLTables`, and `SQLColumns` are absent. The Ruby binding
+may require these even for basic execution/fetching. Check the actual binding,
+encoding, and driver-manager behavior; ODBC levels do not prove Ruby support.
+
+Illustrative runnable Ruby API usage (not a passing OJP bridge test), using
+environment credentials `DB_USER` and `DB_PASSWORD`:
+
+```ruby
+require "odbc"
+
+def brace(value)
+  "{" + value.gsub("}", "}}") + "}"
+end
+
+text = "DRIVER={OJP};SERVER=localhost:1059;" \
+       "DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};" \
+       "UID=#{brace(ENV.fetch('DB_USER'))};" \
+       'PWD=' + brace(ENV.fetch('DB_PASSWORD')) + ";"
+connection = ODBC::Database.new
+statement = nil
+begin
+  connection.drvconnect(text)
+  statement = connection.run("SELECT 1")
+  p statement.fetch
+ensure
+  statement.drop if statement
+  connection.disconnect if connection.connected?
+end
+```
+
+An empty password is valid for a suitably configured H2. Never log the connection
+string. The ODBC route does not add gRPC encryption; use a trusted/private
+network or externally secured deployment.
+
 ## Unit Tests
 
 Run the Ruby client unit and fixture tests:

@@ -974,7 +974,11 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             const auto& instant = value.timestamp_value().instant();
             const std::time_t timestamp = static_cast<std::time_t>(instant.seconds());
             std::tm utc_time{};
+#if defined(_WIN32)
+            if (gmtime_s(&utc_time, &timestamp) != 0) {
+#else
             if (gmtime_r(&timestamp, &utc_time) == nullptr) {
+#endif
                 return false;
             }
             std::ostringstream text;

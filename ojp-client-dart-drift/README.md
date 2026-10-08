@@ -78,13 +78,19 @@ executor interface rather than `sql_conn`.
 The executor can also be used directly for raw SQL:
 
 ```dart
+import 'dart:io';
+
 import 'package:ojp_client_dart_drift/ojp_client_dart_drift.dart';
+
+String requiredEnv(String name) =>
+    Platform.environment[name] ?? (throw StateError('Set $name'));
 
 Future<void> main() async {
   final connection = await OjpConnection.connect(
     endpoint: '127.0.0.1:1059',
     jdbcUrl: 'jdbc:h2:mem:my_database',
-    username: 'sa',
+    username: requiredEnv('DB_USER'),
+    password: requiredEnv('DB_PASSWORD'),
   );
   final executor = OjpDriftExecutor(connection);
 
@@ -111,6 +117,58 @@ Future<void> main() async {
 Application-side connection pools must be disabled when using OJP. Use one
 executor per application connection and do not wrap it in another connection
 pool.
+
+Set `DB_USER` and `DB_PASSWORD` in the environment before running the example
+on the Dart VM; an empty password is valid for a suitably configured H2.
+
+## ODBC alternatives and Drift limitations
+
+The native gRPC client is an early L1 executor with H2 integration coverage.
+**Drift has no standard ODBC backend**, and Dart has no standard-library ODBC
+database API. Installing/registering the OJP C++ ODBC driver does not let a
+Drift database connect to ODBC automatically. The native example above is the
+provided integration; it is not an ODBC bridge.
+
+A custom Dart FFI binding or an external service using ODBC could be explored,
+but neither is implemented here. An FFI route would need native driver-manager
+libraries on each supported OS/architecture, encoding and handle/lifecycle
+management, plus a custom Drift `QueryExecutor` and SQL-dialect validation.
+It is not a portable browser solution. No direct Drift-to-ODBC example or
+working integration is claimed.
+
+A successful Linux driver build/install does not verify a Dart/Drift bridge.
+Windows and macOS driver builds and wrapper integrations remain untested.
+
+For evaluating such a custom bridge, see
+[ODBC build requirements and registration](../ojp-client-cpp-odbc/README.md#build-requirements).
+Register the driver as `OJP` and use a complete DSN-less connection string:
+
+```text
+DRIVER={OJP};SERVER=localhost:1059;DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};UID={environment-user};PWD=;
+```
+
+`SERVER` is the OJP endpoint, `DATABASE` the backend JDBC URL, and `UID`/`PWD`
+the database credentials (the template shows an empty password), which a
+custom bridge must read from secure
+configuration such as environment variables. `ENDPOINT`, `URL`, and `USER`
+are accepted aliases for `SERVER`, `DATABASE`, and `UID`; the driver manager
+resolves `DRIVER`. Braces preserve JDBC semicolons; escape `}` as `}}`.
+`SQLConnect` and DSN-only connections are unsupported: a bridge must call
+`SQLDriverConnect` with the endpoint and JDBC URL supplied.
+
+The OJP driver is **ANSI-only**, without `W` exports. Unicode-call wrappers
+need verified driver-manager translation or changes; do not assume .NET's
+`System.Data.Odbc` or FireDAC works today. `SQLGetInfo` is limited and
+`SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, and
+`SQLColumns` are absent. Language wrappers may need these even for basic
+queries. All such bridges require conformance testing; the ODBC driver's
+implementation levels are not evidence of Drift compatibility.
+
+Disable application/framework and driver-manager pooling before opening
+connections; OJP owns database pooling. Do not log credential-bearing strings.
+The ODBC route does not add gRPC encryption: use a trusted/private network or
+externally secured transport. The OJP server still needs Java 25, UTC, and
+the backend JDBC driver.
 
 ## L1 Boundaries
 

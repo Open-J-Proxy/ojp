@@ -12,7 +12,7 @@ communicates with the server over gRPC.
 | Assessment | Value |
 |---|---|
 | Highest implemented level | **L6 for SQL Server; L5 for H2; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD are implemented for one OJP server per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, and BLOB/CLOB stream round trips; SQL Server additionally covers session affinity via `sessionUUID`/`targetServer`, including local temporary tables across statements and transactions. |
+| Summary | ANSI ODBC connectivity and CRUD start at one configured OJP endpoint per connection. H2 covers typed parameters, multi-block result streaming, result-set lifecycle, local transactions, and BLOB/CLOB stream round trips; SQL Server additionally routes session-bound calls using `sessionUUID`/`targetServer`, including local temporary tables across statements and transactions. |
 
 ### Current test-proven coverage by database
 

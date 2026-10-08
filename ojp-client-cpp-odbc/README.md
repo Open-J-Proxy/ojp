@@ -12,16 +12,16 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L7 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD support one or more configured OJP endpoints. H2 and SQL Server include level-specific coverage through L7, with shared endpoint channels, health monitoring, cluster-health propagation, and stateless `NOT_FOUND` recovery; session-bound requests remain sticky to their assigned server. |
+| Highest implemented level | **L8 for H2 and SQL Server; L1 for PostgreSQL** |
+| Summary | ANSI ODBC connectivity and CRUD support one or more configured OJP endpoints. H2 and SQL Server include level-specific coverage through L8, with shared endpoint channels, health monitoring, cluster-health propagation, stateless failover, and recovered-node reuse; session-bound requests remain sticky to their assigned server. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L7** | L1-L6 suites plus `h2_l7_integration_test.cpp` cover multiple OJP endpoints and shared H2 data across nodes. |
+| **H2** | **L8** | L1-L7 suites plus `h2_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, and recovered-node reuse. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L7** | L1-L6 suites plus `sqlserver_l7_integration_test.cpp` cover shared pool reuse, multi-endpoint routing, and exclusion of an unavailable endpoint. |
+| SQL Server | **L8** | L1-L7 suites plus `sqlserver_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, SQL-error classification, and recovered-node reuse. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -90,9 +90,10 @@ shared process-wide; background health checks propagate topology and recreate
 pools before a recovered endpoint is marked healthy. Stateless `NOT_FOUND`
 responses invalidate the cached pool and retry once after reconnecting.
 
-The SQL Server L7 suite covers the same multinode behavior with the SQL Server
-fixture, including multi-endpoint CRUD, cached pool reuse, and an unavailable
-endpoint. Health probes use the `connect` RPC every 5 seconds by default;
+The SQL Server L7 suite covers multinode behavior with the SQL Server fixture,
+including multi-endpoint CRUD, cached pool reuse, and an unavailable endpoint.
+L8 adds failover/recovery checks and requires its first endpoint to be restartable
+by a supervisor using a PID file. Health probes use the `connect` RPC every 5 seconds by default;
 configure a positive interval in milliseconds with the
 `OJP_HEALTH_CHECK_INTERVAL_MS` environment variable. Active sessions are never
 retried on another endpoint.
@@ -339,6 +340,8 @@ OJP_TEST_H2_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
   ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure
 ```
 
@@ -348,8 +351,10 @@ fail the test instead of silently skipping it. Set
 `OJP_TEST_H2_L7_UNAVAILABLE_ADDR` or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
-The H2 L8 test requires a PID file for its first endpoint and restarts that
-server automatically through the test supervisor.
+The H2 and SQL Server L8 tests require a PID file for their first endpoint and
+restart that server automatically through the test supervisor. Their endpoint
+lists put the restartable server first. Configure that server with
+`ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
@@ -359,5 +364,6 @@ The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
 workflow job runs `OjpOdbcSqlServerL1Integration` through
 `OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
 `OjpOdbcSqlServerL4Integration`, `OjpOdbcSqlServerL5Integration`,
-`OjpOdbcSqlServerL6Integration`, and `OjpOdbcSqlServerL7Integration`; L7 uses
-two OJP server processes.
+`OjpOdbcSqlServerL6Integration`, `OjpOdbcSqlServerL7Integration`, and
+`OjpOdbcSqlServerL8Integration`; L7 and L8 use two OJP server processes. L8's
+first endpoint is supervised and restarted after failure.

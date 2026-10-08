@@ -218,6 +218,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
             "OJP_TEST_SQLSERVER"
             "OJP_TEST_SQLSERVER_L7_ADDRS")
+    add_executable(ojp_odbc_sqlserver_l8_integration_test
+        tests/sqlserver_l8_integration_test.cpp)
+    target_link_libraries(ojp_odbc_sqlserver_l8_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_sqlserver_l8_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcSqlServerL8Integration
+        COMMAND ojp_odbc_sqlserver_l8_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
+            "OJP_TEST_SQLSERVER_L8"
+            "OJP_TEST_SQLSERVER_L8_ADDRS")
     set_tests_properties(
         OjpOdbcH2L1Integration
         OjpOdbcH2L2Integration
@@ -235,10 +244,14 @@ if(BUILD_TESTING)
         OjpOdbcSqlServerL5Integration
         OjpOdbcSqlServerL6Integration
         OjpOdbcSqlServerL7Integration
+        OjpOdbcSqlServerL8Integration
         PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
     set_tests_properties(OjpOdbcH2L8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
         TIMEOUT 120)
+    set_tests_properties(OjpOdbcSqlServerL8Integration PROPERTIES
+        ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
+        TIMEOUT 180)
 endif()

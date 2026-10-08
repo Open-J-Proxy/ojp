@@ -64,8 +64,8 @@ These entries describe the levels targeted by the language client modules; they 
 
 | Client | Database | Target level | Evidence |
 |---|---|---:|---|
-| C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L6** | H2 L6 suite verifies temporary-table session affinity across statements and transactions, in addition to L1-L5 coverage. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L7** | SQL Server L7 suite covers multi-endpoint routing, cached pool reuse, and unavailable-endpoint handling, in addition to L1-L6 coverage. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L7** | H2 L6 verifies session affinity; H2 L7 adds multinode endpoint selection, shared-pool reuse, and health-aware behavior. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L7** | SQL Server L6 verifies session affinity; SQL Server L7 adds multi-endpoint routing, cached-pool reuse, and unavailable-endpoint handling. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L1** | Shared real-server L1 suite covers connectivity, CRUD, diagnostics, and lifecycle. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
@@ -86,8 +86,8 @@ These levels are based on each language client's own integration tests and are i
 
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L6** | L1-L5 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l6_integration_test.cpp` for temporary-table session affinity across statements and transactions. |
-| **C++ ODBC** | SQL Server | **L7** | L1-L6 real-server coverage plus `ojp-client-cpp-odbc/tests/sqlserver_l7_integration_test.cpp` for multi-endpoint routing, cached pool reuse, and unavailable-endpoint handling. |
+| **C++ ODBC** | H2 | **L7** | L1-L6 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l7_integration_test.cpp` for multinode access through multiple OJP endpoints. |
+| **C++ ODBC** | SQL Server | **L7** | L1-L6 real-server coverage plus `ojp-client-cpp-odbc/tests/sqlserver_l7_integration_test.cpp` for multi-endpoint routing, cached-pool reuse, and unavailable-endpoint handling. |
 | **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
@@ -119,7 +119,7 @@ The following table records the implemented target level and its real-server int
 
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L6** | `ojp-client-cpp-odbc/tests/h2_l6_integration_test.cpp` adds session-affinity coverage to the L1-L5 suites. |
+| **C++ ODBC** | H2 | **L7** | `ojp-client-cpp-odbc/tests/h2_l7_integration_test.cpp` adds multinode coverage to the L1-L6 suites. |
 | **C++ ODBC** | SQL Server | **L7** | `ojp-client-cpp-odbc/tests/sqlserver_l7_integration_test.cpp` adds multinode routing and cached-pool behavior to L1-L6 SQL Server coverage. |
 | **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |

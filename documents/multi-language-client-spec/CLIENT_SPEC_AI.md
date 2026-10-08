@@ -580,7 +580,6 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 
 The H2 Java reference client now has an XA lifecycle integration suite in
 `ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/h2/H2XAIntegrationTest.java`.
-H2 remains listed at L8 until the new suite passes CI.
 
 ### 12.3 Conformance reporting rules
 

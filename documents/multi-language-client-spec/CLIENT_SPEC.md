@@ -1638,7 +1638,11 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | L7 | Multinode load balancing + health + cluster sync |
 | L8 | Failover/recovery/redistribution operational resilience |
 | L9 | XA transaction support |
-| L10 | Full operational conformance in multinode scenarios |
+| L10 | Integrated L1–L9 conformance in multinode scenarios, including recovery and XA behavior |
+
+L10 is not inferred from implementing and testing L1–L9 separately. It requires
+integration evidence for their combined behavior in multinode operation; see
+[`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md).
 
 ### Current reference-client status
 

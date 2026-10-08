@@ -22,7 +22,7 @@ Each level includes all lower levels.
 | **L7** | Multinode Operations | Load balancing (least-connections and round-robin), health checks, cluster health propagation, `connHash` cache + reconnect behavior. |
 | **L8** | Resilience + Recovery Operations | Stateless failover retry, unhealthy/healthy transitions, recovered-node reuse and redistribution, pool-exhaustion safety. |
 | **L9** | XA Transactions | XA RPC lifecycle (`xaStart`...`xaIsSameRM` as implemented), XA stickiness/error behavior, XA data source integration. |
-| **L10** | Full Operational Conformance | Combines data-path, operational-path, and distributed-transaction behavior under multinode scenarios, including recovery paths. |
+| **L10** | Full Operational Conformance | Demonstrates the combined L1–L9 data-path, operational-path, and distributed-transaction behavior under multinode scenarios, including recovery paths. |
 
 ---
 
@@ -39,7 +39,7 @@ Each level includes all lower levels.
 | **L7** | Endpoint selection, `clusterHealth` propagation, health-probe behavior, `NOT_FOUND` reconnect path |
 | **L8** | Failover/recovery flow, redistribution behavior, admission/pool exhaustion safeguards |
 | **L9** | `xaStart`, `xaEnd`, `xaPrepare`, `xaCommit`, `xaRollback`, `xaRecover`, `xaForget`, `xaSetTransactionTimeout`, `xaGetTransactionTimeout`, `xaIsSameRM` |
-| **L10** | Combined validation of L1–L9 in multinode operational runs |
+| **L10** | Integrated validation of L1–L9 behavior in multinode operational runs, including recovery and XA affinity |
 
 ---
 
@@ -83,6 +83,7 @@ These entries describe the levels targeted by the language client modules; they 
 - **Operational levels (L7/L8/L10)** are validated primarily in protocol-level multinode test suites under `org/openjproxy/grpc/client`.
 - Those tests validate client behavior independent of SQL dialect, while database-specific suites validate SQL/type/driver behavior.
 - For this reason, operational capability may be considered “platform-proven” even when a specific database does not have a dedicated multinode test class.
+- **L10 is not awarded by adding up independent L1–L9 implementations or test suites.** It requires integration evidence that exercises their combined behavior in multinode operation, including data-path behavior, operational recovery, and XA behavior. Passing lower-level suites separately is necessary evidence, but is not sufficient for L10.
 
 ## 4) Non-Java Client Test-Proven Coverage
 
@@ -90,8 +91,8 @@ These levels are based on each language client's own integration tests and are i
 
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L8** | L1-L7 real-server coverage plus `ojp-client-cpp-odbc/tests/h2_l8_integration_test.cpp` proves the current L8 behavior; the new L9 XA suite requires a passing CI run before raising this achieved level. |
-| **C++ ODBC** | SQL Server | **L8** | L1-L8 real-server coverage plus `ojp-client-cpp-odbc/tests/sqlserver_l9_integration_test.cpp` for XA lifecycle, recovery, and affinity/error behavior; L9 requires a passing CI run to become test-proven. |
+| **C++ ODBC** | H2 | **L9** | L1-L8 suites plus `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` cover XA lifecycle, recovery, and affinity; the C++ ODBC H2 L1-L9 CI job passed. This does not establish L10. |
+| **C++ ODBC** | SQL Server | **L9** | L1-L8 suites plus `ojp-client-cpp-odbc/tests/sqlserver_l9_integration_test.cpp` cover XA lifecycle, recovery, and affinity/error behavior; the C++ ODBC SQL Server L1-L9 CI job passed. This does not establish L10. |
 | **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
@@ -119,12 +120,12 @@ When publishing a new language client, report:
 
 ## 5) Non-Java Client Implementations
 
-The following table records the implemented target level and its real-server integration suite for each non-Java client module. A passing CI run is required before treating the level as test-proven.
+The following table records the implemented target level and its real-server integration suite for each non-Java client module. A passing CI run is required before treating the level as test-proven. Implementing and testing L1–L9 separately does not establish L10; that claim requires an integrated multinode L1–L9 conformance run.
 
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
-| **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; L9 requires a passing CI run to become test-proven. |
-| **C++ ODBC** | SQL Server | **L9** | `ojp-client-cpp-odbc/tests/sqlserver_l9_integration_test.cpp` adds XA lifecycle, recovery, and affinity/error behavior to the SQL Server L1-L8 suites. |
+| **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; its L1-L9 CI job passed. The separate L1–L9 suites do not establish L10. |
+| **C++ ODBC** | SQL Server | **L9** | `ojp-client-cpp-odbc/tests/sqlserver_l9_integration_test.cpp` adds XA lifecycle, recovery, and affinity/error behavior to the SQL Server L1-L8 suites; its L1-L9 CI job passed. The separate L1–L9 suites do not establish L10. |
 | **C++ ODBC** | PostgreSQL | **L1** | `ojp-client-cpp-odbc/tests/l1_integration_test.cpp` covers real-server connectivity, CRUD, diagnostics, and lifecycle. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |

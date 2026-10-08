@@ -19,9 +19,9 @@ communicates with the server over gRPC.
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L8** | L1-L7 suites plus `h2_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, and recovered-node reuse. The L9 suite is added and will become test-proven after CI passes. |
+| **H2** | **L9** | L1-L8 suites plus `h2_l9_integration_test.cpp` cover XA lifecycle and recovery; the C++ ODBC H2 L1-L9 CI job passed. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L8** | L1-L8 suites cover failover/recovery; `sqlserver_l9_integration_test.cpp` adds SQL Server XA lifecycle and affinity coverage, pending a successful run. |
+| SQL Server | **L9** | L1-L8 suites plus `sqlserver_l9_integration_test.cpp` cover XA lifecycle, recovery, and affinity/error behavior; the C++ ODBC SQL Server L1-L9 CI job passed. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -29,6 +29,13 @@ communicates with the server over gRPC.
 | CockroachDB | Not established | No database-specific integration suite in this module. |
 
 Level definitions: [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
+
+The ODBC client does **not** currently claim L10 for H2 or SQL Server. L10
+requires integrated evidence that combines L1-L9 data-path, operational
+recovery, and XA behavior in multinode operation. Although the L1-L9 suites
+passed their respective CI jobs and the L9 suites exercise XA affinity across
+multiple OJP servers, the levels are tested as separate suites; that is not an
+integrated L10 conformance run.
 
 ## L1 capabilities
 

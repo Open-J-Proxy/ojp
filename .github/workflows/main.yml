@@ -2602,6 +2602,14 @@ jobs:
             /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
             -P 'TestPassword123!' -C -b -d defaultdb -Q \
             "IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'testuser') BEGIN CREATE USER testuser FOR LOGIN testuser; ALTER ROLE db_owner ADD MEMBER testuser; END"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -d master -Q \
+            "EXEC sp_sqljdbc_xa_install;"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -d master -Q \
+            "IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'testuser') CREATE USER testuser FOR LOGIN testuser; GRANT EXECUTE ON xp_sqljdbc_xa_init TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_start TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_end TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_prepare TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_commit TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_rollback TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_recover TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_forget TO testuser; IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'SqlJDBCXAUser' AND type = 'R') CREATE ROLE [SqlJDBCXAUser]; ALTER ROLE [SqlJDBCXAUser] ADD MEMBER testuser;"
 
       - name: Start OJP server (background)
         run: |

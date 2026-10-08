@@ -133,6 +133,14 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l1_connection.csv"
             "OJP_TEST_H2"
             "OJP_TEST_H2_ADDR")
+    add_executable(ojp_odbc_h2_l7_integration_test
+        tests/h2_l7_integration_test.cpp)
+    target_link_libraries(ojp_odbc_h2_l7_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_h2_l7_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcH2L7Integration
+        COMMAND ojp_odbc_h2_l7_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/h2_l7_connection.csv"
+            "OJP_TEST_H2_L7")
     add_test(NAME OjpOdbcPostgreSqlL1Integration
         COMMAND ojp_odbc_l1_integration_test
             "PostgreSQL"
@@ -190,6 +198,7 @@ if(BUILD_TESTING)
         OjpOdbcH2L4Integration
         OjpOdbcH2L5Integration
         OjpOdbcH2L6Integration
+        OjpOdbcH2L7Integration
         OjpOdbcPostgreSqlL1Integration
         OjpOdbcSqlServerL1Integration
         OjpOdbcSqlServerL2Integration

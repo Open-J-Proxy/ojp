@@ -1497,10 +1497,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         return execute_savepoint_statement(statement, savepoint_action, savepoint_name);
     }
 
-    StatementService::Stub* stub = route_session_rpc(connection);
-    const SessionInfo request_session = connection->session;
     StatementRequest request;
-    request.mutable_session()->CopyFrom(connection->session);
     request.set_sql(statement->sql);
     for (const auto& entry : statement->parameters) {
         const auto& bound = entry.second;
@@ -1540,6 +1537,10 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                         parameter_error.native_error);
         }
     }
+
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
+    request.mutable_session()->CopyFrom(request_session);
 
     if (is_query_sql(statement->sql)) {
         std::string result_set_uuid;

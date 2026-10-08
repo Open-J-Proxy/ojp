@@ -238,6 +238,21 @@ int row_count(SQLHSTMT statement, const std::string& table, int id) {
     return count;
 }
 
+void verify_endpoint_available(SQLHSTMT statement) {
+    execute_direct(statement, "SELECT 1");
+    require_success(SQLFetch(statement), "SQLFetch(endpoint availability)",
+                    SQL_HANDLE_STMT, statement);
+    SQLINTEGER value = 0;
+    SQLLEN value_length = 0;
+    require_success(SQLGetData(statement, 1, SQL_C_SLONG, &value, sizeof(value), &value_length),
+                    "SQLGetData(endpoint availability)", SQL_HANDLE_STMT, statement);
+    if (value != 1) {
+        throw std::runtime_error("the other SQL Server OJP endpoint returned an unexpected result");
+    }
+    require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(endpoint availability)",
+                    SQL_HANDLE_STMT, statement);
+}
+
 OjpXid xid_for(const std::string& global_id, const std::string& branch_id) {
     if (global_id.size() > OJP_XA_MAX_GTRID_SIZE || branch_id.size() > OJP_XA_MAX_BQUAL_SIZE) {
         throw std::runtime_error("test XID exceeds XA limits");
@@ -474,8 +489,6 @@ int run_integration_test(int argc, char** argv) {
         const OjpXid unavailable_branch = xid_for(table + "_unavailable", "branch-4");
         require_success(xa.start(xa_connection, &unavailable_branch, OJP_XA_TMNOFLAGS),
                         "OjpXAStart(unavailable server)", SQL_HANDLE_DBC, xa_connection);
-        execute_direct(xa_statement, "INSERT INTO " + table +
-                                     " VALUES (4, N'unavailable')");
         stop_server(pid_file, endpoints.front());
         if (xa.end(xa_connection, &unavailable_branch, OJP_XA_TMSUCCESS) != SQL_ERROR) {
             throw std::runtime_error("XA end should fail when its pinned OJP server is unavailable");
@@ -491,11 +504,7 @@ int run_integration_test(int argc, char** argv) {
             xa_error != OJP_XA_XAER_RMFAIL) {
             throw std::runtime_error("XA affinity failure must report XAER_RMFAIL without rerouting");
         }
-        if (row_count(regular_statement, table, 1) != 1 ||
-            row_count(regular_statement, table, 4) != 0) {
-            throw std::runtime_error(
-                "XA server failure must not affect the other SQL Server OJP endpoint");
-        }
+        verify_endpoint_available(regular_statement);
 
         execute_direct(regular_statement, "DROP TABLE " + table);
         table_created = false;

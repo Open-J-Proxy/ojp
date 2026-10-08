@@ -62,13 +62,16 @@ struct ConnectionHandle final : HandleBase {
     ConnectionHandle() : HandleBase(SQL_HANDLE_DBC) {}
 
     std::string endpoint;
-    std::string active_endpoint;
     std::string url;
     std::string user;
     std::string password;
     std::string client_uuid;
     std::shared_ptr<grpc::Channel> channel;
     std::unique_ptr<StatementService::Stub> stub;
+    std::map<std::string, std::shared_ptr<grpc::Channel>> affinity_channels;
+    std::map<std::string, std::unique_ptr<StatementService::Stub>> affinity_stubs;
+    std::map<std::string, std::string> session_to_server;
+    std::mutex routing_mutex;
     SessionInfo session;
     std::mutex operation_mutex;
     std::set<std::string> savepoints;
@@ -126,50 +129,6 @@ struct ParsedConnectionString {
     std::map<std::string, std::string> values;
     std::string error;
 };
-
-SQLRETURN fail(HandleBase* handle, std::string message, std::string state,
-               SQLINTEGER native_error);
-
-std::mutex session_affinity_mutex;
-std::map<std::string, std::string> session_affinity;
-
-void update_session(ConnectionHandle* connection, const SessionInfo& session) {
-    const std::string previous_session_uuid = connection->session.sessionuuid();
-    connection->session.CopyFrom(session);
-    const std::string session_uuid = session.sessionuuid();
-    if (!previous_session_uuid.empty() && previous_session_uuid != session_uuid) {
-        std::lock_guard<std::mutex> lock(session_affinity_mutex);
-        session_affinity.erase(previous_session_uuid);
-    }
-    if (!session_uuid.empty()) {
-        const std::string target_server = session.targetserver().empty()
-            ? connection->active_endpoint : session.targetserver();
-        std::lock_guard<std::mutex> lock(session_affinity_mutex);
-        session_affinity[session_uuid] = target_server;
-    }
-}
-
-SQLRETURN route_to_session_server(ConnectionHandle* connection, HandleBase* handle) {
-    if (connection->session.sessionuuid().empty()) {
-        return SQL_SUCCESS;
-    }
-    std::string target_server;
-    {
-        std::lock_guard<std::mutex> lock(session_affinity_mutex);
-        const auto binding = session_affinity.find(connection->session.sessionuuid());
-        if (binding == session_affinity.end() || binding->second.empty()) {
-            return fail(handle, "OJP session has no target server affinity binding", "HY000", 0);
-        }
-        target_server = binding->second;
-    }
-    if (connection->active_endpoint != target_server) {
-        connection->channel =
-            grpc::CreateChannel(target_server, grpc::InsecureChannelCredentials());
-        connection->stub = StatementService::NewStub(connection->channel);
-        connection->active_endpoint = target_server;
-    }
-    return SQL_SUCCESS;
-}
 
 ParsedConnectionString parse_connection_string(const std::string& input) {
     ParsedConnectionString parsed;
@@ -308,6 +267,67 @@ SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
         sql_state = "08S01";
     }
     return fail(handle, std::move(message), std::move(sql_state), native_error);
+}
+
+StatementService::Stub* route_session_rpc(ConnectionHandle* connection) {
+    std::lock_guard<std::mutex> lock(connection->routing_mutex);
+    std::string target = connection->endpoint;
+    if (!connection->session.sessionuuid().empty()) {
+        const std::string& session_uuid = connection->session.sessionuuid();
+        const auto binding = connection->session_to_server.find(session_uuid);
+        if (binding != connection->session_to_server.end()) {
+            target = binding->second;
+        } else {
+            if (!connection->session.targetserver().empty()) {
+                target = connection->session.targetserver();
+            }
+            connection->session_to_server.emplace(session_uuid, target);
+        }
+        connection->session.set_targetserver(target);
+    } else if (connection->session.targetserver().empty()) {
+        connection->session.set_targetserver(target);
+    }
+
+    if (target == connection->endpoint) {
+        return connection->stub.get();
+    }
+    auto stub = connection->affinity_stubs.find(target);
+    if (stub == connection->affinity_stubs.end()) {
+        auto channel = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
+        auto routed_stub = StatementService::NewStub(channel);
+        connection->affinity_channels.emplace(target, std::move(channel));
+        stub = connection->affinity_stubs.emplace(target, std::move(routed_stub)).first;
+    }
+    return stub->second.get();
+}
+
+void update_session(ConnectionHandle* connection, const SessionInfo& response,
+                    const SessionInfo& request) {
+    std::string target;
+    if (!response.sessionuuid().empty()) {
+        std::lock_guard<std::mutex> lock(connection->routing_mutex);
+        const std::string& session_uuid = response.sessionuuid();
+        if (!response.targetserver().empty()) {
+            target = response.targetserver();
+        } else {
+            const auto binding = connection->session_to_server.find(session_uuid);
+            if (binding != connection->session_to_server.end()) {
+                target = binding->second;
+            } else if (!request.targetserver().empty()) {
+                target = request.targetserver();
+            } else {
+                target = connection->endpoint;
+            }
+        }
+        connection->session_to_server[session_uuid] = target;
+    }
+    connection->session.CopyFrom(response);
+    if (!response.sessionuuid().empty()) {
+        connection->session.set_targetserver(target);
+    } else if (connection->session.targetserver().empty()) {
+        connection->session.set_targetserver(
+            request.targetserver().empty() ? connection->endpoint : request.targetserver());
+    }
 }
 
 std::string format_fraction(std::int32_t nanos) {
@@ -974,16 +994,14 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    const auto route_result = route_to_session_server(connection, handle);
-    if (!SQL_SUCCEEDED(route_result)) {
-        return route_result;
-    }
     if (data.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
         return fail(handle, "LOB input exceeds the supported size", "22001");
     }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    auto writer = connection->stub->createLob(&context);
+    auto writer = stub->createLob(&context);
     std::size_t offset = 0;
     std::size_t character_position = 1;
     bool first_block = true;
@@ -1015,7 +1033,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
                                    : fail_grpc(handle, status, context);
             }
             received_reference = true;
-            update_session(connection, reference.session());
+            update_session(connection, reference.session(), request_session);
         }
     }
     if (!writer->WritesDone()) {
@@ -1024,7 +1042,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
                            : fail_grpc(handle, status, context);
     }
     while (writer->Read(&reference)) {
-        update_session(connection, reference.session());
+        update_session(connection, reference.session(), request_session);
     }
     const auto status = writer->Finish();
     if (!status.ok()) {
@@ -1033,7 +1051,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     if (!received_reference || reference.uuid().empty()) {
         return fail(handle, "OJP returned an empty LOB reference", "HY000");
     }
-    update_session(connection, reference.session());
+    update_session(connection, reference.session(), request_session);
     *uuid = reference.uuid();
     return SQL_SUCCESS;
 }
@@ -1043,10 +1061,8 @@ SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle, const std::
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    const auto route_result = route_to_session_server(connection, handle);
-    if (!SQL_SUCCEEDED(route_result)) {
-        return route_result;
-    }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
     com::openjproxy::grpc::ReadLobRequest request;
     request.mutable_lobreference()->mutable_session()->CopyFrom(connection->session);
     request.mutable_lobreference()->set_uuid(uuid);
@@ -1055,11 +1071,11 @@ SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle, const std::
     request.set_length(std::numeric_limits<std::int32_t>::max());
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    auto reader = connection->stub->readLob(&context, request);
+    auto reader = stub->readLob(&context, request);
     LobDataBlock block;
     while (reader->Read(&block)) {
         if (block.has_session()) {
-            update_session(connection, block.session());
+            update_session(connection, block.session(), request_session);
         }
         const auto max_lob_size =
             static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
@@ -1125,10 +1141,8 @@ SQLRETURN materialize_lob_cell(StatementHandle* statement, const Cell& cell,
 // (CLIENT_SPEC_AI.md section 4.5 rule 2).
 SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& result_set_uuid,
                            StatementHandle* statement) {
-    const auto route_result = route_to_session_server(connection, statement);
-    if (!SQL_SUCCEEDED(route_result)) {
-        return route_result;
-    }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
     com::openjproxy::grpc::CallResourceRequest request;
     request.mutable_session()->CopyFrom(connection->session);
     request.set_resourcetype(com::openjproxy::grpc::RES_RESULT_SET);
@@ -1137,12 +1151,12 @@ SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& resu
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     com::openjproxy::grpc::CallResourceResponse response;
-    const auto status = connection->stub->callResource(&context, request, &response);
+    const auto status = stub->callResource(&context, request, &response);
     if (!status.ok()) {
         return fail_grpc(statement, status, context);
     }
     if (response.has_session()) {
-        update_session(connection, response.session());
+        update_session(connection, response.session(), request_session);
     }
     return SQL_SUCCESS;
 }
@@ -1152,18 +1166,16 @@ SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, I
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    const auto route_result = route_to_session_server(connection, handle);
-    if (!SQL_SUCCEEDED(route_result)) {
-        return route_result;
-    }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     SessionInfo response;
-    const auto status = invoke(&context, connection->session, &response);
+    const auto status = invoke(stub, &context, request_session, &response);
     if (!status.ok()) {
         return fail_grpc(handle, status, context);
     }
-    update_session(connection, response);
+    update_session(connection, response, request_session);
     return SQL_SUCCESS;
 }
 
@@ -1177,10 +1189,8 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
-    const auto route_result = route_to_session_server(connection, handle);
-    if (!SQL_SUCCEEDED(route_result)) {
-        return route_result;
-    }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
     com::openjproxy::grpc::CallResourceRequest request;
     request.mutable_session()->CopyFrom(connection->session);
     request.set_resourcetype(resource_type);
@@ -1194,12 +1204,12 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     com::openjproxy::grpc::CallResourceResponse response;
-    const auto status = connection->stub->callResource(&context, request, &response);
+    const auto status = stub->callResource(&context, request, &response);
     if (!status.ok()) {
         return fail_grpc(handle, status, context);
     }
     if (response.has_session()) {
-        update_session(connection, response.session());
+        update_session(connection, response.session(), request_session);
     }
     if (output != nullptr) {
         output->CopyFrom(response);
@@ -1209,9 +1219,9 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
 
 SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
     return invoke_session_rpc(connection, handle,
-        [connection](grpc::ClientContext* context, const SessionInfo& request,
+        [](StatementService::Stub* stub, grpc::ClientContext* context, const SessionInfo& request,
                      SessionInfo* response) {
-            return connection->stub->startTransaction(context, request, response);
+            return stub->startTransaction(context, request, response);
         });
 }
 
@@ -1225,14 +1235,14 @@ SQLRETURN end_transaction(ConnectionHandle* connection, HandleBase* handle,
     }
     const auto result = completion_type == SQL_COMMIT
         ? invoke_session_rpc(connection, handle,
-            [connection](grpc::ClientContext* context, const SessionInfo& request,
+            [](StatementService::Stub* stub, grpc::ClientContext* context, const SessionInfo& request,
                          SessionInfo* response) {
-                return connection->stub->commitTransaction(context, request, response);
+                return stub->commitTransaction(context, request, response);
             })
         : invoke_session_rpc(connection, handle,
-            [connection](grpc::ClientContext* context, const SessionInfo& request,
+            [](StatementService::Stub* stub, grpc::ClientContext* context, const SessionInfo& request,
                          SessionInfo* response) {
-                return connection->stub->rollbackTransaction(context, request, response);
+                return stub->rollbackTransaction(context, request, response);
             });
     if (SQL_SUCCEEDED(result)) {
         connection->savepoints.clear();
@@ -1506,7 +1516,6 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     }
 
     StatementRequest request;
-    request.mutable_session()->CopyFrom(connection->session);
     request.set_sql(statement->sql);
     for (const auto& entry : statement->parameters) {
         const auto& bound = entry.second;
@@ -1546,11 +1555,11 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                         parameter_error.native_error);
         }
     }
-    const auto route_result = route_to_session_server(connection, statement);
-    if (!SQL_SUCCEEDED(route_result)) {
-        return route_result;
-    }
     request.mutable_session()->CopyFrom(connection->session);
+
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
+    request.mutable_session()->CopyFrom(request_session);
 
     if (is_query_sql(statement->sql)) {
         std::string result_set_uuid;
@@ -1558,7 +1567,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         bool decoded_all = true;
         auto append_result = [&](const OpResult& result) {
             if (result.has_session()) {
-                update_session(connection, result.session());
+                update_session(connection, result.session(), request_session);
             }
             if (result.flag() == kRowByRowMode) {
                 row_by_row = true;
@@ -1590,7 +1599,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
 
         grpc::ClientContext context;
         context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-        auto reader = connection->stub->executeQuery(&context, request);
+        auto reader = stub->executeQuery(&context, request);
         OpResult result;
         while (reader->Read(&result)) {
             append_result(result);
@@ -1602,10 +1611,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         // SQL Server and DB2 send one row at a time when the result has binary or LOB
         // columns; the remaining rows must be pulled with fetchNextRows.
         while (row_by_row && !result_set_uuid.empty()) {
-            const auto fetch_route_result = route_to_session_server(connection, statement);
-            if (!SQL_SUCCEEDED(fetch_route_result)) {
-                return fetch_route_result;
-            }
+            StatementService::Stub* fetch_stub = route_session_rpc(connection);
             com::openjproxy::grpc::ResultSetFetchRequest fetch;
             fetch.mutable_session()->CopyFrom(connection->session);
             fetch.set_resultsetuuid(result_set_uuid);
@@ -1613,9 +1619,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             grpc::ClientContext fetch_context;
             fetch_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
             OpResult next;
-            const auto fetch_status = connection->stub->fetchNextRows(&fetch_context, fetch, &next);
+            const auto fetch_status = fetch_stub->fetchNextRows(&fetch_context, fetch, &next);
             if (!fetch_status.ok()) {
                 return fail_grpc(statement, fetch_status, fetch_context);
+            }
+            if (next.has_session()) {
+                update_session(connection, next.session(), fetch.session());
             }
             if (append_result(next) == 0) {
                 break;
@@ -1638,12 +1647,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     OpResult result;
-    const auto status = connection->stub->executeUpdate(&context, request, &result);
+    const auto status = stub->executeUpdate(&context, request, &result);
     if (!status.ok()) {
         return fail_grpc(statement, status, context);
     }
     if (result.has_session()) {
-        update_session(connection, result.session());
+        update_session(connection, result.session(), request_session);
     }
     if (result.type() != com::openjproxy::grpc::INTEGER || !result.has_int_value()) {
         return fail(statement, "OJP returned an invalid update result", "HY000");
@@ -1685,7 +1694,6 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     connection->client_uuid = make_client_uuid();
     connection->channel = grpc::CreateChannel(connection->endpoint, grpc::InsecureChannelCredentials());
     connection->stub = StatementService::NewStub(connection->channel);
-    connection->active_endpoint = connection->endpoint;
 
     ConnectionDetails details;
     details.set_url(connection->url);
@@ -1703,7 +1711,8 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         connection->channel.reset();
         return fail_grpc(connection, status, context);
     }
-    update_session(connection, session);
+    connection->session.CopyFrom(session);
+    connection->session.set_targetserver(connection->endpoint);
     connection->connected = true;
     if (connection->transaction_isolation != 0) {
         const auto isolation_result = set_transaction_isolation(
@@ -1730,39 +1739,24 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     if (!connection->connected || !connection->stub) {
         return fail(connection, "ODBC connection is not open", "08003");
     }
-    const auto route_result = route_to_session_server(connection, connection);
-    if (!SQL_SUCCEEDED(route_result)) {
-        const std::string session_uuid = connection->session.sessionuuid();
-        if (!session_uuid.empty()) {
-            std::lock_guard<std::mutex> lock(session_affinity_mutex);
-            session_affinity.erase(session_uuid);
-        }
-        connection->connected = false;
-        connection->stub.reset();
-        connection->channel.reset();
-        connection->active_endpoint.clear();
-        connection->savepoints.clear();
-        connection->savepoint_names.clear();
-        connection->auto_commit = true;
-        connection->transaction_isolation = 0;
-        return route_result;
-    }
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     com::openjproxy::grpc::SessionTerminationStatus response;
-    const auto status = connection->stub->terminateSession(&context, connection->session, &response);
-    const std::string session_uuid = connection->session.sessionuuid();
-    if (!session_uuid.empty()) {
-        std::lock_guard<std::mutex> lock(session_affinity_mutex);
-        session_affinity.erase(session_uuid);
-    }
+    StatementService::Stub* stub = route_session_rpc(connection);
+    const SessionInfo request_session = connection->session;
+    const auto status = stub->terminateSession(&context, request_session, &response);
     // terminateSession is sent exactly once; the connection is unusable even if it fails.
     connection->connected = false;
     connection->stub.reset();
     connection->channel.reset();
-    connection->active_endpoint.clear();
     connection->savepoints.clear();
     connection->savepoint_names.clear();
+    {
+        std::lock_guard<std::mutex> routing_lock(connection->routing_mutex);
+        connection->session_to_server.clear();
+        connection->affinity_stubs.clear();
+        connection->affinity_channels.clear();
+    }
     connection->auto_commit = true;
     connection->transaction_isolation = 0;
     if (!status.ok()) {

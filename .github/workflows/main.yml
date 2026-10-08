@@ -2280,26 +2280,6 @@ jobs:
           echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
           exit 1
 
-      - name: Start second OJP server for SQL Server multinode tests
-        run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
-          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
-            -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
-            -jar "$jar" > /tmp/ojp-server-2.log 2>&1 &
-          echo "Second OJP server PID=$!"
-
-      - name: Wait for second OJP server to start
-        run: |
-          for i in $(seq 1 30); do
-            if grep -q "OJP gRPC Server started" /tmp/ojp-server-2.log 2>/dev/null; then
-              echo "Second OJP server ready after ${i}s"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Timed out waiting for second OJP server. Log:"; cat /tmp/ojp-server-2.log
-          exit 1
-
       - name: Configure C++ ODBC client
         run: |
           cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
@@ -2498,14 +2478,14 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC SQL Server L1-L6 Integration Tests
+  # JOB 14: C++ ODBC SQL Server L1-L7 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the C++ ODBC PostgreSQL test after the aggregate H2 gate.
   #
   # ===========================================================================
   cpp-odbc-sqlserver-test:
-    name: C++ ODBC SQL Server L1-L6 Tests
+    name: C++ ODBC SQL Server L1-L7 Tests
     runs-on: ubuntu-latest
     needs: [h2-integration-gate]
     permissions:
@@ -2600,6 +2580,26 @@ jobs:
             sleep 1
           done
           echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Start second OJP server for SQL Server multinode tests
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
+            -jar "$jar" > /tmp/ojp-server-2.log 2>&1 &
+          echo "Second OJP server PID=$!"
+
+      - name: Wait for second OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server-2.log 2>/dev/null; then
+              echo "Second OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for second OJP server. Log:"; cat /tmp/ojp-server-2.log
           exit 1
 
       - name: Configure C++ ODBC client

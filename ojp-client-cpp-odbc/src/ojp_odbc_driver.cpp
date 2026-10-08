@@ -1481,6 +1481,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                         parameter_error.native_error);
         }
     }
+    request.mutable_session()->CopyFrom(connection->session);
 
     if (is_query_sql(statement->sql)) {
         std::string result_set_uuid;

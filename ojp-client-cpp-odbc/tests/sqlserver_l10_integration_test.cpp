@@ -328,6 +328,42 @@ void close_connection(SQLHDBC* connection) {
     }
 }
 
+void wait_for_endpoint(SQLHENV environment, const DatabaseConfig& config,
+                       const std::string& endpoint) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    std::string last_error;
+    while (std::chrono::steady_clock::now() < deadline) {
+        SQLHDBC connection = SQL_NULL_HDBC;
+        SQLHSTMT statement = SQL_NULL_HSTMT;
+        try {
+            connection = open_connection(environment, config, endpoint);
+            require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
+                                           reinterpret_cast<SQLHANDLE*>(&statement)),
+                            "SQLAllocHandle(readiness statement)", SQL_HANDLE_DBC, connection);
+            execute_direct(statement, "SELECT 1");
+            require_success(SQLFetch(statement), "SQLFetch(readiness)", SQL_HANDLE_STMT, statement);
+            SQLINTEGER value = 0;
+            SQLLEN value_length = 0;
+            require_success(SQLGetData(statement, 1, SQL_C_SLONG, &value, sizeof(value), &value_length),
+                            "SQLGetData(readiness)", SQL_HANDLE_STMT, statement);
+            if (value != 1) {
+                throw std::runtime_error("SQL Server endpoint readiness query returned an unexpected result");
+            }
+            SQLFreeHandle(SQL_HANDLE_STMT, statement);
+            close_connection(&connection);
+            return;
+        } catch (const std::exception& error) {
+            last_error = error.what();
+            if (statement != SQL_NULL_HSTMT) {
+                SQLFreeHandle(SQL_HANDLE_STMT, statement);
+            }
+            close_connection(&connection);
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+    }
+    throw std::runtime_error("SQL Server L10 endpoint did not become available: " + last_error);
+}
+
 int run_integration_test(int argc, char** argv) {
     if (argc != 6) {
         throw std::runtime_error(
@@ -369,6 +405,7 @@ int run_integration_test(int argc, char** argv) {
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
 
+        wait_for_endpoint(environment, config, endpoints.front());
         failover_connection = open_connection(environment, config,
                                                endpoints[0] + "," + endpoints[1]);
         xa_connection = open_connection(environment, config, endpoints[0], true);

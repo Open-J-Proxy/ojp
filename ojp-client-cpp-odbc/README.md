@@ -306,7 +306,7 @@ enabled, a missing endpoint or unavailable server fails the test instead of
 silently skipping it.
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L5Integration` against the same OJP server. The C++ ODBC SQL Server
+`OjpOdbcH2L6Integration` against the same OJP server. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration`,
 `OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`, and
 `OjpOdbcSqlServerL4Integration`.

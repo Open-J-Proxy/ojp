@@ -1307,10 +1307,18 @@ SavepointAction parse_savepoint_statement(const std::string& sql, std::string* n
     if (command == "SAVEPOINT") {
         action = SavepointAction::SET;
         name_index = 1;
+    } else if (command == "SAVE" && tokens.size() > 1 &&
+               uppercase_ascii(tokens[1]) == "TRANSACTION") {
+        action = SavepointAction::SET;
+        name_index = 2;
     } else if (command == "ROLLBACK" && tokens.size() > 1 &&
                uppercase_ascii(tokens[1]) == "TO") {
         action = SavepointAction::ROLLBACK;
         name_index = tokens.size() > 2 && uppercase_ascii(tokens[2]) == "SAVEPOINT" ? 3 : 2;
+    } else if (command == "ROLLBACK" && tokens.size() > 1 &&
+               uppercase_ascii(tokens[1]) == "TRANSACTION") {
+        action = SavepointAction::ROLLBACK;
+        name_index = 2;
     } else if (command == "RELEASE") {
         action = SavepointAction::RELEASE;
         name_index = tokens.size() > 1 && uppercase_ascii(tokens[1]) == "SAVEPOINT" ? 2 : 1;
@@ -1353,15 +1361,18 @@ SQLRETURN execute_savepoint_statement(StatementHandle* statement, SavepointActio
         if (!SQL_SUCCEEDED(result)) {
             return result;
         }
-        if (response.resourceuuid().empty()) {
+        if (response.values_size() == 0 ||
+            response.values(0).value_case() != ParameterValue::kStringValue ||
+            response.values(0).string_value().empty()) {
             return fail(statement, "OJP did not return a savepoint handle", "HY000");
         }
+        const auto& savepoint_uuid = response.values(0).string_value();
         const auto previous = connection->savepoint_names.find(name);
         if (previous != connection->savepoint_names.end()) {
             connection->savepoints.erase(previous->second);
         }
-        connection->savepoints.insert(response.resourceuuid());
-        connection->savepoint_names[name] = response.resourceuuid();
+        connection->savepoints.insert(savepoint_uuid);
+        connection->savepoint_names[name] = savepoint_uuid;
         statement->row_count = 0;
         return SQL_SUCCESS;
     }
@@ -2124,7 +2135,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(SQLHDBC connection, SQLINTEGER attribute,
     }
     auto* target = static_cast<ConnectionHandle*>(connection);
     clear_diagnostics(target);
-    if (value == nullptr) {
+    if (value == nullptr && attribute != SQL_ATTR_AUTOCOMMIT) {
         return fail(target, "Connection attribute value is required", "HY009");
     }
     std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
@@ -2235,8 +2246,12 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
         return SQL_INVALID_HANDLE;
     }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
     if (info_type == SQL_TXN_CAPABLE) {
-        const SQLUSMALLINT numeric_value = SQL_TC_DML;
+        const SQLUSMALLINT numeric_value =
+            uppercase_ascii(target->url).find("SQLSERVER") != std::string::npos
+                ? SQL_TC_ALL : SQL_TC_DML;
         if (output_length != nullptr) {
             *output_length = static_cast<SQLSMALLINT>(sizeof(numeric_value));
         }
@@ -2244,6 +2259,35 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
             return SQL_SUCCESS;
         }
         std::memcpy(value, &numeric_value, sizeof(numeric_value));
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_DEFAULT_TXN_ISOLATION) {
+        if (value == nullptr) {
+            return SQL_SUCCESS;
+        }
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        SQLULEN isolation = 0;
+        const auto result = get_transaction_isolation(target, target, &isolation);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        const auto isolation_value = static_cast<SQLUINTEGER>(isolation);
+        std::memcpy(value, &isolation_value, sizeof(isolation_value));
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(isolation_value));
+        }
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_TXN_ISOLATION_OPTION) {
+        const SQLUINTEGER isolation_options =
+            SQL_TXN_READ_UNCOMMITTED | SQL_TXN_READ_COMMITTED |
+            SQL_TXN_REPEATABLE_READ | SQL_TXN_SERIALIZABLE;
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(isolation_options));
+        }
+        if (value != nullptr) {
+            std::memcpy(value, &isolation_options, sizeof(isolation_options));
+        }
         return SQL_SUCCESS;
     }
     std::string text;
@@ -2256,8 +2300,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         case SQL_ODBC_VER: text = "03.80"; break;
         case SQL_IDENTIFIER_QUOTE_CHAR: text = "\""; break;
         default:
-            return fail(static_cast<HandleBase*>(connection),
-                        "Requested SQLGetInfo value is not supported", "HYC00");
+            return fail(target, "Requested SQLGetInfo value is not supported", "HYC00");
     }
     if (output_length != nullptr) {
         *output_length = static_cast<SQLSMALLINT>(text.size());
@@ -2377,6 +2420,7 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLALLOCHANDLE, SQL_API_SQLFREEHANDLE, SQL_API_SQLSETENVATTR,
         SQL_API_SQLDRIVERCONNECT, SQL_API_SQLCONNECT, SQL_API_SQLDISCONNECT,
         SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR, SQL_API_SQLENDTRAN,
+        SQL_API_SQLTRANSACT,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,

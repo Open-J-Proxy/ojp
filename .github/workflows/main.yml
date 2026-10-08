@@ -22,7 +22,7 @@
 # 9. multinode-xa-test: Multinode XA integration tests (needs: h2-integration-gate, resolve-version)
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
-# 12. cpp-odbc-test: C++ ODBC H2 L1-L6 tests (runs alongside build-test)
+# 12. cpp-odbc-test: C++ ODBC H2 L1-L7 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
 # 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L5 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
@@ -2215,14 +2215,14 @@ jobs:
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
 
   # ===========================================================================
-  # JOB 11: C++ ODBC H2 L1-L6 Integration Tests
+  # JOB 11: C++ ODBC H2 L1-L7 Integration Tests
   # ===========================================================================
   #
   # This H2-only job runs in parallel with the main H2 build-test job.
   #
   # ===========================================================================
   cpp-odbc-test:
-    name: C++ ODBC H2 L1-L6 Tests
+    name: C++ ODBC H2 L1-L7 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' }}

@@ -141,7 +141,7 @@ void execute_direct(SQLHSTMT statement, const std::string& sql) {
 }
 
 SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
-                        const std::string& endpoints) {
+                        const std::string& endpoints, bool load_aware) {
     SQLHDBC connection = SQL_NULL_HDBC;
     require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment,
                                    reinterpret_cast<SQLHANDLE*>(&connection)),
@@ -150,7 +150,8 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         "DRIVER={OJP};SERVER=" + brace_value(endpoints) +
         ";DATABASE=" + brace_value(config.url) +
         ";UID=" + brace_value(config.user) +
-        ";PWD=;OJP.LOADAWARE.SELECTION.ENABLED=true;";
+        ";PWD=;OJP.LOADAWARE.SELECTION.ENABLED=" +
+        std::string(load_aware ? "true" : "false") + ";";
     require_success(SQLDriverConnect(connection, nullptr,
                                      reinterpret_cast<SQLCHAR*>(
                                          const_cast<char*>(connection_string.c_str())),
@@ -211,7 +212,7 @@ int run_integration_test(int argc, char** argv) {
         require_success(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
-        first_connection = open_connection(environment, config, server_list);
+        first_connection = open_connection(environment, config, server_list, true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, first_connection,
                                        reinterpret_cast<SQLHANDLE*>(&first_statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, first_connection);
@@ -221,7 +222,7 @@ int run_integration_test(int argc, char** argv) {
         execute_direct(first_statement, "INSERT INTO " + table + " VALUES (1, 'first-node')");
         verify_label(first_statement, table, 1, "first-node");
 
-        second_connection = open_connection(environment, config, server_list);
+        second_connection = open_connection(environment, config, server_list, false);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, second_connection,
                                        reinterpret_cast<SQLHANDLE*>(&second_statement)),
                         "SQLAllocHandle(second statement)", SQL_HANDLE_DBC, second_connection);

@@ -2227,10 +2227,10 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             return fail(connection, "Failed to connect to any configured OJP server: " +
                                         failure_message, "08S01");
         }
-        if (!session.connHash().empty()) {
+        if (!session.connhash().empty()) {
             std::lock_guard<std::mutex> lock(runtime.mutex);
-            runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connHash();
-            runtime.details_by_conn_hash[session.connHash()] = details;
+            runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connhash();
+            runtime.details_by_conn_hash[session.connhash()] = details;
         }
     }
     session.set_targetserver(connection->endpoint);

@@ -88,7 +88,9 @@ and recovered endpoints recreate known pools before becoming eligible again.
 Least-connections selection is the default; set
 `OJP.LOADAWARE.SELECTION.ENABLED=false` for round-robin selection. Stateless
 `NOT_FOUND` responses reconnect and retry once; active sessions are never retried
-on another endpoint.
+on another endpoint. Health probes run every 5 seconds by default; configure a
+positive interval in milliseconds with `OJP.HEALTH.CHECK.INTERVAL` in the
+connection string or the `OJP_HEALTH_CHECK_INTERVAL` environment variable.
 
 The SQL Server L2 suite mirrors the types in the JDBC driver's
 `SQLServerMultipleTypesIntegrationTest`:

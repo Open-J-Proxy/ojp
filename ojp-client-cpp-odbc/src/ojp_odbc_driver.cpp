@@ -67,9 +67,12 @@ public:
         if (health_thread_.joinable()) {
             health_thread_.join();
         }
-        for (const auto& entry : endpoints_) {
-            entry.second->channel->Shutdown();
-        }
+    }
+
+    void set_health_check_interval(std::chrono::milliseconds interval) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        health_check_interval_ = interval;
+        condition_.notify_all();
     }
 
     std::shared_ptr<EndpointState> get(const std::string& endpoint) {
@@ -125,6 +128,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         const auto found = endpoints_.find(endpoint);
         if (found != endpoints_.end()) {
+            cluster_health_dirty_ = cluster_health_dirty_ || found->second->healthy;
             found->second->healthy = false;
             found->second->last_failure = std::chrono::steady_clock::now();
             condition_.notify_all();
@@ -161,6 +165,16 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         conn_hash_by_key_[key] = conn_hash;
         connection_details_by_hash_[conn_hash] = details;
+        const bool has_unhealthy_endpoint = std::any_of(
+            details.serverendpoints().begin(), details.serverendpoints().end(),
+            [this](const std::string& endpoint) {
+                const auto found = endpoints_.find(endpoint);
+                return found != endpoints_.end() && !found->second->healthy;
+            });
+        if (has_unhealthy_endpoint) {
+            cluster_health_dirty_ = true;
+            condition_.notify_all();
+        }
     }
 
     std::vector<ConnectionDetails> stored_connection_details() {
@@ -256,8 +270,11 @@ public:
             }
             std::lock_guard<std::mutex> lock(mutex_);
             const auto found = endpoints_.find(endpoint);
-            if (found != endpoints_.end() && (status == "UP" || status == "DOWN")) {
-                found->second->healthy = status == "UP";
+            if (found != endpoints_.end() && status == "DOWN") {
+                if (found->second->healthy) {
+                    cluster_health_dirty_ = true;
+                }
+                found->second->healthy = false;
                 if (!found->second->healthy) {
                     found->second->last_failure = std::chrono::steady_clock::now();
                 }
@@ -280,8 +297,8 @@ public:
     void monitor_endpoints() {
         std::unique_lock<std::mutex> lock(mutex_);
         while (!stopping_) {
-            if (condition_.wait_for(lock, std::chrono::milliseconds(5000),
-                                    [this]() { return stopping_; })) {
+            condition_.wait_for(lock, health_check_interval_);
+            if (stopping_) {
                 break;
             }
             std::vector<std::pair<std::string, std::shared_ptr<EndpointState>>> probes;
@@ -351,8 +368,15 @@ public:
                     }
                 }
             }
-            const std::string health_after = cluster_health(candidates);
-            if (health_before != health_after) {
+            bool publish_health = false;
+            std::string health_after;
+            {
+                std::lock_guard<std::mutex> health_lock(mutex_);
+                health_after = cluster_health_locked(candidates);
+                publish_health = cluster_health_dirty_ || health_before != health_after;
+                cluster_health_dirty_ = false;
+            }
+            if (publish_health) {
                 push_cluster_health(candidates, health_after);
             }
             lock.lock();
@@ -364,6 +388,8 @@ public:
     std::map<std::string, std::shared_ptr<EndpointState>> endpoints_;
     std::thread health_thread_;
     bool stopping_ = false;
+    std::chrono::milliseconds health_check_interval_{5000};
+    bool cluster_health_dirty_ = false;
     std::size_t next_endpoint_ = 0;
     std::map<std::string, std::string> conn_hash_by_key_;
     std::map<std::string, ConnectionDetails> connection_details_by_hash_;
@@ -723,8 +749,6 @@ void update_session(ConnectionHandle* connection, const SessionInfo& response,
             }
         }
         connection->session_to_server[session_uuid] = target;
-        if (request.sessionuuid().empty()) {
-        }
     }
     connection->session.CopyFrom(response);
     if (!response.clusterhealth().empty()) {
@@ -2205,6 +2229,28 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     if (!load_aware_option.empty() &&
         !parse_boolean_option(load_aware_option, &connection->load_aware_selection)) {
         return fail(connection, "OJP.LOADAWARE.SELECTION.ENABLED must be true or false", "IM012");
+    }
+    std::string health_check_interval = find("OJP.HEALTH.CHECK.INTERVAL");
+    const char* health_check_interval_env = std::getenv("OJP_HEALTH_CHECK_INTERVAL");
+    if (health_check_interval_env != nullptr && *health_check_interval_env != '\0') {
+        health_check_interval = health_check_interval_env;
+    }
+    if (!health_check_interval.empty()) {
+        try {
+            std::size_t parsed_length = 0;
+            const long long interval = std::stoll(health_check_interval, &parsed_length);
+            if (parsed_length != health_check_interval.size() || interval <= 0) {
+                return fail(connection,
+                            "OJP health check interval must be a positive number of milliseconds",
+                            "IM012");
+            }
+            endpoint_registry().set_health_check_interval(
+                std::chrono::milliseconds(interval));
+        } catch (const std::exception&) {
+            return fail(connection,
+                        "OJP health check interval must be a positive number of milliseconds",
+                        "IM012");
+        }
     }
     connection->client_uuid = make_client_uuid();
     for (const auto& endpoint : connection->endpoints) {

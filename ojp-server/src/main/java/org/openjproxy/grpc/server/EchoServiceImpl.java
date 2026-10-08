@@ -8,7 +8,10 @@ import org.openjproxy.grpc.EchoServiceGrpc;
 public final class EchoServiceImpl extends EchoServiceGrpc.EchoServiceImplBase {
     @Override
     public void echo(EchoRequest request, StreamObserver<EchoResponse> responseObserver) {
-        responseObserver.onNext(EchoResponse.newBuilder().setMessage(request.getMessage()).build());
+        EchoResponse response = EchoResponse.newBuilder()
+                .setMessage(request.getMessage())
+                .build();
+        responseObserver.onNext(response);
         responseObserver.onCompleted();
     }
 }

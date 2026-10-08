@@ -3,7 +3,7 @@
 This module provides an ANSI ODBC driver for applications that access OJP
 servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
 **L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and
-**L7 for H2 and SQL Server** from the
+**L7-L9 for H2** and **L7-L8 for SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -12,14 +12,14 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L8 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | ANSI ODBC connectivity and CRUD support one or more configured OJP endpoints. H2 and SQL Server include level-specific coverage through L8, with shared endpoint channels, health monitoring, cluster-health propagation, stateless failover, and recovered-node reuse; session-bound requests remain sticky to their assigned server. |
+| Highest implemented level | **L9 for H2; L8 for SQL Server; L1 for PostgreSQL** |
+| Summary | H2 adds XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. |
 
 ### Current test-proven coverage by database
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L8** | L1-L7 suites plus `h2_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, and recovered-node reuse. |
+| **H2** | **L8** | L1-L7 suites plus `h2_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, and recovered-node reuse. The L9 suite is added and will become test-proven after CI passes. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
 | SQL Server | **L8** | L1-L7 suites plus `sqlserver_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, SQL-error classification, and recovered-node reuse. |
 | MySQL | Not established | No database-specific integration suite in this module. |
@@ -160,9 +160,8 @@ intercepted by the client and not forwarded to the database.
 
 Output parameters, wide-character ODBC entry points, complete metadata
 discovery, configurable fetch-size pagination, full L8 recovery/redistribution,
-and client-side throttling are not implemented. The client shares gRPC channels
-across configured endpoints, balances new connections, monitors endpoint health,
-and routes sticky sessions only to their bound target.
+and client-side throttling are not implemented. XA operations use the same
+session-affinity routing and do not retry or reroute after a branch has started.
 
 ## Conformance with `CLIENT_SPEC_AI.md`
 
@@ -174,7 +173,7 @@ Implemented rules:
 | Spec rule | Implementation |
 |---|---|
 | 4.1.1 process-stable UUID v4 `clientUUID` | Generated once per process |
-| 4.2 `ConnectionDetails` | `url`, `user`, `password`, `clientUUID`, `isXA=false` |
+| 4.2 `ConnectionDetails` | Non-XA uses `isXA=false`; `OJP.XA=TRUE` connections use `isXA=true` and always make a connect RPC |
 | 4.3.1–4.3.2 send and replace `SessionInfo` | Sent with every request and replaced from every `executeQuery`, `executeUpdate`, `fetchNextRows`, and `callResource` response |
 | 4.3.4 `terminateSession` exactly once | Sent once by `SQLDisconnect`; the connection is unusable afterwards, even if the call fails |
 | 4.4.1 empty `statementUUID` for new statements | Always sent empty; prepared statements are not reused on the server |
@@ -190,6 +189,7 @@ Implemented rules:
 | L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
 | L6 session affinity | H2 and SQL Server route session-scoped RPCs exclusively to the bound `targetServer`; failures are surfaced without retry or reroute |
 | L7 multinode operations | Shared endpoint channels, least-connections/round-robin selection, health probes and cluster-health propagation, connHash caching, and stateless `NOT_FOUND` reconnect/retry |
+| L9 XA operations | `ojp_odbc_xa.h` exposes all ten XA RPCs; XA connections pin to their selected endpoint, and a failed active XA operation returns `XAER_RMFAIL` without rerouting |
 | Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
 
 In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
@@ -248,7 +248,9 @@ closing brace in a value is escaped by doubling it. `SQLConnect` with a DSN is
 not implemented yet.
 
 ODBC applications use the standard ODBC API; the gRPC protocol bindings are
-internal to the driver. For example, after allocating an environment, connection,
+internal to the driver. XA applications additionally include `ojp_odbc_xa.h`,
+set `OJP.XA=TRUE` in the connection string, and call the exported OJP XA
+functions with an `OjpXid`. For example, after allocating an environment, connection,
 and statement handle, a client can connect and execute SQL like this:
 
 ```cpp
@@ -323,6 +325,11 @@ restarts the first configured OJP server to verify stateless operation failover,
 pool-exhaustion and SQL-error handling, and reuse of the recovered server. Run
 it only with disposable test servers; its PID file must identify the first
 endpoint, and a supervisor must restart that server after it exits.
+The H2 L9 suite uses two OJP servers and a shared file-backed H2 database. It
+covers XA connection mode, resource-manager identity, two-phase commit and
+recovery, rollback, one-phase commit, timeout operations, forget, and
+`XAER_RMFAIL` without rerouting when the server hosting an active XA branch stops.
+The Java reference client has matching H2 XA lifecycle coverage.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -337,6 +344,9 @@ OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
 OJP_TEST_H2_L7=true OJP_TEST_H2_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_H2_L8=true OJP_TEST_H2_L8_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_H2_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_H2_L9=true \
+OJP_TEST_H2_L9_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_H2_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
@@ -360,7 +370,9 @@ The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
 
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L8Integration`; L7 and L8 run against two OJP servers. The C++ ODBC SQL Server
+`OjpOdbcH2L9Integration`; L7-L9 run against two OJP servers. L9 requires its
+second endpoint's PID file and stops that server during the active-XA affinity
+assertion. The C++ ODBC SQL Server
 workflow job runs `OjpOdbcSqlServerL1Integration` through
 `OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
 `OjpOdbcSqlServerL4Integration`, `OjpOdbcSqlServerL5Integration`,

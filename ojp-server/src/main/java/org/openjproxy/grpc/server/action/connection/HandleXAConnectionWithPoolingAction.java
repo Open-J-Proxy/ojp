@@ -402,6 +402,8 @@ public class HandleXAConnectionWithPoolingAction {
             return "com.microsoft.sqlserver.jdbc.SQLServerXADataSource";
         } else if (lowerUrl.contains(":db2:")) {
             return "com.ibm.db2.jcc.DB2XADataSource";
+        } else if (lowerUrl.contains(":h2:")) {
+            return "org.h2.jdbcx.JdbcDataSource";
         } else if (lowerUrl.contains(":mysql:") || lowerUrl.contains(":mariadb:")) {
             return "com.mysql.cj.jdbc.MysqlXADataSource";
         } else {

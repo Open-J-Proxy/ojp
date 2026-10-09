@@ -6,9 +6,9 @@
 # --------
 # This workflow automates the full release cycle for all OJP modules:
 #
-#   1. Validates required secrets are configured
-#   2. Validates Docker Hub credentials (fast-fail before any version changes)
-#   3. Checks out the repository
+#   1. Checks out the repository and verifies branch/tag pushes before release work
+#   2. Validates required secrets are configured
+#   3. Validates Docker Hub credentials (fast-fail before any version changes)
 #   4. Sets up JDK and Maven settings
 #   5. Computes the release version and the next development version
 #      (see VERSION SCHEME below for details)
@@ -122,7 +122,52 @@ jobs:
     steps:
 
       # -----------------------------------------------------------------------
-      # 1. Validate required secrets (fast-fail before any version changes)
+      # 1. Checkout and Git write preflight (before setup or publishing)
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # A PAT with 'repo' AND 'workflow' scope is required: 'repo' to push
+          # version-bump commits back to main, and 'workflow' because the release
+          # process updates the docker image tag in .github/workflows/main.yml.
+          # GITHUB_TOKEN cannot push workflow file changes.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Verify Git push access
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "branch" ]]; then
+            echo "::error::Releases must run from a branch, not a tag."
+            exit 1
+          fi
+
+          PREFLIGHT_TAG="v0.0.0-release-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # A no-op or --dry-run push does not exercise server-side write rules.
+          git commit --allow-empty -m "chore(release): verify Git push access [skip ci]"
+          git tag -a "${PREFLIGHT_TAG}" -m "Temporary release push preflight"
+          if ! git push --atomic origin \
+              "HEAD:refs/heads/${GITHUB_REF_NAME}" \
+              "refs/tags/${PREFLIGHT_TAG}:refs/tags/${PREFLIGHT_TAG}"; then
+            echo "::error::Git push preflight failed. Check RELEASE_TOKEN permissions and branch/tag rulesets. Nothing will be published."
+            exit 1
+          fi
+          # Keep the empty branch commit; never force-push a protected branch.
+          if ! git push origin --delete "${PREFLIGHT_TAG}"; then
+            echo "::error::Cannot remove temporary tag ${PREFLIGHT_TAG}. Remove it manually and allow tag deletion for the release token. Nothing will be published."
+            exit 1
+          fi
+          git tag -d "${PREFLIGHT_TAG}"
+          echo "Branch and tag pushes verified successfully."
+
+      # -----------------------------------------------------------------------
+      # 2. Validate required secrets (fast-fail before any version changes)
       # -----------------------------------------------------------------------
       - name: Validate required secrets
         if: ${{ inputs.dry_run == false }}
@@ -144,7 +189,7 @@ jobs:
           echo "All required secrets are present."
 
       # -----------------------------------------------------------------------
-      # 2. Validate Docker Hub credentials (fast-fail before any version changes)
+      # 3. Validate Docker Hub credentials (fast-fail before any version changes)
       # -----------------------------------------------------------------------
       - name: Validate Docker Hub credentials
         if: ${{ inputs.dry_run == false }}
@@ -154,19 +199,6 @@ jobs:
             --password-stdin
           docker logout
           echo "Docker Hub credentials verified successfully."
-
-      # -----------------------------------------------------------------------
-      # 3. Checkout
-      # -----------------------------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          # A PAT with 'repo' AND 'workflow' scope is required: 'repo' to push
-          # version-bump commits back to main, and 'workflow' because the release
-          # process updates the docker image tag in .github/workflows/main.yml.
-          # GITHUB_TOKEN cannot push workflow file changes.
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
 
       # -----------------------------------------------------------------------
       # 4. Java + Maven settings (server credentials + GPG key import)
@@ -187,11 +219,6 @@ jobs:
 
       - name: Show Maven version
         run: ./mvnw --version
-
-      - name: Configure Git identity
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       # -----------------------------------------------------------------------
       # 5. Compute release and next-development versions
@@ -441,8 +468,9 @@ jobs:
       - name: Push commits and tag
         if: ${{ inputs.dry_run == false }}
         run: |
-          git push origin HEAD:${{ steps.versions.outputs.branch }}
-          git push origin "v${{ steps.versions.outputs.release }}"
+          git push --atomic origin \
+            "HEAD:refs/heads/${{ steps.versions.outputs.branch }}" \
+            "refs/tags/v${{ steps.versions.outputs.release }}:refs/tags/v${{ steps.versions.outputs.release }}"
 
       # -----------------------------------------------------------------------
       # 14. Create GitHub Release from the new tag

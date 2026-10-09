@@ -152,7 +152,8 @@ jobs:
           # A no-op or --dry-run push does not exercise server-side write rules.
           git commit --allow-empty -m "chore(release): verify Git push access [skip ci]"
           git tag -a "${PREFLIGHT_TAG}" -m "Temporary release push preflight"
-          if ! git push --atomic origin \
+          if ! GIT_TRACE=1 GIT_TRACE_PACKET=1 \
+              git push --verbose --atomic origin \
               "HEAD:refs/heads/${GITHUB_REF_NAME}" \
               "refs/tags/${PREFLIGHT_TAG}:refs/tags/${PREFLIGHT_TAG}"; then
             echo "::error::Git push preflight failed. Check RELEASE_TOKEN permissions and branch/tag rulesets. Nothing will be published."
@@ -468,7 +469,8 @@ jobs:
       - name: Push commits and tag
         if: ${{ inputs.dry_run == false }}
         run: |
-          git push --atomic origin \
+          GIT_TRACE=1 GIT_TRACE_PACKET=1 \
+          git push --verbose --atomic origin \
             "HEAD:refs/heads/${{ steps.versions.outputs.branch }}" \
             "refs/tags/v${{ steps.versions.outputs.release }}:refs/tags/v${{ steps.versions.outputs.release }}"
 

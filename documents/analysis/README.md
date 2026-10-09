@@ -39,6 +39,19 @@ This directory contains technical analysis documents for various OJP features an
 
 ---
 
+### 🆕 Slow Query Segregation Per Datasource/Pool
+
+**Question:** Is Slow Query Segregation currently configurable per datasource, and what would be required to support it?
+
+**Quick Answer:** Enablement and tuning are server-wide today, but each connection hash already has an isolated admission/SQS manager and query-performance monitor. Add client-supplied SQS connection properties, resolve them before manager creation, and retain global settings as compatibility fallbacks.
+
+**Document:** [SLOW_QUERY_SEGREGATION_PER_DATASOURCE_ANALYSIS.md](./SLOW_QUERY_SEGREGATION_PER_DATASOURCE_ANALYSIS.md)
+  - Current configuration scope versus per-pool runtime isolation
+  - Client connection-property model and precedence
+  - Compatibility, lifecycle, observability, and validation considerations
+
+---
+
 ### 🆕 Generic OJP Messaging Protocol (server-to-server and server-to-client)
 
 **Question:** How should OJP servers exchange messages with each other (e.g.

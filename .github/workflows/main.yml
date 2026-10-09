@@ -24,7 +24,7 @@
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L9 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1 test (needs: h2-integration-gate)
-# 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L6 tests (needs: h2-integration-gate)
+# 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L10 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
 # SEQUENTIAL EXECUTION:
@@ -2525,7 +2525,7 @@ jobs:
   #
   # ===========================================================================
   cpp-odbc-sqlserver-test:
-    name: C++ ODBC SQL Server L1-L9 Tests
+    name: C++ ODBC SQL Server L1-L10 Tests
     runs-on: ubuntu-latest
     needs: [h2-integration-gate]
     permissions:
@@ -2668,7 +2668,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC SQL Server L1 through L9 tests
+      - name: Run C++ ODBC SQL Server L1 through L10 tests
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
@@ -2679,11 +2679,14 @@ jobs:
           OJP_TEST_SQLSERVER_L9: 'true'
           OJP_TEST_SQLSERVER_L9_ADDRS: 'localhost:1060,localhost:1059'
           OJP_TEST_SQLSERVER_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
+          OJP_TEST_SQLSERVER_L10: 'true'
+          OJP_TEST_SQLSERVER_L10_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_SQLSERVER_L10_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServerL[1-9]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l9-test.log
+            -R '^OjpOdbcSqlServerL([1-9]|10)Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l10-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2701,9 +2704,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-sqlserver-l1-l9-test-results
+          name: cpp-odbc-sqlserver-l1-l10-test-results
           path: |
-            /tmp/cpp-odbc-sqlserver-l1-l9-test.log
+            /tmp/cpp-odbc-sqlserver-l1-l10-test.log
             /tmp/ojp-server.log
             /tmp/ojp-server-2.log
           retention-days: 7

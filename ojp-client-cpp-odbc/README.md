@@ -3,7 +3,7 @@
 This module provides an ANSI ODBC driver for applications that access OJP
 servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
 **L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and
-**L7-L9 for H2 and SQL Server** from the
+**L7-L9 for H2** and **L7-L10 for SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
@@ -12,8 +12,8 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L9 for H2 and SQL Server; L1 for PostgreSQL** |
-| Summary | H2 and SQL Server add XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. |
+| Highest implemented level | **L9 for H2; L10 for SQL Server; L1 for PostgreSQL** |
+| Summary | H2 and SQL Server add XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse. |
 
 ### Current test-proven coverage by database
 
@@ -21,7 +21,7 @@ communicates with the server over gRPC.
 |---|---:|---|
 | **H2** | **L8** | L1-L7 suites plus `h2_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, and recovered-node reuse. The L9 suite is added and will become test-proven after CI passes. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L8** | L1-L8 suites cover failover/recovery; `sqlserver_l9_integration_test.cpp` adds SQL Server XA lifecycle and affinity coverage, pending a successful run. |
+| SQL Server | **L8** | L1-L8 suites cover failover/recovery; the L9 XA suite and L10 multinode/XA suite are implemented and require passing CI runs before raising achieved coverage. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |
@@ -587,6 +587,10 @@ recovery, rollback, one-phase commit, timeout operations, forget, and
 The SQL Server L9 suite follows the Java SQL Server XA reference coverage and
 also verifies recovery, resource-manager identity, forget, and
 `XAER_RMFAIL` without rerouting when the server hosting an active XA branch stops.
+The L10 suite combines the L9 XA lifecycle with a multinode CRUD failover,
+surviving-node availability, SQL error classification, and reuse of the restarted
+OJP node. SQL Server L10 is a client target; the Java reference-client matrix
+currently records SQL Server at L9.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -612,6 +616,9 @@ OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER_L9=true \
 OJP_TEST_SQLSERVER_L9_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_SQLSERVER_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_SQLSERVER_L10=true \
+OJP_TEST_SQLSERVER_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_SQLSERVER_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
   ctest --test-dir ojp-client-cpp-odbc/build --output-on-failure
 ```
 
@@ -637,7 +644,8 @@ workflow job runs `OjpOdbcSqlServerL1Integration` through
 `OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
 `OjpOdbcSqlServerL4Integration`, `OjpOdbcSqlServerL5Integration`,
 `OjpOdbcSqlServerL6Integration`, `OjpOdbcSqlServerL7Integration`, and
-`OjpOdbcSqlServerL8Integration`, and `OjpOdbcSqlServerL9Integration`; L7-L9 use
-two OJP server processes. L8 and L9 stop the first endpoint and rely on the
-workflow supervisor to restart it. L9 verifies that active XA work does not
-fail over to the other endpoint.
+`OjpOdbcSqlServerL8Integration`, `OjpOdbcSqlServerL9Integration`, and
+`OjpOdbcSqlServerL10Integration`; L7-L10 use two OJP server processes. L8-L10
+stop the first endpoint and rely on the workflow supervisor to restart it. L9
+and L10 verify that active XA work does not fail over to the other endpoint;
+L10 also exercises stateless failover and recovered-node reuse in the same suite.

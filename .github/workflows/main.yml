@@ -176,7 +176,10 @@ jobs:
 
       - name: Build OJP Server Docker image
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
+          # Avoid Docker Hub's anonymous pull limit across parallel matrix jobs.
+          docker build \
+            --build-arg BASE_IMAGE_REGISTRY=public.ecr.aws/docker/library \
+            -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
           echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
 
       - name: Start OJP Server container

@@ -104,6 +104,82 @@ Application-side connection pools should not be used with OJP. This client uses 
 
 The client supports one endpoint and forward-only, fully buffered results. Named parameters, transactions, LOBs, metadata, generated keys, multinode routing/failover, and advanced PDO options are not implemented. L1 is not a claim of full PDO driver compatibility.
 
+## Experimental ODBC alternative: `PDO_ODBC`
+
+The native client is a userland PDO subclass with H2 L1 coverage, not a complete
+PDO driver. PHP's standard `PDO_ODBC` extension offers a different route:
+`new PDO('odbc:...')` → OJP C++ ODBC driver → OJP server. This is a bridge
+candidate requiring conformance testing, not verified OJP/PDO_ODBC support.
+It does not use `OjpPDO` or this module's gRPC bindings.
+
+A successful Linux driver build/install does not verify this bridge.
+Windows and macOS driver builds and these wrapper integrations remain untested.
+
+Build and register the driver as `OJP`; see
+[build requirements and registration](../ojp-client-cpp-odbc/README.md#build-requirements).
+Your PHP runtime needs `PDO_ODBC` and a matching-architecture ODBC driver
+manager/driver. Start OJP using Java 25 and UTC with its H2 JDBC driver available.
+Disable driver-manager pooling before connections, leave PDO persistent
+connections disabled, and do not add framework pooling.
+
+The full DSN-less ODBC string is:
+
+```text
+DRIVER={OJP};SERVER=localhost:1059;DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};UID={environment-user};PWD=;
+```
+
+`SERVER` targets OJP, `DATABASE` is the backend JDBC URL, and `UID`/`PWD`
+are database credentials. The template shows an empty password; the example
+below reads both credentials from the environment.
+`ENDPOINT`, `URL`, and `USER` are accepted aliases
+for `SERVER`, `DATABASE`, and `UID`; `DRIVER` is resolved by the driver manager.
+Brace values containing semicolons and escape `}` as `}}`. Do not substitute
+a DSN-only string: `SQLConnect` is unsupported; this route requires
+`SQLDriverConnect` with the endpoint and JDBC URL supplied.
+
+**Compatibility limits:** OJP's driver is ANSI-only, without `W` exports.
+Choose an ANSI-capable PDO_ODBC/driver-manager build and validate character
+encoding. `SQLGetInfo` is limited; `SQLGetStmtAttr`, `SQLMoreResults`,
+`SQLColAttribute`, `SQLTables`, and `SQLColumns` are absent. PDO_ODBC may
+require these during connection or statement handling, even without explicit
+metadata calls. The following is illustrative runnable PHP API usage, not
+evidence that the bridge currently passes:
+
+```php
+<?php
+function requiredEnv(string $name): string {
+    $value = getenv($name);
+    if ($value === false) {
+        throw new RuntimeException("Set $name");
+    }
+    return $value;
+}
+function brace(string $value): string {
+    return '{' . str_replace('}', '}}', $value) . '}';
+}
+
+$text = 'DRIVER={OJP};SERVER=localhost:1059;'
+    . 'DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};'
+    . 'UID=' . brace(requiredEnv('DB_USER')) . ';'
+    . 'PWD=' . brace(requiredEnv('DB_PASSWORD')) . ';';
+$pdo = new PDO('odbc:' . $text, null, null, [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_PERSISTENT => false,
+]);
+try {
+    $statement = $pdo->query('SELECT 1');
+    echo $statement->fetchColumn(), PHP_EOL;
+    $statement = null;
+} finally {
+    $pdo = null;
+}
+```
+
+Set `DB_USER` and `DB_PASSWORD` in the environment; an empty password is allowed
+for a suitably configured H2. Do not log the connection string. ODBC does not
+secure the driver's gRPC transport; use a trusted/private network or externally
+secured boundary. ODBC implementation levels do not prove wrapper compatibility.
+
 ## Unit Tests
 
 Install dependencies first, then run:

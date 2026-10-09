@@ -68,8 +68,16 @@ target_link_libraries(ojp_odbc PRIVATE
     protobuf::libprotobuf)
 set_target_properties(ojp_odbc PROPERTIES
     OUTPUT_NAME "ojp_odbc"
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
     CXX_VISIBILITY_PRESET default
     VISIBILITY_INLINES_HIDDEN YES)
+
+include(GNUInstallDirs)
+install(TARGETS ojp_odbc
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+install(FILES include/ojp_odbc_xa.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
 include(CTest)
 if(BUILD_TESTING)

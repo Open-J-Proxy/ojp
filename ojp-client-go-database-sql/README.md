@@ -135,6 +135,114 @@ The data source name (DSN) is a CSV record containing the OJP JDBC URL, database
 
 `database/sql` is the only supported Go database access API. The generated protocol bindings remain internal implementation details.
 
+## Experimental ODBC alternative: third-party `database/sql` adapter
+
+The native driver above is a single-endpoint L1 implementation with H2 coverage,
+not full database or OJP-level coverage. Go's `database/sql` has **no built-in
+ODBC driver**. A third-party adapter, for example
+[`github.com/alexbrainman/odbc`](https://github.com/alexbrainman/odbc), can
+provide the conceptual route `database/sql` → ODBC → OJP C++ driver → OJP server.
+It is not a dependency of this module, nor a verified OJP integration.
+
+A successful Linux driver build/install does not verify this bridge.
+Windows and macOS driver builds and these wrapper integrations remain untested.
+
+That adapter uses Windows ODBC DLLs on Windows and cgo/unixODBC elsewhere.
+It therefore requires a supported native platform, driver manager, matching
+driver architecture, and (on Unix) a C toolchain and unixODBC development
+libraries. Do not assume pure-Go, cross-compilation, mobile, or browser support.
+Build and register the OJP driver as `OJP`; see
+[build requirements and registration](../ojp-client-cpp-odbc/README.md#build-requirements).
+Start the server using Java 25 and UTC with its H2 JDBC driver available.
+
+Use the full DSN-less string:
+
+```text
+DRIVER={OJP};SERVER=localhost:1059;DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};UID={environment-user};PWD=;
+```
+
+`SERVER` is the OJP endpoint, `DATABASE` the backend JDBC URL, and `UID`/`PWD`
+the database credentials. The template shows an empty password; the example
+below reads both credentials from the environment.
+`ENDPOINT`, `URL`, and `USER` are accepted aliases
+for `SERVER`, `DATABASE`, and `UID`. The driver manager resolves `DRIVER`.
+Braces preserve JDBC semicolons; escape literal `}` as `}}`.
+`SQLConnect` and DSN-only connections are unsupported: the adapter must use
+`SQLDriverConnect` and supply the endpoint and URL.
+
+**Compatibility blockers:** the OJP driver is ANSI-only, with no `W` exports.
+The example adapter uses Unicode calls, including `SQLDriverConnectW`.
+Driver-manager translation cannot be assumed to resolve that incompatibility.
+`SQLGetInfo` is limited and `SQLGetStmtAttr`, `SQLMoreResults`,
+`SQLColAttribute`, `SQLTables`, and `SQLColumns` are absent. Adapters may need
+these even for ordinary queries. These are experimental bridge candidates
+requiring conformance testing, not working alternatives promised today;
+ODBC implementation levels do not prove adapter compatibility.
+
+For an application that already has the adapter installed, this complete
+program illustrates standard API usage **after** compatibility is resolved:
+
+```go
+package main
+
+import (
+    "context"
+    "database/sql"
+    "fmt"
+    "log"
+    "os"
+    "strings"
+    "time"
+
+    _ "github.com/alexbrainman/odbc"
+)
+
+func requiredEnv(name string) string {
+    value, ok := os.LookupEnv(name)
+    if !ok {
+        log.Fatalf("Set %s", name)
+    }
+    return value
+}
+
+func brace(value string) string {
+    return "{" + strings.ReplaceAll(value, "}", "}}") + "}"
+}
+
+func field(key, value string) string {
+    return key + "=" + brace(value) + ";"
+}
+
+func main() {
+    text := "DRIVER={OJP};SERVER=localhost:1059;" +
+        "DATABASE={jdbc:h2:mem:sample;DB_CLOSE_DELAY=-1};" +
+        field("UID", requiredEnv("DB_USER")) +
+        field("PWD", requiredEnv("DB_PASSWORD"))
+    db, err := sql.Open("odbc", text)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+    db.SetMaxIdleConns(0)
+    db.SetMaxOpenConns(1)
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    var result int
+    if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&result); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(result)
+}
+```
+
+Set `DB_USER` and `DB_PASSWORD` in the environment; an empty password is allowed
+for a suitably configured H2. `database/sql` always manages connections;
+`SetMaxIdleConns(0)` disables retained idle connections, not that lifecycle,
+and `SetMaxOpenConns(1)` limits concurrency. Disable driver-manager pooling
+before connections and do not layer another application/framework pool on top.
+Do not log the credential-bearing string. ODBC does not add gRPC encryption;
+use a trusted/private network or an externally secured boundary.
+
 ## Run the Client
 
 The module path is `github.com/open-j-proxy/ojp-client-go-database-sql`; run commands from the `ojp-client-go-database-sql` directory:

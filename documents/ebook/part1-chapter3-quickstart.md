@@ -1,6 +1,6 @@
 # Chapter 3: Quick Start Guide
 
-> **Chapter Overview**: Get OJP up and running in under 5 minutes. This chapter provides step-by-step instructions for installing OJP Server, adding the JDBC driver to your project, and executing your first query through OJP.
+> **Chapter Overview**: Start the OJP server, connect with the Java JDBC driver, or try the basic non-Java clients. The Java walkthrough is the main path; the client examples below describe current implementation and test boundaries, not feature parity.
 
 ---
 
@@ -527,6 +527,196 @@ ojp_connection_pool_active{database="h2"} 0
 
 ---
 
+## 3.3.1 Basic Non-Java Clients
+
+The same server serves all clients. First deploy it as described above, supply the H2 JDBC driver, and run it on Java 25 with `-Duser.timezone=UTC`. The examples use one server at `localhost:1059` and the backend URL `jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1`. Set `DB_USER` and `DB_PASSWORD` in the application environment (for a default local H2 database, `DB_USER=sa` and an empty password). No Java runtime is needed on the non-Java client machine.
+
+Use the module READMEs linked below for installation, supported types, CRUD examples, and opt-in real-server tests. These examples assume each module and its existing dependencies are available; they are not package-publication or production-readiness claims. Native client transports currently use plaintext gRPC: keep trials on a trusted private/local network or use an externally secured transport. Disable application-side pooling and leave the SQL enhancer disabled.
+
+### Native client maturity
+
+Implementation, an integration suite existing, and that suite passing CI are different claims. This snapshot follows each module README; the [level specification](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) defines the common scale. No broader database coverage is established for the six native clients.
+
+| Client | Current implementation | Reported evidence and important boundaries |
+|---|---|---|
+| [Java JDBC](../../ojp-jdbc-driver/README.md) | Reference JDBC driver; broad types, transactions, LOBs, multinode, and XA | Database-specific levels: H2 L8 (new XA suite pending), PostgreSQL L10, MySQL L8, MariaDB L6, Oracle/SQL Server L9, DB2/CockroachDB L8. See the reference matrix, not an across-all-databases L10 claim. |
+| [.NET ADO.NET](../../ojp-client-dotnet-ado-net/README.md) | L1: `OjpConnection`, commands, positional parameters, buffered forward-only reader | H2 opt-in suite exists; not yet CI-confirmed. One endpoint; no transactions, pagination, LOBs, or metadata discovery. |
+| [Python DB-API 2.0](../../ojp-client-python-dbapi/README.rst) | H2 L1; qmark parameters, buffered results, DB-API exceptions, basic manual transactions | H2 integration coverage includes transaction visibility and complete multi-block results. Basic transactions/scalar metadata do not establish L4. No failover, savepoints, or LOB hydration. |
+| [Go `database/sql`](../../ojp-client-go-database-sql/README.md) | L1 public registered `ojp` driver; positional parameters and basic `BeginTx`/commit/rollback | H2 L1 suite passes locally; CI confirmation pending. One endpoint; non-default isolation/read-only transaction options are rejected. |
+| [PHP PDO-compatible](../../ojp-client-php-pdo/README.md) | L1 through userland `OjpPDO`, not a native PDO driver | H2 L1 suite passes in CI. Instantiate `OjpPDO`, not `new PDO('ojp:...')`. Buffered results; no transactions, named parameters, or LOBs. |
+| [Ruby DBI](../../ojp-client-ruby-dbi/README.md) | L1 DBI driver, positional parameters, basic CRUD | H2 L1 coverage is reported; CI confirmation pending. No Active Record adapter, transactions, pagination, or multinode failover. |
+| [Dart Drift](../../ojp-client-dart-drift/README.md) | L1 public connection and `OjpDriftExecutor` | H2 L1 integration coverage reported. Transactions throw `UnsupportedError`; `runInsert` returns `0`, not a generated ID. Initial query stream only; no cursor pagination. Backend SQL must not assume SQLite compatibility. |
+| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2 through L9; SQL Server through L10; PostgreSQL L1 | H2 L1-L9 and SQL Server L1-L10 integration suites passed. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
+
+### .NET: a native ADO.NET connection
+
+```csharp
+using System;
+using Ojp.Client;
+
+var builder = new OjpConnectionStringBuilder {
+    OjpUrl = "jdbc:ojp[localhost:1059]_h2:mem:ebook;DB_CLOSE_DELAY=-1",
+    UserID = Environment.GetEnvironmentVariable("DB_USER"),
+    Password = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? ""
+};
+using var connection = new OjpConnection(builder.ConnectionString);
+connection.Open();
+using var command = connection.CreateCommand();
+command.CommandText = "SELECT 1 AS id";
+using var reader = command.ExecuteReader();
+while (reader.Read()) {
+    Console.WriteLine(reader.GetInt32(0));
+}
+```
+
+### Python: the native DB-API client, not pyodbc
+
+```python
+import os
+import ojp
+
+with ojp.connect(
+    "jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1",
+    os.environ["DB_USER"], os.environ.get("DB_PASSWORD", ""),
+    endpoint="localhost:1059",
+) as connection:
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT CAST(? AS INTEGER) AS id", (1,))
+        print(cursor.fetchall())
+```
+
+Manual transactions are the default. The connection context commits on success, rolls back on failure, and closes. Results are buffered; do not use this L1 path for unbounded datasets.
+
+### Go: the current public `database/sql` driver
+
+```go
+package main
+
+import (
+    "bytes"
+    "context"
+    "database/sql"
+    "encoding/csv"
+    "fmt"
+    "os"
+    "time"
+
+    ojpclient "github.com/open-j-proxy/ojp-client-go-database-sql/client"
+)
+
+func main() {
+    if err := query(); err != nil {
+        panic(err)
+    }
+}
+
+func query() error {
+    var dsn bytes.Buffer
+    writer := csv.NewWriter(&dsn)
+    if err := writer.Write([]string{
+        "jdbc:ojp[localhost:1059]_jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1",
+        os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"),
+    }); err != nil {
+        return err
+    }
+    writer.Flush()
+    if err := writer.Error(); err != nil {
+        return err
+    }
+    db, err := sql.Open(ojpclient.DriverName, dsn.String())
+    if err != nil {
+        return err
+    }
+    defer db.Close()
+    db.SetMaxIdleConns(0) // Do not retain idle application-side sessions.
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    var id int64
+    if err := db.QueryRowContext(ctx, "SELECT 1 AS id").Scan(&id); err != nil {
+        return err
+    }
+    fmt.Println(id)
+    return nil
+}
+```
+
+Importing `client` registers the driver. Its DSN is one CSV record with exactly three fields; use `encoding/csv` for credentials containing commas. `database/sql` inherently manages connection lifecycle: `SetMaxIdleConns(0)` disables idle retention, not that abstraction itself. Do not wrap it in another pool. If using `db.Conn(ctx)` for a transaction or session-scoped work, close that connection explicitly.
+
+### PHP: instantiate the native userland provider
+
+```php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+$connection = new \OpenJProxy\PDO\OjpPDO(
+    'ojp:host=localhost;port=1059;url=jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1',
+    getenv('DB_USER'),
+    (string) getenv('DB_PASSWORD')
+);
+try {
+    $query = $connection->prepare('SELECT 1 AS id');
+    $query->execute();
+    print_r($query->fetch(\PDO::FETCH_ASSOC));
+} finally {
+    $connection->close();
+}
+```
+
+### Ruby: use DBI, not an Active Record adapter
+
+```ruby
+require "csv"
+require "dbi"
+require "dbd/Ojp"
+
+dsn = CSV.generate_line([
+  "localhost:1059", "jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1"
+]).strip
+DBI.connect("DBI:Ojp:#{dsn}", ENV.fetch("DB_USER"), ENV.fetch("DB_PASSWORD", "")) do |db|
+  db.execute("SELECT 1 AS id") do |statement|
+    p statement.fetch.to_a
+  end
+end
+```
+
+### Dart: use the native Drift executor
+
+```dart
+import 'dart:io';
+import 'package:ojp_client_dart_drift/ojp_client_dart_drift.dart';
+
+Future<void> main() async {
+  final connection = await OjpConnection.connect(
+    endpoint: 'localhost:1059',
+    jdbcUrl: 'jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1',
+    username: Platform.environment['DB_USER']!,
+    password: Platform.environment['DB_PASSWORD'] ?? '',
+  );
+  final executor = OjpDriftExecutor(connection);
+  try {
+    print(await executor.runSelect('SELECT 1 AS id', []));
+  } finally {
+    await executor.close();
+  }
+}
+```
+
+This is a native gRPC executor, not an ODBC executor. Drift-generated SQL, migrations, and transaction use require separate compatibility assessment for the chosen backend.
+
+### C++: the ANSI ODBC driver and its levels
+
+Build and register the driver as `OJP` using the [OS-specific instructions](../../ojp-client-cpp-odbc/README.md#build-requirements). Match the application and driver bitness and disable application-side pooling.
+
+Use `SQLDriverConnect`, not DSN-only `SQLConnect`, with:
+
+```text
+DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};UID={sa};PWD=;
+```
+
+`SERVER` is the OJP endpoint; `DATABASE` is the backend JDBC URL. This example uses local H2 credentials; supply real credentials securely at runtime. Follow the [complete C++ query example](../../ojp-client-cpp-odbc/README.md#using-from-a-c-odbc-application) to execute `SELECT 1` and close the handles.
+
+See [client implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md#4-non-java-client-test-proven-coverage) for tested capabilities and [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) for experimental language bridges. C++ test results do not establish wrapper or operating-system compatibility.
+
 ## 3.4 Common Gotchas
 
 **[IMAGE PROMPT 8]**: Create a troubleshooting flowchart or FAQ-style infographic:
@@ -760,6 +950,8 @@ public class TestConnection {
 You now have OJP up and running! You've successfully installed OJP Server using Docker, JAR, or built from source. The JDBC driver is now part of your project dependencies. You've updated your JDBC URL with the OJP prefix format and executed your first query through the proxy. Most importantly, you understand the common gotchas and how to avoid them, particularly around double-pooling.
 
 The key takeaways are straightforward. OJP requires only one change to your existing code: the JDBC URL format. Remember to disable application-level connection pooling to avoid resource waste. You can run OJP Server via Docker for the easiest setup, or use the standalone JAR when needed. Best of all, the driver is a standard JDBC implementation, so there's no special API to learn.
+
+Non-Java applications can evaluate the native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs, or the more advanced C++ ANSI ODBC driver. Choose using each client's individual test evidence and limitations, not assumed JDBC parity. Standard ODBC wrappers and FireDAC remain experimental, unverified integration paths.
 
 In the next chapter, we'll explore Kubernetes deployment with Helm charts for cloud-native environments.
 

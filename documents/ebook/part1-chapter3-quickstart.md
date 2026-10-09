@@ -555,7 +555,7 @@ using System;
 using Ojp.Client;
 
 var builder = new OjpConnectionStringBuilder {
-    OjpUrl = "jdbc:ojp[localhost:1059]_jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1",
+    OjpUrl = "jdbc:ojp[localhost:1059]_h2:mem:ebook;DB_CLOSE_DELAY=-1",
     UserID = Environment.GetEnvironmentVariable("DB_USER"),
     Password = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? ""
 };
@@ -705,11 +705,7 @@ This is a native gRPC executor, not an ODBC executor. Drift-generated SQL, migra
 
 ### C++: the ANSI ODBC driver and its levels
 
-Follow the [C++ build requirements](../../ojp-client-cpp-odbc/README.md#build-requirements) and register the built driver as `OJP` with your platform's Driver Manager. There are no published prebuilt binaries yet. Application and driver bitness must match.
-
-The README's CMake/Ninja `release` preset builds the driver with integration tests disabled; installation is optional and its prefix is user-chosen. Linux Release build/install has been verified, but Windows and macOS remain untested. Neither a portable preset nor Windows automatic symbol export establishes platform runtime or wrapper compatibility. Consult the [ODBC compatibility table](../../ojp-client-cpp-odbc/README.md#using-other-languages-through-odbc) before trying an experimental bridge.
-
-The H2 L1-L9 and SQL Server L1-L10 integration suites have passed. These results validate the C++ ODBC path, not compatibility with every language wrapper or operating system.
+Build and register the driver as `OJP` using the [OS-specific instructions](../../ojp-client-cpp-odbc/README.md#build-requirements). Match the application and driver bitness and disable application-side pooling.
 
 Use `SQLDriverConnect`, not DSN-only `SQLConnect`, with:
 
@@ -717,22 +713,9 @@ Use `SQLDriverConnect`, not DSN-only `SQLConnect`, with:
 DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};UID={sa};PWD=;
 ```
 
-`SERVER` is the OJP endpoint, not the database host. `DATABASE` is the complete backend JDBC URL. This template uses the default local H2 user and an empty password. In applications, populate `UID` and `PWD` from `DB_USER` and `DB_PASSWORD` at runtime, bracing both values. ODBC braces preserve semicolons; double a literal closing brace inside a value. The [C++ usage example](../../ojp-client-cpp-odbc/README.md#using-from-a-c-odbc-application) shows `SQLExecDirect`, `SQLFetch`, and `SQLGetData`; check every return code, inspect `SQLGetDiagRec`, and free statement/connection/environment handles on every path.
+`SERVER` is the OJP endpoint; `DATABASE` is the backend JDBC URL. This example uses local H2 credentials; supply real credentials securely at runtime. Follow the [complete C++ query example](../../ojp-client-cpp-odbc/README.md#using-from-a-c-odbc-application) to execute `SELECT 1` and close the handles.
 
-| Level | Current C++ implementation and test boundary |
-|---|---|
-| L1 | ANSI connection, CRUD, scalar values, input parameters, diagnostics, close; H2, PostgreSQL, SQL Server coverage. |
-| L2 | H2/SQL Server typed binding and basic result-column metadata. Generated identities are read using backend SQL, not JDBC `getGeneratedKeys`; Java arrays/types are not equivalent ODBC features. |
-| L3 | Consume complete query streams, close result resources, and use `fetchNextRows` for row-by-row results. No configurable fetch-size pagination; rows are eagerly read. |
-| L4 | H2/SQL Server local commit/rollback, autocommit, isolation, and intercepted savepoint SQL mapped to OJP resource calls. |
-| L5 | Chunked LOB upload/read; H2 BLOB/CLOB and SQL Server binary LOB coverage differ. PostgreSQL L5 is not established. |
-| L6 | H2/SQL Server session affinity, temporary-table state, and no rerouting of active session work. |
-| L7 | H2/SQL Server endpoint selection, health checks, shared channels, pool cache, reconnect, and multinode CRUD. |
-| L8 | H2/SQL Server current stateless failover/recovery, recovered-node reuse, and pool-exhaustion safety tested; full recovery/redistribution and client-side throttling remain incomplete. |
-| L9 | H2/SQL Server XA tested through `ojp_odbc_xa.h` and `OJP.XA=TRUE`. Ordinary wrappers do not automatically expose these C functions. |
-| L10 | SQL Server tested combined XA lifecycle/affinity, multinode CRUD failover, SQL-error classification, and recovered-node reuse. |
-
-The driver is not a complete ODBC implementation: no wide-character exports, `SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, or `SQLColumns`, and only limited `SQLGetInfo`. Therefore C++ integration-test success does **not** prove compatibility with .NET ODBC, pyodbc, PDO_ODBC, Ruby ODBC, external Go ODBC adapters, or FireDAC. See [Chapter 7's bridge guidance](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) and the [experimental Delphi guide](../guides/DELPHI_FIREDAC_ODBC.md).
+See [client implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md#4-non-java-client-test-proven-coverage) for tested capabilities and [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) for experimental language bridges. C++ test results do not establish wrapper or operating-system compatibility.
 
 ## 3.4 Common Gotchas
 

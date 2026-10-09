@@ -55,7 +55,7 @@ There are two non-Java application paths:
 
 ```text
 Language API → native OJP client → gRPC/HTTP2 → ojp-server → JDBC → Database
-Language API / FireDAC → ODBC wrapper → Driver Manager → OJP C++ ODBC driver
+Language API → ODBC wrapper → Driver Manager → OJP C++ ODBC driver
                                                        → gRPC/HTTP2 → ojp-server → JDBC → Database
 ```
 
@@ -63,7 +63,7 @@ Native clients expose .NET ADO.NET, Python DB-API 2.0, Go `database/sql`, PHP's 
 
 The C++ driver exposes ANSI ODBC to C++ and potentially to other languages through an ODBC wrapper. Its tested coverage extends through L9 for H2 and L10 for SQL Server; PostgreSQL is L1. L9 XA uses the OJP-specific C API in `ojp_odbc_xa.h`, not transparent enlistment through ordinary ODBC wrappers. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse.
 
-An ODBC wrapper adds its own compatibility requirements. The driver has no wide-character (`W`) exports, incomplete metadata/capability discovery, and no DSN-only `SQLConnect` support. A wrapper can fail during connection setup before any SQL reaches the server. [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) explains candidate bridges; [Delphi FireDAC](../guides/DELPHI_FIREDAC_ODBC.md) is explicitly experimental and unvalidated.
+An ODBC wrapper adds its own compatibility requirements. The driver has no wide-character (`W`) exports, incomplete metadata/capability discovery, and no DSN-only `SQLConnect` support. A wrapper can fail during connection setup before any SQL reaches the server. [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) explains candidate bridges.
 
 Both paths still use the server's JDBC drivers and pools. Disable local/framework/Driver Manager pooling and close application resources promptly. The early native clients and C++ ODBC transport currently use plaintext gRPC; they do not inherit the Java driver's TLS configuration. Use a trusted private environment or an externally secured transport, and do not enable the experimental SQL enhancer.
 
@@ -1285,7 +1285,7 @@ OJP's architecture is built on three core components working in harmony:
 2. **ojp-server**: A gRPC server managing HikariCP connection pools and executing SQL operations
 3. **ojp-grpc-commons**: Shared Protocol Buffer contracts ensuring type-safe communication
 
-The client role also includes native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs and the C++ ANSI ODBC driver. All reach the same server-side JDBC pools, but capability/test coverage differs. Language ODBC wrappers and FireDAC add another compatibility boundary and remain experimental, unvalidated routes.
+The client role also includes native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs and the C++ ANSI ODBC driver. All reach the same server-side JDBC pools, but capability/test coverage differs. Language ODBC wrappers add another compatibility boundary and remain experimental, unvalidated routes.
 
 The use of **gRPC** enables high-performance, low-latency communication with HTTP/2 multiplexing, while **HikariCP** provides industry-leading connection pool performance. The modular architecture with the **Connection Pool Provider SPI** ensures flexibility and extensibility.
 

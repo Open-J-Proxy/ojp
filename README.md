@@ -86,7 +86,7 @@ docker run --rm -d \
   --network host \
   -v "$(pwd)/ojp-libs:/opt/ojp/ojp-libs" \
   -e JAVA_TOOL_OPTIONS="-Duser.timezone=UTC" \
-  rrobetti/ojp:1.1.0-RC2-RC1
+  rrobetti/ojp:1.0.3
 ```
 
 ### 2. Add OJP JDBC Driver to your project
@@ -94,7 +94,7 @@ docker run --rm -d \
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>1.1.0-RC1</version>
+    <version>1.0.3</version>
 </dependency>
 ```
 

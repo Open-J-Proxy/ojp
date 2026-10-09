@@ -5,7 +5,7 @@
 
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-parent</artifactId>
-    <version>1.1.0-RC2</version>
+    <version>1.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>OJP Parent</name>
@@ -217,7 +217,7 @@
                             <!-- Automatically publish after validation (no manual approval needed) -->
                             <autoPublish>true</autoPublish>
                             <!-- Wait for publishing to complete before the build finishes -->
-                            <waitForPublishing>true</waitForPublishing>
+                            <waitUntil>published</waitUntil>
                         </configuration>
                     </plugin>
                 </plugins>

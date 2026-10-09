@@ -24,6 +24,7 @@ public class CommonConstants {
     public static final int DEFAULT_PORT_NUMBER = 1059;
     public static final String OJP_REGEX_PATTERN = "ojp\\[([^\\]]+)\\]";
     public static final String OJP_CLOB_PREFIX = "OJP_CLOB_PREFIX:";
+    public static final String OJP_RELAYED_PGOBJECT_MARKER = "OJP_RELAYED_PGOBJECT";
 
     // Configuration property keys
     public static final String DATASOURCE_NAME_PROPERTY = "ojp.datasource.name";

@@ -379,10 +379,22 @@ public class SQLServerMultipleTypesIntegrationTest {
         resultSet.close();
         psSelect.close();
         psInsert.close();
-        
+
         // Clean up
         TestDBUtils.cleanupTestTables(conn, "sqlserver_specific_types_test");
         conn.close();
+    }
+
+    @ParameterizedTest
+    @ArgumentsSource(SQLServerConnectionProvider.class)
+    void arrayTypesAreNotSupported(String driverClass, String url, String user, String pwd) throws SQLException {
+        assumeFalse(isTestDisabled, "SQL Server tests are disabled");
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            SQLException ex = assertThrows(SQLException.class,
+                    () -> conn.createArrayOf("INTEGER", new Object[]{1, 2, 3}));
+            assertNotNull(ex.getMessage(), "SQL Server array failures should surface the underlying driver behavior");
+        }
     }
 
     @ParameterizedTest

@@ -1,0 +1,1 @@
+"jdbc:sqlserver://localhost:1433;databaseName=defaultdb;encrypt=false;trustServerCertificate=true",testuser,TestPassword123!

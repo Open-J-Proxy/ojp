@@ -1,0 +1,129 @@
+name: PHP PDO CRUD Test (H2)
+
+on:
+  push:
+    branches: [ main, 'lts/**' ]
+  pull_request:
+    branches: [ main, 'lts/**' ]
+  workflow_dispatch:
+    inputs:
+      full_suite:
+        description: Run the full CI suite
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    uses: ./.github/workflows/ci-test-selection.yml
+    with:
+      full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
+
+  php-pdo-crud-test:
+    name: PHP PDO L1 CRUD against H2
+    needs: detect-changes
+    if: needs.detect-changes.outputs.php == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+          cache: maven
+
+      - name: Build and install shared protocol module
+        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+
+      - name: Download open-source JDBC drivers
+        run: bash ojp-server/download-drivers.sh ./ojp-libs
+
+      - name: Build OJP server
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Set up PHP with gRPC extension
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: grpc
+          coverage: none
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist
+        working-directory: ojp-client-php-pdo
+
+      - name: Verify generated protobuf classes
+        run: ./generate-proto.sh --check
+        working-directory: ojp-client-php-pdo
+
+      - name: Lint PHP client and integration test
+        run: find src gen tests -name '*.php' -print0 | xargs -0 -n1 php -l
+        working-directory: ojp-client-php-pdo
+
+      - name: Run PHP unit checks
+        run: php tests/unit.php
+        working-directory: ojp-client-php-pdo
+
+      - name: Start OJP server
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -jar "$jar" &>/tmp/ojp-server.log &
+          echo "OJP server PID=$!"
+
+      - name: Wait for OJP server
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server.log 2>/dev/null; then
+              echo "OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for OJP server. Log:"
+          cat /tmp/ojp-server.log
+          exit 1
+
+      - name: Run PHP H2 L1 integration test
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+        run: php tests/h2_l1_integration.php
+        working-directory: ojp-client-php-pdo
+
+      - name: Show OJP server log
+        if: always()
+        run: cat /tmp/ojp-server.log
+
+  php-ci-result:
+    name: PHP CI Result
+    needs: [detect-changes, php-pdo-crud-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify selected suite result
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SELECTED: ${{ needs.detect-changes.outputs.php }}
+        run: |
+          node <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS);
+          const selected = process.env.SELECTED;
+          const result = needs['php-pdo-crud-test'].result;
+          if (needs['detect-changes'].result !== 'success' ||
+              !['true', 'false'].includes(selected) ||
+              (selected === 'true' && result !== 'success') ||
+              (selected === 'false' && !['skipped', 'success'].includes(result))) {
+            console.error('PHP CI failed:', JSON.stringify(needs), 'selected:', selected);
+            process.exit(1);
+          }
+          console.log(selected === 'true' ? 'PHP suite passed.' : 'PHP suite not selected.');
+          NODE

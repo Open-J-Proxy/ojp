@@ -4,12 +4,15 @@ import com.openjproxy.grpc.ParameterProto;
 import com.openjproxy.grpc.ParameterValue;
 import com.openjproxy.grpc.TimestampWithZone;
 import org.junit.jupiter.api.Test;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
+import org.postgresql.util.PGobject;
 
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -253,5 +256,43 @@ class ProtoConverterTemporalTest {
         assertEquals(timestamp, result1.getValues().get(0));
         assertEquals(date, result2.getValues().get(0));
         assertEquals(time.toString(), result3.getValues().get(0).toString());
+    }
+
+    @Test
+    void testObjectWithTargetSqlTypePreservesMetadata() {
+        Parameter param = Parameter.builder()
+                .index(7)
+                .type(ParameterType.OBJECT)
+                .values(Arrays.asList(LocalTime.of(10, 15, 30), java.sql.Types.TIME, 12))
+                .build();
+
+        Parameter result = ProtoConverter.fromProto(ProtoConverter.toProto(param));
+
+        assertEquals(ParameterType.OBJECT, result.getType());
+        assertEquals(3, result.getValues().size());
+        assertEquals("10:15:30", result.getValues().get(0).toString());
+        assertEquals(java.sql.Types.TIME, result.getValues().get(1));
+        assertEquals(12, result.getValues().get(2));
+    }
+
+    @Test
+    void testPgObjectRelayPreservesTypeMetadata() {
+        PGobject pgObject = new PGobject();
+        pgObject.setType("jsonb");
+        pgObject.setValue("{\"active\":true}");
+
+        Parameter param = Parameter.builder()
+                .index(1)
+                .type(ParameterType.OBJECT)
+                .values(List.of(pgObject))
+                .build();
+
+        Parameter result = ProtoConverter.fromProto(ProtoConverter.toProto(param));
+
+        assertEquals(ParameterType.OBJECT, result.getType());
+        assertEquals(3, result.getValues().size());
+        assertEquals("{\"active\":true}", result.getValues().get(0));
+        assertEquals(CommonConstants.OJP_RELAYED_PGOBJECT_MARKER, result.getValues().get(1));
+        assertEquals("jsonb", result.getValues().get(2));
     }
 }

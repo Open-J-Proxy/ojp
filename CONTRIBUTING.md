@@ -349,11 +349,48 @@ OJP is a multi-module Maven project:
 
 ### CI/CD Testing
 
-Tests run automatically in GitHub Actions:
+Main CI follows a two-phase integration test strategy: selected H2 integration jobs
+run in parallel first, then selected database-specific integration tests run only if
+every selected H2 job succeeds. This includes the Java H2 matrix and client-specific H2
+tests for .NET, Ruby, Python, and C++ ODBC. The C++ ODBC H2 job runs alongside
+the main H2 matrix; its PostgreSQL test runs in the database-specific phase,
+after both the main H2 checks and the ODBC H2 test pass.
 
-- **Main CI**: Runs H2 tests first (fast fail-fast mechanism)
-- **Specialized Jobs**: Run only after Main CI succeeds (PostgreSQL, MySQL, MariaDB, CockroachDB, Oracle, SQL Server, DB2)
-  - **PostgreSQL tests** run twice: once with standard OJP server and once with SQL enhancer enabled
+- **H2 phase**: Runs first with the fast fail-fast H2 matrix and client suites.
+- **Database-specific phase**: Runs only after the aggregate H2 gate succeeds
+  (PostgreSQL, MySQL, MariaDB, CockroachDB, Oracle, SQL Server, and DB2).
+  - **PostgreSQL tests** run twice: once with the standard OJP server and once
+    with SQL enhancer enabled.
+
+Pull requests select tests using the shared
+`.github/workflows/ci-test-selection.yml` workflow, comparing the PR head with
+its merge base. The selection summary is available in the workflow run:
+
+| Changes | Selected coverage |
+| --- | --- |
+| Markdown, `documents/`, license or notice files only | No integration suites |
+| Shared gRPC contracts, server, datasource API/providers, or XA pool | All suites, including downstream clients |
+| JDBC driver | Java H2, database, multinode, and XA suites |
+| Testcontainers | Java reactor and Java integration suites |
+| Spring Boot starter | Starter verification; framework integration notification on trusted runs |
+| Individual language clients | Only those clients' suites |
+| Root build files, workflows, or unclassified paths | All suites conservatively |
+
+Multiple changed modules select the union of their suites. Java reactor
+verification runs once on Java 25, separately from the driver's Java
+11/17/21/25 compatibility matrix. Dart coverage runs in its dedicated workflow,
+not inside the Java matrix. Go, Dart, and PHP use the same selection rules.
+Pushes to `main` and `lts/**` always select full coverage. Manual workflow runs
+also select full coverage; the `full_suite` input explicitly requests it.
+Detection uncertainty falls back to full coverage.
+
+For branch protection, require **Main CI Result**, **Go CI Result**,
+**Dart CI Result**, and **PHP CI Result**, rather than individual optional jobs.
+These checks run even for documentation-only PRs, accept intentionally skipped
+suites, and reject failures, cancellations, or selected suites unexpectedly
+being skipped. Repository administrators must update existing required-check
+settings when adopting these checks. External framework dispatch runs only on
+pushes or manual runs, never on PRs where its secret is unavailable.
 
 For more details, see [Setup and Testing OJP Source](https://github.com/Open-J-Proxy/ojp/blob/main/documents/code-contributions/setup_and_testing_ojp_source.md).
 

@@ -785,7 +785,11 @@ public class RemoteProxyResultSet implements java.sql.ResultSet {
     @Override
     public Array getArray(int columnIndex) throws SQLException {
         log.debug("getArray: {}", columnIndex);
-        throw new SQLFeatureNotSupportedException();
+        String arrayUUID = this.callProxy(CallType.CALL_GET, "Array", String.class, List.of(columnIndex));
+        if (arrayUUID == null || arrayUUID.isBlank()) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array(this.getConnection(), this.statementService, arrayUUID);
     }
 
     @Override
@@ -815,7 +819,11 @@ public class RemoteProxyResultSet implements java.sql.ResultSet {
     @Override
     public Array getArray(String columnLabel) throws SQLException {
         log.debug("getArray: {}", columnLabel);
-        throw new SQLFeatureNotSupportedException();
+        String arrayUUID = this.callProxy(CallType.CALL_GET, "Array", String.class, List.of(columnLabel));
+        if (arrayUUID == null || arrayUUID.isBlank()) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array(this.getConnection(), this.statementService, arrayUUID);
     }
 
     @Override

@@ -1,0 +1,163 @@
+name: Select affected CI suites
+
+on:
+  workflow_call:
+    inputs:
+      full-suite:
+        type: boolean
+        default: false
+    outputs:
+      full:
+        value: ${{ jobs.select.outputs.full }}
+      java:
+        value: ${{ jobs.select.outputs.java }}
+      java_build:
+        value: ${{ jobs.select.outputs.java_build }}
+      java_modules:
+        value: ${{ jobs.select.outputs.java_modules }}
+      dotnet:
+        value: ${{ jobs.select.outputs.dotnet }}
+      ruby:
+        value: ${{ jobs.select.outputs.ruby }}
+      python:
+        value: ${{ jobs.select.outputs.python }}
+      cpp:
+        value: ${{ jobs.select.outputs.cpp }}
+      dart:
+        value: ${{ jobs.select.outputs.dart }}
+      go:
+        value: ${{ jobs.select.outputs.go }}
+      php:
+        value: ${{ jobs.select.outputs.php }}
+      framework:
+        value: ${{ jobs.select.outputs.framework }}
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.select.outputs.full }}
+      java: ${{ steps.select.outputs.java }}
+      java_build: ${{ steps.select.outputs.java_build }}
+      java_modules: ${{ steps.select.outputs.java_modules }}
+      dotnet: ${{ steps.select.outputs.dotnet }}
+      ruby: ${{ steps.select.outputs.ruby }}
+      python: ${{ steps.select.outputs.python }}
+      cpp: ${{ steps.select.outputs.cpp }}
+      dart: ${{ steps.select.outputs.dart }}
+      go: ${{ steps.select.outputs.go }}
+      php: ${{ steps.select.outputs.php }}
+      framework: ${{ steps.select.outputs.framework }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'pull_request' && !inputs.full-suite
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Find PR merge base
+        id: base
+        if: github.event_name == 'pull_request' && !inputs.full-suite
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          echo "sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Match affected paths
+        id: paths
+        if: steps.base.outcome == 'success' && steps.base.outputs.sha != ''
+        continue-on-error: true
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          token: ''
+          base: ${{ steps.base.outputs.sha }}
+          predicate-quantifier: every
+          filters: |
+            shared:
+              - '{ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons}/**'
+              - '!**/*.md'
+            jdbc:
+              - 'ojp-jdbc-driver/**'
+              - '!**/*.md'
+            testcontainers:
+              - 'ojp-testcontainers/**'
+              - '!**/*.md'
+            starter:
+              - 'spring-boot-starter-ojp/**'
+              - '!**/*.md'
+            dotnet:
+              - 'ojp-client-dotnet-ado-net/**'
+              - '!**/*.md'
+            ruby:
+              - 'ojp-client-ruby-dbi/**'
+              - '!**/*.md'
+            python:
+              - 'ojp-client-python-dbapi/**'
+              - '!**/*.md'
+            cpp:
+              - 'ojp-client-cpp-odbc/**'
+              - '!**/*.md'
+            dart:
+              - 'ojp-client-dart-drift/**'
+              - '!**/*.md'
+            go:
+              - 'ojp-client-go-database-sql/**'
+              - '!**/*.md'
+            php:
+              - 'ojp-client-php-pdo/**'
+              - '!**/*.md'
+            unknown:
+              - '**'
+              - '!{documents,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons,ojp-jdbc-driver,ojp-testcontainers,spring-boot-starter-ojp,ojp-client-dotnet-ado-net,ojp-client-ruby-dbi,ojp-client-python-dbapi,ojp-client-cpp-odbc,ojp-client-dart-drift,ojp-client-go-database-sql,ojp-client-php-pdo}/**'
+              - '!**/*.md'
+              - '!{LICENSE,LICENSE.*,NOTICE,NOTICE.*}'
+
+      - name: Select suites and explain selection
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          FORCE_FULL: ${{ inputs.full-suite }}
+          DETECTION: ${{ steps.paths.outcome }}
+          FILTERS: ${{ toJSON(steps.paths.outputs) }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const paths = JSON.parse(process.env.FILTERS);
+          const changed = key => paths[key] === 'true';
+          const classified = ['shared', 'unknown', 'jdbc', 'testcontainers', 'starter',
+            'dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php']
+            .every(key => ['true', 'false'].includes(paths[key]));
+          const full = process.env.EVENT !== 'pull_request' ||
+            process.env.FORCE_FULL === 'true' ||
+            process.env.DETECTION !== 'success' || !classified ||
+            changed('shared') || changed('unknown');
+          const java = full || changed('jdbc') || changed('testcontainers');
+          const javaBuild = java || changed('starter');
+          const modules = full || changed('testcontainers')
+            ? ['ojp-grpc-commons', 'ojp-jdbc-driver', 'ojp-server',
+               'ojp-datasource-api', 'ojp-datasource-hikari', 'ojp-datasource-dbcp',
+               'ojp-xa-pool-commons', 'ojp-testcontainers', 'spring-boot-starter-ojp']
+            : [changed('jdbc') && 'ojp-jdbc-driver',
+               changed('starter') && 'spring-boot-starter-ojp'].filter(Boolean);
+          const selected = {full, java, java_build: javaBuild,
+            java_modules: modules.join(','), framework: java || changed('starter')};
+          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php']) {
+            selected[suite] = full || changed(suite);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            Object.entries(selected).map(([k, v]) => `${k}=${v}\n`).join(''));
+          const reason = full
+            ? 'Full coverage: push/manual run, override, shared/unknown changes, or detection uncertainty.'
+            : 'PR selection from merge-base changes; documentation does not select integration suites.';
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `### CI suite selection\n${reason}\n\n` +
+            '| Suite | Selected |\n| --- | --- |\n' +
+            Object.entries(selected).map(([k, v]) => `| ${k} | ${v} |\n`).join(''));
+          NODE

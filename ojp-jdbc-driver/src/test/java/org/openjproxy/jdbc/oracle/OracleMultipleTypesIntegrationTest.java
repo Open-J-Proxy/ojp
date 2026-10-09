@@ -419,6 +419,18 @@ public class OracleMultipleTypesIntegrationTest {
 
     @ParameterizedTest
     @CsvFileSource(resources = "/oracle_connections.csv")
+    void arrayTypesRequireVendorSpecificCollections(String driverClass, String url, String user, String pwd) throws SQLException {
+        assumeFalse(isTestDisabled, "Oracle tests are disabled");
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            SQLException ex = assertThrows(SQLException.class,
+                    () -> conn.createArrayOf("INTEGER", new Object[]{1, 2, 3}));
+            assertNotNull(ex.getMessage(), "Oracle array failures should surface the underlying driver behavior");
+        }
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/oracle_connections.csv")
     void testOracleSpecificTypes(String driverClass, String url, String user, String pwd) throws SQLException, ClassNotFoundException {
         assumeFalse(isTestDisabled, "Oracle tests are disabled");
         

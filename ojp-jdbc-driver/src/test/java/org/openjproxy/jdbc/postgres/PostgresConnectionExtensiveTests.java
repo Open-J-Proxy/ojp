@@ -319,6 +319,9 @@ public class PostgresConnectionExtensiveTests {
         // createArrayOf
         Array arr = connection.createArrayOf("INTEGER", new Object[]{1, 2, 3});
         assertNotNull(arr);
+        assertNotNull(arr.getBaseTypeName());
+        assertNotNull(arr.getArray());
+        arr.free();
 
         // createStruct - PostgreSQL supports composite types, but this might still throw
         try {

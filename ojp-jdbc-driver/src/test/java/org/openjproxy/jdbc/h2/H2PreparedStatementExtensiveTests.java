@@ -7,6 +7,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.io.ByteArrayInputStream;
+import java.io.Reader;
+import java.io.StringWriter;
 import java.io.StringReader;
 import java.math.BigDecimal;
 import java.net.URL;
@@ -521,6 +523,44 @@ class H2PreparedStatementExtensiveTests {
         }
         assertTrue(keyCount > 0, "At least one generated key must be returned");
         keys.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/h2_connection.csv")
+    void testClobObjectAccess(String driverClass, String url, String user, String password) throws Exception {
+        this.setUp(driverClass, url, user, password);
+
+        ps = connection.prepareStatement("INSERT INTO h2_prepared_stmt_test (id, info) VALUES (?, ?)");
+        ps.setInt(1, 1);
+        ps.setString(2, "H2 CLOB content");
+        ps.executeUpdate();
+        ps.close();
+
+        ps = connection.prepareStatement("SELECT info FROM h2_prepared_stmt_test WHERE id = ?");
+        ps.setInt(1, 1);
+        ResultSet rs = ps.executeQuery();
+        assertTrue(rs.next());
+
+        Object value = rs.getObject("info");
+        assertTrue(value instanceof Clob);
+        assertEquals("H2 CLOB content", rs.getObject("info", String.class));
+
+        Clob clob = rs.getObject("info", Clob.class);
+        assertEquals("H2 CLOB content", clob.getSubString(1, (int) clob.length()));
+
+        try (Reader reader = clob.getCharacterStream()) {
+            StringWriter writer = new StringWriter();
+            reader.transferTo(writer);
+            assertEquals("H2 CLOB content", writer.toString());
+        }
+
+        try (Reader reader = rs.getCharacterStream("info")) {
+            StringWriter writer = new StringWriter();
+            reader.transferTo(writer);
+            assertEquals("H2 CLOB content", writer.toString());
+        }
+
+        rs.close();
     }
 
     @ParameterizedTest

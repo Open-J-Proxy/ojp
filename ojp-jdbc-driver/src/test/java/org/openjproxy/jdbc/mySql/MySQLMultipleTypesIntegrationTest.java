@@ -11,6 +11,7 @@ import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -26,6 +27,7 @@ import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
@@ -454,5 +456,23 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         psSelect.close();
         psInsert.close();
         conn.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
+    void arrayTypesAreNotSupported(String driverClass, String url, String user, String pwd) throws SQLException {
+        if (url.toLowerCase().contains("mysql") && !isMySQLTestEnabled) {
+            assumeFalse(true, "Skipping MySQL tests");
+        }
+
+        if (url.toLowerCase().contains("mariadb") && !isMariaDBTestEnabled) {
+            assumeFalse(true, "Skipping MariaDB tests");
+        }
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            SQLFeatureNotSupportedException ex = assertThrows(SQLFeatureNotSupportedException.class,
+                    () -> conn.createArrayOf("INTEGER", new Object[]{1, 2, 3}));
+            assertNotNull(ex.getMessage(), "Unsupported array operations should explain the failure");
+        }
     }
 }

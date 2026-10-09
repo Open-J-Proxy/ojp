@@ -157,6 +157,15 @@ public class ResultSetHelper {
                         }
                         break;
                     }
+                    case Types.ARRAY: {
+                        java.sql.Array array = rs.getArray(i + 1);
+                        if (array != null) {
+                            String arrayUUID = UUID.randomUUID().toString();
+                            context.getSessionManager().registerAttr(session, arrayUUID, array);
+                            currentValue = arrayUUID;
+                        }
+                        break;
+                    }
                     case Types.BINARY: {
                         if (isSQLOrDB2) {
                             resultSetMode = CommonConstants.RESULT_SET_ROW_BY_ROW_MODE;

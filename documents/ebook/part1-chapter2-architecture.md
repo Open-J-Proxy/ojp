@@ -2,17 +2,20 @@
 
 > **Chapter Overview**: This chapter explores the internal architecture of OJP, detailing its components, communication protocols, and connection pool management. You'll understand how the pieces fit together to deliver intelligent database connection management.
 
+Before the deep dive, see the [system picture](https://github.com/Open-J-Proxy/ojp/blob/main/README.md#system-picture) and follow [executeQuery](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/EXECUTE_QUERY_FLOW.md). Its steps provide a place for the mechanisms explained here. Choose other operations from the [flow index](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/MAIN_FLOWS.md), or jump directly to the [documentation hub](https://github.com/Open-J-Proxy/ojp/blob/main/documents/README.md) for task guides and exact references.
+
 ---
 
 ## 2.1 System Components
 
-OJP's architecture consists of three main components that work together to provide transparent connection management:
+OJP's architecture consists of three main components that work together to provide transparent connection management: client adapters, the shared gRPC contract, and the server. JDBC is the Java reference adapter, not a requirement on non-Java application machines.
 
 ```mermaid
 graph TB
     subgraph "Client Side"
     APP[Java Application]
     DRIVER[ojp-jdbc-driver<br/>JDBC Implementation]
+    OTHER[Go / Dart / .NET / PHP / Python / Ruby / C++ Client APIs]
     end
     
     subgraph "Shared Contract"
@@ -31,6 +34,7 @@ graph TB
     end
     
     APP --> DRIVER
+    OTHER -->|gRPC/HTTP2| SERVER
     DRIVER -.->|uses| GRPC
     DRIVER -->|gRPC/HTTP2| SERVER
     SERVER -.->|uses| GRPC
@@ -44,6 +48,24 @@ graph TB
     style GRPC fill:#90caf9
     style HIKARI fill:#ff8a65
 ```
+
+### Native clients and the ODBC bridge
+
+There are two non-Java application paths:
+
+```text
+Language API → native OJP client → gRPC/HTTP2 → ojp-server → JDBC → Database
+Language API → ODBC wrapper → Driver Manager → OJP C++ ODBC driver
+                                                       → gRPC/HTTP2 → ojp-server → JDBC → Database
+```
+
+Native clients expose .NET ADO.NET, Python DB-API 2.0, Go `database/sql`, PHP's PDO-compatible API, Ruby DBI, and Dart's Drift executor. Each currently targets single-server L1 connectivity and CRUD, with its own limits and test evidence. Python and Go also implement basic local transactions; this does not establish full L4 conformance. The Java JDBC client has broader, database-specific coverage. See the [quick-start client matrix](part1-chapter3-quickstart.md#native-client-maturity) rather than assuming protocol sharing means feature parity.
+
+The C++ driver exposes ANSI ODBC to C++ and potentially to other languages through an ODBC wrapper. Its tested coverage extends through L9 for H2 and L10 for SQL Server; PostgreSQL is L1. L9 XA uses the OJP-specific C API in `ojp_odbc_xa.h`, not transparent enlistment through ordinary ODBC wrappers. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse.
+
+An ODBC wrapper adds its own compatibility requirements. The driver has no wide-character (`W`) exports, incomplete metadata/capability discovery, and no DSN-only `SQLConnect` support. A wrapper can fail during connection setup before any SQL reaches the server. [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) explains candidate bridges.
+
+Both paths still use the server's JDBC drivers and pools. Disable local/framework/Driver Manager pooling and close application resources promptly. The early native clients and C++ ODBC transport currently use plaintext gRPC; they do not inherit the Java driver's TLS configuration. Use a trusted private environment or an externally secured transport, and do not enable the experimental SQL enhancer.
 
 ### ojp-server: The gRPC Server
 
@@ -182,6 +204,12 @@ ojp.server.circuitBreakerTimeout=60000
 The **ojp-jdbc-driver** is a complete JDBC 4.2 specification implementation that applications use as a drop-in replacement for traditional JDBC drivers.
 
 The driver implements the JDBC API interfaces to ensure compliance with the standard. Rather than maintaining actual database connections, it provides lightweight virtual connection objects that delegate to the server. Under the hood, it acts as a gRPC client, communicating with ojp-server to execute all database operations. The driver handles result set streaming efficiently to minimize memory overhead, and manages transaction state across the network boundary. For high availability scenarios, it supports connecting to multiple OJP servers simultaneously, automatically failing over when needed.
+
+### Early Non-Java Client Implementations
+
+The gRPC contract is language-neutral, and OJP now includes early client modules that expose language-native database APIs: Go `database/sql`, Dart Drift, .NET ADO.NET, PHP PDO-compatible, Python DB-API 2.0, Ruby DBI, and C++ ODBC. Each is a separate client implementation that communicates with the same OJP server; these are not wrappers around the Java driver.
+
+The six native language clients target single-endpoint H2 L1 (basic connectivity and CRUD), with different test evidence. C++ ODBC is more advanced: H2 L1-L9 and SQL Server L1-L10 integration suites have passed, while PostgreSQL has L1 coverage. Neither protocol sharing nor these levels establishes parity with the JDBC driver's full database/operational coverage or production readiness. See the [client implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) and the individual [Go](../../ojp-client-go-database-sql/README.md), [Dart](../../ojp-client-dart-drift/README.md), [.NET](../../ojp-client-dotnet-ado-net/README.md), [PHP](../../ojp-client-php-pdo/README.md), [Python](../../ojp-client-python-dbapi/README.rst), [Ruby](../../ojp-client-ruby-dbi/README.md), and [C++ ODBC](../../ojp-client-cpp-odbc/README.md) guides.
 
 **JDBC Implementation Mapping**:
 
@@ -1256,6 +1284,8 @@ OJP's architecture is built on three core components working in harmony:
 1. **ojp-jdbc-driver**: A complete JDBC implementation that provides virtual connections and communicates via gRPC
 2. **ojp-server**: A gRPC server managing HikariCP connection pools and executing SQL operations
 3. **ojp-grpc-commons**: Shared Protocol Buffer contracts ensuring type-safe communication
+
+The client role also includes native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs and the C++ ANSI ODBC driver. All reach the same server-side JDBC pools, but capability/test coverage differs. Language ODBC wrappers add another compatibility boundary and remain experimental, unvalidated routes.
 
 The use of **gRPC** enables high-performance, low-latency communication with HTTP/2 multiplexing, while **HikariCP** provides industry-leading connection pool performance. The modular architecture with the **Connection Pool Provider SPI** ensures flexibility and extensibility.
 

@@ -24,8 +24,12 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 ### Part I: Foundation (5 chapters)
 - [Chapter 1: Introduction to OJP](part1-chapter1-introduction.md)
 - [Chapter 2: Architecture and Design](part1-chapter2-architecture.md)
+  - [Native clients and the ODBC bridge](part1-chapter2-architecture.md#native-clients-and-the-odbc-bridge)
 - [Chapter 2a: OJP as Smart Load Balancer and Automatic Failover](part1-chapter2a-smart-load-balancing.md)
 - [Chapter 3: Quick Start Guide](part1-chapter3-quickstart.md)
+  - [3.3.1 Basic Non-Java Clients](part1-chapter3-quickstart.md#331-basic-non-java-clients)
+  - [Native client maturity](part1-chapter3-quickstart.md#native-client-maturity)
+  - [C++: the ANSI ODBC driver and its levels](part1-chapter3-quickstart.md#c-the-ansi-odbc-driver-and-its-levels)
 - [Chapter 3a: Kubernetes Deployment with Helm](part1-chapter3a-kubernetes-helm.md)
 
 ### Part II: Configuration (4 chapters)
@@ -33,6 +37,8 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 - [Chapter 5: JDBC Configuration](part2-chapter5-jdbc-configuration.md)
 - [Chapter 6: Server Configuration](part2-chapter6-server-configuration.md)
 - [Chapter 7: Framework Integration](part2-chapter7-framework-integration.md)
+  - [7.9 Non-Java APIs and ODBC Bridges](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges)
+  - [Delphi FireDAC / ODBC guide — experimental, not validated](../guides/DELPHI_FIREDAC_ODBC.md)
 
 ### Part III: Advanced Features (7 chapters)
 - [Chapter 8: Slow Query Segregation](part3-chapter8-slow-query-segregation.md)
@@ -71,6 +77,16 @@ Message: feat: Spring Boot starter module for zero-config OJP autoconfiguration
 
 ## Reading Paths
 
+The ebook offers narrative learning for people evaluating, using, operating, or developing OJP. Choose a path for your goal below; implementation details and simplified flow diagrams are optional, not prerequisites.
+
+For task-oriented navigation, use the [documentation hub](https://github.com/Open-J-Proxy/ojp/blob/main/documents/README.md). Exact settings belong in the [JDBC](https://github.com/Open-J-Proxy/ojp/blob/main/documents/configuration/ojp-jdbc-configuration.md) and [server](https://github.com/Open-J-Proxy/ojp/blob/main/documents/configuration/ojp-server-configuration.md) references; client responsibilities and wire contracts belong in the [client specification](https://github.com/Open-J-Proxy/ojp/blob/main/documents/multi-language-client-spec/CLIENT_SPEC.md).
+
+### For Evaluators and Managers
+
+1. [Chapter 1: Introduction](https://github.com/Open-J-Proxy/ojp/blob/main/documents/ebook/part1-chapter1-introduction.md) — the problem, benefits, and suitability.
+2. [Support policy](https://github.com/Open-J-Proxy/ojp/blob/main/SUPPORT.md) and [roadmap](https://github.com/Open-J-Proxy/ojp/blob/main/ROADMAP.md) — support commitments and direction.
+3. [Production deployment guide](https://github.com/Open-J-Proxy/ojp/blob/main/documents/monitoring/PRODUCTION_DEPLOYMENT_GUIDE.md) — planning a phased rollout.
+
 ### For Quick Start
 Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then explore Chapter 1 (Introduction) for deeper context.
 
@@ -89,6 +105,12 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 4. Chapter 12: Connection Pool Provider SPI
 5. Appendix G: Troubleshooting
 
+### For Non-Java Applications
+
+1. [Basic Non-Java Clients](part1-chapter3-quickstart.md#331-basic-non-java-clients) — .NET, Python, Go, PHP, Ruby, Dart, and C++ examples with separate implementation/test boundaries.
+2. [Non-Java APIs and ODBC Bridges](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) — native APIs versus experimental wrapper routes.
+3. [Delphi FireDAC / ODBC](../guides/DELPHI_FIREDAC_ODBC.md) — unvalidated configuration probe, current blockers, and diagnostics.
+
 ### For Advanced Users
 1. Chapter 8: Slow Query Segregation
 2. Chapter 8a: Client-Side Throttling
@@ -103,17 +125,24 @@ Start with Chapter 3 (Quick Start Guide) for immediate hands-on experience, then
 3. Chapter 17: Testing Philosophy and Code Quality
 4. Chapter 18: Contributor Recognition Program
 
+### For Understanding an Operation
+
+1. Start with the [system picture](https://github.com/Open-J-Proxy/ojp/blob/main/README.md#system-picture), which shows component relationships rather than execution order.
+2. Follow [executeQuery](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/EXECUTE_QUERY_FLOW.md) or another [main flow](https://github.com/Open-J-Proxy/ojp/blob/main/documents/designs/MAIN_FLOWS.md).
+3. Read the flow's assumptions and essential notes, then choose its **Go deeper** links for your scenario.
+4. Continue with [Chapter 2: Architecture](https://github.com/Open-J-Proxy/ojp/blob/main/documents/ebook/part1-chapter2-architecture.md) for mechanisms, or the flow's source checkpoints to verify implementation.
+
 ## E-Book Characteristics
 
 **Scope**: Comprehensive technical documentation covering OJP from architecture to contribution, fully up-to-date with latest features and current implementation details
 
 **Style**: Conversational narrative throughout (minimal bullet lists, flowing prose)
 
-**Audience**: Java developers (intermediate to advanced), DevOps engineers, DBAs, technical architects
+**Audience**: Java and non-Java application developers, DevOps engineers, DBAs, technical architects
 
 **Quality**: Multiple rounds of review feedback incorporated, technical accuracy validated against current codebase
 
-**Practicality**: Production-ready examples, real-world scenarios, complete working code including proprietary database setup
+**Practicality**: Java deployment examples, real-world scenarios, and basic native non-Java client examples. ODBC bridge examples are experimental compatibility probes, not verified production integrations.
 
 **Currency**: All features from main branch documented with current implementation
 

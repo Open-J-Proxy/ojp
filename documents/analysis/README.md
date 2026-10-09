@@ -2,7 +2,42 @@
 
 This directory contains technical analysis documents for various OJP features and decisions.
 
-## Latest Analysis (September 2026)
+## Latest Analysis (October 2026)
+
+### 🆕 ODBC Driver Distribution
+
+**Question:** How should the OJP ODBC driver be delivered so users do not need to clone and compile it, and what differs between Windows, Linux, and macOS?
+
+**Quick Answer:** The driver is already a shared library. Make it self-contained (static dependencies, only `SQL*` symbols exported), publish per-OS/per-architecture archives on GitHub Releases, then add native installers (MSI, deb/rpm, Homebrew) that register the driver with each platform's ODBC Driver Manager.
+
+**Document:**
+- [ODBC_DRIVER_DISTRIBUTION_ANALYSIS.md](./ODBC_DRIVER_DISTRIBUTION_ANALYSIS.md)
+  - Current build and release gaps
+  - How ODBC drivers are delivered on Windows, Linux, and macOS
+  - Phased recommendation, concerns, and open questions
+
+**Key Takeaway:** The work is distribution, not a new artefact type: self-contained binaries first, installers and DSN/Unicode support later.
+
+---
+
+## Previous Latest Analysis (September 2026)
+
+### 🆕 Database Total Connection Budget Control
+
+**Question:** How can OJP Server enforce a hard total connection budget for one real database, even when multiple pools are created against that same database, without adding more hot-path queues or semaphores?
+
+**Quick Answer:** Add a server-side database budget controller that groups multiple pools under one database budget key, allocates weighted pool caps from one total connection budget, and rebalances pool sizes in the background. Start with priority by database username; treat client-name priority as a later classification feature.
+
+**Document:**
+- [DATABASE_TOTAL_CONNECTION_BUDGET_ANALYSIS.md](./DATABASE_TOTAL_CONNECTION_BUDGET_ANALYSIS.md)
+  - Current OJP behavior and the gap in per-database protection
+  - Why pool-budget control is a better fit than another hot-path gate
+  - Username vs client-name priority tradeoffs
+  - Cluster-wide concerns, open questions, and recommended phasing
+
+**Key Takeaway:** The safest low-overhead direction is to enforce a per-database total by controlling pool maxima and background rebalancing, not by adding another request-time blocking layer.
+
+---
 
 ### 🆕 Generic OJP Messaging Protocol (server-to-server and server-to-client)
 
@@ -129,6 +164,7 @@ the topology for every message type, consensus included.
 ### Driver Architecture
 
 - [DRIVER_EXTERNALIZATION_IMPLEMENTATION_SUMMARY.md](./DRIVER_EXTERNALIZATION_IMPLEMENTATION_SUMMARY.md) - Driver externalization implementation
+- [POSTGRESQL_ARRAY_IMPLEMENTATION_ANALYSIS.md](./POSTGRESQL_ARRAY_IMPLEMENTATION_ANALYSIS.md) - PostgreSQL-focused analysis for implementing `java.sql.Array` in OJP with extensibility notes for other databases
 
 ---
 
@@ -171,5 +207,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-09-02  
+**Last Updated:** 2026-10-07
 **Maintained By:** OJP Core Team

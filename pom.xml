@@ -217,7 +217,7 @@
                             <!-- Automatically publish after validation (no manual approval needed) -->
                             <autoPublish>true</autoPublish>
                             <!-- Wait for publishing to complete before the build finishes -->
-                            <waitUntil>published</waitUntil>
+                            <waitForPublishing>true</waitForPublishing>
                         </configuration>
                     </plugin>
                 </plugins>

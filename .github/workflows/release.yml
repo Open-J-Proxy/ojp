@@ -185,9 +185,6 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
-      - name: Show Maven version
-        run: ./mvnw --version
-
       - name: Configure Git identity
         run: |
           git config user.name  "github-actions[bot]"
@@ -215,7 +212,7 @@ jobs:
           fi
 
           # ── Read current pom version ────────────────────────────────────────
-          CURRENT=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+          CURRENT=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "Current version: ${CURRENT}"
 
           # ── Determine release version ───────────────────────────────────────
@@ -310,7 +307,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Set release version (${{ steps.versions.outputs.release }})
         run: |
-          ./mvnw --batch-mode versions:set \
+          mvn --batch-mode versions:set \
               -DnewVersion=${{ steps.versions.outputs.release }} \
               -DprocessAllModules=true \
               -DgenerateBackupPoms=false \
@@ -321,7 +318,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Build all modules (no tests)
         run: |
-          ./mvnw --batch-mode clean package \
+          mvn --batch-mode clean package \
               -DskipTests \
               -Dgpg.skip=true \
               --no-transfer-progress
@@ -330,33 +327,22 @@ jobs:
       # 8. Deploy all modules to Maven Central (libraries + ojp-server executable JAR)
       # -----------------------------------------------------------------------
       - name: Deploy to Maven Central
-        id: central_deploy
         if: ${{ inputs.dry_run == false }}
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          ./mvnw --batch-mode deploy \
+          mvn --batch-mode deploy \
               -DskipTests \
               -Prelease \
               --no-transfer-progress
-
-      - name: Diagnose Central bundle
-        if: ${{ failure() && steps.central_deploy.outcome == 'failure' }}
-        run: |
-          ./mvnw --version
-          if [[ -f target/central-publishing/central-bundle.zip ]]; then
-            unzip -Z1 target/central-publishing/central-bundle.zip
-          else
-            echo "Central bundle not found at target/central-publishing/central-bundle.zip"
-          fi
 
       # -----------------------------------------------------------------------
       # 9. Build and push Docker image for ojp-server
       #    Image tag is the release version (e.g. rrobetti/ojp:0.4.1-beta)
       #    Also tagged as latest.
-      #    Fat JAR is already built by step 7 (./mvnw clean package).
+      #    Fat JAR is already built by step 7 (mvn clean package).
       # -----------------------------------------------------------------------
       - name: Download open source JDBC drivers
         if: ${{ inputs.dry_run == false }}
@@ -423,7 +409,7 @@ jobs:
       - name: Set next development version (${{ steps.versions.outputs.next }})
         if: ${{ steps.versions.outputs.is_prerelease == 'false' }}
         run: |
-          ./mvnw --batch-mode versions:set \
+          mvn --batch-mode versions:set \
               -DnewVersion=${{ steps.versions.outputs.next }} \
               -DprocessAllModules=true \
               -DgenerateBackupPoms=false \

@@ -24,7 +24,7 @@ The [C++ implementation](../../ojp-client-cpp-odbc/src/ojp_odbc_driver.cpp) curr
 
 FireDAC commonly uses Unicode and capability/metadata calls. Depending on the Driver Manager's conversion behavior and the FireDAC release, it can fail during initialization, before your first query. ANSI-to-Unicode translation by a Driver Manager does not supply missing metadata functions. There is **no verified configuration switch** that makes FireDAC fully compatible with this driver; neither selecting generic ODBC nor changing string types guarantees success.
 
-The C++ driver's H2 and SQL Server implementations extend through L9, but reported test-proven coverage is L8 and the new L9 XA suites await passing CI. PostgreSQL has L1 coverage. Those tests use C++ ODBC calls, **not FireDAC**. XA requires the OJP-specific C API in `ojp_odbc_xa.h`; ordinary FireDAC local transactions do not expose it.
+The C++ driver's H2 L1-L9 and SQL Server L1-L10 integration suites have passed. PostgreSQL has L1 coverage. Those tests use C++ ODBC calls, **not FireDAC**. XA requires the OJP-specific C API in `ojp_odbc_xa.h`; ordinary FireDAC local transactions do not expose it.
 
 **Confidence:** High in these source-level limitations; low in end-to-end FireDAC compatibility because no FireDAC validation results are available.
 

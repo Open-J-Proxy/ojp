@@ -19,9 +19,9 @@ communicates with the server over gRPC.
 
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
-| **H2** | **L8** | L1-L7 suites plus `h2_l8_integration_test.cpp` cover stateless failover, pool-exhaustion safety, and recovered-node reuse. The L9 suite is added and will become test-proven after CI passes. |
+| **H2** | **L9** | L1-L9 integration suites passed, including stateless failover, pool-exhaustion safety, recovered-node reuse, and XA lifecycle/recovery in `h2_l9_integration_test.cpp`. |
 | PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L8** | L1-L8 suites cover failover/recovery; the L9 XA suite and L10 multinode/XA suite are implemented and require passing CI runs before raising achieved coverage. |
+| SQL Server | **L10** | L1-L10 integration suites passed, including XA lifecycle/recovery in `sqlserver_l9_integration_test.cpp` and combined multinode/XA coverage in `sqlserver_l10_integration_test.cpp`. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
 | Oracle | Not established | No database-specific integration suite in this module. |

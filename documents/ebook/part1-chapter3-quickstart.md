@@ -546,7 +546,7 @@ Implementation, an integration suite existing, and that suite passing CI are dif
 | [PHP PDO-compatible](../../ojp-client-php-pdo/README.md) | L1 through userland `OjpPDO`, not a native PDO driver | H2 L1 suite passes in CI. Instantiate `OjpPDO`, not `new PDO('ojp:...')`. Buffered results; no transactions, named parameters, or LOBs. |
 | [Ruby DBI](../../ojp-client-ruby-dbi/README.md) | L1 DBI driver, positional parameters, basic CRUD | H2 L1 coverage is reported; CI confirmation pending. No Active Record adapter, transactions, pagination, or multinode failover. |
 | [Dart Drift](../../ojp-client-dart-drift/README.md) | L1 public connection and `OjpDriftExecutor` | H2 L1 integration coverage reported. Transactions throw `UnsupportedError`; `runInsert` returns `0`, not a generated ID. Initial query stream only; no cursor pagination. Backend SQL must not assume SQLite compatibility. |
-| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2/SQL Server through L9; PostgreSQL L1 | H2/SQL Server reported test-proven L8; L9 suites pending passing CI. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
+| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2 through L9; SQL Server through L10; PostgreSQL L1 | H2 L1-L9 and SQL Server L1-L10 integration suites passed. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
 
 ### .NET: a native ADO.NET connection
 
@@ -709,7 +709,7 @@ Follow the [C++ build requirements](../../ojp-client-cpp-odbc/README.md#build-re
 
 The README's CMake/Ninja `release` preset builds the driver with integration tests disabled; installation is optional and its prefix is user-chosen. Linux Release build/install has been verified, but Windows and macOS remain untested. Neither a portable preset nor Windows automatic symbol export establishes platform runtime or wrapper compatibility. Consult the [ODBC compatibility table](../../ojp-client-cpp-odbc/README.md#using-other-languages-through-odbc) before trying an experimental bridge.
 
-The latest Linux validation also passed the README's complete `SELECT 1` example and existing H2 L1, L2, L3, and L6 suites. H2 L4 `SQLTransact` rollback and L5 `SQLParamData` failed identically on the clean original baseline. These are pre-existing limitations, not regressions from the build/documentation changes; the historical level assessments below are not a claim that every suite or operation passes in every environment.
+The H2 L1-L9 and SQL Server L1-L10 integration suites have passed. These results validate the C++ ODBC path, not compatibility with every language wrapper or operating system.
 
 Use `SQLDriverConnect`, not DSN-only `SQLConnect`, with:
 
@@ -729,7 +729,8 @@ DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=
 | L6 | H2/SQL Server session affinity, temporary-table state, and no rerouting of active session work. |
 | L7 | H2/SQL Server endpoint selection, health checks, shared channels, pool cache, reconnect, and multinode CRUD. |
 | L8 | H2/SQL Server current stateless failover/recovery, recovered-node reuse, and pool-exhaustion safety tested; full recovery/redistribution and client-side throttling remain incomplete. |
-| L9 | H2/SQL Server XA implemented through `ojp_odbc_xa.h` and `OJP.XA=TRUE`; new XA suites pending successful CI, so test-proven level remains L8. Ordinary wrappers do not automatically expose these C functions. |
+| L9 | H2/SQL Server XA tested through `ojp_odbc_xa.h` and `OJP.XA=TRUE`. Ordinary wrappers do not automatically expose these C functions. |
+| L10 | SQL Server tested combined XA lifecycle/affinity, multinode CRUD failover, SQL-error classification, and recovered-node reuse. |
 
 The driver is not a complete ODBC implementation: no wide-character exports, `SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, or `SQLColumns`, and only limited `SQLGetInfo`. Therefore C++ integration-test success does **not** prove compatibility with .NET ODBC, pyodbc, PDO_ODBC, Ruby ODBC, external Go ODBC adapters, or FireDAC. See [Chapter 7's bridge guidance](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) and the [experimental Delphi guide](../guides/DELPHI_FIREDAC_ODBC.md).
 

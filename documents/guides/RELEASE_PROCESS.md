@@ -130,7 +130,7 @@ and add the following **Repository secrets**:
 | `GPG_PASSPHRASE` | Passphrase for the GPG key |
 | `DOCKERHUB_USER` | Docker Hub username (`rrobetti`) |
 | `DOCKERHUB_TOKEN` | Docker Hub access token |
-| `RELEASE_TOKEN` | (Recommended) A Personal Access Token (PAT) with `repo` scope, used to push the version-bump commit back to `main`. If omitted, `GITHUB_TOKEN` is used, which may be blocked by branch-protection rules. |
+| `RELEASE_TOKEN` | (Recommended) A Personal Access Token (PAT) with `repo` and `workflow` scopes, used to push commits (including workflow updates) and tags. Its owner must be allowed by branch and tag rulesets. If omitted, `GITHUB_TOKEN` is used, which cannot push workflow changes and may be blocked by protection rules. |
 
 ### 5. Branch Protection
 
@@ -163,17 +163,34 @@ That's it — one click.
 ### What the Workflow Does
 
 ```
-checkout → compute versions → set release version in all poms
+checkout → configure Git identity → real branch/tag push preflight
+  → validate secrets and Docker credentials → set up Java
+  → compute versions → set release version in all poms
   → build (no tests) → deploy to Maven Central (-Prelease)
   → build & push Docker image
   → update docs to new release version
   → commit release pom changes → create annotated Git tag on the release commit
   → bump to next SNAPSHOT → commit next-dev version
-  → push to main + push tag
+  → atomically push to the current branch + push tag
   → create GitHub Release with auto-generated release notes
 ```
 
 Detailed steps in the workflow file: `.github/workflows/release.yml`.
+
+For a full release, the first check after checkout and Git identity setup is a
+**real dummy push**, not `git push --dry-run`: it atomically pushes an empty commit
+to the selected branch and an annotated temporary tag named
+`v0.0.0-release-preflight-<run-id>-<attempt>`. It then deletes the temporary tag.
+The empty commit remains on the branch (with `[skip ci]`); no files are changed
+and no branch history is rewritten. A rejected branch push, tag push, or tag
+cleanup stops the job before Java setup, builds, or publishing. Dry runs skip
+this check and do not modify remote Git refs.
+
+The token needs permission to create and delete the temporary tag as well as
+push to the release branch. A temporary tag cannot prove access to every
+version-specific tag rule, and permissions can change during a run. The final
+branch/tag push is also atomic, so a rejected release tag cannot leave only the
+version-bump commits pushed.
 
 All Maven commands in the release job use the committed Maven Wrapper (`./mvnw`),
 pinned to Maven 3.9.16, with Java 25. If Central deployment fails, the workflow
@@ -514,6 +531,18 @@ After the workflow completes:
 - If `RELEASE_TOKEN` is not set, it falls back to `GITHUB_TOKEN`, which may not
   have permission to push to protected branches.
 - See [Branch Protection](#5-branch-protection) for solutions.
+
+### "Git push preflight failed" or a release tag push is rejected
+
+- Branch write access does not imply tag write access. Check tag rulesets and
+  ensure the `RELEASE_TOKEN` owner can create `v*` tags and delete the temporary
+  preflight tag.
+- If cleanup fails, remove the temporary tag named in the error before retrying.
+- A generic remote rejection such as `(failed)` does not identify the underlying
+  server-side reason. Check repository settings and GitHub service status rather
+  than assuming a token scope or ruleset error.
+- If a release fails after publishing, inspect Maven Central, Docker Hub, and
+  remote Git refs before retrying; published Maven versions cannot be overwritten.
 
 ### "versions:set did not update inter-module dependency versions"
 

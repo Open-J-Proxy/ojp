@@ -175,6 +175,11 @@ checkout → compute versions → set release version in all poms
 
 Detailed steps in the workflow file: `.github/workflows/release.yml`.
 
+All Maven commands in the release job use the committed Maven Wrapper (`./mvnw`),
+pinned to Maven 3.9.16, with Java 25. If Central deployment fails, the workflow
+prints the Maven version and lists `target/central-publishing/central-bundle.zip`
+when present. Check for versioned POMs and stray artifact-level metadata in that list.
+
 #### Git tagging strategy
 
 The tag (`v<release-version>`) is created on the commit that contains the
@@ -431,12 +436,12 @@ that enables all three publishing requirements:
       <plugin>
         <groupId>org.sonatype.central</groupId>
         <artifactId>central-publishing-maven-plugin</artifactId>
-        <version>1.0.0-RC1</version>
+        <version>0.8.0</version>
         <extensions>true</extensions>
         <configuration>
           <publishingServerId>central</publishingServerId>
           <autoPublish>true</autoPublish>
-          <waitForPublishing>true</waitForPublishing>
+          <waitUntil>published</waitUntil>
         </configuration>
       </plugin>
     </plugins>
@@ -449,7 +454,7 @@ that enables all three publishing requirements:
 | Option | Value | Meaning |
 |--------|-------|---------|
 | `autoPublish` | `true` | Publish automatically after validation (no manual portal step) |
-| `waitForPublishing` | `true` | Block the build until publishing completes (required for CI success) |
+| `waitUntil` | `published` | Block the build until publishing completes (required for CI success) |
 | `publishingServerId` | `central` | Must match the `<server><id>` in Maven settings |
 
 ### ojp-server: Dual Distribution

@@ -1,4 +1,5 @@
-// Verifies PostgreSQL session affinity for temporary tables and session state through ODBC.
+// Verifies PostgreSQL session affinity for temporary tables and session state
+// through ODBC.
 #include <sql.h>
 #include <sqlext.h>
 
@@ -91,8 +92,8 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLCHAR detail[1024] = {};
         SQLINTEGER native_error = 0;
         SQLSMALLINT detail_length = 0;
-        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail,
-                          sizeof(detail), &detail_length) == SQL_SUCCESS) {
+        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail, sizeof(detail),
+                          &detail_length) == SQL_SUCCESS) {
             message << " [" << state << ", " << native_error << "] "
                     << reinterpret_cast<const char*>(detail);
         }
@@ -111,8 +112,8 @@ std::string random_suffix() {
 }
 
 void execute_direct(SQLHSTMT statement, const std::string& sql) {
-    require_success(SQLExecDirect(statement, sql_text(sql), SQL_NTS),
-                    "SQLExecDirect", SQL_HANDLE_STMT, statement);
+    require_success(SQLExecDirect(statement, sql_text(sql), SQL_NTS), "SQLExecDirect",
+                    SQL_HANDLE_STMT, statement);
 }
 
 void close_statement(SQLHSTMT statement, const std::string& operation) {
@@ -136,8 +137,8 @@ std::string read_text(SQLHSTMT statement, const std::string& sql) {
 
 void verify_label(SQLHSTMT statement, const std::string& table, int id,
                   const std::string& expected) {
-    expect(read_text(statement, "SELECT label FROM " + table + " WHERE id = " +
-                                std::to_string(id)) == expected,
+    expect(read_text(statement, "SELECT label FROM " + table +
+                                    " WHERE id = " + std::to_string(id)) == expected,
            "PostgreSQL temporary-table value was not preserved across requests");
 }
 
@@ -154,11 +155,11 @@ SQLINTEGER row_count(SQLHSTMT statement, const std::string& table) {
 }
 
 void set_autocommit(SQLHDBC connection, SQLULEN value) {
-    require_success(SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
-                                      reinterpret_cast<SQLPOINTER>(
-                                          static_cast<std::uintptr_t>(value)),
-                                      SQL_IS_UINTEGER),
-                    "SQLSetConnectAttr(autocommit)", SQL_HANDLE_DBC, connection);
+    require_success(
+        SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
+                          reinterpret_cast<SQLPOINTER>(static_cast<std::uintptr_t>(value)),
+                          SQL_IS_UINTEGER),
+        "SQLSetConnectAttr(autocommit)", SQL_HANDLE_DBC, connection);
 }
 
 void end_transaction(SQLHDBC connection, SQLSMALLINT completion) {
@@ -175,10 +176,9 @@ int run_integration_test(int argc, char** argv) {
     const std::string endpoint_variable = argv[3];
     const char* enabled_value = std::getenv(enable_variable.c_str());
     std::string enabled = enabled_value == nullptr ? "" : enabled_value;
-    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
+    std::transform(enabled.begin(), enabled.end(), enabled.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
     if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
         std::cout << "Skipped: set " << enable_variable
                   << "=true to run the PostgreSQL L6 session-affinity suite\n";
@@ -212,25 +212,25 @@ int run_integration_test(int argc, char** argv) {
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
         require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment, &connection),
                         "SQLAllocHandle(connection)", SQL_HANDLE_ENV, environment);
-        const std::string connection_string =
-            "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
-            ";DATABASE=" + brace_value(config.url) +
-            ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
-        require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string),
-                                         SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
+        const std::string connection_string = "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
+                                              ";DATABASE=" + brace_value(config.url) +
+                                              ";UID=" + brace_value(config.user) +
+                                              ";P"
+                                              "WD=" +
+                                              brace_value(config.password) + ";";
+        require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,
+                                         nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
         execute_direct(statement, "CREATE TEMPORARY TABLE " + table +
-                                  " (id INT PRIMARY KEY, label VARCHAR(100)) "
-                                  "ON COMMIT PRESERVE ROWS");
+                                      " (id INT PRIMARY KEY, label VARCHAR(100)) "
+                                      "ON COMMIT PRESERVE ROWS");
         table_created = true;
         execute_direct(statement, "INSERT INTO " + table +
-                                  " VALUES (1, 'initial'), (2, 'second'), (3, 'third')");
-        execute_direct(statement, "UPDATE " + table +
-                                  " SET label = 'updated' WHERE id = 2");
+                                      " VALUES (1, 'initial'), (2, 'second'), (3, 'third')");
+        execute_direct(statement, "UPDATE " + table + " SET label = 'updated' WHERE id = 2");
         expect(row_count(statement, table) == 3,
                "PostgreSQL temporary table rows were not visible across requests");
         verify_label(statement, table, 1, "initial");
@@ -240,7 +240,8 @@ int run_integration_test(int argc, char** argv) {
         set_autocommit(connection, SQL_AUTOCOMMIT_OFF);
         execute_direct(statement, "SET LOCAL application_name = '" + session_marker + "'");
         expect(read_text(statement, "SELECT current_setting('application_name')") == session_marker,
-               "PostgreSQL transaction-local session state was not preserved across requests");
+               "PostgreSQL transaction-local session state was not preserved "
+               "across requests");
         execute_direct(statement, "INSERT INTO " + table + " VALUES (4, 'committed')");
         end_transaction(connection, SQL_COMMIT);
         expect(read_text(statement, "SELECT current_setting('application_name')") != session_marker,
@@ -251,7 +252,8 @@ int run_integration_test(int argc, char** argv) {
         end_transaction(connection, SQL_ROLLBACK);
         verify_label(statement, table, 4, "committed");
         expect(row_count(statement, table) == 4,
-               "PostgreSQL temporary table did not persist correctly across transactions");
+               "PostgreSQL temporary table did not persist correctly across "
+               "transactions");
         end_transaction(connection, SQL_COMMIT);
 
         set_autocommit(connection, SQL_AUTOCOMMIT_ON);
@@ -272,8 +274,7 @@ int run_integration_test(int argc, char** argv) {
             if (connection != SQL_NULL_HDBC) {
                 SQLEndTran(SQL_HANDLE_DBC, connection, SQL_ROLLBACK);
                 SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
-                                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON),
-                                  SQL_IS_UINTEGER);
+                                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON), SQL_IS_UINTEGER);
             }
             if (table_created) {
                 const std::string drop = "DROP TABLE IF EXISTS " + table;

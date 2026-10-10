@@ -1,0 +1,1 @@
+"jdbc:mariadb://localhost:3307/defaultdb",testuser,testpassword

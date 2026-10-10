@@ -93,6 +93,7 @@ These levels are based on each language client's own integration tests and are i
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
 | **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
 | **C++ ODBC** | PostgreSQL | **L8** | L1-L8 real-server suites have existing coverage. PostgreSQL L9 and L10 integration tests are registered in CI. |
+| **C++ ODBC** | MariaDB | **L2** | `ojp-client-cpp-odbc/tests/mariadb_l2_integration_test.cpp` covers typed parameters, statements, generated identities, and result metadata. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
@@ -138,6 +139,7 @@ The following table records the implemented target level and its real-server int
 | **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; all H2 L1-L9 integration suites passed. |
 | **C++ ODBC** | SQL Server | **L10** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp` combines XA commit/rollback/recovery, non-XA multinode failover, SQL-error classification, XA affinity failure, and recovered-node reuse with the SQL Server L1-L9 suites. |
 | **C++ ODBC** | PostgreSQL | **L10** | `ojp-client-cpp-odbc/tests/postgresql_l10_integration_test.cpp` combines XA lifecycle/recovery and affinity behavior with non-XA failover, SQL-error classification, and recovered-node reuse. A passing real-server CI run is required before reporting L10 as achieved. |
+| **C++ ODBC** | MariaDB | **L2** | `ojp-client-cpp-odbc/tests/mariadb_l2_integration_test.cpp` |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

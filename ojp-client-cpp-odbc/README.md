@@ -13,7 +13,7 @@ communicates with the server over gRPC.
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
 | MySQL | Not established |
-| MariaDB | Not established |
+| MariaDB | **L2** |
 | Oracle | Not established |
 | DB2 | Not established |
 | CockroachDB | Not established |
@@ -360,10 +360,11 @@ connection strings. See the [ebook integration chapter](../documents/ebook/part2
 
 ## Integration tests
 
-The H2, PostgreSQL, and SQL Server tests read backend connection details from
+The H2, PostgreSQL, MariaDB, and SQL Server tests read backend connection details from
 their respective fixtures:
 [`h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
 [`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
+[`mariadb_l1_connection.csv`](tests/testdata/mariadb_l1_connection.csv),
 and
 [`sqlserver_l1_connection.csv`](tests/testdata/sqlserver_l1_connection.csv).
 The H2 L7 multinode suite uses
@@ -407,6 +408,7 @@ OJP_TEST_POSTGRESQL_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL_L10=true \
 OJP_TEST_POSTGRESQL_L10_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_POSTGRESQL_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB=true OJP_TEST_MARIADB_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \

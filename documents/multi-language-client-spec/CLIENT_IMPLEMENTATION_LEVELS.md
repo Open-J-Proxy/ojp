@@ -70,7 +70,7 @@ These entries describe the levels targeted by the language client modules; they 
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L9** | H2 L1-L9 integration suites passed, including XA lifecycle and resource-manager integration. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server L1-L10 integration suites passed; `sqlserver_l10_integration_test.cpp` combines XA lifecycle/affinity with multinode failover and recovered-node reuse. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L4** | Shared L1 and PostgreSQL L2-L4 suites cover typed parameters, streaming/cursor lifecycle, local transactions, isolation, savepoints, and aborted-transaction recovery. L5-L10 remain gaps. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L5** | L1-L5 cover hydrated BYTEA/TEXT and chunked ODBC input/output, following the PostgreSQL JDBC reference's LOB/stream semantics. L6-L10 remain gaps. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
@@ -92,13 +92,25 @@ These levels are based on each language client's own integration tests and are i
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
 | **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
-| **C++ ODBC** | PostgreSQL | **L4** | L1-L4 passed locally against the published OJP 1.0.3 server (Java 25) and PostgreSQL 16; `postgresql_l4_integration_test.cpp` verifies commit/rollback visibility, isolation, savepoint invalidation/recovery, and transactional DDL. Current-source server validation awaits CI. |
+| **C++ ODBC** | PostgreSQL | **L5** | L1-L5 passed locally against the unmodified base OJP server (Java 25) and PostgreSQL 16 and in the PostgreSQL CI job. `postgresql_l5_integration_test.cpp` verifies >1 MiB BYTEA, varied multi-chunk UTF-8 TEXT, NULL/empty values, updates, repeated reads, bound columns, cancellation, and error recovery, matching the PostgreSQL JDBC reference approach. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
 | **PHP PDO-compatible** | H2 | **L1** | `ojp-client-php-pdo/tests/h2_l1_integration.php` |
 | **Python DB-API 2.0** | H2 | **L1** | `ojp-client-python-dbapi/tests/test_h2.py` |
 | **Ruby DBI** | H2 | **L1** | `ojp-client-ruby-dbi/test/integration/h2_l1_test.rb` |
+
+PostgreSQL L5 is assessed against the PostgreSQL Java JDBC reference's
+LOB/stream semantics, using `BYTEA`/`TEXT`, not OID large objects.
+The client follows the existing Java JDBC path: binary input is hydrated
+`PT_BINARY_STREAM` bytes and text input is `PT_STRING`; query results are also
+hydrated. ODBC chunks are buffered locally, not streamed through
+`createLob`/`readLob`. PostgreSQL JDBC does not support native
+`createBlob`/`createClob`. As in the PostgreSQL JDBC reference, this hydrated
+path satisfies the database-specific L5 level without LOB-handle RPCs.
+This work does not modify the OJP server or claim the `LT_BINARY_STREAM`
+reference path.
+ODBC cancellation is supported for buffered data-at-execution only, not active RPCs.
 
 The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-client-ruby-dbi/README.md`](../../ojp-client-ruby-dbi/README.md) for the implemented API and current gaps.
 
@@ -125,7 +137,7 @@ The following table records the implemented target level and its real-server int
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; all H2 L1-L9 integration suites passed. |
 | **C++ ODBC** | SQL Server | **L10** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp` combines XA commit/rollback/recovery, non-XA multinode failover, SQL-error classification, XA affinity failure, and recovered-node reuse with the SQL Server L1-L9 suites. |
-| **C++ ODBC** | PostgreSQL | **L2** | `ojp-client-cpp-odbc/tests/postgresql_l2_integration_test.cpp` adds typed parameters, statement variants, generated IDs, NULLs, and metadata to the shared L1 suite. L2 remains a target until CI passes. |
+| **C++ ODBC** | PostgreSQL | **L5** | `ojp-client-cpp-odbc/tests/postgresql_l5_integration_test.cpp` adds hydrated BYTEA/TEXT, chunked ODBC input/output, updates, cancellation, and error recovery to L1-L4, following the PostgreSQL JDBC reference. CI runs all five suites. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

@@ -546,7 +546,7 @@ Implementation, an integration suite existing, and that suite passing CI are dif
 | [PHP PDO-compatible](../../ojp-client-php-pdo/README.md) | L1 through userland `OjpPDO`, not a native PDO driver | H2 L1 suite passes in CI. Instantiate `OjpPDO`, not `new PDO('ojp:...')`. Buffered results; no transactions, named parameters, or LOBs. |
 | [Ruby DBI](../../ojp-client-ruby-dbi/README.md) | L1 DBI driver, positional parameters, basic CRUD | H2 L1 coverage is reported; CI confirmation pending. No Active Record adapter, transactions, pagination, or multinode failover. |
 | [Dart Drift](../../ojp-client-dart-drift/README.md) | L1 public connection and `OjpDriftExecutor` | H2 L1 integration coverage reported. Transactions throw `UnsupportedError`; `runInsert` returns `0`, not a generated ID. Initial query stream only; no cursor pagination. Backend SQL must not assume SQLite compatibility. |
-| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2 through L9; PostgreSQL and SQL Server through L10 | H2 L1-L9 and SQL Server L1-L10 integration suites passed; PostgreSQL's L10 real-server CI run is pending. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
+| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2 through L9; PostgreSQL and SQL Server through L10 | H2 L1-L9 and SQL Server L1-L10 integration suites passed; PostgreSQL L1-L10 integration suites are registered in CI. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
 
 ### .NET: a native ADO.NET connection
 

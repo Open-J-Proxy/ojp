@@ -24,7 +24,7 @@
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L9 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L10 tests (needs: h2-integration-gate)
-# 14. cpp-odbc-mariadb-test: C++ ODBC MariaDB L2 tests (needs: h2-integration-gate)
+# 14. cpp-odbc-mariadb-test: C++ ODBC MariaDB L1-L4 tests (needs: h2-integration-gate)
 # 15. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L10 tests (needs: h2-integration-gate)
 # 16. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
@@ -2567,14 +2567,14 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC MariaDB L2 Integration Tests
+  # JOB 14: C++ ODBC MariaDB L1-L4 Integration Tests
   # ===========================================================================
   #
   # Runs only after the aggregate H2 gate has succeeded.
   #
   # ===========================================================================
   cpp-odbc-mariadb-test:
-    name: C++ ODBC MariaDB L2 Tests
+    name: C++ ODBC MariaDB L1-L4 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes, h2-integration-gate]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' && needs.h2-integration-gate.result == 'success' }}
@@ -2655,15 +2655,15 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC MariaDB L2 tests
+      - name: Run C++ ODBC MariaDB L1-L4 tests
         env:
           OJP_TEST_MARIADB: 'true'
           OJP_TEST_MARIADB_ADDR: 'localhost:1059'
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcMariaDBL2Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-mariadb-l2-test.log
+            -R '^OjpOdbcMariaDBL[124]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-mariadb-l1-l4-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2673,9 +2673,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-mariadb-l2-test-results
+          name: cpp-odbc-mariadb-l1-l4-test-results
           path: |
-            /tmp/cpp-odbc-mariadb-l2-test.log
+            /tmp/cpp-odbc-mariadb-l1-l4-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

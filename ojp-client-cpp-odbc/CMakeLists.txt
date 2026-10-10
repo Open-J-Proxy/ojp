@@ -198,6 +198,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/postgresql_l1_connection.csv"
             "OJP_TEST_POSTGRESQL"
             "OJP_TEST_POSTGRESQL_ADDR")
+    add_executable(ojp_odbc_postgresql_l4_integration_test
+        tests/postgresql_l4_integration_test.cpp)
+    target_link_libraries(ojp_odbc_postgresql_l4_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_postgresql_l4_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcPostgreSqlL4Integration
+        COMMAND ojp_odbc_postgresql_l4_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/postgresql_l1_connection.csv"
+            "OJP_TEST_POSTGRESQL"
+            "OJP_TEST_POSTGRESQL_ADDR")
     add_test(NAME OjpOdbcSqlServerL1Integration
         COMMAND ojp_odbc_l1_integration_test
             "SQL Server"
@@ -311,6 +320,7 @@ if(BUILD_TESTING)
         OjpOdbcPostgreSqlL1Integration
         OjpOdbcPostgreSqlL2Integration
         OjpOdbcPostgreSqlL3Integration
+        OjpOdbcPostgreSqlL4Integration
         OjpOdbcSqlServerL1Integration
         OjpOdbcSqlServerL2Integration
         OjpOdbcSqlServerL3Integration

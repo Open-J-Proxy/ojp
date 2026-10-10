@@ -10,7 +10,7 @@ communicates with the server over gRPC.
 | Database | Highest supported level |
 |---|---:|
 | H2 | **L9** |
-| PostgreSQL | **L3** |
+| PostgreSQL | **L4** |
 | SQL Server | **L10** |
 | MySQL | Not established |
 | MariaDB | Not established |

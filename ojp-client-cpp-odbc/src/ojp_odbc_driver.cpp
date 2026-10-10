@@ -3609,8 +3609,17 @@ SQLRETURN SQL_API SQLTransact(SQLHENV environment, SQLHDBC connection,
         return fail(static_cast<HandleBase*>(environment),
                     "Environment-wide transactions are not supported", "HYC00");
     }
-    return SQLEndTran(SQL_HANDLE_DBC, connection,
-                      static_cast<SQLSMALLINT>(completion_type));
+    if (static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (completion_type != SQL_COMMIT && completion_type != SQL_ROLLBACK) {
+        return fail(target, "Invalid transaction completion type", "HY012");
+    }
+    std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+    // Calling the exported SQLEndTran here can resolve to the Driver Manager's entry point.
+    return end_transaction(target, target, static_cast<SQLSMALLINT>(completion_type));
 }
 
 SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statement, SQLINTEGER attribute,
@@ -3636,8 +3645,10 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
     auto* target = static_cast<ConnectionHandle*>(connection);
     clear_diagnostics(target);
     if (info_type == SQL_TXN_CAPABLE) {
+        const auto database_url = uppercase_ascii(target->url);
         const SQLUSMALLINT numeric_value =
-            uppercase_ascii(target->url).find("SQLSERVER") != std::string::npos
+            database_url.find("SQLSERVER") != std::string::npos ||
+            database_url.find("POSTGRESQL") != std::string::npos
                 ? SQL_TC_ALL : SQL_TC_DML;
         if (output_length != nullptr) {
             *output_length = static_cast<SQLSMALLINT>(sizeof(numeric_value));

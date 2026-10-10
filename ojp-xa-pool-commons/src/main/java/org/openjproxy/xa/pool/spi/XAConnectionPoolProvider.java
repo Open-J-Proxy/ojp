@@ -110,6 +110,28 @@ public interface XAConnectionPoolProvider {
             throws SQLException, ReflectiveOperationException;
 
     /**
+     * Indicates whether this provider can resize a pool after creation.
+     *
+     * @return true if {@link #resizePool(Object, int, int)} is supported
+     */
+    default boolean supportsDynamicResizing() {
+        return false;
+    }
+
+    /**
+     * Resizes an existing XA connection pool.
+     *
+     * @param pooledDataSource the pooled XADataSource created by this provider
+     * @param maximumPoolSize the new maximum pool size
+     * @param minimumIdle the new minimum idle size
+     * @return true if the resize was applied
+     * @throws SQLException if resizing fails
+     */
+    default boolean resizePool(Object pooledDataSource, int maximumPoolSize, int minimumIdle) throws SQLException {
+        return false;
+    }
+
+    /**
      * Closes and releases all resources associated with the pooled XADataSource.
      *
      * <p>This method should:</p>

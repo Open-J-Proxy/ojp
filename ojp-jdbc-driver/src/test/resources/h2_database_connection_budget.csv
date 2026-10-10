@@ -1,0 +1,1 @@
+org.openjproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_h2:mem:ojp_budget_test;DB_CLOSE_DELAY=-1,sa,

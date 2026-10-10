@@ -2,7 +2,7 @@
 
 This module provides an ANSI ODBC driver for applications that access OJP
 servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and
+**L2 for PostgreSQL**, **L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and
 **L7-L9 for H2** and **L7-L10 for SQL Server** from the
 [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
@@ -12,7 +12,7 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L9 for H2; L10 for SQL Server; L1 for PostgreSQL** |
+| Highest implemented level | **L9 for H2; L10 for SQL Server; L2 for PostgreSQL** |
 | Summary | H2 and SQL Server add XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse. |
 
 ### Current test-proven coverage by database
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
 | **H2** | **L9** | L1-L9 integration suites passed, including stateless failover, pool-exhaustion safety, recovered-node reuse, and XA lifecycle/recovery in `h2_l9_integration_test.cpp`. |
-| PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
+| PostgreSQL | **L1; L2 target** | `l1_integration_test.cpp` covers connectivity and CRUD; `postgresql_l2_integration_test.cpp` adds typed parameters, statement variants, generated IDs, and metadata. A passing CI run is required to establish L2. |
 | SQL Server | **L10** | L1-L10 integration suites passed, including XA lifecycle/recovery in `sqlserver_l9_integration_test.cpp` and combined multinode/XA coverage in `sqlserver_l10_integration_test.cpp`. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
@@ -128,6 +128,32 @@ These JDBC cases are not ported, and here is why:
 
 Generated SQL Server identities are read with `IDENT_CURRENT` for the table
 that the run creates.
+
+### PostgreSQL L2 coverage
+
+The PostgreSQL L2 suite follows the JDBC driver's
+`PostgresMultipleTypesIntegrationTest` and prepared-statement tests, using the
+same standalone ODBC test format as H2 and SQL Server. It checks integer widths
+(PostgreSQL uses `SMALLINT`, not `TINYINT`), booleans, floating-point values,
+`NUMERIC` parameters and results, UTF-8 text, `BYTEA` (including embedded NUL,
+large, empty, and NULL values), and date/time/timestamp values. Decimal struct
+and decimal text bindings exercise BigDecimalWire, including negative values;
+typed NULL bindings exercise the target JDBC type codes required by
+`CLIENT_SPEC_AI.md` section 4.4.
+
+PostgreSQL UUID and timezone-aware values use explicitly cast text parameters:
+the ANSI ODBC client has no native UUID or offset temporal C binding. Java's
+`java.sql` and `java.time` variants map to the same ODBC temporal structs.
+Java-specific objects (`PGobject`, references, and SQL arrays) are not native
+ODBC bindings. The suite instead round-trips JSON/JSONB as explicitly cast
+text, validates JSON extraction operators and NULLs, and reads native UUID
+results as text.
+LOB/data-at-execution streams belong to L5 and are not claimed for PostgreSQL L2.
+Generated identities are retrieved with PostgreSQL SQL, not a JDBC-style
+`getGeneratedKeys()` API or session-dependent `currval`.
+Basic metadata checks cover column names, counts, and scalar type inference;
+complete JDBC descriptors, precision/scale, and empty-result type discovery
+are not implemented.
 
 ## L5 LOB coverage
 
@@ -562,7 +588,8 @@ DELETE, row counts, result values, empty results, SQL error diagnostics, and
 session termination. The separate H2 L2 suite reuses the H2 L1 connection
 fixture and covers typed parameters, generated identity retrieval, and basic
 result metadata. The SQL Server L2 suite does the same using the SQL Server
-fixture. The L2 suites are database-specific, so the shared L1 executable does
+fixture. PostgreSQL L2 reuses the PostgreSQL L1 fixture and enable/endpoint
+variables. The L2 suites are database-specific, so the shared L1 executable does
 not need database-dependent branches.
 
 The H2 and SQL Server L3 suites cover multi-block reads, result metadata,
@@ -636,6 +663,8 @@ The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
 
+The C++ ODBC PostgreSQL workflow job runs `OjpOdbcPostgreSqlL1Integration` and
+`OjpOdbcPostgreSqlL2Integration` against PostgreSQL and one OJP server.
 The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
 `OjpOdbcH2L9Integration`; L7-L9 run against two OJP servers. L9 requires its
 second endpoint's PID file and stops that server during the active-XA affinity

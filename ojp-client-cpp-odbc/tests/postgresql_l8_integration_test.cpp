@@ -239,7 +239,7 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
                         "SQLAllocHandle(overloaded statement)", SQL_HANDLE_DBC,
                         overloaded_connection);
 
-        const std::string long_query = "SELECT pg_sleep(5)";
+        const std::string long_query = "SELECT 1 FROM pg_sleep(5)";
         long_query_thread = std::thread([&] {
             query_started.store(true);
             long_query_result = SQLExecDirect(busy_statement, sql_text(long_query), SQL_NTS);

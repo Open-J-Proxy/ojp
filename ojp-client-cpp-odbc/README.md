@@ -1,232 +1,24 @@
 # OJP C++ ODBC Client
 
 This module provides an ANSI ODBC driver for applications that access OJP
-servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2 for PostgreSQL**, **L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and
-**L7-L9 for H2** and **L7-L10 for SQL Server** from the
-[client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
+servers from C++.
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
 
-## Current implementation level assessment
+## Supported levels by database
 
-| Assessment | Value |
-|---|---|
-| Highest implemented level | **L9 for H2; L10 for SQL Server; L2 for PostgreSQL** |
-| Summary | H2 and SQL Server add XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse. |
-
-### Current test-proven coverage by database
-
-| Database | Highest achieved level (current tests) | Evidence |
-|---|---:|---|
-| **H2** | **L9** | L1-L9 integration suites passed, including stateless failover, pool-exhaustion safety, recovered-node reuse, and XA lifecycle/recovery in `h2_l9_integration_test.cpp`. |
-| PostgreSQL | **L1; L2 target** | `l1_integration_test.cpp` covers connectivity and CRUD; `postgresql_l2_integration_test.cpp` adds typed parameters, statement variants, generated IDs, and metadata. A passing CI run is required to establish L2. |
-| SQL Server | **L10** | L1-L10 integration suites passed, including XA lifecycle/recovery in `sqlserver_l9_integration_test.cpp` and combined multinode/XA coverage in `sqlserver_l10_integration_test.cpp`. |
-| MySQL | Not established | No database-specific integration suite in this module. |
-| MariaDB | Not established | No database-specific integration suite in this module. |
-| Oracle | Not established | No database-specific integration suite in this module. |
-| DB2 | Not established | No database-specific integration suite in this module. |
-| CockroachDB | Not established | No database-specific integration suite in this module. |
+| Database | Highest supported level |
+|---|---:|
+| H2 | **L9** |
+| PostgreSQL | **L3** |
+| SQL Server | **L10** |
+| MySQL | Not established |
+| MariaDB | Not established |
+| Oracle | Not established |
+| DB2 | Not established |
+| CockroachDB | Not established |
 
 Level definitions: [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
-
-## L1 capabilities
-
-L1 includes connection establishment and termination, query and update
-execution, basic result columns and scalar values, input parameters for common
-ODBC scalar types, and SQL error diagnostics. The implementation supports
-`SQLDriverConnect`, `SQLPrepare`/`SQLExecute`, `SQLBindParameter` for input
-parameters, `SQLExecDirect`, forward-only `SQLFetch`/`SQLGetData`, and affected
-row counts. The current parameter/value mapping covers null, booleans, signed
-integers, floats, doubles, decimals, dates, times, timestamps, strings, and
-binary values. NULL parameters are sent with the `java.sql.Types` code matching
-the bound ODBC SQL type, because the server binds them with `setNull`. Disable application-side
-connection pooling when using OJP.
-
-The H2 L2 suite covers typed decimal, temporal, integer, floating-point,
-boolean, text, and binary input parameters, both direct and prepared statement
-execution, basic result-column metadata, and retrieval of the generated identity
-value through H2 SQL. Unlike the JDBC H2 type suite, this ODBC suite does not
-cover Java-specific types, timezone-aware values, or arrays; those have no
-equivalent in the currently implemented ODBC parameter mapping. The ODBC API
-has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
-identities are read with database SQL rather than a driver-specific
-generated-keys API.
-
-The H2 and SQL Server L3 suites retrieve 10,001 ordered rows through the
-server-streaming query protocol, check result metadata and end-of-result
-behavior, and exercise closing a partially consumed result and reusing the
-statement for full and empty results. The SQL Server suite also returns multiple
-`VARBINARY` rows, exercising the server's row-by-row result mode and
-`fetchNextRows` pagination. The client consumes every `executeQuery` stream and
-closes its server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`.
-The client also uses `fetchNextRows` when the server marks a result as row-by-row.
-
-The H2 L4 suite maps ODBC autocommit and `SQLEndTran`/`SQLTransact` to the
-transaction RPCs, and maps `SQL_ATTR_TXN_ISOLATION` to connection resource calls.
-ODBC has no portable savepoint API, so the client accepts `SAVEPOINT name`,
-`ROLLBACK TO [SAVEPOINT] name`, and `RELEASE [SAVEPOINT] name` statements and
-implements them with OJP savepoint resource calls. These statements are
-intercepted by the client and are not sent to H2.
-
-The H2 L5 suite binds `SQL_LONGVARBINARY` and `SQL_LONGVARCHAR` values using
-ODBC data-at-execution (`SQLParamData`/`SQLPutData`). The client uploads BLOB and
-CLOB chunks through `createLob`, then sends the returned handle as a `PT_BLOB`
-or `PT_CLOB` parameter. `SQLGetData` hydrates BLOB and CLOB references through
-`readLob`; the suite verifies a 180 KB binary value, multi-byte UTF-8 CLOB data,
-and typed NULL LOB parameters.
-
-The H2 L6 suite verifies session affinity with a local temporary table across
-multiple statements, CRUD operations, and transaction boundaries. Session UUIDs
-are bound to their target server; all session-scoped RPCs use that binding, and
-an RPC failure is surfaced without retrying on another server.
-
-The H2 L7 suite connects through multiple OJP endpoints, checks shared-pool
-connection reuse and cluster CRUD, and includes an unavailable endpoint to
-verify it is marked down and excluded from subsequent selection. The client
-balances new connections by least active connections by default, with round-robin
-available through `OJP.LOADAWARE.SELECTION.ENABLED=false`. Endpoint channels are
-shared process-wide; background health checks propagate topology and recreate
-pools before a recovered endpoint is marked healthy. Stateless `NOT_FOUND`
-responses invalidate the cached pool and retry once after reconnecting.
-
-The SQL Server L7 suite covers multinode behavior with the SQL Server fixture,
-including multi-endpoint CRUD, cached pool reuse, and an unavailable endpoint.
-L8 adds failover/recovery checks and requires its first endpoint to be restartable
-by a supervisor using a PID file. Health probes use the `connect` RPC every 5 seconds by default;
-configure a positive interval in milliseconds with the
-`OJP_HEALTH_CHECK_INTERVAL_MS` environment variable. Active sessions are never
-retried on another endpoint.
-
-The SQL Server L2 suite mirrors the types in the JDBC driver's
-`SQLServerMultipleTypesIntegrationTest`:
-
-| SQL Server type (JDBC test) | ODBC binding / retrieval in the L2 suite |
-|---|---|
-| `INT`, `BIGINT`, `SMALLINT` | `SQL_C_SLONG`/`SQL_C_SBIGINT`/`SQL_C_SSHORT` parameters, read back as integers |
-| `TINYINT` (value 255) | Bound as `SQL_C_SLONG`/`SQL_INTEGER`, like the JDBC test's `setInt`; SQL Server `TINYINT` is unsigned, so 255 does not fit `SQL_C_STINYINT` |
-| `BIT` | `SQL_C_BIT` |
-| `FLOAT`, `REAL` | `SQL_C_DOUBLE`, `SQL_C_FLOAT` |
-| `DECIMAL(10, 2)`, `MONEY`, `SMALLMONEY` | `SQL_C_NUMERIC` and decimal text parameters, read back directly as decimal text |
-| `NVARCHAR`, `NTEXT`, `TEXT`, `NVARCHAR(MAX)`, `VARCHAR(MAX)` | `SQL_C_CHAR` with UTF-8 text, including Chinese characters and an emoji, and a 50 KB value |
-| `VARBINARY(1)`, `VARBINARY(4)`, `VARBINARY(MAX)` | `SQL_C_BINARY`, including a 10,000-byte value, and a multi-row `VARBINARY` query (the server sends these rows one at a time) |
-| `DATE`, `TIME`, `DATETIME2`, `SMALLDATETIME` | `SQL_C_TYPE_DATE`, `SQL_C_TYPE_TIME`, `SQL_C_TYPE_TIMESTAMP` |
-| `DATETIMEOFFSET` (`OffsetDateTime`, `OffsetTime`, `Instant`) | UTC timestamp structs and offset text such as `2024-12-01 10:10:10 +02:00`; values are read back as UTC, and a text `CAST` confirms the stored offset |
-| `UNIQUEIDENTIFIER` | Generated with `NEWID()` and read back as GUID text |
-| `IMAGE`, `XML`, `GEOMETRY`, `GEOGRAPHY`, `HIERARCHYID`, `SQL_VARIANT` | Created and returned as `SQL_NULL_DATA`, as in the JDBC test, which never writes them either |
-| NULL values | Typed NULL parameters plus omitted columns returned as `SQL_NULL_DATA` |
-
-These JDBC cases are not ported, and here is why:
-
-- **Java-specific types.** `LocalDate`, `LocalTime`, and `LocalDateTime` versus
-  `java.sql.Date`, `Time`, and `Timestamp`: ODBC has one C struct per SQL type,
-  so each pair maps to the same `DATE`, `TIME`, or `DATETIME2` binding.
-- **Arrays.** `createArrayOf` has no ODBC equivalent.
-- **Timezone-aware ODBC types.** The client does not implement SQL Server's
-  driver-specific `SQL_SS_TIMESTAMPOFFSET` C type. Offsets are therefore sent as
-  text.
-
-Generated SQL Server identities are read with `IDENT_CURRENT` for the table
-that the run creates.
-
-### PostgreSQL L2 coverage
-
-The PostgreSQL L2 suite follows the JDBC driver's
-`PostgresMultipleTypesIntegrationTest` and prepared-statement tests, using the
-same standalone ODBC test format as H2 and SQL Server. It checks integer widths
-(PostgreSQL uses `SMALLINT`, not `TINYINT`), booleans, floating-point values,
-`NUMERIC` parameters and results, UTF-8 text, `BYTEA` (including embedded NUL,
-large, empty, and NULL values), and date/time/timestamp values. Decimal struct
-and decimal text bindings exercise BigDecimalWire, including negative values;
-typed NULL bindings exercise the target JDBC type codes required by
-`CLIENT_SPEC_AI.md` section 4.4.
-
-PostgreSQL UUID and timezone-aware values use explicitly cast text parameters:
-the ANSI ODBC client has no native UUID or offset temporal C binding. Java's
-`java.sql` and `java.time` variants map to the same ODBC temporal structs.
-Java-specific objects (`PGobject`, references, and SQL arrays) are not native
-ODBC bindings. The suite instead round-trips JSON/JSONB as explicitly cast
-text, validates JSON extraction operators and NULLs, and reads native UUID
-results as text.
-LOB/data-at-execution streams belong to L5 and are not claimed for PostgreSQL L2.
-Generated identities are retrieved with PostgreSQL SQL, not a JDBC-style
-`getGeneratedKeys()` API or session-dependent `currval`.
-Basic metadata checks cover column names, counts, and scalar type inference;
-complete JDBC descriptors, precision/scale, and empty-result type discovery
-are not implemented.
-
-## L5 LOB coverage
-
-The SQL Server L5 suite streams `SQL_LONGVARBINARY` parameters through
-`SQLParamData`/`SQLPutData`, which the driver forwards to `createLob` in 64 KiB
-chunks. The integration test round-trips large, small, empty, and NULL
-`VARBINARY(MAX)` values through SQL Server and verifies the returned bytes.
-`readLob` is also supported for LOB references returned by the server; SQL
-Server query results are currently hydrated as binary values by the server.
-
-Decimal results arrive as BigDecimalWire bytes
-([format](../documents/protocol/BIGDECIMAL_WIRE_FORMAT.md)). Like the JDBC
-driver, the client decodes result bytes that match this layout exactly as
-decimal text and returns other bytes as binary.
-
-## L4 transaction coverage
-
-The H2 L4 suite covers commit, rollback, autocommit transitions, savepoint
-rollback/release, isolation, and invalidated savepoint handles. The SQL Server
-suite follows transaction and savepoint cases in
-`SQLServerConnectionExtensiveTests` and `SQLServerSavepointTests` from the JDBC
-reference client, and verifies commit, rollback, autocommit transitions, nested
-savepoint rollback/release, and isolation through OJP.
-
-ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
-`SAVE TRANSACTION name`, `ROLLBACK TO [SAVEPOINT] name` and
-`ROLLBACK TRANSACTION name`, plus `RELEASE [SAVEPOINT] name` to the
-`callResource` operations in `CLIENT_SPEC_AI.md`. These directives are
-intercepted by the client and not forwarded to the database.
-
-Output parameters, wide-character ODBC entry points, complete metadata
-discovery, configurable fetch-size pagination, full L8 recovery/redistribution,
-and client-side throttling are not implemented. XA operations use the same
-session-affinity routing and do not retry or reroute after a branch has started.
-
-## Conformance with `CLIENT_SPEC_AI.md`
-
-The same driver code serves H2, PostgreSQL, and SQL Server, so these points
-apply to all three databases.
-
-Implemented rules:
-
-| Spec rule | Implementation |
-|---|---|
-| 4.1.1 process-stable UUID v4 `clientUUID` | Generated once per process |
-| 4.2 `ConnectionDetails` | Non-XA uses `isXA=false`; `OJP.XA=TRUE` connections use `isXA=true` and always make a connect RPC |
-| 4.3.1–4.3.2 send and replace `SessionInfo` | Sent with every request and replaced from every `executeQuery`, `executeUpdate`, `fetchNextRows`, and `callResource` response |
-| 4.3.4 `terminateSession` exactly once | Sent once by `SQLDisconnect`; the connection is unusable afterwards, even if the call fails |
-| 4.4.1 empty `statementUUID` for new statements | Always sent empty; prepared statements are not reused on the server |
-| 4.4.2 1-based parameter indexes | ODBC parameter numbers are passed through |
-| 4.4.3 `PT_BIG_DECIMAL` as BigDecimalWire `bytes_value` | Decimal parameters are encoded, and decimal results decoded, in this format |
-| 4.4.4 `StringValue` wrapper fields | `uuid_value`, `biginteger_value`, `url_value`, `rowid_value`, and `rowidlifetime_value` results are decoded as text |
-| 4.4.5 `PT_NULL` with a `java.sql.Types` code in `int_value` | Derived from the bound ODBC SQL type; unknown types send `0` (`Types.NULL`) |
-| 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
-| L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
-| 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
-| L5 LOB lifecycle | `createLob` sends 64 KB `LT_BLOB`/`LT_CLOB` chunks, updates the session from returned references, and `readLob` concatenates response blocks |
-| L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
-| L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
-| L6 session affinity | H2 and SQL Server route session-scoped RPCs exclusively to the bound `targetServer`; failures are surfaced without retry or reroute |
-| L7 multinode operations | Shared endpoint channels, least-connections/round-robin selection, health probes and cluster-health propagation, connHash caching, and stateless `NOT_FOUND` reconnect/retry |
-| L9 XA operations | `ojp_odbc_xa.h` exposes all ten XA RPCs; XA connections pin to their selected endpoint, and a failed active XA operation returns `XAER_RMFAIL` without rerouting |
-| Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
-
-In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
-the client pulls the remaining rows with `fetchNextRows`. Earlier versions
-returned only the first row.
-
-Spec rules outside the implemented levels or still incomplete:
-
-- **L5 for PostgreSQL:** `createLob` and `readLob`.
-- **L8:** full failover/recovery and connection redistribution.
-- **Section 8:** client-side admission throttling.
 
 ## Build requirements
 
@@ -577,47 +369,9 @@ and
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
-They exercise the ODBC API through the Driver Manager against a running OJP
-server and the respective database. The SQL Server fixture follows the OJP JDBC
-driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
-including the SQLSTATE expected for the L1 suite's invalid SQL. The Microsoft
-JDBC driver reports `42S01` for this syntax error rather than the standard
-`42000`, and OJP passes it through unchanged. Each test uses a unique
-table per run and verifies connection readiness, prepared INSERT/SELECT/UPDATE,
-DELETE, row counts, result values, empty results, SQL error diagnostics, and
-session termination. The separate H2 L2 suite reuses the H2 L1 connection
-fixture and covers typed parameters, generated identity retrieval, and basic
-result metadata. The SQL Server L2 suite does the same using the SQL Server
-fixture. PostgreSQL L2 reuses the PostgreSQL L1 fixture and enable/endpoint
-variables. The L2 suites are database-specific, so the shared L1 executable does
-not need database-dependent branches.
-
-The H2 and SQL Server L3 suites cover multi-block reads, result metadata,
-end-of-result behavior, empty results, and closing a result before reusing the
-statement. SQL Server L3 also selects multiple `VARBINARY` rows to exercise
-row-by-row server streaming through `fetchNextRows`.
-
-The H2 L5 suite additionally checks BLOB/CLOB input streams sent in multiple
-ODBC chunks, multi-block LOB reads, UTF-8 character preservation, and SQL NULL
-handling for both LOB types. H2 and SQL Server L6 verify temporary-table state
-across SQL operations and committed transactions. Both L7 suites use at least
-two OJP endpoints to check multinode CRUD, cached-pool reuse, and handling of an
-unavailable endpoint. H2 L8 stops and
-restarts the first configured OJP server to verify stateless operation failover,
-pool-exhaustion and SQL-error handling, and reuse of the recovered server. Run
-it only with disposable test servers; its PID file must identify the first
-endpoint, and a supervisor must restart that server after it exits.
-The H2 L9 suite uses two OJP servers and a shared file-backed H2 database. It
-covers XA connection mode, resource-manager identity, two-phase commit and
-recovery, rollback, one-phase commit, timeout operations, forget, and
-`XAER_RMFAIL` without rerouting when the server hosting an active XA branch stops.
-The SQL Server L9 suite follows the Java SQL Server XA reference coverage and
-also verifies recovery, resource-manager identity, forget, and
-`XAER_RMFAIL` without rerouting when the server hosting an active XA branch stops.
-The L10 suite combines the L9 XA lifecycle with a multinode CRUD failover,
-surviving-node availability, SQL error classification, and reuse of the restarted
-OJP node. SQL Server L10 is a client target; the Java reference-client matrix
-currently records SQL Server at L9.
+Use disposable test servers: H2 L8-L9 and SQL Server L8-L10 stop an OJP server.
+PID files must identify the endpoint being stopped, and a supervisor must
+restart that server.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -662,19 +416,3 @@ lists put the restartable server first. Configure that server with
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
-
-The C++ ODBC PostgreSQL workflow job runs `OjpOdbcPostgreSqlL1Integration` and
-`OjpOdbcPostgreSqlL2Integration` against PostgreSQL and one OJP server.
-The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L9Integration`; L7-L9 run against two OJP servers. L9 requires its
-second endpoint's PID file and stops that server during the active-XA affinity
-assertion. The C++ ODBC SQL Server
-workflow job runs `OjpOdbcSqlServerL1Integration` through
-`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
-`OjpOdbcSqlServerL4Integration`, `OjpOdbcSqlServerL5Integration`,
-`OjpOdbcSqlServerL6Integration`, `OjpOdbcSqlServerL7Integration`, and
-`OjpOdbcSqlServerL8Integration`, `OjpOdbcSqlServerL9Integration`, and
-`OjpOdbcSqlServerL10Integration`; L7-L10 use two OJP server processes. L8-L10
-stop the first endpoint and rely on the workflow supervisor to restart it. L9
-and L10 verify that active XA work does not fail over to the other endpoint;
-L10 also exercises stateless failover and recovered-node reuse in the same suite.

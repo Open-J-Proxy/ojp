@@ -540,7 +540,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC PostgreSQL partial L5 data-path integration test passed\n";
+    std::cout << "C++ ODBC PostgreSQL L5 integration test passed\n";
     return 0;
 }
 

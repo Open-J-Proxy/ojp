@@ -70,7 +70,7 @@ These entries describe the levels targeted by the language client modules; they 
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L9** | H2 L1-L9 integration suites passed, including XA lifecycle and resource-manager integration. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server L1-L10 integration suites passed; `sqlserver_l10_integration_test.cpp` combines XA lifecycle/affinity with multinode failover and recovered-node reuse. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L8** | L1-L7 cover PostgreSQL CRUD, typed parameters, result streaming, transactions, hydrated BYTEA/TEXT, session affinity, and multinode operations; `postgresql_l8_integration_test.cpp` adds failover, pool-exhaustion safety, recovery, and recovered-node reuse. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L9** | L1-L8 cover PostgreSQL CRUD, typed parameters, result streaming, transactions, hydrated BYTEA/TEXT, session affinity, multinode operations, failover, and recovery; `postgresql_l9_integration_test.cpp` adds the XA lifecycle and server-affinity failure coverage. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
@@ -92,7 +92,7 @@ These levels are based on each language client's own integration tests and are i
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
 | **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
-| **C++ ODBC** | PostgreSQL | **L5** | L1-L5 passed locally against the unmodified base OJP server (Java 25) and PostgreSQL 16 and in the PostgreSQL CI job. `postgresql_l5_integration_test.cpp` verifies >1 MiB BYTEA, varied multi-chunk UTF-8 TEXT, NULL/empty values, updates, repeated reads, bound columns, cancellation, and error recovery. The L6-L8 suites are registered in PostgreSQL CI; a passing real-server run is required before raising the test-proven level. |
+| **C++ ODBC** | PostgreSQL | **L8** | Existing L1-L8 suites cover PostgreSQL data, affinity, multinode operations, and failover/recovery. The new `postgresql_l9_integration_test.cpp` covers XA; promote the test-proven level to L9 after the PostgreSQL L1-L9 real-server CI run passes. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

@@ -6,6 +6,7 @@ import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
 import org.openjproxy.grpc.server.SessionManager;
+import org.openjproxy.grpc.server.lob.BufferedLob;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -293,7 +294,12 @@ public class ParameterHandler {
         if (blobUUID == null) {
             ps.setBlob(idx, (Blob) null);
         } else {
-            ps.setBlob(idx, sessionManager.<Blob>getLob(session, (String) blobUUID));
+            Object lob = sessionManager.getLob(session, (String) blobUUID);
+            if (lob instanceof BufferedLob buffered) {
+                ps.setBinaryStream(idx, new ByteArrayInputStream(buffered.binaryContent()));
+            } else {
+                ps.setBlob(idx, (Blob) lob);
+            }
         }
     }
 
@@ -306,8 +312,12 @@ public class ParameterHandler {
         if (clobUUID == null) {
             ps.setClob(idx, (Clob) null);
         } else {
-            Clob clob = sessionManager.getLob(session, (String) clobUUID);
-            ps.setClob(idx, clob.getCharacterStream());
+            Object lob = sessionManager.getLob(session, (String) clobUUID);
+            if (lob instanceof BufferedLob buffered) {
+                ps.setString(idx, buffered.textContent());
+            } else {
+                ps.setClob(idx, ((Clob) lob).getCharacterStream());
+            }
         }
     }
 

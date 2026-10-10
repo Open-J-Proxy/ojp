@@ -176,6 +176,7 @@ struct StatementHandle final : HandleBase {
         : HandleBase(SQL_HANDLE_STMT), connection(parent) {}
 
     ConnectionHandle* connection;
+    std::mutex operation_mutex;
     std::string sql;
     std::map<SQLUSMALLINT, BoundParameter> parameters;
     std::map<SQLUSMALLINT, BoundColumn> bound_columns;
@@ -1484,10 +1485,10 @@ bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diag
     return true;
 }
 
-std::size_t utf8_character_units(const std::string& text, std::size_t length) {
+std::size_t utf8_character_units(const std::string& text, std::size_t offset, std::size_t length) {
     std::size_t units = 0;
     for (std::size_t index = 0; index < length;) {
-        const auto character = static_cast<unsigned char>(text[index]);
+        const auto character = static_cast<unsigned char>(text[offset + index]);
         const std::size_t width = character < 0x80 ? 1 : (character < 0xe0 ? 2 :
             (character < 0xf0 ? 3 : 4));
         units += width == 4 ? 2 : 1;
@@ -1545,7 +1546,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
                                : fail_grpc(handle, status, context);
         }
         if (lob_type == com::openjproxy::grpc::LT_CLOB) {
-            character_position += utf8_character_units(data, end - offset);
+            character_position += utf8_character_units(data, offset, end - offset);
         }
         offset = end;
         first_block = false;
@@ -2098,6 +2099,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
 
     StatementRequest request;
     request.set_sql(statement->sql);
+    const bool postgres = connection->url.find("jdbc:postgresql:") != std::string::npos;
     for (const auto& entry : statement->parameters) {
         const auto& bound = entry.second;
         if (bound.direction != SQL_PARAM_INPUT) {
@@ -2134,6 +2136,9 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         if (!set_parameter_value(value, bound, entry.first, &parameter_error)) {
             return fail(statement, parameter_error.message, parameter_error.state,
                         parameter_error.native_error);
+        }
+        if (postgres && is_null && bound.parameter_type == SQL_LONGVARBINARY) {
+            value->set_int_value(SQL_VARBINARY);
         }
     }
     request.mutable_session()->CopyFrom(connection->session);
@@ -3125,6 +3130,7 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER len
         return fail(static_cast<HandleBase*>(statement), "SQL text is required", "HY009");
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     reset_data_at_execution(target);
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
@@ -3142,6 +3148,7 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER length
         return fail(static_cast<HandleBase*>(statement), "SQL text is required", "HY009");
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     reset_data_at_execution(target);
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
@@ -3159,6 +3166,7 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (!target->data_at_execution_parameters.empty()) {
         return fail(target, "Cannot bind a parameter while data-at-execution is active", "HY010");
@@ -3201,6 +3209,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statement) {
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (target->waiting_for_data) {
         return fail(target, "Data-at-execution is already active", "HY010");
@@ -3222,12 +3231,29 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statement) {
     return execute_statement(target);
 }
 
+SQLRETURN SQL_API SQLCancel(SQLHSTMT statement) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
+    clear_diagnostics(target);
+    if (!target->waiting_for_data) {
+        return fail(target, "Only buffered data-at-execution cancellation is supported", "HYC00");
+    }
+    // Data-at-execution is buffered locally; cancellation must discard it before any RPC.
+    reset_data_at_execution(target);
+    return SQL_SUCCESS;
+}
+
 SQLRETURN SQL_API SQLParamData(SQLHSTMT statement, SQLPOINTER* value) {
     if (statement == SQL_NULL_HSTMT ||
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (!target->waiting_for_data) {
         return fail(target, "No data-at-execution operation is active", "HY010");
@@ -3267,6 +3293,7 @@ SQLRETURN SQL_API SQLPutData(SQLHSTMT statement, SQLPOINTER data, SQLLEN length)
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (!target->waiting_for_data || target->current_data_at_execution_parameter == 0) {
         return fail(target, "SQLParamData must request a parameter before SQLPutData", "HY010");
@@ -3307,6 +3334,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (!target->has_result_set) {
         return fail(target, "Statement does not have a result set", "24000");
@@ -3349,6 +3377,7 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (target->row_index == 0 || target->row_index > target->rows.size() ||
         column_number == 0 || column_number > target->rows[target->row_index - 1].size()) {
@@ -3356,14 +3385,26 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
     }
     const Cell& cell = target->rows[target->row_index - 1][column_number - 1];
     Cell materialized_cell;
-    const auto lob_result = materialize_lob_cell(target, cell, target_type, &materialized_cell);
-    if (!SQL_SUCCEEDED(lob_result)) {
-        return lob_result;
+    const Cell* result_cell = &cell;
+    const auto* original_text = std::get_if<std::string>(&cell);
+    if (original_text != nullptr &&
+        (original_text->compare(0, std::strlen("OJP_CLOB_PREFIX:"), "OJP_CLOB_PREFIX:") == 0 ||
+         (target_type == SQL_C_BINARY && is_uuid(*original_text)))) {
+        const auto lob_result = materialize_lob_cell(target, cell, target_type, &materialized_cell);
+        if (!SQL_SUCCEEDED(lob_result)) {
+            return lob_result;
+        }
+        result_cell = &materialized_cell;
     }
     if (target_type == SQL_C_BINARY || target_type == SQL_C_CHAR) {
-        if (const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&materialized_cell)) {
+        const auto* bytes = std::get_if<std::vector<std::uint8_t>>(result_cell);
+        const auto* text = std::get_if<std::string>(result_cell);
+        if (bytes != nullptr || (target_type == SQL_C_CHAR && text != nullptr)) {
+            const std::size_t size = bytes != nullptr ? bytes->size() : text->size();
+            const void* data = bytes != nullptr
+                ? static_cast<const void*>(bytes->data()) : static_cast<const void*>(text->data());
             const auto offset = target->get_data_offsets[column_number];
-            if (offset > bytes->size()) {
+            if (offset > size) {
                 return SQL_NO_DATA;
             }
             if (target_value == nullptr) {
@@ -3375,28 +3416,28 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
             const auto capacity = target_type == SQL_C_CHAR
                 ? (buffer_length > 0 ? static_cast<std::size_t>(buffer_length - 1) : 0)
                 : static_cast<std::size_t>(buffer_length);
-            const auto available = bytes->size() - offset;
+            const auto available = size - offset;
             const auto copy_count = std::min(capacity, available);
             if (copy_count > 0) {
-                std::memcpy(target_value, bytes->data() + offset, copy_count);
+                std::memcpy(target_value, static_cast<const char*>(data) + offset, copy_count);
             }
             if (target_type == SQL_C_CHAR && buffer_length > 0) {
                 static_cast<char*>(target_value)[copy_count] = '\0';
             }
             if (indicator != nullptr) {
-                *indicator = static_cast<SQLLEN>(bytes->size());
+                *indicator = static_cast<SQLLEN>(available);
             }
             target->get_data_offsets[column_number] =
-                copy_count < available ? offset + copy_count : bytes->size() + 1;
+                copy_count < available ? offset + copy_count : size + 1;
             if (copy_count < available) {
                 target->diagnostics.push_back(
-                    {"01004", 0, "Binary result was truncated"});
+                    {"01004", 0, "Result value was truncated"});
                 return SQL_SUCCESS_WITH_INFO;
             }
             return SQL_SUCCESS;
         }
     }
-    return write_cell(target, materialized_cell, target_type, target_value,
+    return write_cell(target, *result_cell, target_type, target_value,
                       buffer_length, indicator);
 }
 
@@ -3493,6 +3534,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
     clear_diagnostics(target);
     if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS) {
         if (option == SQL_CLOSE) {
@@ -3820,7 +3862,8 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLSETCONNECTATTR, SQL_API_SQLGETCONNECTATTR, SQL_API_SQLENDTRAN,
         SQL_API_SQLTRANSACT,
         SQL_API_SQLEXECDIRECT, SQL_API_SQLPREPARE, SQL_API_SQLBINDPARAMETER,
-        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLPARAMDATA, SQL_API_SQLPUTDATA,
+        SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLCANCEL,
+        SQL_API_SQLPARAMDATA, SQL_API_SQLPUTDATA,
         SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
         SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
         SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,

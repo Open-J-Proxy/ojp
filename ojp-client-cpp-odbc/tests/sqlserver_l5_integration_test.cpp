@@ -172,9 +172,9 @@ void verify_lob_rows(SQLHSTMT statement,
                 expect(data_length == SQL_NULL_DATA, "SQL Server did not preserve a NULL LOB");
                 break;
             }
-            expect(data_length == static_cast<SQLLEN>(expected_payloads[row].size()),
-                   "SQL Server returned an incorrect LOB length");
             const auto remaining = expected_payloads[row].size() - actual_payload.size();
+            expect(data_length == static_cast<SQLLEN>(remaining),
+                   "SQL Server returned an incorrect remaining LOB length");
             const auto bytes_read = std::min(chunk_size, remaining);
             actual_payload.insert(actual_payload.end(), buffer.begin(),
                                   buffer.begin() + static_cast<std::ptrdiff_t>(bytes_read));

@@ -1,5 +1,6 @@
 package org.openjproxy.grpc.server.action.streaming;
 
+import com.openjproxy.grpc.DbName;
 import com.openjproxy.grpc.LobDataBlock;
 import com.openjproxy.grpc.LobReference;
 import com.openjproxy.grpc.LobType;
@@ -12,6 +13,7 @@ import org.openjproxy.grpc.server.ConnectionSessionDTO;
 import org.openjproxy.grpc.server.LobDataBlocksInputStream;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.StreamingAction;
+import org.openjproxy.grpc.server.lob.BufferedLob;
 
 import java.io.IOException;
 import java.io.Writer;
@@ -129,7 +131,11 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
         private void initializeLobIfNeeded(ConnectionSessionDTO dto, LobDataBlock lobDataBlock) throws SQLException {
             if (lobDataBlock.getSession().getSessionUUID().isEmpty() || this.lobUUID == null) {
                 Connection conn = dto.getConnection();
-                if (LobType.LT_BLOB.equals(this.lobType)) {
+                if (DbName.POSTGRES.equals(context.getDbNameMap().get(dto.getSession().getConnHash()))
+                        && (this.lobType == LobType.LT_BLOB || this.lobType == LobType.LT_CLOB)) {
+                    this.lobUUID = UUID.randomUUID().toString();
+                    sessionManager.registerLob(dto.getSession(), new BufferedLob(this.lobType), this.lobUUID);
+                } else if (LobType.LT_BLOB.equals(this.lobType)) {
                     Blob newBlob = conn.createBlob();
                     this.lobUUID = UUID.randomUUID().toString();
                     sessionManager.registerLob(dto.getSession(), newBlob, this.lobUUID);
@@ -147,6 +153,12 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
          * @return the number of bytes written
          */
         private int writeLobData(ConnectionSessionDTO dto, LobDataBlock lobDataBlock) throws SQLException {
+            if (this.lobUUID != null) {
+                Object lob = sessionManager.getLob(dto.getSession(), this.lobUUID);
+                if (lob instanceof BufferedLob buffered) {
+                    return buffered.write(lobDataBlock.getPosition(), lobDataBlock.getData().toByteArray());
+                }
+            }
             return switch (this.lobType) {
                 case LT_BLOB -> writeBlobData(dto, lobDataBlock);
                 case LT_CLOB -> writeClobData(dto, lobDataBlock);

@@ -12,7 +12,7 @@ communicates with the server over gRPC.
 
 | Assessment | Value |
 |---|---|
-| Highest implemented level | **L9 for H2; L10 for SQL Server; L3 target for PostgreSQL** |
+| Highest implemented level | **L9 for H2; L10 for SQL Server; L3 for PostgreSQL** |
 | Summary | H2 and SQL Server add XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse. |
 
 ### Current test-proven coverage by database
@@ -20,7 +20,7 @@ communicates with the server over gRPC.
 | Database | Highest achieved level (current tests) | Evidence |
 |---|---:|---|
 | **H2** | **L9** | L1-L9 integration suites passed, including stateless failover, pool-exhaustion safety, recovered-node reuse, and XA lifecycle/recovery in `h2_l9_integration_test.cpp`. |
-| PostgreSQL | **L1; L2-L3 target** | `l1_integration_test.cpp` covers connectivity and CRUD; `postgresql_l2_integration_test.cpp` adds typed parameters, statement variants, generated IDs, and metadata; `postgresql_l3_integration_test.cpp` adds multi-block results and cursor lifecycle. Passing enabled integration runs are required to establish L2-L3. |
+| PostgreSQL | **L3** | Enabled PostgreSQL L1-L3 integration suites passed against PostgreSQL 17 and one OJP server. `l1_integration_test.cpp` covers connectivity and CRUD; `postgresql_l2_integration_test.cpp` adds typed parameters, statement variants, generated IDs, and metadata; `postgresql_l3_integration_test.cpp` adds multi-block results and cursor lifecycle. |
 | SQL Server | **L10** | L1-L10 integration suites passed, including XA lifecycle/recovery in `sqlserver_l9_integration_test.cpp` and combined multinode/XA coverage in `sqlserver_l10_integration_test.cpp`. |
 | MySQL | Not established | No database-specific integration suite in this module. |
 | MariaDB | Not established | No database-specific integration suite in this module. |
@@ -158,11 +158,13 @@ are not implemented.
 ### PostgreSQL L3 coverage
 
 The PostgreSQL L3 suite follows the result iteration, metadata, and close/reuse
-behavior of the JDBC PostgreSQL statement and result-set tests, using the same
+behavior of the JDBC `PostgresStatementExtensiveTests` and
+`PostgresPreparedStatementExtensiveTests`, using the same
 standalone ODBC format as H2 and SQL Server. It verifies 10,001 ordered rows
-inserted with `generate_series`, column labels, empty results, repeated
-`SQL_NO_DATA`, partial cursor closure, and statement reuse. `BYTEA` results check
-binary preservation and SQL NULL handling.
+generated with `generate_series`, column labels, empty results, repeated
+`SQL_NO_DATA`, partial cursor closure through `SQLFreeStmt` and `SQLCloseCursor`,
+prepared-query reuse, and freeing an active statement. `BYTEA` results check
+binary preservation, empty values, and SQL NULL handling across streamed blocks.
 
 For `CLIENT_SPEC_AI.md` sections 4.3, 4.5.2, and 12.1, the shared driver consumes
 every `executeQuery` response, updates session information, and closes the

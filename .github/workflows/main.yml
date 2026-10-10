@@ -23,7 +23,7 @@
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L9 tests (runs alongside build-test)
-# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L2 tests (needs: h2-integration-gate)
+# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L3 tests (needs: h2-integration-gate)
 # 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L10 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
@@ -2400,7 +2400,7 @@ jobs:
           NODE
 
   # ===========================================================================
-  # JOB 13: C++ ODBC PostgreSQL L1-L2 Integration Tests
+  # JOB 13: C++ ODBC PostgreSQL L1-L3 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the remaining database-specific integration tests, only
@@ -2408,7 +2408,7 @@ jobs:
   #
   # ===========================================================================
   cpp-odbc-postgres-test:
-    name: C++ ODBC PostgreSQL L1-L2 Tests
+    name: C++ ODBC PostgreSQL L1-L3 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes, h2-integration-gate]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' && needs.h2-integration-gate.result == 'success' }}
@@ -2475,7 +2475,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC PostgreSQL L1-L2 tests
+      - name: Run C++ ODBC PostgreSQL L1-L3 tests
         env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
@@ -2497,8 +2497,8 @@ jobs:
             sleep 2
           done
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcPostgreSqlL[12]Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-postgresql-l1-l2-test.log
+            -R '^OjpOdbcPostgreSqlL[123]Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-postgresql-l1-l3-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2514,9 +2514,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-postgresql-l1-l2-test-results
+          name: cpp-odbc-postgresql-l1-l3-test-results
           path: |
-            /tmp/cpp-odbc-postgresql-l1-l2-test.log
+            /tmp/cpp-odbc-postgresql-l1-l3-test.log
             /tmp/ojp-server.log
           retention-days: 7
 

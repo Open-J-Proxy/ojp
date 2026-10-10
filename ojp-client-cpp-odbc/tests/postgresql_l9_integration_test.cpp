@@ -392,11 +392,11 @@ int run_integration_test(int argc, char** argv) {
         if (same_resource_manager != SQL_TRUE) {
             throw std::runtime_error("an XA resource must share its resource manager with itself");
         }
-        same_resource_manager = SQL_FALSE;
+        same_resource_manager = SQL_TRUE;
         require_success(xa.is_same_rm(xa_connection, same_rm_connection, &same_resource_manager),
                         "OjpXAIsSameRM(PostgreSQL resources)", SQL_HANDLE_DBC, xa_connection);
-        if (same_resource_manager != SQL_TRUE) {
-            throw std::runtime_error("PostgreSQL XA sessions for the same database must share an RM");
+        if (same_resource_manager != SQL_FALSE) {
+            throw std::runtime_error("PostgreSQL must report distinct XA resources as different RMs");
         }
 
         const OjpXid two_phase_xid = xid_for(table + "_two_phase", "branch-1");

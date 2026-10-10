@@ -12,7 +12,6 @@ import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.StatementServiceImpl;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
-import org.openjproxy.grpc.server.lob.BufferedLob;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -87,11 +86,6 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
         log.debug("Reading lob {}", request.getLobReference().getUuid());
         try {
             LobReference lobRef = request.getLobReference();
-            Object lob = context.getSessionManager().getLob(lobRef.getSession(), lobRef.getUuid());
-            if (lob instanceof BufferedLob buffered) {
-                readBufferedLob(buffered, request, responseObserver);
-                return;
-            }
             StatementServiceImpl.ReadLobContext readLobContext = this.findLobContext(context.getSessionManager(),
                     request);
             InputStream inputStream = readLobContext.getInputStream();
@@ -163,26 +157,6 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private void readBufferedLob(BufferedLob lob, ReadLobRequest request,
-                                 StreamObserver<LobDataBlock> responseObserver) throws SQLException {
-        if (lob.getLobType() != request.getLobReference().getLobType()) {
-            throw new SQLException("LOB reference type does not match the stored value", "07006");
-        }
-        byte[] data = lob.read(request.getPosition(), request.getLength());
-        int offset = 0;
-        do {
-            int end = Math.min(data.length, offset + MAX_LOB_DATA_BLOCK_SIZE);
-            responseObserver.onNext(LobDataBlock.newBuilder()
-                    .setSession(request.getLobReference().getSession())
-                    .setLobType(lob.getLobType())
-                    .setPosition(request.getPosition() + offset)
-                    .setData(ByteString.copyFrom(data, offset, end - offset))
-                    .build());
-            offset = end;
-        } while (offset < data.length);
-        responseObserver.onCompleted();
     }
 
     /**

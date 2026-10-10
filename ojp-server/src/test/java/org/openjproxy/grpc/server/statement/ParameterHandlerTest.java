@@ -1,24 +1,19 @@
 package org.openjproxy.grpc.server.statement;
 
 import com.openjproxy.grpc.SessionInfo;
-import com.openjproxy.grpc.LobType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
-import org.mockito.ArgumentCaptor;
 import org.mockito.MockitoAnnotations;
 import org.postgresql.util.PGobject;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
 import org.openjproxy.grpc.server.SessionManager;
-import org.openjproxy.grpc.server.lob.BufferedLob;
 
-import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -27,14 +22,12 @@ import java.sql.Timestamp;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link ParameterHandler}.
@@ -60,36 +53,6 @@ class ParameterHandlerTest {
                 .setConnHash("test-hash")
                 .setClientUUID("test-client")
                 .build();
-    }
-
-    @Test
-    void shouldBindBufferedBlobAsBinaryStream() throws Exception {
-        byte[] bytes = new byte[]{0, 1, (byte) 255, 0};
-        BufferedLob lob = new BufferedLob(LobType.LT_BLOB);
-        lob.write(1, bytes);
-        when(sessionManager.getLob(session, "buffered-blob")).thenReturn(lob);
-        Parameter param = Parameter.builder().index(1).type(ParameterType.BLOB)
-                .values(List.of("buffered-blob")).build();
-
-        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
-
-        ArgumentCaptor<InputStream> stream = ArgumentCaptor.forClass(InputStream.class);
-        verify(ps).setBinaryStream(eq(1), stream.capture());
-        assertArrayEquals(bytes, stream.getValue().readAllBytes());
-    }
-
-    @Test
-    void shouldBindBufferedClobAsUnicodeString() throws SQLException {
-        String text = "é東京🙂";
-        BufferedLob lob = new BufferedLob(LobType.LT_CLOB);
-        lob.write(1, text.getBytes(StandardCharsets.UTF_8));
-        when(sessionManager.getLob(session, "buffered-clob")).thenReturn(lob);
-        Parameter param = Parameter.builder().index(1).type(ParameterType.CLOB)
-                .values(List.of("buffered-clob")).build();
-
-        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
-
-        verify(ps).setString(1, text);
     }
 
     // -------------------------------------------------------------------------

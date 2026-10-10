@@ -1,17 +1,13 @@
 // PostgreSQL uses BYTEA/TEXT rather than JDBC BLOB/CLOB objects.
 #include <sql.h>
 #include <sqlext.h>
-#include "StatementService.grpc.pb.h"
-#include <grpcpp/grpcpp.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -19,8 +15,6 @@
 #include <vector>
 
 namespace {
-
-namespace protocol = com::openjproxy::grpc;
 
 struct DatabaseConfig {
     std::string url;
@@ -385,194 +379,6 @@ void verify_small_chunks(SQLHSTMT statement) {
     reset_statement(statement);
 }
 
-void require_rpc(const grpc::Status& status, const std::string& operation) {
-    expect(status.ok(), operation + " failed: " + status.error_message());
-}
-
-protocol::LobReference upload_protocol_lob(protocol::StatementService::Stub& stub,
-                                          protocol::SessionInfo& session,
-                                          protocol::LobType type, const std::string& data) {
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    auto stream = stub.createLob(&context);
-    protocol::LobReference reference;
-    std::size_t offset = 0;
-    std::size_t characters = 0;
-    do {
-        std::size_t end = std::min(data.size(), offset + 64 * 1024);
-        if (type == protocol::LT_CLOB && end < data.size()) {
-            while (end > offset && (static_cast<unsigned char>(data[end]) & 0xc0) == 0x80) {
-                --end;
-            }
-        }
-        protocol::LobDataBlock block;
-        block.mutable_session()->CopyFrom(session);
-        block.set_lobtype(type);
-        block.set_position(static_cast<std::int64_t>(
-            (type == protocol::LT_CLOB ? characters : offset) + 1));
-        block.set_data(data.data() + offset, end - offset);
-        expect(stream->Write(block), "createLob closed the upload before all blocks were sent");
-        if (offset == 0) {
-            expect(stream->Read(&reference), "createLob did not return an initial reference");
-            expect(!reference.uuid().empty() && !reference.session().sessionuuid().empty(),
-                   "createLob must assign a LOB and sticky session");
-            session.CopyFrom(reference.session());
-        }
-        for (std::size_t index = offset; type == protocol::LT_CLOB && index < end;) {
-            const auto leading = static_cast<unsigned char>(data[index]);
-            const std::size_t width = leading < 0x80 ? 1 : leading < 0xe0 ? 2 : leading < 0xf0 ? 3 : 4;
-            characters += width == 4 ? 2 : 1;
-            index += width;
-        }
-        offset = end;
-    } while (offset < data.size());
-    expect(stream->WritesDone(), "createLob could not finish the upload");
-    while (stream->Read(&reference)) {
-        session.CopyFrom(reference.session());
-    }
-    require_rpc(stream->Finish(), "createLob");
-    expect(reference.byteswritten() == static_cast<std::int32_t>(data.size()),
-           "createLob returned an incorrect uploaded byte count");
-    expect(reference.lobtype() == type, "createLob returned an incorrect LOB type");
-    return reference;
-}
-
-std::string read_protocol_lob(protocol::StatementService::Stub& stub,
-                              const protocol::LobReference& reference,
-                              std::int64_t position, std::int32_t length,
-                              const std::string& expected_state = "") {
-    protocol::ReadLobRequest request;
-    request.mutable_lobreference()->CopyFrom(reference);
-    request.set_position(position);
-    request.set_length(length);
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    auto stream = stub.readLob(&context, request);
-    protocol::LobDataBlock block;
-    std::string result;
-    std::size_t block_count = 0;
-    while (stream->Read(&block)) {
-        expect(block.data().size() <= 64 * 1024, "readLob exceeded the protocol chunk size");
-        expect(block.session().sessionuuid() == reference.session().sessionuuid(),
-               "readLob changed the sticky session");
-        result += block.data();
-        ++block_count;
-    }
-    const auto status = stream->Finish();
-    if (!expected_state.empty()) {
-        expect(!status.ok(), "invalid readLob request unexpectedly succeeded");
-        bool found_state = false;
-        for (const auto& item : context.GetServerTrailingMetadata()) {
-            const std::string key(item.first.data(), item.first.size());
-            if (key.find("-bin") != std::string::npos) {
-                protocol::SqlErrorResponse error;
-                if (error.ParseFromArray(item.second.data(), static_cast<int>(item.second.size())) &&
-                    error.sqlstate() == expected_state) {
-                    found_state = true;
-                }
-            }
-        }
-        expect(found_state, "readLob did not preserve SQLSTATE " + expected_state);
-    } else {
-        require_rpc(status, "readLob");
-        expect(block_count != 0, "readLob must return a block even for an empty value");
-        if (result.size() > 64 * 1024) {
-            expect(block_count > 1, "large readLob result was not streamed in multiple blocks");
-        }
-    }
-    return result;
-}
-
-std::int64_t protocol_lob_length(protocol::StatementService::Stub& stub,
-                                 const protocol::LobReference& reference) {
-    protocol::CallResourceRequest request;
-    request.mutable_session()->CopyFrom(reference.session());
-    request.set_resourcetype(protocol::RES_LOB);
-    request.set_resourceuuid(reference.uuid());
-    request.mutable_target()->set_calltype(protocol::CALL_LENGTH);
-    grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    protocol::CallResourceResponse response;
-    require_rpc(stub.callResource(&context, request, &response), "callResource(LOB length)");
-    expect(response.session().sessionuuid() == reference.session().sessionuuid(),
-           "callResource(LOB length) changed the sticky session");
-    expect(response.values_size() == 1 && response.values(0).has_long_value(),
-           "callResource(LOB length) must return a JDBC long");
-    return response.values(0).long_value();
-}
-
-void verify_lob_protocol(const DatabaseConfig& config, const std::string& endpoint,
-                         const std::string& binary, const std::string& text) {
-    auto stub = protocol::StatementService::NewStub(
-        grpc::CreateChannel(endpoint, grpc::InsecureChannelCredentials()));
-    protocol::ConnectionDetails details;
-    details.set_url(config.url);
-    details.set_user(config.user);
-    details.set_password(config.password);
-    details.set_clientuuid("cpp-pg-l5-" + std::to_string(std::random_device{}()));
-    details.add_serverendpoints(endpoint);
-    protocol::SessionInfo session;
-    grpc::ClientContext connect_context;
-    connect_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-    require_rpc(stub->connect(&connect_context, details, &session), "connect(protocol)");
-    const auto terminate = [&]() {
-        grpc::ClientContext context;
-        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-        protocol::SessionTerminationStatus response;
-        return stub->terminateSession(&context, session, &response);
-    };
-    try {
-        const auto blob = upload_protocol_lob(*stub, session, protocol::LT_BLOB, binary);
-        const auto clob = upload_protocol_lob(*stub, session, protocol::LT_CLOB, text);
-        const auto unicode = upload_protocol_lob(*stub, session, protocol::LT_CLOB, "é東京🙂z");
-        const auto empty_blob = upload_protocol_lob(*stub, session, protocol::LT_BLOB, "");
-        const auto empty_clob = upload_protocol_lob(*stub, session, protocol::LT_CLOB, "");
-        std::int64_t text_length = 0;
-        for (unsigned char byte : text) {
-            if ((byte & 0xC0) != 0x80) {
-                text_length += byte >= 0xF0 ? 2 : 1;
-            }
-        }
-        for (int read = 0; read < 2; ++read) {
-            expect(protocol_lob_length(*stub, blob) == static_cast<std::int64_t>(binary.size()),
-                   "BLOB length must count all bytes, including trailing zeros");
-            expect(protocol_lob_length(*stub, clob) == text_length,
-                   "CLOB length must count UTF-16 units, not UTF-8 bytes");
-            expect(protocol_lob_length(*stub, unicode) == 6,
-                   "CLOB length must count supplementary characters as two UTF-16 units");
-            expect(protocol_lob_length(*stub, empty_blob) == 0 &&
-                       protocol_lob_length(*stub, empty_clob) == 0,
-                   "empty BLOB and CLOB lengths must be zero");
-            expect(read_protocol_lob(*stub, blob, 1, std::numeric_limits<std::int32_t>::max()) == binary,
-                   "createLob/readLob changed binary bytes, including trailing zeros");
-            expect(read_protocol_lob(*stub, clob, 1, std::numeric_limits<std::int32_t>::max()) == text,
-                   "createLob/readLob changed multi-chunk Unicode text");
-            expect(read_protocol_lob(*stub, empty_blob, 1, 100).empty(),
-                   "readLob changed an empty BLOB");
-            expect(read_protocol_lob(*stub, empty_clob, 1, 100).empty(),
-                   "readLob changed an empty CLOB");
-        }
-        expect(read_protocol_lob(*stub, blob, 17, 121) == binary.substr(16, 121),
-               "readLob returned the wrong binary slice");
-        expect(read_protocol_lob(*stub, blob, static_cast<std::int64_t>(binary.size()) + 1, 0).empty(),
-               "readLob zero-length slice must be empty");
-        expect(read_protocol_lob(*stub, unicode, 2, 4) == "東京🙂",
-               "readLob CLOB slices must use UTF-16 character positions");
-        expect(read_protocol_lob(*stub, unicode, 1, 1) == "é",
-               "readLob truncated a multi-byte character");
-        read_protocol_lob(*stub, blob, 0, 1, "22003");
-        read_protocol_lob(*stub, blob, 1, -1, "22003");
-        read_protocol_lob(*stub, blob, static_cast<std::int64_t>(binary.size()) + 2, 1, "22003");
-        auto wrong_type = blob;
-        wrong_type.set_lobtype(protocol::LT_CLOB);
-        read_protocol_lob(*stub, wrong_type, 1, 1, "07006");
-        require_rpc(terminate(), "terminateSession(protocol)");
-    } catch (...) {
-        terminate();
-        throw;
-    }
-}
-
 int run_integration_test(int argc, char** argv) {
     if (argc != 4) {
         throw std::runtime_error("expected PostgreSQL CSV path, enable variable, and endpoint variable");
@@ -585,7 +391,7 @@ int run_integration_test(int argc, char** argv) {
         return static_cast<char>(std::tolower(character));
     });
     if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
-        std::cout << "Skipped: set " << enable_variable << "=true to run the PostgreSQL L5 suite\n";
+        std::cout << "Skipped: set " << enable_variable << "=true to run the PostgreSQL L5 data-path suite\n";
         return 77;
     }
     if (enabled != "true" && enabled != "1" && enabled != "yes") {
@@ -622,7 +428,6 @@ int run_integration_test(int argc, char** argv) {
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
     bool table_created = false;
-    verify_lob_protocol(config, endpoint, large_binary, large_text);
     try {
         require_success(SQLSetEnvAttr(SQL_NULL_HENV, SQL_ATTR_CONNECTION_POOLING,
                                       reinterpret_cast<SQLPOINTER>(SQL_CP_OFF), 0),
@@ -735,7 +540,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC PostgreSQL L5 integration test passed\n";
+    std::cout << "C++ ODBC PostgreSQL partial L5 data-path integration test passed\n";
     return 0;
 }
 

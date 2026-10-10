@@ -2116,6 +2116,18 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             if (!get_lob_parameter_data(bound, &lob_data, &parameter_error)) {
                 return fail(statement, parameter_error.message, parameter_error.state);
             }
+            if (postgres) {
+                // Match Java JDBC: PostgreSQL BYTEA/TEXT uses hydrated values, not LOB handles.
+                if (bound.parameter_type == SQL_LONGVARBINARY) {
+                    parameter->set_type(com::openjproxy::grpc::PT_BINARY_STREAM);
+                    value->set_bytes_value(lob_data);
+                    parameter->add_values()->set_long_value(static_cast<std::int64_t>(lob_data.size()));
+                } else {
+                    parameter->set_type(com::openjproxy::grpc::PT_STRING);
+                    value->set_string_value(lob_data);
+                }
+                continue;
+            }
             const LobType lob_type = bound.parameter_type == SQL_LONGVARBINARY
                 ? com::openjproxy::grpc::LT_BLOB : com::openjproxy::grpc::LT_CLOB;
             std::string lob_uuid;

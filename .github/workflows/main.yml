@@ -23,7 +23,7 @@
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L9 tests (runs alongside build-test)
-# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L5 tests (needs: h2-integration-gate)
+# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L4 + partial L5 data-path tests (needs: h2-integration-gate)
 # 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L10 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
@@ -2400,7 +2400,7 @@ jobs:
           NODE
 
   # ===========================================================================
-  # JOB 13: C++ ODBC PostgreSQL L1-L5 Integration Tests
+  # JOB 13: C++ ODBC PostgreSQL L1-L4 + Partial L5 Data-Path Tests
   # ===========================================================================
   #
   # Runs alongside the remaining database-specific integration tests, only
@@ -2408,7 +2408,7 @@ jobs:
   #
   # ===========================================================================
   cpp-odbc-postgres-test:
-    name: C++ ODBC PostgreSQL L1-L5 Tests
+    name: C++ ODBC PostgreSQL L1-L4 + Partial L5 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes, h2-integration-gate]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' && needs.h2-integration-gate.result == 'success' }}
@@ -2475,7 +2475,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC PostgreSQL L1-L5 tests
+      - name: Run C++ ODBC PostgreSQL L1-L4 and partial L5 data-path tests
         env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'

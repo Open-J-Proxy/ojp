@@ -70,7 +70,7 @@ These entries describe the levels targeted by the language client modules; they 
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L9** | H2 L1-L9 integration suites passed, including XA lifecycle and resource-manager integration. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server L1-L10 integration suites passed; `sqlserver_l10_integration_test.cpp` combines XA lifecycle/affinity with multinode failover and recovered-node reuse. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L5** | L1-L5 cover typed parameters, cursors, transactions, BYTEA/TEXT, chunked ODBC input/output, and direct `createLob`/`readLob` BLOB/CLOB protocol round trips. L6-L10 remain gaps. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L5 (partial data path)** | L1-L4 plus hydrated BYTEA/TEXT and chunked ODBC input/output. Strict L5 `createLob`/`readLob` handles and L6-L10 remain gaps. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
@@ -92,7 +92,7 @@ These levels are based on each language client's own integration tests and are i
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
 | **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
-| **C++ ODBC** | PostgreSQL | **L5** | L1-L5 passed locally against the current-source OJP server (Java 25) and PostgreSQL 16. `postgresql_l5_integration_test.cpp` verifies >1 MiB BYTEA, varied multi-chunk UTF-8 TEXT, NULL/empty values, updates, repeated reads, bound columns, cancellation, and `createLob`/`readLob` protocol conformance including slices and SQL errors. |
+| **C++ ODBC** | PostgreSQL | **L4** | L1-L4 and the partial L5 data-path suite passed locally against the unmodified base OJP server (Java 25) and PostgreSQL 16. `postgresql_l5_integration_test.cpp` verifies >1 MiB BYTEA, varied multi-chunk UTF-8 TEXT, NULL/empty values, updates, repeated reads, bound columns, cancellation, and error recovery. Strict L5 protocol coverage remains a gap. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
@@ -100,12 +100,13 @@ These levels are based on each language client's own integration tests and are i
 | **Python DB-API 2.0** | H2 | **L1** | `ojp-client-python-dbapi/tests/test_h2.py` |
 | **Ruby DBI** | H2 | **L1** | `ojp-client-ruby-dbi/test/integration/h2_l1_test.rb` |
 
-PostgreSQL L5 uses `BYTEA`/`TEXT`, not OID large objects. The server provides
-session-owned buffered BLOB/CLOB handles because PostgreSQL JDBC does not support
-native `createBlob`/`createClob`. Uploads and direct protocol reads use
-`createLob`/`readLob`; normal SQL query results remain hydrated. Binary slices
-use byte positions and CLOB slices use JDBC UTF-16 character units. The legacy
-`LT_BINARY_STREAM` upload-reference path is not used or claimed by this suite.
+PostgreSQL partial L5 coverage uses `BYTEA`/`TEXT`, not OID large objects.
+The client follows the existing Java JDBC path: binary input is hydrated
+`PT_BINARY_STREAM` bytes and text input is `PT_STRING`; query results are also
+hydrated. ODBC chunks are buffered locally, not streamed through
+`createLob`/`readLob`. PostgreSQL JDBC does not support native
+`createBlob`/`createClob`, so strict L5 LOB handles remain unsupported. This work
+does not modify the OJP server or claim the `LT_BINARY_STREAM` reference path.
 ODBC cancellation is supported for buffered data-at-execution only, not active RPCs.
 
 The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide an Active Record adapter or claim L2+ coverage; see [`ojp-client-ruby-dbi/README.md`](../../ojp-client-ruby-dbi/README.md) for the implemented API and current gaps.
@@ -133,7 +134,7 @@ The following table records the implemented target level and its real-server int
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; all H2 L1-L9 integration suites passed. |
 | **C++ ODBC** | SQL Server | **L10** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp` combines XA commit/rollback/recovery, non-XA multinode failover, SQL-error classification, XA affinity failure, and recovered-node reuse with the SQL Server L1-L9 suites. |
-| **C++ ODBC** | PostgreSQL | **L5** | `ojp-client-cpp-odbc/tests/postgresql_l5_integration_test.cpp` adds BYTEA/TEXT, BLOB/CLOB `createLob`/`readLob`, chunked ODBC input/output, updates, cancellation, and error recovery to L1-L4. All five suites passed locally; CI runs the same suites. |
+| **C++ ODBC** | PostgreSQL | **L5 (partial data path)** | `ojp-client-cpp-odbc/tests/postgresql_l5_integration_test.cpp` adds hydrated BYTEA/TEXT, chunked ODBC input/output, updates, cancellation, and error recovery to achieved L4. CI runs L1-L4 and this partial L5 suite; strict `createLob`/`readLob` support remains a gap. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

@@ -70,7 +70,7 @@ These entries describe the levels targeted by the language client modules; they 
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L9** | H2 L1-L9 integration suites passed, including XA lifecycle and resource-manager integration. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server L1-L10 integration suites passed; `sqlserver_l10_integration_test.cpp` combines XA lifecycle/affinity with multinode failover and recovered-node reuse. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L2** | Shared L1 suite plus `postgresql_l2_integration_test.cpp` cover typed parameters, statement variants, generated IDs, NULLs, and basic metadata; L2 awaits a passing CI run. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L4** | Shared L1 and PostgreSQL L2-L4 suites cover typed parameters, streaming/cursor lifecycle, local transactions, isolation, savepoints, and aborted-transaction recovery. L5-L10 remain gaps. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L1** | `client/h2_l1_integration_test.go` exercises connectivity, CRUD, errors, empty results, and connection lifecycle. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
@@ -92,7 +92,7 @@ These levels are based on each language client's own integration tests and are i
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
 | **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
-| **C++ ODBC** | PostgreSQL | **L1** | Real-server connectivity, CRUD, diagnostics, and lifecycle coverage in `ojp-client-cpp-odbc/tests/l1_integration_test.cpp`. |
+| **C++ ODBC** | PostgreSQL | **L4** | L1-L4 passed locally against the published OJP 1.0.3 server (Java 25) and PostgreSQL 16; `postgresql_l4_integration_test.cpp` verifies commit/rollback visibility, isolation, savepoint invalidation/recovery, and transactional DDL. Current-source server validation awaits CI. |
 | **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

@@ -12,6 +12,34 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class BufferedLobTest {
     @Test
+    void shouldReturnByteLengthWhenAppendingAndOverwritingBinary() throws SQLException {
+        BufferedLob lob = new BufferedLob(LobType.LT_BLOB);
+        assertEquals(0L, lob.length());
+        lob.write(1, new byte[]{1, 2, 3, 0, 0});
+        assertEquals(5L, lob.length());
+        lob.write(6, new byte[]{4, 0, 0});
+        assertEquals(8L, lob.length());
+        lob.write(1, new byte[]{9, 8});
+        assertEquals(8L, lob.length());
+        lob.write(9, new byte[0]);
+        assertEquals(8L, lob.length());
+    }
+
+    @Test
+    void shouldReturnUtf16LengthWhenAppendingAndOverwritingUnicode() throws SQLException {
+        BufferedLob lob = new BufferedLob(LobType.LT_CLOB);
+        assertEquals(0L, lob.length());
+        lob.write(1, "é東京🙂".getBytes(StandardCharsets.UTF_8));
+        assertEquals(5L, lob.length());
+        lob.write(6, "z".getBytes(StandardCharsets.UTF_8));
+        assertEquals(6L, lob.length());
+        lob.write(6, "🙂".getBytes(StandardCharsets.UTF_8));
+        assertEquals(7L, lob.length());
+        lob.write(8, new byte[0]);
+        assertEquals(7L, lob.length());
+    }
+
+    @Test
     void shouldPreserveAllBinaryValuesAndTrailingZerosWhenWritingChunks() throws SQLException {
         BufferedLob lob = new BufferedLob(LobType.LT_BLOB);
         byte[] first = new byte[65536];
@@ -43,6 +71,7 @@ class BufferedLobTest {
         for (LobType type : new LobType[]{LobType.LT_BLOB, LobType.LT_CLOB}) {
             BufferedLob lob = new BufferedLob(type);
             lob.write(1, new byte[0]);
+            assertEquals(0L, lob.length());
             assertArrayEquals(new byte[0], lob.read(1, Integer.MAX_VALUE));
             assertEquals("22003", assertThrows(SQLException.class, () -> lob.read(0, 1)).getSQLState());
             assertEquals("22003", assertThrows(SQLException.class, () -> lob.read(2, 1)).getSQLState());

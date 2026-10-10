@@ -68,6 +68,10 @@ public class BufferedLob {
         return characters.toString();
     }
 
+    public synchronized long length() {
+        return size();
+    }
+
     private int size() {
         return lobType == LobType.LT_CLOB ? characters.length() : byteLength;
     }

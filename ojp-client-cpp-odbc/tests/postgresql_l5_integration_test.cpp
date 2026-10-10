@@ -483,6 +483,24 @@ std::string read_protocol_lob(protocol::StatementService::Stub& stub,
     return result;
 }
 
+std::int64_t protocol_lob_length(protocol::StatementService::Stub& stub,
+                                 const protocol::LobReference& reference) {
+    protocol::CallResourceRequest request;
+    request.mutable_session()->CopyFrom(reference.session());
+    request.set_resourcetype(protocol::RES_LOB);
+    request.set_resourceuuid(reference.uuid());
+    request.mutable_target()->set_calltype(protocol::CALL_LENGTH);
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    protocol::CallResourceResponse response;
+    require_rpc(stub.callResource(&context, request, &response), "callResource(LOB length)");
+    expect(response.session().sessionuuid() == reference.session().sessionuuid(),
+           "callResource(LOB length) changed the sticky session");
+    expect(response.values_size() == 1 && response.values(0).has_long_value(),
+           "callResource(LOB length) must return a JDBC long");
+    return response.values(0).long_value();
+}
+
 void verify_lob_protocol(const DatabaseConfig& config, const std::string& endpoint,
                          const std::string& binary, const std::string& text) {
     auto stub = protocol::StatementService::NewStub(
@@ -509,7 +527,22 @@ void verify_lob_protocol(const DatabaseConfig& config, const std::string& endpoi
         const auto unicode = upload_protocol_lob(*stub, session, protocol::LT_CLOB, "é東京🙂z");
         const auto empty_blob = upload_protocol_lob(*stub, session, protocol::LT_BLOB, "");
         const auto empty_clob = upload_protocol_lob(*stub, session, protocol::LT_CLOB, "");
+        std::int64_t text_length = 0;
+        for (unsigned char byte : text) {
+            if ((byte & 0xC0) != 0x80) {
+                text_length += byte >= 0xF0 ? 2 : 1;
+            }
+        }
         for (int read = 0; read < 2; ++read) {
+            expect(protocol_lob_length(*stub, blob) == static_cast<std::int64_t>(binary.size()),
+                   "BLOB length must count all bytes, including trailing zeros");
+            expect(protocol_lob_length(*stub, clob) == text_length,
+                   "CLOB length must count UTF-16 units, not UTF-8 bytes");
+            expect(protocol_lob_length(*stub, unicode) == 6,
+                   "CLOB length must count supplementary characters as two UTF-16 units");
+            expect(protocol_lob_length(*stub, empty_blob) == 0 &&
+                       protocol_lob_length(*stub, empty_clob) == 0,
+                   "empty BLOB and CLOB lengths must be zero");
             expect(read_protocol_lob(*stub, blob, 1, std::numeric_limits<std::int32_t>::max()) == binary,
                    "createLob/readLob changed binary bytes, including trailing zeros");
             expect(read_protocol_lob(*stub, clob, 1, std::numeric_limits<std::int32_t>::max()) == text,

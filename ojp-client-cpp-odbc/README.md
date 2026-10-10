@@ -10,7 +10,7 @@ communicates with the server over gRPC.
 | Database | Highest supported level |
 |---|---:|
 | H2 | **L9** |
-| PostgreSQL | **L6** |
+| PostgreSQL | **L7** |
 | SQL Server | **L10** |
 | MySQL | Not established |
 | MariaDB | Not established |
@@ -369,6 +369,8 @@ and
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
+The PostgreSQL L7 suite uses the PostgreSQL fixture and requires two OJP endpoints
+connected to the same PostgreSQL database.
 Use disposable test servers: H2 L8-L9 and SQL Server L8-L10 stop an OJP server.
 PID files must identify the endpoint being stopped, and a supervisor must
 restart that server.
@@ -390,6 +392,8 @@ OJP_TEST_H2_L9=true \
 OJP_TEST_H2_L9_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_H2_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
+OJP_TEST_POSTGRESQL_L7=true \
+OJP_TEST_POSTGRESQL_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -406,7 +410,8 @@ OJP_TEST_SQLSERVER_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 Each test is skipped when its corresponding enable variable is unset or false.
 When enabled, missing endpoint configuration or unavailable required servers
 fail the test instead of silently skipping it. Set
-`OJP_TEST_H2_L7_UNAVAILABLE_ADDR` or
+`OJP_TEST_H2_L7_UNAVAILABLE_ADDR`,
+`OJP_TEST_POSTGRESQL_L7_UNAVAILABLE_ADDR`, or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
 The H2 and SQL Server L8 tests require a PID file for their first endpoint and

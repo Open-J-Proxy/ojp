@@ -23,7 +23,7 @@
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L9 tests (runs alongside build-test)
-# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L5 tests (needs: h2-integration-gate)
+# 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L7 tests (needs: h2-integration-gate)
 # 14. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L10 tests (needs: h2-integration-gate)
 # 15. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
@@ -2400,7 +2400,7 @@ jobs:
           NODE
 
   # ===========================================================================
-  # JOB 13: C++ ODBC PostgreSQL L1-L5 Integration Tests
+  # JOB 13: C++ ODBC PostgreSQL L1-L7 Integration Tests
   # ===========================================================================
   #
   # Runs alongside the remaining database-specific integration tests, only
@@ -2408,7 +2408,7 @@ jobs:
   #
   # ===========================================================================
   cpp-odbc-postgres-test:
-    name: C++ ODBC PostgreSQL L1-L5 Tests
+    name: C++ ODBC PostgreSQL L1-L7 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes, h2-integration-gate]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' && needs.h2-integration-gate.result == 'success' }}
@@ -2466,6 +2466,26 @@ jobs:
           echo "Timed out waiting for OJP server. Log:"; cat /tmp/ojp-server.log
           exit 1
 
+      - name: Start second OJP server (background)
+        run: |
+          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
+            -jar "$jar" > /tmp/ojp-server-2.log 2>&1 &
+          echo "Second OJP server PID=$!"
+
+      - name: Wait for second OJP server to start
+        run: |
+          for i in $(seq 1 30); do
+            if grep -q "OJP gRPC Server started" /tmp/ojp-server-2.log 2>/dev/null; then
+              echo "Second OJP server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for second OJP server. Log:"; cat /tmp/ojp-server-2.log
+          exit 1
+
       - name: Configure C++ ODBC client
         run: |
           cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
@@ -2475,11 +2495,14 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC PostgreSQL L1-L5 tests
+      - name: Run C++ ODBC PostgreSQL L1-L7 tests
         env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
+          OJP_TEST_POSTGRESQL_L7: 'true'
+          OJP_TEST_POSTGRESQL_L7_ADDRS: 'localhost:1059,localhost:1060'
         run: |
+          set -o pipefail
           docker run --detach --rm --name ojp-odbc-postgres \
             --publish 5432:5432 \
             --env POSTGRES_USER=testuser \
@@ -2497,12 +2520,14 @@ jobs:
             sleep 2
           done
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcPostgreSqlL[12345]Integration$' --output-on-failure \
-            2>&1 | tee ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l5-test.log
+            -R '^OjpOdbcPostgreSqlL([1-7])Integration$' --output-on-failure \
+            2>&1 | tee ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l7-test.log
 
       - name: Show OJP server log
         if: always()
-        run: cat /tmp/ojp-server.log
+        run: |
+          cat /tmp/ojp-server.log
+          cat /tmp/ojp-server-2.log
 
       - name: Show PostgreSQL logs
         if: always()
@@ -2514,10 +2539,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-postgresql-l1-l5-test-results
+          name: cpp-odbc-postgresql-l1-l7-test-results
           path: |
-            ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l5-test.log
+            ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l7-test.log
             /tmp/ojp-server.log
+            /tmp/ojp-server-2.log
           retention-days: 7
 
   # ===========================================================================

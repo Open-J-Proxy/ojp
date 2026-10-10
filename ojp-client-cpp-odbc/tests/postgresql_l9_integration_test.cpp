@@ -353,6 +353,9 @@ int run_integration_test(int argc, char** argv) {
     void* driver_module = nullptr;
     bool table_created = false;
     try {
+        require_success(SQLSetEnvAttr(SQL_NULL_HENV, SQL_ATTR_CONNECTION_POOLING,
+                                      reinterpret_cast<SQLPOINTER>(SQL_CP_OFF), 0),
+                        "SQLSetEnvAttr(pooling off)");
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
                         "SQLAllocHandle(environment)");

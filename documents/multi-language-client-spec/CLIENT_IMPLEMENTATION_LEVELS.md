@@ -137,7 +137,7 @@ The following table records the implemented target level and its real-server int
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; all H2 L1-L9 integration suites passed. |
 | **C++ ODBC** | SQL Server | **L10** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp` combines XA commit/rollback/recovery, non-XA multinode failover, SQL-error classification, XA affinity failure, and recovered-node reuse with the SQL Server L1-L9 suites. |
-| **C++ ODBC** | PostgreSQL | **L8** | `ojp-client-cpp-odbc/tests/postgresql_l8_integration_test.cpp` covers pool-exhaustion safety, stateless failover, SQL-error classification, recovered-node reuse, and shared-database cluster operations; the PostgreSQL CI job runs the L1-L8 suites against the real server. |
+| **C++ ODBC** | PostgreSQL | **L8** | `ojp-client-cpp-odbc/tests/postgresql_l8_integration_test.cpp` covers pool-exhaustion safety, stateless failover, SQL-error classification, recovered-node reuse, and shared-database cluster operations. The new L9 XA suite is registered in CI; report L9 as test-proven after its real-server run passes. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

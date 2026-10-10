@@ -2504,7 +2504,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC PostgreSQL L1-L8 tests
+      - name: Run C++ ODBC PostgreSQL L1-L9 tests
         env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'

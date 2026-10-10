@@ -384,13 +384,15 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
         require_success(SQLNumResultCols(statement, &count), "SQLNumResultCols",
                         SQL_HANDLE_STMT, statement);
         expect(count == 23, "expected twenty-three PostgreSQL result columns");
-        expect_column(statement, 1, "id", SQL_BIGINT);
-        expect_column(statement, 2, "val_int", SQL_INTEGER);
-        expect_column(statement, 3, "val_varchar", SQL_VARCHAR);
-        expect_column(statement, 4, "val_double", SQL_DOUBLE);
-        expect_column(statement, 8, "val_boolean", SQL_BIT);
-        expect_column(statement, 12, "val_byte", SQL_VARBINARY);
-        expect_column(statement, 14, "val_date", SQL_TYPE_DATE);
+        if (row == 0) {
+            // Current ODBC metadata is inferred from result cells, not full JDBC descriptors.
+            expect_column(statement, 1, "id", SQL_BIGINT);
+            expect_column(statement, 2, "val_int", SQL_INTEGER);
+            expect_column(statement, 3, "val_varchar", SQL_VARCHAR);
+            expect_column(statement, 4, "val_double", SQL_DOUBLE);
+            expect_column(statement, 8, "val_boolean", SQL_BIT);
+            expect_column(statement, 12, "val_byte", SQL_VARBINARY);
+        }
         fetch(statement);
         expect(get_value<SQLBIGINT>(statement, 1, SQL_C_SBIGINT) == id, "wrong generated id");
         if (row == 2) {
@@ -487,6 +489,100 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     execute_prepared(statement, "empty query");
     expect_end(statement);
     close_and_reset(statement);
+
+    prepare(statement, "UPDATE " + table +
+        " SET val_localdate = CAST(? AS DATE), val_localtime = CAST(? AS TIME),"
+        " val_localdatetime = CAST(? AS TIMESTAMP),"
+        " val_offsetdatetime = CAST(? AS TIMESTAMPTZ), val_offsettime = CAST(? AS TIMETZ)"
+        " WHERE id = ?");
+    std::string date_text = "2024-02-29";
+    std::string time_text = "23:59:58.654321";
+    std::string timestamp_text = "2024-02-29 23:59:58.654321";
+    std::string offset_datetime_text = "2024-02-29 23:59:58.654321-05:30";
+    std::string offset_time_text = "23:59:58.654321+05:30";
+    SQLLEN temporal_length = SQL_NTS;
+    std::vector<std::string*> temporal_texts = {
+        &date_text, &time_text, &timestamp_text, &offset_datetime_text, &offset_time_text};
+    for (std::size_t index = 0; index < temporal_texts.size(); ++index) {
+        auto& value = *temporal_texts[index];
+        bind(statement, static_cast<SQLUSMALLINT>(index + 1), SQL_C_CHAR, SQL_VARCHAR,
+             40, 0, value.data(), static_cast<SQLLEN>(value.size() + 1), &temporal_length);
+    }
+    id = ids[1];
+    bind(statement, 6, SQL_C_SBIGINT, SQL_BIGINT, 0, 0, &id, sizeof(id), &id_length);
+    execute_prepared(statement, "text temporal casts");
+    expect_rows_affected(statement, 1);
+    close_and_reset(statement);
+    // Cast on retrieval preserves fractional TIME and removes JVM/session timezone dependence.
+    execute_direct(statement, "SELECT CAST(val_localdate AS TEXT), CAST(val_localtime AS TEXT),"
+        " CAST(val_localdatetime AS TEXT),"
+        " CAST(val_offsetdatetime AT TIME ZONE 'UTC' AS TEXT), CAST(val_offsettime AS TEXT)"
+        " FROM " + table + " WHERE id = " + std::to_string(ids[1]));
+    fetch(statement);
+    expect_text(statement, 1, date_text);
+    expect_text(statement, 2, time_text);
+    expect_text(statement, 3, timestamp_text);
+    expect_text(statement, 4, "2024-03-01 05:29:58.654321");
+    expect_text(statement, 5, offset_time_text);
+    expect_end(statement);
+    close_and_reset(statement);
+
+    execute_direct(statement, "SELECT val_uuid FROM " + table +
+                   " WHERE id = " + std::to_string(ids[0]));
+    expect_column(statement, 1, "val_uuid", SQL_GUID);
+    fetch(statement);
+    expect_text(statement, 1, uuid);
+    expect_end(statement);
+    close_and_reset(statement);
+}
+
+void verify_json_types(SQLHSTMT statement, const std::string& table) {
+    execute_direct(statement, "CREATE TABLE " + table +
+                   " (id INTEGER PRIMARY KEY, json_value JSON, jsonb_value JSONB)");
+    close_and_reset(statement);
+    prepare(statement, "INSERT INTO " + table +
+                       " VALUES (?, CAST(? AS JSON), CAST(? AS JSONB))");
+    SQLINTEGER id = 1;
+    SQLLEN id_length = sizeof(id);
+    std::string json = "{\"key\":\"caf\xC3\xA9\",\"number\":42,\"active\":false}";
+    std::string jsonb = "{\"active\":true,\"tags\":[\"a\",\"b\"]}";
+    SQLLEN json_length = SQL_NTS;
+    SQLLEN jsonb_length = SQL_NTS;
+    bind(statement, 1, SQL_C_SLONG, SQL_INTEGER, 0, 0, &id, sizeof(id), &id_length);
+    bind(statement, 2, SQL_C_CHAR, SQL_VARCHAR, json.size(), 0, json.data(),
+         static_cast<SQLLEN>(json.size() + 1), &json_length);
+    bind(statement, 3, SQL_C_CHAR, SQL_VARCHAR, jsonb.size(), 0, jsonb.data(),
+         static_cast<SQLLEN>(jsonb.size() + 1), &jsonb_length);
+    execute_prepared(statement, "JSON/JSONB text casts");
+    expect_rows_affected(statement, 1);
+    close_cursor(statement);
+    id = 2;
+    json_length = SQL_NULL_DATA;
+    jsonb_length = SQL_NULL_DATA;
+    execute_prepared(statement, "NULL JSON/JSONB text casts");
+    expect_rows_affected(statement, 1);
+    close_and_reset(statement);
+
+    execute_direct(statement, "SELECT json_value, jsonb_value,"
+        " json_value ->> 'key', CAST(json_value ->> 'number' AS INTEGER),"
+        " CAST(json_value ->> 'active' AS BOOLEAN), jsonb_value -> 'tags' ->> 1"
+        " FROM " + table + " WHERE id = 1");
+    fetch(statement);
+    expect_text(statement, 1, json);
+    // JSONB canonicalizes spacing and key order, unlike JSON.
+    expect_text(statement, 2, "{\"tags\": [\"a\", \"b\"], \"active\": true}");
+    expect_text(statement, 3, "caf\xC3\xA9");
+    expect(get_value<SQLINTEGER>(statement, 4, SQL_C_SLONG) == 42, "JSON number was lost");
+    expect(get_value<SQLCHAR>(statement, 5, SQL_C_BIT) == 0, "JSON false was lost");
+    expect_text(statement, 6, "b");
+    expect_end(statement);
+    close_and_reset(statement);
+    execute_direct(statement, "SELECT json_value, jsonb_value FROM " + table + " WHERE id = 2");
+    fetch(statement);
+    expect_null(statement, 1, SQL_C_CHAR);
+    expect_null(statement, 2, SQL_C_CHAR);
+    expect_end(statement);
+    close_and_reset(statement);
 }
 
 void verify_large_types(SQLHSTMT statement, const std::string& table) {
@@ -507,9 +603,10 @@ void verify_large_types(SQLHSTMT statement, const std::string& table) {
     SQLLEN text_length = static_cast<SQLLEN>(text.size());
     SQLLEN binary_length = static_cast<SQLLEN>(binary.size());
     bind(statement, 1, SQL_C_SLONG, SQL_INTEGER, 0, 0, &id, sizeof(id), &id_length);
-    bind(statement, 2, SQL_C_CHAR, SQL_LONGVARCHAR, text.size(), 0, text.data(),
+    // VARCHAR/VARBINARY deliberately exercise inline PT_STRING/PT_BYTES, not L5 createLob.
+    bind(statement, 2, SQL_C_CHAR, SQL_VARCHAR, text.size(), 0, text.data(),
          text_length + 1, &text_length);
-    bind(statement, 3, SQL_C_BINARY, SQL_LONGVARBINARY, binary.size(), 0, binary.data(),
+    bind(statement, 3, SQL_C_BINARY, SQL_VARBINARY, binary.size(), 0, binary.data(),
          binary_length, &binary_length);
     execute_prepared(statement, "large TEXT/BYTEA insert");
     expect_rows_affected(statement, 1);
@@ -572,7 +669,8 @@ int run_integration_test(int argc, char** argv) {
     SQLHSTMT statement = SQL_NULL_HSTMT;
     const std::string suffix = random_suffix();
     const std::vector<std::string> tables = {
-        "ojp_cpp_pg_l2_types_" + suffix, "ojp_cpp_pg_l2_large_" + suffix};
+        "ojp_cpp_pg_l2_types_" + suffix, "ojp_cpp_pg_l2_large_" + suffix,
+        "ojp_cpp_pg_l2_json_" + suffix};
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -596,6 +694,7 @@ int run_integration_test(int argc, char** argv) {
 
         verify_multiple_types(statement, tables[0]);
         verify_large_types(statement, tables[1]);
+        verify_json_types(statement, tables[2]);
         for (const auto& table : tables) {
             execute_direct(statement, "DROP TABLE IF EXISTS " + table);
             close_and_reset(statement);
@@ -632,8 +731,9 @@ int run_integration_test(int argc, char** argv) {
         throw;
     }
     std::cout << "C++ ODBC PostgreSQL L2 integration test passed\n"
-              << "Limitations: temporal/numeric results use text; timezone and UUID parameters use "
-                 "explicit SQL casts. Java objects, PGobject/JSON, arrays, callable/batch APIs, "
+              << "Limitations: metadata is cell-inferred; temporal/numeric results use text; "
+                 "timezone, UUID and JSON/JSONB parameters use "
+                 "explicit SQL casts. Native Java/PGobject binding, arrays, callable/batch APIs, "
                  "and L5 LOB/stream semantics are not covered.\n";
     return 0;
 }

@@ -135,8 +135,9 @@ The PostgreSQL L2 suite follows the JDBC driver's
 `PostgresMultipleTypesIntegrationTest` and prepared-statement tests, using the
 same standalone ODBC test format as H2 and SQL Server. It checks integer widths
 (PostgreSQL uses `SMALLINT`, not `TINYINT`), booleans, floating-point values,
-`NUMERIC` parameters and results, UTF-8 text, `BYTEA`, and date/time/timestamp
-values. Decimal struct and decimal text bindings exercise BigDecimalWire;
+`NUMERIC` parameters and results, UTF-8 text, `BYTEA` (including embedded NUL,
+large, empty, and NULL values), and date/time/timestamp values. Decimal struct
+and decimal text bindings exercise BigDecimalWire, including negative values;
 typed NULL bindings exercise the target JDBC type codes required by
 `CLIENT_SPEC_AI.md` section 4.4.
 
@@ -144,10 +145,15 @@ PostgreSQL UUID and timezone-aware values use explicitly cast text parameters:
 the ANSI ODBC client has no native UUID or offset temporal C binding. Java's
 `java.sql` and `java.time` variants map to the same ODBC temporal structs.
 Java-specific objects (`PGobject`, references, and SQL arrays) are not native
-ODBC bindings; JSON can be supplied as explicitly cast SQL text instead.
+ODBC bindings. The suite instead round-trips JSON/JSONB as explicitly cast
+text, validates JSON extraction operators and NULLs, and reads native UUID
+results as text.
 LOB/data-at-execution streams belong to L5 and are not claimed for PostgreSQL L2.
 Generated identities are retrieved with PostgreSQL SQL, not a JDBC-style
 `getGeneratedKeys()` API or session-dependent `currval`.
+Basic metadata checks cover column names, counts, and scalar type inference;
+complete JDBC descriptors, precision/scale, and empty-result type discovery
+are not implemented.
 
 ## L5 LOB coverage
 

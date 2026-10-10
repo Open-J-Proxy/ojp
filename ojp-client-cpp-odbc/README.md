@@ -10,7 +10,7 @@ communicates with the server over gRPC.
 | Database | Highest supported level |
 |---|---:|
 | H2 | **L9** |
-| PostgreSQL | **L9** |
+| PostgreSQL | **L10** |
 | SQL Server | **L10** |
 | MySQL | Not established |
 | MariaDB | Not established |
@@ -404,6 +404,9 @@ OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL_L9=true \
 OJP_TEST_POSTGRESQL_L9_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_POSTGRESQL_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_POSTGRESQL_L10=true \
+OJP_TEST_POSTGRESQL_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_POSTGRESQL_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -426,7 +429,7 @@ fail the test instead of silently skipping it. Set
 (`127.0.0.1:1`) in the corresponding L7 test.
 The H2, PostgreSQL, and SQL Server L8 tests require a PID file for their first endpoint and
 restart that server automatically through the test supervisor. The PostgreSQL and
-SQL Server L9 tests also require a PID file for their first endpoint, which must be
+SQL Server L9/L10 tests also require a PID file for their first endpoint, which must be
 restarted by a supervisor. Their endpoint lists put the restartable server first.
 Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and

@@ -13,7 +13,7 @@ communicates with the server over gRPC.
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
 | MySQL | Not established |
-| MariaDB | **L2** |
+| MariaDB | **L4** |
 | Oracle | Not established |
 | DB2 | Not established |
 | CockroachDB | Not established |

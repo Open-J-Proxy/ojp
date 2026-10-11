@@ -144,7 +144,9 @@ public class ResultSetHelper {
                         break;
                     }
                     case Types.CLOB, Types.LONGVARCHAR, Types.VARCHAR: {
-                        if (colType == Types.VARCHAR && !isTextLobType(colTypeName)) {
+                        boolean isMySqlTextLob = (DbName.MYSQL.equals(dbName) || DbName.MARIADB.equals(dbName))
+                                && isTextLobType(colTypeName);
+                        if (colType != Types.CLOB && !isMySqlTextLob) {
                             currentValue = rs.getObject(i + 1);
                             break;
                         }

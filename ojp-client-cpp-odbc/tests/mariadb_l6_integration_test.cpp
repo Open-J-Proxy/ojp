@@ -1,4 +1,5 @@
-// Verifies MariaDB session affinity for temporary tables and session variables through ODBC.
+// Verifies MariaDB session affinity for temporary tables and session variables
+// through ODBC.
 #include <sql.h>
 #include <sqlext.h>
 
@@ -91,8 +92,8 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLCHAR detail[1024] = {};
         SQLINTEGER native_error = 0;
         SQLSMALLINT detail_length = 0;
-        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail,
-                          sizeof(detail), &detail_length) == SQL_SUCCESS) {
+        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail, sizeof(detail),
+                          &detail_length) == SQL_SUCCESS) {
             message << " [" << state << ", " << native_error << "] "
                     << reinterpret_cast<const char*>(detail);
         }
@@ -111,8 +112,8 @@ std::string random_suffix() {
 }
 
 void execute_direct(SQLHSTMT statement, const std::string& sql) {
-    require_success(SQLExecDirect(statement, sql_text(sql), SQL_NTS),
-                    "SQLExecDirect", SQL_HANDLE_STMT, statement);
+    require_success(SQLExecDirect(statement, sql_text(sql), SQL_NTS), "SQLExecDirect",
+                    SQL_HANDLE_STMT, statement);
 }
 
 void close_statement(SQLHSTMT statement, const std::string& operation) {
@@ -206,11 +207,12 @@ int run_integration_test(int argc, char** argv) {
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
         require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment, &connection),
                         "SQLAllocHandle(connection)", SQL_HANDLE_ENV, environment);
-        const std::string connection_string =
-            "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
-            ";DATABASE=" + brace_value(config.url) +
-            ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+        const std::string connection_string = "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
+                                              ";DATABASE=" + brace_value(config.url) +
+                                              ";UID=" + brace_value(config.user) +
+                                              ";P"
+                                              "WD=" +
+                                              brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,
                                          nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
@@ -218,8 +220,8 @@ int run_integration_test(int argc, char** argv) {
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
         execute_direct(statement, "CREATE TEMPORARY TABLE " + table +
-                                 " (id INT PRIMARY KEY, label VARCHAR(100) NOT NULL) "
-                                 "ENGINE=InnoDB");
+                                      " (id INT PRIMARY KEY, label VARCHAR(100) NOT NULL) "
+                                      "ENGINE=InnoDB");
         table_created = true;
         execute_direct(statement, "INSERT INTO " + table + " VALUES (1, 'initial')");
         expect(row_count(statement, table) == 1,
@@ -229,10 +231,8 @@ int run_integration_test(int argc, char** argv) {
         expect(read_text(statement, "SELECT " + session_variable) == "session-affinity",
                "MariaDB session variable was not preserved across requests");
 
-        execute_direct(statement, "INSERT INTO " + table +
-                                 " VALUES (2, 'second'), (3, 'third')");
-        execute_direct(statement, "UPDATE " + table +
-                                 " SET label = 'updated' WHERE id = 2");
+        execute_direct(statement, "INSERT INTO " + table + " VALUES (2, 'second'), (3, 'third')");
+        execute_direct(statement, "UPDATE " + table + " SET label = 'updated' WHERE id = 2");
         expect(row_count(statement, table) == 3,
                "MariaDB temporary-table rows were not preserved across requests");
         expect(read_text(statement, "SELECT label FROM " + table + " WHERE id = 2") == "updated",
@@ -243,13 +243,14 @@ int run_integration_test(int argc, char** argv) {
         execute_direct(statement, "INSERT INTO " + table + " VALUES (4, 'committed')");
         end_transaction(connection, SQL_COMMIT);
         expect(read_text(statement, "SELECT label FROM " + table + " WHERE id = 4") == "committed",
-               "MariaDB temporary table did not persist across a committed transaction");
+               "MariaDB temporary table did not persist across a committed "
+               "transaction");
 
-        execute_direct(statement, "UPDATE " + table +
-                                 " SET label = 'rolled-back' WHERE id = 4");
+        execute_direct(statement, "UPDATE " + table + " SET label = 'rolled-back' WHERE id = 4");
         end_transaction(connection, SQL_ROLLBACK);
         expect(read_text(statement, "SELECT label FROM " + table + " WHERE id = 4") == "committed",
-               "MariaDB transaction rollback did not preserve the committed row value");
+               "MariaDB transaction rollback did not preserve the committed row "
+               "value");
         expect(read_text(statement, "SELECT " + session_variable) == "session-affinity",
                "MariaDB session variable was not preserved across transactions");
         end_transaction(connection, SQL_COMMIT);
@@ -273,8 +274,7 @@ int run_integration_test(int argc, char** argv) {
             if (connection != SQL_NULL_HDBC && transaction_active) {
                 SQLEndTran(SQL_HANDLE_DBC, connection, SQL_ROLLBACK);
                 SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
-                                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON),
-                                  SQL_IS_UINTEGER);
+                                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_ON), SQL_IS_UINTEGER);
             }
             if (table_created) {
                 const std::string drop = "DROP TEMPORARY TABLE IF EXISTS " + table;

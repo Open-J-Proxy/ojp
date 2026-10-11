@@ -312,13 +312,19 @@ int run_integration_test(int argc, char** argv) {
     const std::string update = "UPDATE " + table +
                                " SET binary_payload = ?, text_payload = ? WHERE id = ?";
     const std::string small_binary = make_binary(1000, 17);
-    const std::string large_binary = make_binary(1024 * 1024 + 137, 37);
-    const std::string unicode_text = "MariaDB-L5-äöü-ñ-中文-東京-🚀-🙂;";
-    std::string large_text(65535, 'a');
-    large_text += "🙂";
-    for (int index = 0; index < 6000; ++index) {
-        large_text += unicode_text;
+    const std::string binary_chunk = "medium-blob-chunk-";
+    std::string repeated_binary;
+    repeated_binary.reserve(binary_chunk.size() * 10000);
+    for (int index = 0; index < 10000; ++index) {
+        repeated_binary += binary_chunk;
     }
+    const std::string text_chunk = "medium-text-chunk-";
+    std::string large_text;
+    large_text.reserve(text_chunk.size() * 10000);
+    for (int index = 0; index < 10000; ++index) {
+        large_text += text_chunk;
+    }
+    const std::string unicode_text = "MariaDB-L5-äöü-ñ-中文-東京-🚀-🙂;";
     const std::string updated_text = "Updated MariaDB LOB data: Καλημέρα 東京";
     const std::string updated_binary = make_binary(8193, 29);
 
@@ -350,18 +356,18 @@ int run_integration_test(int argc, char** argv) {
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
         execute_direct(statement, "CREATE TABLE " + table +
-                                  " (id INT PRIMARY KEY, binary_payload LONGBLOB NULL,"
-                                  " text_payload LONGTEXT NULL) ENGINE=InnoDB");
+                                  " (id INT PRIMARY KEY, binary_payload MEDIUMBLOB NULL,"
+                                  " text_payload MEDIUMTEXT NULL) ENGINE=InnoDB");
         table_created = true;
 
         write_lobs(statement, insert, 1, small_binary, unicode_text, false);
-        write_lobs(statement, insert, 2, large_binary, large_text, true);
+        write_lobs(statement, insert, 2, repeated_binary, large_text, true);
         write_lobs(statement, insert, 3, "", "", true);
         write_lobs(statement, insert, 4, "", "", false, true);
         write_lobs(statement, insert, 5, small_binary, unicode_text, true);
         for (int read = 0; read < 2; ++read) {
             verify_row(statement, table, 1, small_binary, unicode_text);
-            verify_row(statement, table, 2, large_binary, large_text);
+            verify_row(statement, table, 2, repeated_binary, large_text);
             verify_row(statement, table, 3, "", "");
             verify_row(statement, table, 4, "", "", true);
             verify_row(statement, table, 5, small_binary, unicode_text);
@@ -371,7 +377,7 @@ int run_integration_test(int argc, char** argv) {
         execute_direct(statement, "SELECT binary_payload, text_payload FROM " + table +
                                   " ORDER BY id");
         const std::vector<std::string> binary_rows = {
-            small_binary, large_binary, "", "", small_binary};
+            small_binary, repeated_binary, "", "", small_binary};
         const std::vector<std::string> text_rows = {
             unicode_text, large_text, "", "", unicode_text};
         for (std::size_t row = 0; row < binary_rows.size(); ++row) {

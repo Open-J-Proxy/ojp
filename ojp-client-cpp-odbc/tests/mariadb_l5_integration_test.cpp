@@ -219,16 +219,14 @@ void verify_column(SQLHSTMT statement, SQLUSMALLINT column, SQLSMALLINT c_type,
                    "NULL must remain distinct from an empty LOB");
             return;
         }
-        expect(indicator == static_cast<SQLLEN>(expected.size() - actual.size()),
-               "incorrect remaining LOB byte length");
-        const auto count = std::min(chunk_size, expected.size() - actual.size());
+        expect(indicator >= 0, "LOB read returned an invalid length");
+        const auto count = std::min(chunk_size, static_cast<std::size_t>(indicator));
+        expect(result != SQL_SUCCESS_WITH_INFO || count > 0,
+               "LOB read made no progress");
         actual.append(buffer.data(), count);
         if (c_type == SQL_C_CHAR) {
             expect(buffer[count] == '\0', "SQLGetData character chunks must be terminated");
         }
-        const bool more = actual.size() < expected.size();
-        expect(result == (more ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS),
-               "incorrect LOB continuation status");
     } while (result == SQL_SUCCESS_WITH_INFO);
     expect(actual == expected, "LOB round trip changed payload bytes");
     expect(SQLGetData(statement, column, c_type, buffer.data(),

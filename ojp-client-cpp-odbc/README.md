@@ -13,10 +13,19 @@ communicates with the server over gRPC.
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
 | MySQL | Not established |
-| MariaDB | **L4** |
+| MariaDB | **L5** |
 | Oracle | Not established |
 | DB2 | Not established |
 | CockroachDB | Not established |
+
+### MariaDB streamed CLOB limitation
+
+Large multi-chunk CLOB writes containing supplementary Unicode characters
+(such as emoji) can be corrupted by the current interaction between OJP's
+positioned CLOB writes and MariaDB Connector/J. The MariaDB L5 large-payload
+round trip therefore uses the same ASCII `MEDIUMTEXT` and `MEDIUMBLOB` payloads
+as the JDBC reference test; small UTF-8 CLOB round trips remain covered. Large
+supplementary-Unicode CLOB round trips are not currently supported.
 
 Level definitions: [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
 

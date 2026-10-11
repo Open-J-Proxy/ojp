@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.Optional;
 
 import static org.openjproxy.constants.CommonConstants.MAX_LOB_DATA_BLOCK_SIZE;
@@ -98,11 +99,12 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
                 responseObserver.onCompleted();
                 return;
             }
-            // If the lob length is known the exact size of the next block is also known.
-            boolean exactSizeKnown = readLobContext.getLobLength().isPresent()
-                    && readLobContext.getAvailableLength().isPresent();
             int nextByte = inputStream.read();
             int nextBlockSize = nextByte == -1 ? 1 : this.nextBlockSize(readLobContext, request.getPosition());
+            if (nextByte != -1 && nextBlockSize <= 0) {
+                responseObserver.onCompleted();
+                return;
+            }
             byte[] nextBlock = new byte[nextBlockSize];
             int idx = -1;
             int currentPos = (int) request.getPosition();
@@ -120,11 +122,11 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
                             .setData(ByteString.copyFrom(nextBlock))
                             .build());
                     nextBlockSize = this.nextBlockSize(readLobContext, currentPos - 1L);
-                    if (nextBlockSize > 0) { // Might be a single small block then nextBlockSize will return negative.
-                        nextBlock = new byte[nextBlockSize];
-                    } else {
-                        nextBlock = new byte[0];
+                    if (nextBlockSize <= 0) {
+                        responseObserver.onCompleted();
+                        return;
                     }
+                    nextBlock = new byte[nextBlockSize];
                     nextBlockFullyEmpty = true;
                     idx = -1;
                 }
@@ -132,15 +134,9 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
             }
 
             // Send leftover bytes
-            if (!nextBlockFullyEmpty && nextBlock[0] != -1) {
+            if (!nextBlockFullyEmpty) {
 
-                byte[] adjustedSizeArray = (idx % MAX_LOB_DATA_BLOCK_SIZE != 0 && !exactSizeKnown) ? trim(nextBlock)
-                        : nextBlock;
-                if (adjustedSizeArray.length == 1 && adjustedSizeArray[0] != nextByte) {
-                    // For cases where the amount of bytes is a multiple of the block size and last
-                    // read only reads the end of the stream.
-                    adjustedSizeArray = new byte[0];
-                }
+                byte[] adjustedSizeArray = Arrays.copyOf(nextBlock, idx + 1);
                 currentPos = (int) request.getPosition() + idx;
                 log.debug("Sending leftover bytes size {} pos {}", idx, currentPos);
                 responseObserver.onNext(LobDataBlock.newBuilder()
@@ -157,33 +153,6 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-    }
-
-    /**
-     * Trims trailing {@code 0x00} padding bytes from a read block.
-     * <p>
-     * This is used to shrink the last block when the read buffer is larger than the
-     * actual remaining LOB bytes.
-     * Note: if the input contains only {@code 0x00} bytes, this method returns a
-     * single-byte array.
-     *
-     * @param nextBlock the block to trim (must not be {@code null})
-     * @return a new array containing the bytes up to the last non-zero byte
-     *         (inclusive)
-     */
-    private byte[] trim(byte[] nextBlock) {
-        int lastBytePos = 0;
-        for (int i = nextBlock.length - 1; i >= 0; i--) {
-            int currentByte = nextBlock[i];
-            if (currentByte != 0) {
-                lastBytePos = i;
-                break;
-            }
-        }
-
-        byte[] trimmedArray = new byte[lastBytePos + 1];
-        System.arraycopy(nextBlock, 0, trimmedArray, 0, lastBytePos + 1);
-        return trimmedArray;
     }
 
     /**
@@ -282,10 +251,10 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
             StatementServiceImpl.ReadLobContext.ReadLobContextBuilder readLobContextBuilder) {
         Clob clob = sessionManager.getLob(lobReference.getSession(), lobReference.getUuid());
         long lobLength = clob.length();
-        readLobContextBuilder.lobLength(Optional.of(lobLength));
         int availableLength = (request.getPosition() + request.getLength()) < lobLength ? request.getLength()
                 : (int) (lobLength - request.getPosition() + 1);
-        readLobContextBuilder.availableLength(Optional.of(availableLength));
+        readLobContextBuilder.lobLength(Optional.empty());
+        readLobContextBuilder.availableLength(Optional.empty());
         Reader reader = clob.getCharacterStream(request.getPosition(), availableLength);
         return ReaderInputStream.builder()
                 .setReader(reader)

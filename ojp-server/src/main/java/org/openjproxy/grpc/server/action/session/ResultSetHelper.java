@@ -143,7 +143,13 @@ public class ResultSetHelper {
                         currentValue = LobProcessor.treatAsBlob(sessionManager, session, rs, i, context.getDbNameMap());
                         break;
                     }
-                    case Types.CLOB: {
+                    case Types.CLOB, Types.LONGVARCHAR, Types.VARCHAR: {
+                        boolean isMySqlTextLob = (DbName.MYSQL.equals(dbName) || DbName.MARIADB.equals(dbName))
+                                && isTextLobType(colTypeName);
+                        if (colType != Types.CLOB && !isMySqlTextLob) {
+                            currentValue = rs.getObject(i + 1);
+                            break;
+                        }
                         if (isSQLOrDB2) {
                             resultSetMode = CommonConstants.RESULT_SET_ROW_BY_ROW_MODE;
                         }
@@ -254,6 +260,13 @@ public class ResultSetHelper {
         if (sessionInfo != null && !sessionInfo.getSessionUUID().isEmpty()) {
             context.getSessionManager().updateSessionActivity(sessionInfo);
         }
+    }
+
+    private static boolean isTextLobType(String columnTypeName) {
+        return "TINYTEXT".equalsIgnoreCase(columnTypeName)
+                || "TEXT".equalsIgnoreCase(columnTypeName)
+                || "MEDIUMTEXT".equalsIgnoreCase(columnTypeName)
+                || "LONGTEXT".equalsIgnoreCase(columnTypeName);
     }
 
     /**

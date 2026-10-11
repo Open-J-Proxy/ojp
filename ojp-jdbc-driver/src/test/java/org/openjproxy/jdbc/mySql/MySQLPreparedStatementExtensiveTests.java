@@ -39,8 +39,11 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
     }
 
      void setUp(String driverClass, String url, String user, String password) throws Exception {
-        assumeFalse(!isMySQLTestEnabled, "MySQL tests are not enabled");
-        assumeFalse(!isMariaDBTestEnabled, "MariaDB tests are not enabled");
+        if (url.toLowerCase().contains("mariadb")) {
+            assumeFalse(!isMariaDBTestEnabled, "MariaDB tests are not enabled");
+        } else {
+            assumeFalse(!isMySQLTestEnabled, "MySQL tests are not enabled");
+        }
 
         connection = DriverManager.getConnection(url, user, password);
         Statement stmt = connection.createStatement();
@@ -167,11 +170,11 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
         // Verify the data
         ps = connection.prepareStatement("SELECT data FROM mysql_prepared_stmt_test WHERE id = ?");
-        ps.setInt(1, 20);
+        ps.setInt(1, 21);
         ResultSet rs = ps.executeQuery();
         assertTrue(rs.next());
         byte[] retrievedData = rs.getBytes("data");
-        assertEquals("Hello World", new String(retrievedData));
+        assertArrayEquals(testData, retrievedData);
         rs.close();
     }
 
@@ -196,7 +199,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
         // Verify the data
         ps = connection.prepareStatement("SELECT info FROM mysql_prepared_stmt_test WHERE id = ?");
-        ps.setInt(1, 30);
+        ps.setInt(1, 31);
         ResultSet rs = ps.executeQuery();
         assertTrue(rs.next());
         assertEquals(testText, rs.getString("info"));

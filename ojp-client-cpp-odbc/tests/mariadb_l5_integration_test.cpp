@@ -204,7 +204,7 @@ void write_lobs(SQLHSTMT statement, const std::string& sql, SQLINTEGER id,
 }
 
 void verify_column(SQLHSTMT statement, SQLUSMALLINT column, SQLSMALLINT c_type,
-                   const std::string& expected, bool null_value) {
+                   const std::string& context, const std::string& expected, bool null_value) {
     constexpr std::size_t chunk_size = 17003;
     std::vector<char> buffer(chunk_size + (c_type == SQL_C_CHAR ? 1 : 0), '\x7f');
     SQLLEN indicator = -1;
@@ -228,7 +228,30 @@ void verify_column(SQLHSTMT statement, SQLUSMALLINT column, SQLSMALLINT c_type,
             expect(buffer[count] == '\0', "SQLGetData character chunks must be terminated");
         }
     } while (result == SQL_SUCCESS_WITH_INFO);
-    expect(actual == expected, "LOB round trip changed payload bytes");
+    if (actual != expected) {
+        std::size_t mismatch = 0;
+        while (mismatch < actual.size() && mismatch < expected.size() &&
+               actual[mismatch] == expected[mismatch]) {
+            ++mismatch;
+        }
+        std::ostringstream message;
+        message << context << " payload mismatch: expected " << expected.size()
+                << " bytes, received " << actual.size() << " bytes; first difference at byte "
+                << mismatch;
+        if (mismatch < expected.size()) {
+            message << ", expected value "
+                    << static_cast<unsigned int>(static_cast<unsigned char>(expected[mismatch]));
+        } else {
+            message << ", expected end of payload";
+        }
+        if (mismatch < actual.size()) {
+            message << ", received value "
+                    << static_cast<unsigned int>(static_cast<unsigned char>(actual[mismatch]));
+        } else {
+            message << ", received end of payload";
+        }
+        throw std::runtime_error(message.str());
+    }
     expect(SQLGetData(statement, column, c_type, buffer.data(),
                       static_cast<SQLLEN>(buffer.size()), &indicator) == SQL_NO_DATA,
            "SQLGetData must stop after the final chunk");
@@ -240,8 +263,10 @@ void verify_row(SQLHSTMT statement, const std::string& table, SQLINTEGER id,
     execute_direct(statement, "SELECT binary_payload, text_payload FROM " + table +
                               " WHERE id = " + std::to_string(id));
     require_success(SQLFetch(statement), "SQLFetch(LOB)", SQL_HANDLE_STMT, statement);
-    verify_column(statement, 1, SQL_C_BINARY, binary, null_values);
-    verify_column(statement, 2, SQL_C_CHAR, text, null_values);
+    verify_column(statement, 1, SQL_C_BINARY, "row " + std::to_string(id) + " binary",
+                  binary, null_values);
+    verify_column(statement, 2, SQL_C_CHAR, "row " + std::to_string(id) + " text",
+                  text, null_values);
     expect(SQLFetch(statement) == SQL_NO_DATA, "unexpected extra LOB row");
     reset_statement(statement);
 }
@@ -353,8 +378,11 @@ int run_integration_test(int argc, char** argv) {
             require_success(SQLFetch(statement), "SQLFetch(LOB rows)",
                             SQL_HANDLE_STMT, statement);
             const bool null_values = row == 3;
-            verify_column(statement, 1, SQL_C_BINARY, binary_rows[row], null_values);
-            verify_column(statement, 2, SQL_C_CHAR, text_rows[row], null_values);
+            const std::string row_context = "row " + std::to_string(row + 1);
+            verify_column(statement, 1, SQL_C_BINARY, row_context + " binary",
+                          binary_rows[row], null_values);
+            verify_column(statement, 2, SQL_C_CHAR, row_context + " text",
+                          text_rows[row], null_values);
         }
         expect(SQLFetch(statement) == SQL_NO_DATA, "unexpected extra LOB rows");
         reset_statement(statement);

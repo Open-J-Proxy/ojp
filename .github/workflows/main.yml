@@ -2632,6 +2632,7 @@ jobs:
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
+            -Dojp.server.logLevel=DEBUG \
             -jar "$jar" > /tmp/ojp-server.log 2>&1 &
           echo "OJP server PID=$!"
 

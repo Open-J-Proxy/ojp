@@ -167,11 +167,11 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
         // Verify the data
         ps = connection.prepareStatement("SELECT data FROM mysql_prepared_stmt_test WHERE id = ?");
-        ps.setInt(1, 20);
+        ps.setInt(1, 21);
         ResultSet rs = ps.executeQuery();
         assertTrue(rs.next());
         byte[] retrievedData = rs.getBytes("data");
-        assertEquals("Hello World", new String(retrievedData));
+        assertArrayEquals(testData, retrievedData);
         rs.close();
     }
 
@@ -196,7 +196,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
         // Verify the data
         ps = connection.prepareStatement("SELECT info FROM mysql_prepared_stmt_test WHERE id = ?");
-        ps.setInt(1, 30);
+        ps.setInt(1, 31);
         ResultSet rs = ps.executeQuery();
         assertTrue(rs.next());
         assertEquals(testText, rs.getString("info"));

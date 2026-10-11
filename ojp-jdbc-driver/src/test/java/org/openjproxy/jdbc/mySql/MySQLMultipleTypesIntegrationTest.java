@@ -5,7 +5,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvFileSource;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.DriverManager;
@@ -383,7 +387,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
     @ParameterizedTest
     @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
-    void mysqlSpecificTypesTestSuccessful(String driverClass, String url, String user, String pwd) throws SQLException {
+    void mysqlSpecificTypesTestSuccessful(String driverClass, String url, String user, String pwd) throws SQLException, IOException {
         // Skip MySQL tests if not enabled
         if (url.toLowerCase().contains("mysql") && !isMySQLTestEnabled) {
             assumeFalse(true, "Skipping MySQL tests");
@@ -400,6 +404,8 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
         TestDBUtils.createMySQLSpecificTestTable(conn, "mysql_specific_types_test");
 
+        String mediumText = "medium-text-chunk-".repeat(10_000);
+        byte[] mediumBlob = "medium-blob-chunk-".repeat(10_000).getBytes(StandardCharsets.UTF_8);
         java.sql.PreparedStatement psInsert = conn.prepareStatement(
                 "insert into mysql_specific_types_test (enum_col, json_col, text_col, mediumtext_col, " +
                         "longtext_col, blob_col, mediumblob_col, longblob_col, set_col, year_col, bit_col) " +
@@ -409,10 +415,10 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         psInsert.setString(1, "medium");
         psInsert.setString(2, "{\"key\": \"value\", \"number\": 42}");
         psInsert.setString(3, "This is a TEXT column");
-        psInsert.setString(4, "This is a MEDIUMTEXT column with more content");
+        psInsert.setString(4, mediumText);
         psInsert.setString(5, "This is a LONGTEXT column with even more content");
         psInsert.setBytes(6, "BLOB data".getBytes());
-        psInsert.setBytes(7, "MEDIUMBLOB data".getBytes());
+        psInsert.setBytes(7, mediumBlob);
         psInsert.setBytes(8, "LONGBLOB data".getBytes());
         psInsert.setString(9, "option1,option3");
         psInsert.setInt(10, 2024);
@@ -429,10 +435,8 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         String enumCol = resultSet.getString(2);
         String jsonCol = resultSet.getString(3);
         String textCol = resultSet.getString(4);
-        String mediumtextCol = resultSet.getString(5);
         String longtextCol = resultSet.getString(6);
         byte[] blobCol = resultSet.getBytes(7);
-        byte[] mediumblobCol = resultSet.getBytes(8);
         byte[] longblobCol = resultSet.getBytes(9);
         String setCol = resultSet.getString(10);
         int yearCol = resultSet.getInt(11);
@@ -443,11 +447,15 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         assertEquals("medium", enumCol);
         assertEquals("{\"key\": \"value\", \"number\": 42}", jsonCol);
         assertEquals("This is a TEXT column", textCol);
-        assertEquals("This is a MEDIUMTEXT column with more content", mediumtextCol);
         assertEquals("This is a LONGTEXT column with even more content", longtextCol);
         assertEquals("BLOB data", new String(blobCol));
-        assertEquals("MEDIUMBLOB data", new String(mediumblobCol));
         assertEquals("LONGBLOB data", new String(longblobCol));
+        try (Reader mediumTextReader = resultSet.getCharacterStream(5)) {
+            assertEquals(mediumText, readAll(mediumTextReader));
+        }
+        try (InputStream mediumBlobStream = resultSet.getBinaryStream(8)) {
+            assertArrayEquals(mediumBlob, mediumBlobStream.readAllBytes());
+        }
         assertEquals("option1,option3", setCol);
         assertEquals(2024, yearCol);
         assertEquals((byte) 0b101010, bitCol);
@@ -456,6 +464,16 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         psSelect.close();
         psInsert.close();
         conn.close();
+    }
+
+    private static String readAll(Reader reader) throws IOException {
+        StringBuilder value = new StringBuilder();
+        char[] buffer = new char[8192];
+        int charsRead;
+        while ((charsRead = reader.read(buffer)) != -1) {
+            value.append(buffer, 0, charsRead);
+        }
+        return value.toString();
     }
 
     @ParameterizedTest

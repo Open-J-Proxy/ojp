@@ -103,6 +103,10 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
                     && readLobContext.getAvailableLength().isPresent();
             int nextByte = inputStream.read();
             int nextBlockSize = nextByte == -1 ? 1 : this.nextBlockSize(readLobContext, request.getPosition());
+            if (nextByte != -1 && nextBlockSize <= 0) {
+                responseObserver.onCompleted();
+                return;
+            }
             byte[] nextBlock = new byte[nextBlockSize];
             int idx = -1;
             int currentPos = (int) request.getPosition();
@@ -120,11 +124,11 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
                             .setData(ByteString.copyFrom(nextBlock))
                             .build());
                     nextBlockSize = this.nextBlockSize(readLobContext, currentPos - 1L);
-                    if (nextBlockSize > 0) { // Might be a single small block then nextBlockSize will return negative.
-                        nextBlock = new byte[nextBlockSize];
-                    } else {
-                        nextBlock = new byte[0];
+                    if (nextBlockSize <= 0) {
+                        responseObserver.onCompleted();
+                        return;
                     }
+                    nextBlock = new byte[nextBlockSize];
                     nextBlockFullyEmpty = true;
                     idx = -1;
                 }

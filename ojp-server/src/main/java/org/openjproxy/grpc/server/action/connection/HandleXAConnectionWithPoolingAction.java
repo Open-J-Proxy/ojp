@@ -404,7 +404,9 @@ public class HandleXAConnectionWithPoolingAction {
             return "com.ibm.db2.jcc.DB2XADataSource";
         } else if (lowerUrl.contains(":h2:")) {
             return "org.h2.jdbcx.JdbcDataSource";
-        } else if (lowerUrl.contains(":mysql:") || lowerUrl.contains(":mariadb:")) {
+        } else if (lowerUrl.contains(":mariadb:")) {
+            return "org.mariadb.jdbc.MariaDbDataSource";
+        } else if (lowerUrl.contains(":mysql:")) {
             return "com.mysql.cj.jdbc.MysqlXADataSource";
         } else {
             throw new IllegalArgumentException("Unsupported database for XA: " + url);

@@ -748,7 +748,6 @@ jobs:
           MARIADB_USER: testuser
           MARIADB_PASSWORD: testpassword
           MARIADB_ROOT_PASSWORD: rootpassword
-          MARIADB_ROOT_HOST: '%'
         options: >-
           --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
           --health-interval=10s
@@ -2627,15 +2626,7 @@ jobs:
             libprotobuf-dev \
             protobuf-compiler \
             protobuf-compiler-grpc \
-            mariadb-client \
             unixodbc-dev
-
-      - name: Grant MariaDB XA recovery privilege
-        env:
-          MYSQL_PWD: rootpassword
-        run: |
-          mariadb --host=127.0.0.1 --port=3307 --user=root \
-            -e "GRANT XA_RECOVER_ADMIN ON *.* TO 'testuser'@'%';"
 
       - name: Start OJP server
         run: |

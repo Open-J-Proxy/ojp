@@ -1,3 +1,5 @@
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -23,11 +25,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
+using ojp::test::DatabaseConfig;
 
 struct XaApi {
     decltype(&OjpXAStart) start;
@@ -41,42 +39,6 @@ struct XaApi {
     decltype(&OjpXAGetTransactionTimeout) get_timeout;
     decltype(&OjpXAIsSameRM) is_same_rm;
 };
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the H2 L9 connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in H2 L9 CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -236,43 +198,10 @@ void close_connection(SQLHDBC* connection) {
     }
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 6) {
-        throw std::runtime_error(
-            "expected H2 CSV path, enable variable, endpoint variable, target PID variable, and driver path");
-    }
-    const std::string enable_variable = argv[2];
-    const std::string enabled_value = environment_value(enable_variable.c_str());
-    if (!enabled(enabled_value)) {
-        if (!disabled(enabled_value)) {
-            throw std::runtime_error(enable_variable + " must be true or false");
-        }
-        std::cout << "Skipped: set " << enable_variable << "=true to run the H2 L9 suite\n";
-        return 77;
-    }
-    const std::string endpoints = environment_value(argv[3]);
-    if (endpoints.empty()) {
-        throw std::runtime_error(std::string(argv[3]) + " is required when " +
-                                 enable_variable + "=true");
-    }
-    std::vector<std::string> endpoint_list;
-    std::istringstream endpoint_stream(endpoints);
-    std::string endpoint;
-    while (std::getline(endpoint_stream, endpoint, ',')) {
-        if (endpoint.empty()) {
-            throw std::runtime_error(std::string(argv[3]) + " must contain non-empty endpoints");
-        }
-        endpoint_list.push_back(endpoint);
-    }
-    if (endpoint_list.size() < 2) {
-        throw std::runtime_error(std::string(argv[3]) + " must contain at least two OJP servers");
-    }
-    const std::string pid_file = environment_value(argv[4]);
-    if (pid_file.empty()) {
-        throw std::runtime_error(std::string(argv[4]) + " is required when " +
-                                 enable_variable + "=true");
-    }
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::vector<std::string>& endpoint_list,
+                   const std::string& pid_file,
+                   char** argv) {
     const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
     const std::string table = "ojp_cpp_l9_" + std::to_string(timestamp);
     SQLHENV environment = SQL_NULL_HENV;
@@ -284,6 +213,7 @@ int run_integration_test(int argc, char** argv) {
     SQLHSTMT xa_statement = SQL_NULL_HSTMT;
     void* driver_module = nullptr;
     bool table_created = false;
+    long target_pid = 0;
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -291,7 +221,7 @@ int run_integration_test(int argc, char** argv) {
         require_success(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
-        regular_connection = open_connection(environment, config, endpoints, false);
+        regular_connection = open_connection(environment, config, endpoint_list.front(), false);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, regular_connection,
                                        reinterpret_cast<SQLHANDLE*>(&regular_statement)),
                         "SQLAllocHandle(regular statement)", SQL_HANDLE_DBC, regular_connection);
@@ -299,7 +229,7 @@ int run_integration_test(int argc, char** argv) {
                                           " (id INT PRIMARY KEY, label VARCHAR(100))");
         table_created = true;
 
-        xa_connection = open_connection(environment, config, endpoints, true);
+        xa_connection = open_connection(environment, config, endpoint_list.back(), true);
         same_rm_connection = open_connection(environment, config, endpoint_list.back(), true);
         second_xa_connection = open_connection(environment, config, endpoint_list.back(), true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, xa_connection,
@@ -415,7 +345,6 @@ int run_integration_test(int argc, char** argv) {
                         "OjpXAStart(unavailable server)", SQL_HANDLE_DBC, xa_connection);
         execute_direct(xa_statement, "INSERT INTO " + table + " VALUES (4, 'unavailable')");
         std::ifstream pid_input(pid_file);
-        long target_pid = 0;
         if (!(pid_input >> target_pid) || target_pid <= 0) {
             throw std::runtime_error("H2 L9 target PID file does not contain a valid process ID");
         }
@@ -493,8 +422,53 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
+    ojp::test::wait_for_restart(pid_file, target_pid,
+        "DRIVER={OJP};SERVER=" + brace_value(endpoint_list.back()) +
+        ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
+        ";P" "WD=" + brace_value(config.password) + ";");
     std::cout << "C++ ODBC H2 L9 XA integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 6) {
+        throw std::runtime_error(
+            "expected H2 CSV path, enable variable, endpoint variable, target PID variable, and driver path");
+    }
+    const std::string enable_variable = argv[2];
+    const std::string enabled_value = environment_value(enable_variable.c_str());
+    if (!enabled(enabled_value)) {
+        if (!disabled(enabled_value)) {
+            throw std::runtime_error(enable_variable + " must be true or false");
+        }
+        std::cout << "Skipped: set " << enable_variable << "=true to run the H2 L9 suite\n";
+        return 77;
+    }
+    const std::string endpoints = environment_value(argv[3]);
+    if (endpoints.empty()) {
+        throw std::runtime_error(std::string(argv[3]) + " is required when " +
+                                 enable_variable + "=true");
+    }
+    std::vector<std::string> endpoint_list;
+    std::istringstream endpoint_stream(endpoints);
+    std::string endpoint;
+    while (std::getline(endpoint_stream, endpoint, ',')) {
+        if (endpoint.empty()) {
+            throw std::runtime_error(std::string(argv[3]) + " must contain non-empty endpoints");
+        }
+        endpoint_list.push_back(endpoint);
+    }
+    if (endpoint_list.size() < 2) {
+        throw std::runtime_error(std::string(argv[3]) + " must contain at least two OJP servers");
+    }
+    const std::string pid_file = environment_value(argv[4]);
+    if (pid_file.empty()) {
+        throw std::runtime_error(std::string(argv[4]) + " is required when " +
+                                 enable_variable + "=true");
+    }
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoint_list, pid_file, argv);
+    });
 }
 
 }  // namespace

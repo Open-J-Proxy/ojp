@@ -1,5 +1,7 @@
 // Verifies SQL Server typed parameters, statement execution, generated IDs, and column metadata
 // through ODBC. Type coverage follows the OJP JDBC SQLServerMultipleTypesIntegrationTest.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -16,47 +18,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the SQL Server connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in SQL Server CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -536,32 +498,8 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     close_and_reset(statement);
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error(
-            "expected SQL Server CSV path, enable variable, and endpoint variable");
-    }
-    const std::string csv_path = argv[1];
-    const std::string enable_variable = argv[2];
-    const std::string endpoint_variable = argv[3];
-    const char* enabled_value = std::getenv(enable_variable.c_str());
-    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
-    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
-        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
-        std::cout << "Skipped: set " << enable_variable << "=true to run the SQL Server L2 suite\n";
-        return 77;
-    }
-    if (enabled != "true" && enabled != "1" && enabled != "yes") {
-        throw std::runtime_error(enable_variable + " must be true or false");
-    }
-    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
-    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
-    if (endpoint.empty()) {
-        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
-                                 "=true");
-    }
-    const DatabaseConfig config = read_connection_config(csv_path);
+int run_connection(const DatabaseConfig& config,
+                   const std::string& endpoint) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
@@ -627,6 +565,36 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC SQL Server L2 integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error(
+            "expected SQL Server CSV path, enable variable, and endpoint variable");
+    }
+    const std::string csv_path = argv[1];
+    const std::string enable_variable = argv[2];
+    const std::string endpoint_variable = argv[3];
+    const char* enabled_value = std::getenv(enable_variable.c_str());
+    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
+    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
+        std::cout << "Skipped: set " << enable_variable << "=true to run the SQL Server L2 suite\n";
+        return 77;
+    }
+    if (enabled != "true" && enabled != "1" && enabled != "yes") {
+        throw std::runtime_error(enable_variable + " must be true or false");
+    }
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
+    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
+    if (endpoint.empty()) {
+        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
+                                 "=true");
+    }
+    return ojp::test::run_connections(csv_path, [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoint);
+    });
 }
 
 }  // namespace

@@ -1,1 +1,0 @@
-"jdbc:mysql://localhost:3306/defaultdb?allowPublicKeyRetrieval=true&useSSL=false",testuser,testpassword

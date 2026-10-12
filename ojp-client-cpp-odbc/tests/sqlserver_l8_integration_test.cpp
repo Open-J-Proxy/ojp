@@ -1,4 +1,6 @@
 // Verifies SQL Server failover, pool-exhaustion handling, and server recovery through ODBC.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -24,47 +26,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the SQL Server connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in SQL Server CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -210,15 +172,21 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
                                          const std::string& alternate_endpoint) {
     SQLHDBC busy_connection = SQL_NULL_HDBC;
     SQLHDBC overloaded_connection = SQL_NULL_HDBC;
+    std::vector<SQLHDBC> alternate_connections;
     SQLHSTMT busy_statement = SQL_NULL_HSTMT;
     SQLHSTMT overloaded_statement = SQL_NULL_HSTMT;
     std::atomic<bool> query_started{false};
     SQLRETURN long_query_result = SQL_ERROR;
     std::thread long_query_thread;
     try {
+        // Give the idle alternate a higher connection count so the overload
+        // probe deterministically selects the busy server on every record.
+        for (int index = 0; index < 3; ++index) {
+            alternate_connections.push_back(open_connection(environment, config, alternate_endpoint, false));
+        }
         busy_connection = open_connection(environment, config, endpoint, false);
         overloaded_connection = open_connection(
-            environment, config, endpoint + "," + alternate_endpoint, false);
+            environment, config, endpoint + "," + alternate_endpoint, true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, busy_connection,
                                        reinterpret_cast<SQLHANDLE*>(&busy_statement)),
                         "SQLAllocHandle(busy statement)", SQL_HANDLE_DBC, busy_connection);
@@ -279,6 +247,13 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
         require_success(SQLFreeHandle(SQL_HANDLE_DBC, busy_connection),
                         "SQLFreeHandle(busy connection)", SQL_HANDLE_ENV, environment);
         busy_connection = SQL_NULL_HDBC;
+        for (auto& alternate : alternate_connections) {
+            require_success(SQLDisconnect(alternate), "SQLDisconnect(alternate)",
+                            SQL_HANDLE_DBC, alternate);
+            require_success(SQLFreeHandle(SQL_HANDLE_DBC, alternate),
+                            "SQLFreeHandle(alternate)", SQL_HANDLE_ENV, environment);
+            alternate = SQL_NULL_HDBC;
+        }
     } catch (...) {
         if (long_query_thread.joinable()) {
             long_query_thread.join();
@@ -296,6 +271,12 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
         if (busy_connection != SQL_NULL_HDBC) {
             SQLDisconnect(busy_connection);
             SQLFreeHandle(SQL_HANDLE_DBC, busy_connection);
+        }
+        for (const auto alternate : alternate_connections) {
+            if (alternate != SQL_NULL_HDBC) {
+                SQLDisconnect(alternate);
+                SQLFreeHandle(SQL_HANDLE_DBC, alternate);
+            }
         }
         throw;
     }
@@ -320,38 +301,9 @@ long stop_server(const std::string& pid_file, const std::string& endpoint) {
     return process_id;
 }
 
-void wait_for_server_restart(const std::string& pid_file, long stopped_process_id) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (std::chrono::steady_clock::now() < deadline) {
-        const long restarted_process_id = read_process_id(pid_file);
-        if (restarted_process_id > 0 && restarted_process_id != stopped_process_id) {
-            std::this_thread::sleep_for(std::chrono::seconds(8));
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    throw std::runtime_error("the SQL Server L8 OJP server did not restart within 30 seconds");
-}
-
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error(
-            "expected SQL Server L8 CSV path, enable variable, and endpoint variable");
-    }
-    const std::string enable_variable = argv[2];
-    if (!enabled(environment_value(enable_variable.c_str()))) {
-        std::cout << "Skipped: set " << enable_variable
-                  << "=true to run the SQL Server L8 suite\n";
-        return 77;
-    }
-    const std::vector<std::string> endpoints = split_endpoints(environment_value(argv[3]));
-    const std::string pid_file =
-        environment_value("OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE");
-    if (pid_file.empty()) {
-        throw std::runtime_error(
-            "OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE is required when SQL Server L8 is enabled");
-    }
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::vector<std::string>& endpoints,
+                   const std::string& pid_file) {
     const std::string table = "dbo.ojp_cpp_mssql_l8_" + random_suffix();
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC first_connection = SQL_NULL_HDBC;
@@ -400,7 +352,10 @@ int run_integration_test(int argc, char** argv) {
         }
         verify_label(first_statement, table, 1, "after-failover");
 
-        wait_for_server_restart(pid_file, stopped_process_id);
+        ojp::test::wait_for_restart(pid_file, stopped_process_id,
+            "DRIVER={OJP};SERVER=" + brace_value(endpoints[0]) +
+            ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
+            ";P" "WD=" + brace_value(config.password) + ";");
         recovered_connection = open_connection(environment, config, endpoints[0]);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, recovered_connection,
                                        reinterpret_cast<SQLHANDLE*>(&recovered_statement)),
@@ -490,6 +445,29 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC SQL Server L8 failover and recovery integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error(
+            "expected SQL Server L8 CSV path, enable variable, and endpoint variable");
+    }
+    const std::string enable_variable = argv[2];
+    if (!enabled(environment_value(enable_variable.c_str()))) {
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the SQL Server L8 suite\n";
+        return 77;
+    }
+    const std::vector<std::string> endpoints = split_endpoints(environment_value(argv[3]));
+    const std::string pid_file =
+        environment_value("OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE");
+    if (pid_file.empty()) {
+        throw std::runtime_error(
+            "OJP_TEST_SQLSERVER_L8_FIRST_SERVER_PID_FILE is required when SQL Server L8 is enabled");
+    }
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoints, pid_file);
+    });
 }
 
 }  // namespace

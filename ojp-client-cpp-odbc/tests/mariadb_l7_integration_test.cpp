@@ -1,4 +1,6 @@
 // Verifies MariaDB operations across a multinode OJP cluster through ODBC.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -16,47 +18,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the MariaDB connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else if (character != '\r') {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in MariaDB CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -192,36 +154,9 @@ void verify_value(SQLHSTMT statement, const std::string& table, int id,
                     SQL_HANDLE_STMT, statement);
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error(
-            "expected MariaDB L7 CSV path, enable variable, and endpoints variable");
-    }
-    const std::string enable_variable = argv[2];
-    const std::string endpoints_variable = argv[3];
-    std::string enabled_value = environment_value(enable_variable);
-    std::transform(enabled_value.begin(), enabled_value.end(), enabled_value.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
-    if (!is_enabled(enabled_value)) {
-        if (!enabled_value.empty() && enabled_value != "false" && enabled_value != "0" &&
-            enabled_value != "no") {
-            throw std::runtime_error(enable_variable + " must be true or false");
-        }
-        std::cout << "Skipped: set " << enable_variable
-                  << "=true to run the MariaDB L7 suite\n";
-        return 77;
-    }
-    const std::string configured_endpoints = environment_value(endpoints_variable);
-    const auto endpoints = split_endpoints(configured_endpoints);
-    const std::string unavailable_endpoint =
-        environment_value((enable_variable + "_UNAVAILABLE_ADDR").c_str()).empty()
-            ? "127.0.0.1:1"
-            : environment_value((enable_variable + "_UNAVAILABLE_ADDR").c_str());
-    expect(std::find(endpoints.begin(), endpoints.end(), unavailable_endpoint) == endpoints.end(),
-           "the unavailable test endpoint must not be a healthy endpoint");
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::vector<std::string>& endpoints,
+                   const std::string& unavailable_endpoint) {
     std::string server_list = unavailable_endpoint;
     for (const auto& endpoint : endpoints) {
         server_list += "," + endpoint;
@@ -319,6 +254,40 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC MariaDB/MySQL L7 multinode integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error(
+            "expected MariaDB L7 CSV path, enable variable, and endpoints variable");
+    }
+    const std::string enable_variable = argv[2];
+    const std::string endpoints_variable = argv[3];
+    std::string enabled_value = environment_value(enable_variable);
+    std::transform(enabled_value.begin(), enabled_value.end(), enabled_value.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    if (!is_enabled(enabled_value)) {
+        if (!enabled_value.empty() && enabled_value != "false" && enabled_value != "0" &&
+            enabled_value != "no") {
+            throw std::runtime_error(enable_variable + " must be true or false");
+        }
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the MariaDB L7 suite\n";
+        return 77;
+    }
+    const std::string configured_endpoints = environment_value(endpoints_variable);
+    const auto endpoints = split_endpoints(configured_endpoints);
+    const std::string unavailable_endpoint =
+        environment_value((enable_variable + "_UNAVAILABLE_ADDR").c_str()).empty()
+            ? "127.0.0.1:1"
+            : environment_value((enable_variable + "_UNAVAILABLE_ADDR").c_str());
+    expect(std::find(endpoints.begin(), endpoints.end(), unavailable_endpoint) == endpoints.end(),
+           "the unavailable test endpoint must not be a healthy endpoint");
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoints, unavailable_endpoint);
+    });
 }
 
 }  // namespace

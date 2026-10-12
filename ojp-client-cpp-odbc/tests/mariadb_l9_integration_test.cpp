@@ -1,3 +1,5 @@
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -26,11 +28,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
+using ojp::test::DatabaseConfig;
 
 struct XaApi {
     decltype(&OjpXAStart) start;
@@ -44,42 +42,6 @@ struct XaApi {
     decltype(&OjpXAGetTransactionTimeout) get_timeout;
     decltype(&OjpXAIsSameRM) is_same_rm;
 };
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the MariaDB L9 connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else if (character != '\r') {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in MariaDB L9 CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
 
 std::string environment_value(const char* name) {
     const char* value = std::getenv(name);
@@ -262,7 +224,7 @@ long read_process_id(const std::string& path) {
     return process_id;
 }
 
-void stop_server(const std::string& pid_file, const std::string& endpoint) {
+long stop_server(const std::string& pid_file, const std::string& endpoint) {
     const long process_id = read_process_id(pid_file);
     std::ifstream command_line_file(
         "/proc/" + std::to_string(process_id) + "/cmdline", std::ios::binary);
@@ -279,7 +241,7 @@ void stop_server(const std::string& pid_file, const std::string& endpoint) {
     }
     for (int attempt = 0; attempt < 100; ++attempt) {
         if (::kill(static_cast<pid_t>(process_id), 0) != 0) {
-            return;
+            return process_id;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -294,29 +256,10 @@ void close_connection(SQLHDBC* connection) {
     }
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 6) {
-        throw std::runtime_error(
-            "expected MariaDB CSV path, enable variable, endpoints variable, target PID file, and driver path");
-    }
-    const std::string enable_variable = argv[2];
-    const std::string enabled_value = environment_value(enable_variable.c_str());
-    if (!enabled(enabled_value)) {
-        if (disabled(enabled_value)) {
-            std::cout << "Skipped: set " << enable_variable
-                      << "=true to run the MariaDB L9 suite\n";
-            return 77;
-        }
-        throw std::runtime_error(enable_variable + " must be true or false");
-    }
-    const std::vector<std::string> endpoints =
-        split_endpoints(environment_value(argv[3]));
-    const std::string pid_file = environment_value(argv[4]);
-    if (pid_file.empty()) {
-        throw std::runtime_error(std::string(argv[4]) + " is required when " +
-                                 enable_variable + "=true");
-    }
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::vector<std::string>& endpoints,
+                   const std::string& pid_file,
+                   char** argv) {
     std::random_device random;
     std::ostringstream suffix;
     suffix << std::hex << random();
@@ -329,6 +272,7 @@ int run_integration_test(int argc, char** argv) {
     SQLHSTMT regular_statement = SQL_NULL_HSTMT;
     void* driver_module = nullptr;
     bool table_created = false;
+    long stopped_process_id = 0;
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -456,7 +400,7 @@ int run_integration_test(int argc, char** argv) {
         const OjpXid unavailable_branch = xid_for(table + "_unavailable", "branch-4");
         require_success(xa.start(xa_connection, &unavailable_branch, OJP_XA_TMNOFLAGS),
                         "OjpXAStart(unavailable server)", SQL_HANDLE_DBC, xa_connection);
-        stop_server(pid_file, endpoints.front());
+        stopped_process_id = stop_server(pid_file, endpoints.front());
         if (xa.end(xa_connection, &unavailable_branch, OJP_XA_TMSUCCESS) != SQL_ERROR) {
             throw std::runtime_error("XA end should fail when its pinned OJP server is unavailable");
         }
@@ -524,8 +468,39 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
+    ojp::test::wait_for_restart(pid_file, stopped_process_id,
+        "DRIVER={OJP};SERVER=" + brace_value(endpoints.front()) +
+        ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
+        ";P" "WD=" + brace_value(config.password) + ";");
     std::cout << "C++ ODBC MariaDB/MySQL L9 XA integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 6) {
+        throw std::runtime_error(
+            "expected MariaDB CSV path, enable variable, endpoints variable, target PID file, and driver path");
+    }
+    const std::string enable_variable = argv[2];
+    const std::string enabled_value = environment_value(enable_variable.c_str());
+    if (!enabled(enabled_value)) {
+        if (disabled(enabled_value)) {
+            std::cout << "Skipped: set " << enable_variable
+                      << "=true to run the MariaDB L9 suite\n";
+            return 77;
+        }
+        throw std::runtime_error(enable_variable + " must be true or false");
+    }
+    const std::vector<std::string> endpoints =
+        split_endpoints(environment_value(argv[3]));
+    const std::string pid_file = environment_value(argv[4]);
+    if (pid_file.empty()) {
+        throw std::runtime_error(std::string(argv[4]) + " is required when " +
+                                 enable_variable + "=true");
+    }
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoints, pid_file, argv);
+    });
 }
 
 }  // namespace

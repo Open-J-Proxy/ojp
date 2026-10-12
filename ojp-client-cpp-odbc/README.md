@@ -13,7 +13,7 @@ communicates with the server over gRPC.
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
 | MySQL | Not established |
-| MariaDB | **L7** |
+| MariaDB | **L8** |
 | Oracle | Not established |
 | DB2 | Not established |
 | CockroachDB | Not established |
@@ -379,8 +379,11 @@ and
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
-The MariaDB L7 suite uses the MariaDB fixture and requires two OJP endpoints
-connected to the same MariaDB database.
+The MariaDB L7-L8 suites use the MariaDB fixture and require two OJP endpoints
+connected to the same MariaDB database. MariaDB L8 stops and recovers its first
+endpoint, so that server must be supervised by a restart loop and its PID file
+must identify the server process. Configure it with
+`ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
 The PostgreSQL L7-L9 suites use the PostgreSQL fixture and require two OJP endpoints
 connected to the same PostgreSQL database. PostgreSQL L8 stops the first endpoint,
 so its PID file must identify the server process that a supervisor will restart.
@@ -422,6 +425,9 @@ OJP_TEST_POSTGRESQL_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_MARIADB=true OJP_TEST_MARIADB_ADDR=localhost:1059 \
 OJP_TEST_MARIADB_L7=true \
 OJP_TEST_MARIADB_L7_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_MARIADB_L8=true \
+OJP_TEST_MARIADB_L8_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -443,7 +449,7 @@ fail the test instead of silently skipping it. Set
 `OJP_TEST_POSTGRESQL_L7_UNAVAILABLE_ADDR`, or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
-The H2, PostgreSQL, and SQL Server L8 tests require a PID file for their first endpoint and
+The H2, PostgreSQL, MariaDB, and SQL Server L8 tests require a PID file for their first endpoint and
 restart that server automatically through the test supervisor. The PostgreSQL and
 SQL Server L9/L10 tests also require a PID file for their first endpoint, which must be
 restarted by a supervisor. Their endpoint lists put the restartable server first.

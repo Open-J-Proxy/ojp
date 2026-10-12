@@ -128,7 +128,7 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         "DRIVER={OJP};SERVER=" + brace_value(endpoints) +
         ";DATABASE=" + brace_value(config.url) +
         ";UID=" + brace_value(config.user) +
-        ";P" "WD=" + brace_value(config.password) +
+        ";PWD=" + brace_value(config.password) +
         ";OJP.LOADAWARE.SELECTION.ENABLED=" +
         std::string(load_aware ? "true" : "false") + ";";
     require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,

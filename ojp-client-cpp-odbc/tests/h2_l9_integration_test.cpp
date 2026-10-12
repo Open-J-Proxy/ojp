@@ -131,8 +131,7 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
         ";DATABASE=" + brace_value(config.url) +
         ";UID=" + brace_value(config.user) +
-        ";P"
-        "WD=" + brace_value(config.password) + ";" +
+        ";PWD=" + brace_value(config.password) + ";" +
         "OJP.LOADAWARE.SELECTION.ENABLED=false;" +
         (xa ? "OJP.XA=TRUE;" : "");
     require_success(SQLDriverConnect(connection, nullptr,
@@ -425,7 +424,7 @@ int run_connection(const DatabaseConfig& config,
     ojp::test::wait_for_restart(pid_file, target_pid,
         "DRIVER={OJP};SERVER=" + brace_value(endpoint_list.back()) +
         ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
-        ";P" "WD=" + brace_value(config.password) + ";");
+        ";PWD=" + brace_value(config.password) + ";");
     std::cout << "C++ ODBC H2 L9 XA integration test passed\n";
     return 0;
 }

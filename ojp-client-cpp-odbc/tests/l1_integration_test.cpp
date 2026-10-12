@@ -132,7 +132,7 @@ int run_connection(const DatabaseConfig& config,
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+            ";PWD=" + brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr,
             reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.c_str())),
             SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),

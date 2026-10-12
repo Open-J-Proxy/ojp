@@ -163,7 +163,7 @@ int run_connection(const DatabaseConfig& config,
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+            ";PWD=" + brace_value(config.password) + ";";
         for (SQLHDBC* handle : {&connection, &observer}) {
             require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment, handle),
                             "SQLAllocHandle(connection)", SQL_HANDLE_ENV, environment);

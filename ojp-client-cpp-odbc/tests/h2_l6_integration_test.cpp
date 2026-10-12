@@ -106,8 +106,7 @@ int run_connection(const DatabaseConfig& config,
         const std::string connection_string = "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
                                               ";DATABASE=" + brace_value(config.url) +
                                               ";UID=" + brace_value(config.user) +
-                                              ";P"
-                                              "WD=" +
+                                              ";PWD=" +
                                               brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr,
                                          reinterpret_cast<SQLCHAR*>(

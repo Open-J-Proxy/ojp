@@ -1,8 +1,8 @@
 package org.openjproxy.jdbc.mySql;
 
-import org.junit.jupiter.api.BeforeAll;
+import org.openjproxy.jdbc.testutil.MySQLCompatibleDatabase;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvFileSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,24 +15,16 @@ import java.sql.Statement;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Integration tests for SQL session affinity feature with MySQL/MariaDB databases.
  * Tests that temporary tables and session variables work correctly across
  * multiple requests by ensuring session affinity.
  */
+public abstract class MySQLCompatibleSessionAffinityIntegrationTest {
 
-class MySQLMariaDBSessionAffinityIntegrationTest {
-    private static final Logger logger = LoggerFactory.getLogger(MySQLMariaDBSessionAffinityIntegrationTest.class);
-    private static boolean isMySQLTestEnabled;
-    private static boolean isMariaDBTestEnabled;
-
-    @BeforeAll
-    static void checkTestConfiguration() {
-        isMySQLTestEnabled = Boolean.parseBoolean(System.getProperty("enableMySQLTests", "false"));
-        isMariaDBTestEnabled = Boolean.parseBoolean(System.getProperty("enableMariaDBTests", "false"));
-    }
+    protected abstract MySQLCompatibleDatabase database();
+    private static final Logger logger = LoggerFactory.getLogger(MySQLCompatibleSessionAffinityIntegrationTest.class);
 
     /**
      * Tests that temporary tables work across multiple SQL statements.
@@ -40,15 +32,10 @@ class MySQLMariaDBSessionAffinityIntegrationTest {
      * and subsequent operations use the same session/connection.
      */
     @ParameterizedTest
-    @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
+    @MethodSource("connectionDetails")
     void testTemporaryTableSessionAffinity(String driverClass, String url, String user, String pwd) throws SQLException {
         logger.info("Testing temporay table with Driver: {}", driverClass);
-        // Skip tests based on database type
-        if (url.toLowerCase().contains("mysql")) {
-            assumeTrue(isMySQLTestEnabled, "MySQL tests are disabled");
-        } else if (url.toLowerCase().contains("mariadb")) {
-            assumeTrue(isMariaDBTestEnabled, "MariaDB tests are disabled");
-        }
+        database().assumeEnabledAndVerifyServerDriver(url, user, pwd);
 
         logger.info("Testing temporary table session affinity for MySQL/MariaDB: {}", url);
 
@@ -91,15 +78,10 @@ class MySQLMariaDBSessionAffinityIntegrationTest {
      * Tests that session variables work across multiple SQL statements.
      */
     @ParameterizedTest
-    @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
+    @MethodSource("connectionDetails")
     void testSessionVariableAffinity(String driverClass, String url, String user, String pwd) throws SQLException {
         logger.info("Testing temporay table with Driver: {}", driverClass);
-        // Skip tests based on database type
-        if (url.toLowerCase().contains("mysql")) {
-            assumeTrue(isMySQLTestEnabled, "MySQL tests are disabled");
-        } else if (url.toLowerCase().contains("mariadb")) {
-            assumeTrue(isMariaDBTestEnabled, "MariaDB tests are disabled");
-        }
+        database().assumeEnabledAndVerifyServerDriver(url, user, pwd);
 
         logger.info("Testing session variable affinity for MySQL/MariaDB: {}", url);
 
@@ -127,15 +109,10 @@ class MySQLMariaDBSessionAffinityIntegrationTest {
      * Tests that multiple temporary table operations work correctly.
      */
     @ParameterizedTest
-    @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
+    @MethodSource("connectionDetails")
      void testComplexTemporaryTableOperations(String driverClass, String url, String user, String pwd)            throws SQLException {
         logger.info("Testing temporay table with Driver: {}", driverClass);
-        // Skip tests based on database type
-        if (url.toLowerCase().contains("mysql")) {
-            assumeTrue(isMySQLTestEnabled, "MySQL tests are disabled");
-        } else if (url.toLowerCase().contains("mariadb")) {
-            assumeTrue(isMariaDBTestEnabled, "MariaDB tests are disabled");
-        }
+        database().assumeEnabledAndVerifyServerDriver(url, user, pwd);
 
         logger.info("Testing complex temporary table operations for MySQL/MariaDB: {}", url);
 
@@ -196,15 +173,10 @@ class MySQLMariaDBSessionAffinityIntegrationTest {
      * Tests that temp table persists within same session across transactions.
      */
     @ParameterizedTest
-    @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
+    @MethodSource("connectionDetails")
      void testTemporaryTablePersistenceAcrossTransactions(String driverClass, String url, String user, String pwd)            throws SQLException {
         logger.info("Testing temporay table with Driver: {}", driverClass);
-        // Skip tests based on database type
-        if (url.toLowerCase().contains("mysql")) {
-            assumeTrue(isMySQLTestEnabled, "MySQL tests are disabled");
-        } else if (url.toLowerCase().contains("mariadb")) {
-            assumeTrue(isMariaDBTestEnabled, "MariaDB tests are disabled");
-        }
+        database().assumeEnabledAndVerifyServerDriver(url, user, pwd);
 
         logger.info("Testing temporary table persistence across transactions for MySQL/MariaDB: {}", url);
 

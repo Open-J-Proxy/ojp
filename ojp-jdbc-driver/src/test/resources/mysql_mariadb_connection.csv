@@ -1,2 +1,0 @@
-org.openjproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_mysql://localhost:3306/defaultdb,testuser,testpassword,false
-org.openjproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_mariadb://localhost:3307/defaultdb,testuser,testpassword,false

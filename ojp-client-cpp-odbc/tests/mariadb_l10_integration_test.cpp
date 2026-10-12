@@ -314,7 +314,13 @@ long stop_server(const std::string& pid_file, const std::string& endpoint) {
         ::kill(static_cast<pid_t>(process_id), SIGTERM) != 0) {
         throw std::runtime_error("cannot stop the first MariaDB L10 OJP server");
     }
-    return process_id;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (::kill(static_cast<pid_t>(process_id), 0) != 0) {
+            return process_id;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    throw std::runtime_error("MariaDB L10 OJP server did not stop");
 }
 
 void wait_for_server_restart(const std::string& pid_file, long stopped_process_id) {

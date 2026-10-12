@@ -587,3 +587,5 @@ The H2 Java reference client now has an XA lifecycle integration suite in
 2. The tested-achieved level MUST be reported per database.
 3. Missing capabilities MUST be declared as explicit level gaps (for example: `L9 missing`).
 4. Operational level claims (L7+) SHOULD cite multinode protocol tests and database-specific evidence separately.
+5. An achieved level MUST be supported by passing candidate-client integration tests for every required scenario at that level and all lower levels, against each database reported at that level. The required scenarios and minimum coverage are defined in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level).
+6. A skipped/disabled suite, unit test alone, or another client’s passing suite MUST NOT count as candidate-client certification. L7–L10 evidence MUST include a multi-server integration run; L10 MUST exercise combined operational and XA behavior.

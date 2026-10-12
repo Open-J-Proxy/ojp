@@ -28,8 +28,11 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
     }
 
      void setUp(String driverClass, String url, String user, String password) throws Exception {
-        assumeFalse(!isMySQLTestEnabled, "MySQL tests are not enabled");
-        assumeFalse(!isMariaDBTestEnabled, "MariaDB tests are not enabled");
+        if (url.toLowerCase().contains("mariadb")) {
+            assumeFalse(!isMariaDBTestEnabled, "MariaDB tests are not enabled");
+        } else {
+            assumeFalse(!isMySQLTestEnabled, "MySQL tests are not enabled");
+        }
         connection = DriverManager.getConnection(url, user, password);
         TestDBUtils.createBasicTestTable(connection, "mysql_db_metadata_test", TestDBUtils.SqlSyntax.MYSQL, true);
     }

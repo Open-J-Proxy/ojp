@@ -677,11 +677,8 @@ jobs:
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
       # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      # Keep only the MySQL driver so the server cannot reach this database through the other vendor's driver
       - name: Download Open Source Drivers
-        run: |
-          bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
-          rm -f ./ojp-server/ojp-libs/mariadb-java-client-*.jar
+        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
       - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
@@ -779,11 +776,8 @@ jobs:
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
       # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      # Keep only the MariaDB driver so the server cannot reach this database through the other vendor's driver
       - name: Download Open Source Drivers
-        run: |
-          bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
-          rm -f ./ojp-server/ojp-libs/mysql-connector-j-*.jar
+        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
 
       - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true

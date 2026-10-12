@@ -1,1 +1,0 @@
-org.openjproxy.jdbc.Driver,jdbc:ojp[localhost:1059]_mariadb://localhost:3307/defaultdb,testuser,testpassword

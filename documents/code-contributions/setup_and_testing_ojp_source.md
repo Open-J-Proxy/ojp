@@ -150,8 +150,6 @@ For detailed CockroachDB setup instructions, see [CockroachDB Testing Guide](../
 - `-DenableOracleTests` - Enable Oracle integration tests (disabled by default, requires manual Oracle JDBC driver setup)
 - `-DenableSqlServerTests` - Enable SQL Server integration tests (disabled by default)
 
-MySQL and MariaDB share test logic in the abstract `MySQLCompatible*` classes (`org.openjproxy.jdbc.mySql`), but run as separate suites: `MySQL*` classes use `mysql_connection.csv` and `MariaDB*` classes (`org.openjproxy.jdbc.mariadb`) use `mariadb_connection.csv`. Each suite first asserts that OJP Server reports the vendor's own JDBC driver (`MySQL Connector/J` or `MariaDB Connector/J`). In CI, the MySQL job removes the MariaDB driver from `ojp-libs` and the MariaDB job removes the MySQL driver.
-
 ### Workflow Ordering and Fail-Fast Strategy
 The CI workflows are organized in a hierarchical order to save CI cycles:
 

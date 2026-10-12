@@ -125,7 +125,7 @@ std::vector<std::string> split_endpoints(const std::string& value) {
         const auto last = endpoint.find_last_not_of(" \t\r\n");
         endpoint = first == std::string::npos ? "" : endpoint.substr(first, last - first + 1);
         if (endpoint.empty()) {
-            throw std::runtime_error("OJP_TEST_MARIADB_L7_ADDRS contains an empty endpoint");
+            throw std::runtime_error("the L7 endpoint list contains an empty endpoint");
         }
         if (std::find(endpoints.begin(), endpoints.end(), endpoint) == endpoints.end()) {
             endpoints.push_back(std::move(endpoint));
@@ -136,7 +136,7 @@ std::vector<std::string> split_endpoints(const std::string& value) {
         start = separator + 1;
     }
     if (endpoints.size() < 2) {
-        throw std::runtime_error("OJP_TEST_MARIADB_L7_ADDRS must contain at least two endpoints");
+        throw std::runtime_error("the L7 endpoint list must contain at least two endpoints");
     }
     return endpoints;
 }
@@ -216,9 +216,9 @@ int run_integration_test(int argc, char** argv) {
     const std::string configured_endpoints = environment_value(endpoints_variable);
     const auto endpoints = split_endpoints(configured_endpoints);
     const std::string unavailable_endpoint =
-        environment_value("OJP_TEST_MARIADB_L7_UNAVAILABLE_ADDR").empty()
+        environment_value((enable_variable + "_UNAVAILABLE_ADDR").c_str()).empty()
             ? "127.0.0.1:1"
-            : environment_value("OJP_TEST_MARIADB_L7_UNAVAILABLE_ADDR");
+            : environment_value((enable_variable + "_UNAVAILABLE_ADDR").c_str());
     expect(std::find(endpoints.begin(), endpoints.end(), unavailable_endpoint) == endpoints.end(),
            "the unavailable test endpoint must not be a healthy endpoint");
     const DatabaseConfig config = read_connection_config(argv[1]);
@@ -317,7 +317,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC MariaDB L7 multinode integration test passed\n";
+    std::cout << "C++ ODBC MariaDB/MySQL L7 multinode integration test passed\n";
     return 0;
 }
 

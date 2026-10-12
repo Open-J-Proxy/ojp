@@ -375,6 +375,30 @@ if(BUILD_TESTING)
             "OJP_TEST_MARIADB_L10_ADDRS"
             "OJP_TEST_MARIADB_L10_TARGET_PID_FILE"
             "$<TARGET_FILE:ojp_odbc>")
+    foreach(LEVEL RANGE 1 10)
+        set(MYSQL_TEST_ARGS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/mysql_l1_connection.csv")
+        if(LEVEL LESS 7)
+            list(APPEND MYSQL_TEST_ARGS "OJP_TEST_MYSQL" "OJP_TEST_MYSQL_ADDR")
+        else()
+            list(APPEND MYSQL_TEST_ARGS
+                "OJP_TEST_MYSQL_L${LEVEL}" "OJP_TEST_MYSQL_L${LEVEL}_ADDRS")
+        endif()
+        if(LEVEL GREATER_EQUAL 9)
+            list(APPEND MYSQL_TEST_ARGS
+                "OJP_TEST_MYSQL_L${LEVEL}_TARGET_PID_FILE" "$<TARGET_FILE:ojp_odbc>")
+        endif()
+        add_test(NAME OjpOdbcMySQLL${LEVEL}Integration
+            COMMAND ojp_odbc_mariadb_l${LEVEL}_integration_test ${MYSQL_TEST_ARGS})
+        set_tests_properties(OjpOdbcMySQLL${LEVEL}Integration PROPERTIES
+            SKIP_RETURN_CODE 77
+            ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
+        if(LEVEL GREATER_EQUAL 8)
+            set_tests_properties(OjpOdbcMySQLL${LEVEL}Integration PROPERTIES
+                ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
+                TIMEOUT 180)
+        endif()
+    endforeach()
     add_test(NAME OjpOdbcSqlServerL1Integration
         COMMAND ojp_odbc_l1_integration_test
             "SQLServer"

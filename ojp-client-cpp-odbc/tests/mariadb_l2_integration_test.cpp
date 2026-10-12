@@ -512,7 +512,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC MariaDB L2 integration test passed\n";
+    std::cout << "C++ ODBC MariaDB/MySQL L2 integration test passed\n";
     return 0;
 }
 

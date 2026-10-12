@@ -291,7 +291,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC MariaDB L6 integration test passed\n";
+    std::cout << "C++ ODBC MariaDB/MySQL L6 integration test passed\n";
     return 0;
 }
 

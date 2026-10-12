@@ -12,7 +12,7 @@ communicates with the server over gRPC.
 | H2 | **L9** |
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
-| MySQL | Not established |
+| MySQL | **L10** |
 | MariaDB | **L10** |
 | Oracle | Not established |
 | DB2 | Not established |
@@ -369,18 +369,28 @@ connection strings. See the [ebook integration chapter](../documents/ebook/part2
 
 ## Integration tests
 
-The H2, PostgreSQL, MariaDB, and SQL Server tests read backend connection details from
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server tests read backend connection details from
 their respective fixtures:
 [`h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
 [`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
 [`mariadb_l1_connection.csv`](tests/testdata/mariadb_l1_connection.csv),
+[`mysql_l1_connection.csv`](tests/testdata/mysql_l1_connection.csv),
 and
 [`sqlserver_l1_connection.csv`](tests/testdata/sqlserver_l1_connection.csv).
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
-The MariaDB L7-L8 suites use the MariaDB fixture and require two OJP endpoints
-connected to the same MariaDB database. MariaDB L8 stops and recovers its first
+MySQL reuses all ten MariaDB test executables; only the CSV fixture and
+`OJP_TEST_MYSQL*` configuration differ. CTest reports each backend separately as
+`OjpOdbcMariaDBL1Integration` through `OjpOdbcMariaDBL10Integration` and
+`OjpOdbcMySQLL1Integration` through `OjpOdbcMySQLL10Integration`. Main CI runs the
+same suites against MariaDB 10.11 and MySQL 8.4 in separate matrix jobs.
+The MySQL fixture uses port 3306; the MariaDB fixture uses port 3307. Both require
+`defaultdb` and a disposable `testuser` account. The MySQL fixture disables TLS
+and allows public-key retrieval for local tests only; do not use these settings
+for production connections. Supply each backend's JDBC driver to OJP.
+The shared MariaDB/MySQL L7-L8 suites use the corresponding fixture and require two OJP endpoints
+connected to the same database. L8 stops and recovers its first
 endpoint, so that server must be supervised by a restart loop and its PID file
 must identify the server process. Configure it with
 `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
@@ -390,7 +400,7 @@ so its PID file must identify the server process that a supervisor will restart.
 Configure that server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion
 assertion. PostgreSQL L9 exercises XA, including two-phase commit and prepared
 transaction recovery, so configure PostgreSQL with `max_prepared_transactions > 0`.
-Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and SQL Server L8-L10 stop an OJP server.
+Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and MariaDB/MySQL and SQL Server L8-L10 stop an OJP server.
 PID files must identify the endpoint being stopped, and a supervisor must
 restart that server.
 
@@ -431,6 +441,21 @@ OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_MARIADB_L9=true \
 OJP_TEST_MARIADB_L9_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_MARIADB_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB_L10=true \
+OJP_TEST_MARIADB_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MYSQL=true OJP_TEST_MYSQL_ADDR=localhost:1059 \
+OJP_TEST_MYSQL_L7=true \
+OJP_TEST_MYSQL_L7_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_MYSQL_L8=true \
+OJP_TEST_MYSQL_L8_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MYSQL_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MYSQL_L9=true \
+OJP_TEST_MYSQL_L9_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MYSQL_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MYSQL_L10=true \
+OJP_TEST_MYSQL_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MYSQL_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -449,12 +474,13 @@ When enabled, missing endpoint configuration or unavailable required servers
 fail the test instead of silently skipping it. Set
 `OJP_TEST_H2_L7_UNAVAILABLE_ADDR`,
 `OJP_TEST_MARIADB_L7_UNAVAILABLE_ADDR`,
+`OJP_TEST_MYSQL_L7_UNAVAILABLE_ADDR`,
 `OJP_TEST_POSTGRESQL_L7_UNAVAILABLE_ADDR`, or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
-The H2, PostgreSQL, MariaDB, and SQL Server L8 tests require a PID file for their first endpoint and
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server L8 tests require a PID file for their first endpoint and
 restart that server automatically through the test supervisor. The PostgreSQL,
-MariaDB, and SQL Server L9/L10 tests also require a PID file for their first
+MariaDB, MySQL, and SQL Server L9/L10 tests also require a PID file for their first
 endpoint, which must be restarted by a supervisor. Their endpoint lists put the
 restartable server first.
 Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.

@@ -24,7 +24,7 @@
 # 11. sqlserver-tests: SQL Server tests (needs: h2-integration-gate, resolve-version)
 # 12. cpp-odbc-test: C++ ODBC H2 L1-L9 tests (runs alongside build-test)
 # 13. cpp-odbc-postgres-test: C++ ODBC PostgreSQL L1-L10 tests (needs: h2-integration-gate)
-# 14. cpp-odbc-mariadb-test: C++ ODBC MariaDB L1-L10 tests (needs: h2-integration-gate)
+# 14. cpp-odbc-mariadb-test: Shared C++ ODBC MariaDB/MySQL L1-L10 tests (needs: h2-integration-gate)
 # 15. cpp-odbc-sqlserver-test: C++ ODBC SQL Server L1-L10 tests (needs: h2-integration-gate)
 # 16. notify-integration: Triggers integration repo workflow (needs: h2-integration-gate)
 #
@@ -2567,34 +2567,48 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # JOB 14: C++ ODBC MariaDB L1-L10 Integration Tests
+  # JOB 14: Shared C++ ODBC MariaDB/MySQL L1-L10 Integration Tests
   # ===========================================================================
   #
   # Runs only after the aggregate H2 gate has succeeded.
   #
   # ===========================================================================
   cpp-odbc-mariadb-test:
-    name: C++ ODBC MariaDB L1-L10 Tests
+    name: C++ ODBC ${{ matrix.database }} L1-L10 Tests
     runs-on: ubuntu-latest
     needs: [detect-changes, h2-integration-gate]
     if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.cpp == 'true' && needs.h2-integration-gate.result == 'success' }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: MariaDB
+            flag: MARIADB
+            image: mariadb:10.11
+            port: 3307
+            slug: mariadb
+          - database: MySQL
+            flag: MYSQL
+            image: mysql:8.4
+            port: 3306
+            slug: mysql
     services:
-      mariadb:
-        image: mariadb:10.11
+      database:
+        image: ${{ matrix.image }}
         env:
-          MARIADB_DATABASE: defaultdb
-          MARIADB_USER: testuser
-          MARIADB_PASSWORD: testpassword
-          MARIADB_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: defaultdb
+          MYSQL_USER: testuser
+          MYSQL_PASSWORD: testpassword
+          MYSQL_ROOT_PASSWORD: rootpassword
         options: >-
           --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
         ports:
-          - 3307:3306
+          - ${{ matrix.port }}:3306
     steps:
       - name: Git checkout
         uses: actions/checkout@v5
@@ -2649,7 +2663,7 @@ jobs:
           cat /tmp/ojp-server.log
           exit 1
 
-      - name: Start restartable second OJP server for MariaDB L8-L10
+      - name: Start restartable second OJP server for L8-L10
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           nohup bash -c '
@@ -2686,26 +2700,23 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC MariaDB L1-L10 tests
-        env:
-          OJP_TEST_MARIADB: 'true'
-          OJP_TEST_MARIADB_ADDR: 'localhost:1059'
-          OJP_TEST_MARIADB_L7: 'true'
-          OJP_TEST_MARIADB_L7_ADDRS: 'localhost:1059,localhost:1060'
-          OJP_TEST_MARIADB_L8: 'true'
-          OJP_TEST_MARIADB_L8_ADDRS: 'localhost:1060,localhost:1059'
-          OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
-          OJP_TEST_MARIADB_L9: 'true'
-          OJP_TEST_MARIADB_L9_ADDRS: 'localhost:1060,localhost:1059'
-          OJP_TEST_MARIADB_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
-          OJP_TEST_MARIADB_L10: 'true'
-          OJP_TEST_MARIADB_L10_ADDRS: 'localhost:1060,localhost:1059'
-          OJP_TEST_MARIADB_L10_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
+      - name: Run shared C++ ODBC L1-L10 tests
         run: |
           set -o pipefail
+          export "OJP_TEST_${{ matrix.flag }}=true"
+          export "OJP_TEST_${{ matrix.flag }}_ADDR=localhost:1059"
+          export "OJP_TEST_${{ matrix.flag }}_L7=true"
+          export "OJP_TEST_${{ matrix.flag }}_L7_ADDRS=localhost:1059,localhost:1060"
+          for level in 8 9 10; do
+            export "OJP_TEST_${{ matrix.flag }}_L${level}=true"
+            export "OJP_TEST_${{ matrix.flag }}_L${level}_ADDRS=localhost:1060,localhost:1059"
+          done
+          export "OJP_TEST_${{ matrix.flag }}_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid"
+          export "OJP_TEST_${{ matrix.flag }}_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid"
+          export "OJP_TEST_${{ matrix.flag }}_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid"
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcMariaDBL(10|[1-9])Integration$' --output-on-failure \
-            2>&1 | tee /tmp/cpp-odbc-mariadb-l1-l10-test.log
+            -R '^OjpOdbc${{ matrix.database }}L(10|[1-9])Integration$' --output-on-failure \
+            2>&1 | tee /tmp/cpp-odbc-${{ matrix.slug }}-l1-l10-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2713,13 +2724,13 @@ jobs:
           cat /tmp/ojp-server.log
           cat /tmp/ojp-server-2.log
 
-      - name: Save C++ ODBC MariaDB test report and server log
+      - name: Save shared C++ ODBC test report and server log
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: cpp-odbc-mariadb-l1-l10-test-results
+          name: cpp-odbc-${{ matrix.slug }}-l1-l10-test-results
           path: |
-            /tmp/cpp-odbc-mariadb-l1-l10-test.log
+            /tmp/cpp-odbc-${{ matrix.slug }}-l1-l10-test.log
             /tmp/ojp-server.log
             /tmp/ojp-server-2.log
           retention-days: 7

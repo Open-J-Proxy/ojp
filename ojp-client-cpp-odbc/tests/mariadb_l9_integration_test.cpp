@@ -180,7 +180,7 @@ std::vector<std::string> split_endpoints(const std::string& value) {
         start = separator + 1;
     }
     if (endpoints.size() < 2) {
-        throw std::runtime_error("OJP_TEST_MARIADB_L9_ADDRS must contain at least two servers");
+        throw std::runtime_error("the L9 endpoint list must contain at least two servers");
     }
     return endpoints;
 }
@@ -524,7 +524,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC MariaDB L9 XA integration test passed\n";
+    std::cout << "C++ ODBC MariaDB/MySQL L9 XA integration test passed\n";
     return 0;
 }
 

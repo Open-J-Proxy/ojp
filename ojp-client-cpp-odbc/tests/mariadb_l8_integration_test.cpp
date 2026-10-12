@@ -135,7 +135,7 @@ std::vector<std::string> split_endpoints(const std::string& value) {
     }
     if (endpoints.size() < 2) {
         throw std::runtime_error(
-            "OJP_TEST_MARIADB_L8_ADDRS must contain at least two OJP servers");
+            "the L8 endpoint list must contain at least two OJP servers");
     }
     return endpoints;
 }
@@ -352,10 +352,11 @@ int run_integration_test(int argc, char** argv) {
     }
     const std::vector<std::string> endpoints = split_endpoints(environment_value(argv[3]));
     const std::string pid_file =
-        environment_value("OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE");
+        environment_value((enable_variable + "_FIRST_SERVER_PID_FILE").c_str());
     if (pid_file.empty()) {
         throw std::runtime_error(
-            "OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE is required when MariaDB L8 is enabled");
+            enable_variable + "_FIRST_SERVER_PID_FILE is required when " +
+            enable_variable + " is enabled");
     }
     const DatabaseConfig config = read_connection_config(argv[1]);
     const std::string table = "ojp_cpp_mariadb_l8_" + random_suffix();
@@ -493,7 +494,7 @@ int run_integration_test(int argc, char** argv) {
         }
         throw;
     }
-    std::cout << "C++ ODBC MariaDB L8 failover and recovery integration test passed\n";
+    std::cout << "C++ ODBC MariaDB/MySQL L8 failover and recovery integration test passed\n";
     return 0;
 }
 

@@ -147,21 +147,18 @@ func (c *sqlConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver
 	if options.ReadOnly {
 		return nil, errors.New("OJP does not support read-only transaction options")
 	}
-	c.connection.mu.Lock()
-	defer c.connection.mu.Unlock()
-	if err := c.checkOpen(); err != nil {
-		return nil, err
-	}
-	var trailer metadata.MD
-	session, err := c.client.rpc.StartTransaction(ctx, cloneSession(c.connection.session), grpc.Trailer(&trailer))
-	if err != nil {
-		return nil, grpcError(ctx, err, trailer)
-	}
-	if session == nil {
-		return nil, errors.New("OJP server returned an empty transaction session")
-	}
-	c.connection.applySession(session)
-	return &sqlTx{connection: c.connection}, nil
+	return withConnectionLock(c.connection, func() (driver.Tx, error) {
+		var trailer metadata.MD
+		session, err := c.client.rpc.StartTransaction(ctx, cloneSession(c.connection.session), grpc.Trailer(&trailer))
+		if err != nil {
+			return nil, grpcError(ctx, err, trailer)
+		}
+		if session == nil {
+			return nil, errors.New("OJP server returned an empty transaction session")
+		}
+		c.connection.applySession(session)
+		return &sqlTx{connection: c.connection}, nil
+	})
 }
 
 func (c *sqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
@@ -318,38 +315,31 @@ func (t *sqlTx) Rollback() error {
 }
 
 func (t *sqlTx) finish(commit bool) error {
-	t.connection.mu.Lock()
-	defer t.connection.mu.Unlock()
-	if t.done {
-		return errors.New("transaction has already completed")
-	}
-	c := t.connection
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return errClientClosed
-	}
-	if c.closed {
-		return errConnectionClosed
-	}
-	ctx := context.Background()
-	var trailer metadata.MD
-	var session *pb.SessionInfo
-	var err error
-	if commit {
-		session, err = c.client.rpc.CommitTransaction(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
-	} else {
-		session, err = c.client.rpc.RollbackTransaction(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
-	}
-	if err != nil {
-		return grpcError(ctx, err, trailer)
-	}
-	if session == nil {
-		return errors.New("OJP server returned an empty transaction session")
-	}
-	c.applySession(session)
-	t.done = true
-	return nil
+	_, err := withConnectionLock(t.connection, func() (any, error) {
+		if t.done {
+			return nil, errors.New("transaction has already completed")
+		}
+		c := t.connection
+		ctx := context.Background()
+		var trailer metadata.MD
+		var session *pb.SessionInfo
+		var rpcErr error
+		if commit {
+			session, rpcErr = c.client.rpc.CommitTransaction(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
+		} else {
+			session, rpcErr = c.client.rpc.RollbackTransaction(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
+		}
+		if rpcErr != nil {
+			return nil, grpcError(ctx, rpcErr, trailer)
+		}
+		if session == nil {
+			return nil, errors.New("OJP server returned an empty transaction session")
+		}
+		c.applySession(session)
+		t.done = true
+		return nil, nil
+	})
+	return err
 }
 
 func namedValues(args []driver.Value) []driver.NamedValue {
@@ -369,32 +359,23 @@ func toProtoParameters(args []driver.NamedValue) ([]*pb.ParameterProto, error) {
 		parameter := &pb.ParameterProto{Index: int32(index + 1)}
 		switch value := argument.Value.(type) {
 		case nil:
-			parameter.Type = pb.ParameterTypeProto_PT_NULL
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_IsNull{IsNull: true}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_NULL, &pb.ParameterValue{Value: &pb.ParameterValue_IsNull{IsNull: true}})
 		case bool:
-			parameter.Type = pb.ParameterTypeProto_PT_BOOLEAN
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_BoolValue{BoolValue: value}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_BOOLEAN, encodeParam(value))
 		case int64:
-			parameter.Type = pb.ParameterTypeProto_PT_LONG
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_LongValue{LongValue: value}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_LONG, encodeParam(value))
 		case float64:
-			parameter.Type = pb.ParameterTypeProto_PT_DOUBLE
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_DoubleValue{DoubleValue: value}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_DOUBLE, encodeParam(value))
 		case string:
-			parameter.Type = pb.ParameterTypeProto_PT_STRING
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_StringValue{StringValue: value}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_STRING, encodeParam(value))
 		case []byte:
-			parameter.Type = pb.ParameterTypeProto_PT_BYTES
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_BytesValue{BytesValue: append([]byte(nil), value...)}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_BYTES, encodeParam(value))
 		case time.Time:
 			timestamp := timestamppb.New(value)
 			if err := timestamp.CheckValid(); err != nil {
 				return nil, fmt.Errorf("invalid timestamp parameter: %w", err)
 			}
-			parameter.Type = pb.ParameterTypeProto_PT_TIMESTAMP
-			parameter.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_TimestampValue{
-				TimestampValue: &pb.TimestampWithZone{Instant: timestamp},
-			}}}
+			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_TIMESTAMP, encodeParam(value))
 		default:
 			return nil, fmt.Errorf("unsupported database/sql parameter type %T", argument.Value)
 		}
@@ -413,6 +394,18 @@ func toDriverValue(value any) (driver.Value, error) {
 		return float64(typed), nil
 	default:
 		return nil, fmt.Errorf("unsupported database/sql value %T", value)
+	}
+}
+
+// buildParameter is a small generic helper that combines an index, a
+// protobuf parameter type, and a pre-encoded value into a
+// *pb.ParameterProto. It removes the boilerplate of constructing the
+// struct literal at each call site.
+func buildParameter[T pb.ParameterTypeProto](index int, paramType T, value *pb.ParameterValue) *pb.ParameterProto {
+	return &pb.ParameterProto{
+		Index:  int32(index),
+		Type:   pb.ParameterTypeProto(paramType),
+		Values: []*pb.ParameterValue{value},
 	}
 }
 

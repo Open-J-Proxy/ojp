@@ -23,6 +23,7 @@ import (
 var (
 	errClientClosed     = errors.New("OJP client is closed")
 	errConnectionClosed = errors.New("OJP connection is closed")
+	errNoMoreRows       = errors.New("no more rows")
 )
 
 type connectionConfig struct {
@@ -49,6 +50,7 @@ type rpcConnection struct {
 type queryResult struct {
 	Columns []string
 	Rows    [][]any
+	cursor  int
 }
 
 var processUUIDOnce sync.Once
@@ -134,115 +136,89 @@ func (c *rpcClient) close() error {
 }
 
 func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return 0, errConnectionClosed
-	}
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return 0, errClientClosed
-	}
-
-	var trailer metadata.MD
-	result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
-		Session:    cloneSession(c.session),
-		Sql:        sql,
-		Parameters: parameters,
-	}, grpc.Trailer(&trailer))
-	if err != nil {
-		return 0, grpcError(ctx, err, trailer)
-	}
-	if result == nil {
-		return 0, errors.New("OJP server returned an empty update result")
-	}
-	c.applySession(result.GetSession())
-	if result.GetType() != pb.ResultType_INTEGER {
-		return 0, fmt.Errorf("unexpected update result type %s", result.GetType())
-	}
-	updateCount, ok := result.GetResult().(*pb.OpResult_IntValue)
-	if !ok {
-		return 0, errors.New("OJP server returned an update result without an affected-row count")
-	}
-	return int64(updateCount.IntValue), nil
+	return withConnectionLock(c, func() (int64, error) {
+		var trailer metadata.MD
+		result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
+			Session:    cloneSession(c.session),
+			Sql:        sql,
+			Parameters: parameters,
+		}, grpc.Trailer(&trailer))
+		if err != nil {
+			return 0, grpcError(ctx, err, trailer)
+		}
+		if result == nil {
+			return 0, errors.New("OJP server returned an empty update result")
+		}
+		c.applySession(result.GetSession())
+		if result.GetType() != pb.ResultType_INTEGER {
+			return 0, fmt.Errorf("unexpected update result type %s", result.GetType())
+		}
+		updateCount, ok := result.GetResult().(*pb.OpResult_IntValue)
+		if !ok {
+			return 0, errors.New("OJP server returned an update result without an affected-row count")
+		}
+		return int64(updateCount.IntValue), nil
+	})
 }
 
 func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return nil, errConnectionClosed
-	}
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return nil, errClientClosed
-	}
+	return withConnectionLock(c, func() (*queryResult, error) {
+		stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
+			Session:    cloneSession(c.session),
+			Sql:        sql,
+			Parameters: parameters,
+		})
+		if err != nil {
+			return nil, grpcError(ctx, err, nil)
+		}
 
-	stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
-		Session:    cloneSession(c.session),
-		Sql:        sql,
-		Parameters: parameters,
-	})
-	if err != nil {
-		return nil, grpcError(ctx, err, nil)
-	}
-
-	result := &queryResult{}
-	for {
-		message, recvErr := stream.Recv()
-		if errors.Is(recvErr, io.EOF) {
-			return result, nil
-		}
-		if recvErr != nil {
-			return nil, grpcError(ctx, recvErr, stream.Trailer())
-		}
-		c.applySession(message.GetSession())
-		queryResult := message.GetQueryResult()
-		if queryResult == nil {
-			continue
-		}
-		if len(result.Columns) == 0 {
-			result.Columns = append(result.Columns, queryResult.GetLabels()...)
-		}
-		for _, row := range queryResult.GetRows() {
-			columns := make([]any, len(row.GetColumns()))
-			for index, value := range row.GetColumns() {
-				columns[index], err = decodeValue(value)
-				if err != nil {
-					return nil, fmt.Errorf("decode query result column %d: %w", index, err)
-				}
+		result := &queryResult{}
+		for {
+			message, recvErr := stream.Recv()
+			if errors.Is(recvErr, io.EOF) {
+				return result, nil
 			}
-			result.Rows = append(result.Rows, columns)
+			if recvErr != nil {
+				return nil, grpcError(ctx, recvErr, stream.Trailer())
+			}
+			c.applySession(message.GetSession())
+			queryResult := message.GetQueryResult()
+			if queryResult == nil {
+				continue
+			}
+			if len(result.Columns) == 0 {
+				result.Columns = append(result.Columns, queryResult.GetLabels()...)
+			}
+			for _, row := range queryResult.GetRows() {
+				columns := make([]any, len(row.GetColumns()))
+				for index, value := range row.GetColumns() {
+					columns[index], err = decodeValue(value)
+					if err != nil {
+						return nil, fmt.Errorf("decode query result column %d: %w", index, err)
+					}
+				}
+				result.Rows = append(result.Rows, columns)
+			}
 		}
-	}
+	})
 }
 
 func (c *rpcConnection) close(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return nil
-	}
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return errClientClosed
-	}
-
-	var trailer metadata.MD
-	response, err := c.client.rpc.TerminateSession(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
-	if err != nil {
-		return grpcError(ctx, err, trailer)
-	}
-	if response == nil || !response.GetTerminated() {
-		return errors.New("OJP server did not terminate the session")
-	}
-	c.closed = true
-	c.session = cloneSession(c.session)
-	c.session.SessionStatus = pb.SessionStatus_SESSION_TERMINATED
-	return nil
+	_, err := withConnectionLock(c, func() (any, error) {
+		var trailer metadata.MD
+		response, rpcErr := c.client.rpc.TerminateSession(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
+		if rpcErr != nil {
+			return nil, grpcError(ctx, rpcErr, trailer)
+		}
+		if response == nil || !response.GetTerminated() {
+			return nil, errors.New("OJP server did not terminate the session")
+		}
+		c.closed = true
+		c.session = cloneSession(c.session)
+		c.session.SessionStatus = pb.SessionStatus_SESSION_TERMINATED
+		return nil, nil
+	})
+	return err
 }
 
 func (c *rpcConnection) isClosed() bool {

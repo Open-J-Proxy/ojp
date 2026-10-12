@@ -170,7 +170,8 @@ inline void wait_for_restart(const std::string& pid_file, long stopped_pid,
             if (connection != SQL_NULL_HDBC) {
                 if (connected) {
                     const auto disconnect = SQLDisconnect(connection);
-                    cleaned = SQL_SUCCEEDED(disconnect) && cleaned;
+                    // A throttled termination RPC still disconnects locally; retry the probe.
+                    ready = SQL_SUCCEEDED(disconnect) && ready;
                 }
                 const auto release = SQLFreeHandle(SQL_HANDLE_DBC, connection);
                 cleaned = SQL_SUCCEEDED(release) && cleaned;

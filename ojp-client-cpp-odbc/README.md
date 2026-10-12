@@ -389,6 +389,9 @@ The MySQL fixture uses port 3306; the MariaDB fixture uses port 3307. Both requi
 `defaultdb` and a disposable `testuser` account. The MySQL fixture disables TLS
 and allows public-key retrieval for local tests only; do not use these settings
 for production connections. Supply each backend's JDBC driver to OJP.
+For MySQL L9/L10 recovery scans, grant the disposable test account
+`XA_RECOVER_ADMIN` on `*.*` in addition to its privileges on `defaultdb`;
+Main CI applies this grant automatically.
 The shared MariaDB/MySQL L7-L8 suites use the corresponding fixture and require two OJP endpoints
 connected to the same database. L8 stops and recovers its first
 endpoint, so that server must be supervised by a restart loop and its PID file

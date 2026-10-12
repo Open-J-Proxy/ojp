@@ -198,7 +198,7 @@ std::string insert_rows_query(const std::string& table, SQLINTEGER row_count) {
            "d4.digit * 10000 AS n FROM " +
            digits + " AS d0 CROSS JOIN " + digits + " AS d1 CROSS JOIN " + digits +
            " AS d2 CROSS JOIN " + digits + " AS d3 CROSS JOIN " + digits +
-           " AS d4) AS generated WHERE n <= " + std::to_string(row_count);
+           " AS d4) AS generated_rows WHERE n <= " + std::to_string(row_count);
 }
 
 std::string select_rows_query(const std::string& table) {

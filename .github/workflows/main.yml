@@ -2663,6 +2663,13 @@ jobs:
           cat /tmp/ojp-server.log
           exit 1
 
+      - name: Grant MySQL XA recovery permission
+        if: matrix.database == 'MySQL'
+        run: |
+          docker exec ${{ job.services.database.id }} \
+            mysql -uroot -prootpassword \
+            -e "GRANT XA_RECOVER_ADMIN ON *.* TO 'testuser'@'%';"
+
       - name: Start restartable second OJP server for L8-L10
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)

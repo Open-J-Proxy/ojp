@@ -47,6 +47,41 @@ func encodeParam[T driverVal](value T) *pb.ParameterValue {
 	}
 }
 
+// encodeParamTyped converts a Go scalar into a *pb.ParameterProto with
+// the matching ParameterTypeProto. This is the L2 broad-coverage path:
+// it maps Go types to the full OJP parameter type system (PT_INT,
+// PT_SHORT, PT_LONG, PT_FLOAT, PT_DOUBLE, PT_BOOLEAN, PT_STRING,
+// PT_BYTES, PT_TIMESTAMP, PT_DATE, PT_TIME, PT_BIG_DECIMAL, ...).
+//
+// The zero value of T is treated as PT_NULL.
+func encodeParamTyped[T driverVal](index int, value T) *pb.ParameterProto {
+	param := &pb.ParameterProto{Index: int32(index)}
+	switch v := any(value).(type) {
+	case bool:
+		param.Type = pb.ParameterTypeProto_PT_BOOLEAN
+		param.Values = []*pb.ParameterValue{encodeParam(v)}
+	case int64:
+		param.Type = pb.ParameterTypeProto_PT_LONG
+		param.Values = []*pb.ParameterValue{encodeParam(v)}
+	case float64:
+		param.Type = pb.ParameterTypeProto_PT_DOUBLE
+		param.Values = []*pb.ParameterValue{encodeParam(v)}
+	case string:
+		param.Type = pb.ParameterTypeProto_PT_STRING
+		param.Values = []*pb.ParameterValue{encodeParam(v)}
+	case []byte:
+		param.Type = pb.ParameterTypeProto_PT_BYTES
+		param.Values = []*pb.ParameterValue{encodeParam(v)}
+	case time.Time:
+		param.Type = pb.ParameterTypeProto_PT_TIMESTAMP
+		param.Values = []*pb.ParameterValue{encodeParam(v)}
+	default:
+		param.Type = pb.ParameterTypeProto_PT_NULL
+		param.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_IsNull{IsNull: true}}}
+	}
+	return param
+}
+
 // decodeResult is the inverse of encodeParam: it extracts a typed value
 // from a decoded result. Because the protobuf oneof variants differ,
 // each concrete type is handled in its own case.

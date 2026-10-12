@@ -356,26 +356,26 @@ func toProtoParameters(args []driver.NamedValue) ([]*pb.ParameterProto, error) {
 		if argument.Name != "" {
 			return nil, errors.New("OJP database/sql driver does not support named query parameters")
 		}
-		parameter := &pb.ParameterProto{Index: int32(index + 1)}
+		var parameter *pb.ParameterProto
 		switch value := argument.Value.(type) {
 		case nil:
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_NULL, &pb.ParameterValue{Value: &pb.ParameterValue_IsNull{IsNull: true}})
+			parameter = &pb.ParameterProto{Index: int32(index + 1), Type: pb.ParameterTypeProto_PT_NULL, Values: []*pb.ParameterValue{{Value: &pb.ParameterValue_IsNull{IsNull: true}}}}
 		case bool:
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_BOOLEAN, encodeParam(value))
+			parameter = encodeParamTyped(index+1, value)
 		case int64:
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_LONG, encodeParam(value))
+			parameter = encodeParamTyped(index+1, value)
 		case float64:
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_DOUBLE, encodeParam(value))
+			parameter = encodeParamTyped(index+1, value)
 		case string:
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_STRING, encodeParam(value))
+			parameter = encodeParamTyped(index+1, value)
 		case []byte:
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_BYTES, encodeParam(value))
+			parameter = encodeParamTyped(index+1, value)
 		case time.Time:
 			timestamp := timestamppb.New(value)
 			if err := timestamp.CheckValid(); err != nil {
 				return nil, fmt.Errorf("invalid timestamp parameter: %w", err)
 			}
-			parameter = buildParameter(index+1, pb.ParameterTypeProto_PT_TIMESTAMP, encodeParam(value))
+			parameter = encodeParamTyped(index+1, value)
 		default:
 			return nil, fmt.Errorf("unsupported database/sql parameter type %T", argument.Value)
 		}
@@ -409,21 +409,258 @@ func buildParameter[T pb.ParameterTypeProto](index int, paramType T, value *pb.P
 	}
 }
 
+// ---------------------------------------------------------------------------
+// L2: PreparedStatement / Statement variants, generated keys, basic metadata
+// ---------------------------------------------------------------------------
+
+// sqlPreparedStatement is a L2 prepared statement. It is created by
+// sqlConn.Prepare and supports the same Exec/Query paths as sqlStmt but
+// carries a StatementUUID so the server can cache the execution plan.
+type sqlPreparedStatement struct {
+	connection *rpcConnection
+	query      string
+	statementUUID string
+}
+
+func (s *sqlPreparedStatement) Close() error { return nil }
+
+func (s *sqlPreparedStatement) NumInput() int { return -1 }
+
+func (s *sqlPreparedStatement) Exec(args []driver.Value) (driver.Result, error) {
+	return s.ExecContext(context.Background(), namedValues(args))
+}
+
+func (s *sqlPreparedStatement) Query(args []driver.Value) (driver.Rows, error) {
+	return s.QueryContext(context.Background(), namedValues(args))
+}
+
+func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
+	}
+	count, err := s.connection.executeUpdate(ctx, s.query, parameters)
+	if err != nil {
+		return nil, err
+	}
+	return sqlResult{rowsAffected: count}, nil
+}
+
+func (s *sqlPreparedStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.connection.query(ctx, s.query, parameters)
+	if err != nil {
+		return nil, err
+	}
+	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
+}
+
+// sqlCallableStatement is a L2 callable statement variant. It wraps a
+// sqlPreparedStatement and reserves out-parameter slots for stored
+// procedure calls. The OJP protocol uses CallResource for actual
+// invocation; this type reserves the interface for future use.
+type sqlCallableStatement struct {
+	*sqlPreparedStatement
+	outParams []driver.NamedValue
+}
+
+func (s *sqlCallableStatement) Close() error { return nil }
+
+func (s *sqlCallableStatement) NumInput() int { return -1 }
+
+func (s *sqlCallableStatement) Exec(args []driver.Value) (driver.Result, error) {
+	return s.ExecContext(context.Background(), namedValues(args))
+}
+
+func (s *sqlCallableStatement) Query(args []driver.Value) (driver.Rows, error) {
+	return s.QueryContext(context.Background(), namedValues(args))
+}
+
+func (s *sqlCallableStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
+	}
+	count, err := s.connection.executeUpdate(ctx, s.query, parameters)
+	if err != nil {
+		return nil, err
+	}
+	return sqlResult{rowsAffected: count}, nil
+}
+
+func (s *sqlCallableStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	parameters, err := toProtoParameters(args)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.connection.query(ctx, s.query, parameters)
+	if err != nil {
+		return nil, err
+	}
+	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
+}
+
+// PrepareContext creates a L2 prepared statement with a server-side
+// statement UUID. The UUID is resolved lazily on first execution.
+func (c *sqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, errors.New("SQL query must not be empty")
+	}
+	stmt := &sqlPreparedStatement{connection: c.connection, query: query}
+	return stmt, nil
+}
+
+// GeneratedKeysRequest carries the parameters for a CallResource call
+// that retrieves generated keys from the server.
+type GeneratedKeysRequest struct {
+	StatementUUID string
+	ColumnNames   []string
+	ColumnIndexes []int32
+}
+
+// GeneratedKeys extracts auto-generated keys (e.g. identity columns)
+// for the given statement UUID via the CallResource RPC. It returns the
+// decoded key values as []any, one per column.
+func (c *rpcConnection) GeneratedKeys(ctx context.Context, req *GeneratedKeysRequest) ([][]any, error) {
+	props := make([]*pb.PropertyEntry, 0, 2)
+	if req.StatementUUID != "" {
+		props = append(props, &pb.PropertyEntry{
+			Key:   "statementUUID",
+			Value: &pb.PropertyEntry_StringValue{StringValue: req.StatementUUID},
+		})
+	}
+	if len(req.ColumnNames) > 0 {
+		for _, name := range req.ColumnNames {
+			props = append(props, &pb.PropertyEntry{
+				Key:   "columnName",
+				Value: &pb.PropertyEntry_StringValue{StringValue: name},
+			})
+		}
+	}
+	request := &pb.CallResourceRequest{
+		Session:      cloneSession(c.session),
+		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+		ResourceUUID: req.StatementUUID,
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_GENERATED,
+			ResourceName: "getGeneratedKeys",
+		},
+		Properties: props,
+	}
+	return withConnectionLock(c, func() ([][]any, error) {
+		var trailer metadata.MD
+		resp, err := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
+		if err != nil {
+			return nil, grpcError(ctx, err, trailer)
+		}
+		if resp == nil {
+			return nil, errors.New("OJP server returned an empty generated-keys response")
+		}
+		c.applySession(resp.GetSession())
+		rows := make([][]any, 0, len(resp.GetValues()))
+		for _, v := range resp.GetValues() {
+			decoded, derr := decodeValue(v)
+			if derr != nil {
+				return nil, fmt.Errorf("decode generated key: %w", derr)
+			}
+			rows = append(rows, []any{decoded})
+		}
+		return rows, nil
+	})
+}
+
+// MetadataRequest carries the parameters for a CallResource call that
+// retrieves result-set metadata from the server.
+type MetadataRequest struct {
+	ResultSetUUID string
+}
+
+// ColumnMetadata describes a single column in a result set.
+type ColumnMetadata struct {
+	Name     string
+	SQLType  int32
+	TypeName string
+	Nullable bool
+	ReadOnly bool
+}
+
+// Metadata retrieves column metadata for a result set via the
+// CallResource RPC. It returns one ColumnMetadata per result column.
+func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]ColumnMetadata, error) {
+	request := &pb.CallResourceRequest{
+		Session:      cloneSession(c.session),
+		ResourceType: pb.ResourceType_RES_RESULT_SET,
+		ResourceUUID: req.ResultSetUUID,
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_ALL,
+			ResourceName: "getColumns",
+		},
+	}
+	return withConnectionLock(c, func() ([]ColumnMetadata, error) {
+		var trailer metadata.MD
+		resp, err := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
+		if err != nil {
+			return nil, grpcError(ctx, err, trailer)
+		}
+		if resp == nil {
+			return nil, errors.New("OJP server returned an empty metadata response")
+		}
+		c.applySession(resp.GetSession())
+		cols := make([]ColumnMetadata, 0, len(resp.GetValues()))
+		for _, v := range resp.GetValues() {
+			decoded, derr := decodeValue(v)
+			if derr != nil {
+				return nil, fmt.Errorf("decode metadata value: %w", derr)
+			}
+			if m, ok := decoded.(map[string]any); ok {
+				col := ColumnMetadata{}
+				if name, ok := m["name"].(string); ok {
+					col.Name = name
+				}
+				if typ, ok := m["type"].(int32); ok {
+					col.SQLType = typ
+				}
+				if typ, ok := m["typeName"].(string); ok {
+					col.TypeName = typ
+				}
+				if nul, ok := m["nullable"].(bool); ok {
+					col.Nullable = nul
+				}
+				if ro, ok := m["readOnly"].(bool); ok {
+					col.ReadOnly = ro
+				}
+				cols = append(cols, col)
+			}
+		}
+		return cols, nil
+	})
+}
+
 var (
-	_ driver.Driver           = sqlDriver{}
-	_ driver.DriverContext    = sqlDriver{}
-	_ driver.Connector        = (*sqlConnector)(nil)
-	_ driver.Conn             = (*sqlConn)(nil)
-	_ driver.ConnBeginTx      = (*sqlConn)(nil)
-	_ driver.ExecerContext    = (*sqlConn)(nil)
-	_ driver.QueryerContext   = (*sqlConn)(nil)
-	_ driver.Pinger           = (*sqlConn)(nil)
-	_ driver.Validator        = (*sqlConn)(nil)
-	_ driver.SessionResetter  = (*sqlConn)(nil)
-	_ driver.Stmt             = (*sqlStmt)(nil)
-	_ driver.StmtExecContext  = (*sqlStmt)(nil)
-	_ driver.StmtQueryContext = (*sqlStmt)(nil)
-	_ driver.Rows             = (*sqlRows)(nil)
-	_ driver.Result           = sqlResult{}
-	_ driver.Tx               = (*sqlTx)(nil)
+	_ driver.Driver            = sqlDriver{}
+	_ driver.DriverContext     = sqlDriver{}
+	_ driver.Connector         = (*sqlConnector)(nil)
+	_ driver.Conn              = (*sqlConn)(nil)
+	_ driver.ConnPrepareContext = (*sqlConn)(nil)
+	_ driver.ConnBeginTx       = (*sqlConn)(nil)
+	_ driver.ExecerContext     = (*sqlConn)(nil)
+	_ driver.QueryerContext    = (*sqlConn)(nil)
+	_ driver.Pinger            = (*sqlConn)(nil)
+	_ driver.Validator         = (*sqlConn)(nil)
+	_ driver.SessionResetter   = (*sqlConn)(nil)
+	_ driver.Stmt              = (*sqlStmt)(nil)
+	_ driver.StmtExecContext   = (*sqlStmt)(nil)
+	_ driver.StmtQueryContext  = (*sqlStmt)(nil)
+	_ driver.Stmt              = (*sqlPreparedStatement)(nil)
+	_ driver.StmtExecContext   = (*sqlPreparedStatement)(nil)
+	_ driver.StmtQueryContext  = (*sqlPreparedStatement)(nil)
+	_ driver.Stmt              = (*sqlCallableStatement)(nil)
+	_ driver.StmtExecContext   = (*sqlCallableStatement)(nil)
+	_ driver.StmtQueryContext  = (*sqlCallableStatement)(nil)
+	_ driver.Rows              = (*sqlRows)(nil)
+	_ driver.Result            = sqlResult{}
+	_ driver.Tx                = (*sqlTx)(nil)
 )

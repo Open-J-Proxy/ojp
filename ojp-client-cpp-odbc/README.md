@@ -397,6 +397,8 @@ restart that server.
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
 database-owner permissions, as in the JDBC integration-test container setup.
+MariaDB L9 additionally requires `XA_RECOVER_ADMIN` on the configured database
+user because MariaDB 10.11 restricts `XA RECOVER` to privileged accounts.
 Then build and run the tests:
 
 ```sh

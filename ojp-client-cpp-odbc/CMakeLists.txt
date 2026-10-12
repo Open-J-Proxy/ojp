@@ -327,9 +327,18 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/mariadb_l1_connection.csv"
             "OJP_TEST_MARIADB"
             "OJP_TEST_MARIADB_ADDR")
+    add_executable(ojp_odbc_mariadb_l7_integration_test
+        tests/mariadb_l7_integration_test.cpp)
+    target_link_libraries(ojp_odbc_mariadb_l7_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_mariadb_l7_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcMariaDBL7Integration
+        COMMAND ojp_odbc_mariadb_l7_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/mariadb_l1_connection.csv"
+            "OJP_TEST_MARIADB_L7"
+            "OJP_TEST_MARIADB_L7_ADDRS")
     add_test(NAME OjpOdbcSqlServerL1Integration
         COMMAND ojp_odbc_l1_integration_test
-            "SQL Server"
+            "SQLServer"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
             "OJP_TEST_SQLSERVER"
             "OJP_TEST_SQLSERVER_ADDR"
@@ -453,6 +462,7 @@ if(BUILD_TESTING)
         OjpOdbcMariaDBL4Integration
         OjpOdbcMariaDBL5Integration
         OjpOdbcMariaDBL6Integration
+        OjpOdbcMariaDBL7Integration
         OjpOdbcSqlServerL1Integration
         OjpOdbcSqlServerL2Integration
         OjpOdbcSqlServerL3Integration

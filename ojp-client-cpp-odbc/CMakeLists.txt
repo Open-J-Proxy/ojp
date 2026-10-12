@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Protobuf REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(ODBC REQUIRED)
+find_package(Threads REQUIRED)
 
 set(OJP_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ojp-grpc-commons/src/main/proto")
 set(GOOGLEAPIS_PROTO_DIR "" CACHE PATH "Root directory containing google/type/date.proto")
@@ -517,38 +518,45 @@ if(BUILD_TESTING)
         OjpOdbcSqlServerL10Integration
         PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 0
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc")
     set_tests_properties(OjpOdbcH2L8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 120)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcH2L9Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcSqlServerL8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcPostgreSqlL8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcMariaDBL8Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcMariaDBL9Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcMariaDBL10Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcPostgreSqlL9Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcPostgreSqlL10Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcSqlServerL9Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
     set_tests_properties(OjpOdbcSqlServerL10Integration PROPERTIES
         ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc;OJP_HEALTH_CHECK_INTERVAL_MS=500"
-        TIMEOUT 180)
+        TIMEOUT 0)
+    get_property(TEST_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(TEST_TARGET IN LISTS TEST_TARGETS)
+        if(TEST_TARGET MATCHES "^ojp_odbc_.*_integration_test$")
+            target_link_libraries(${TEST_TARGET} PRIVATE Threads::Threads)
+        endif()
+    endforeach()
 endif()

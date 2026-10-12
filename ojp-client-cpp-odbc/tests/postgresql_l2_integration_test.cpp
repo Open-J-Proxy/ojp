@@ -1,4 +1,6 @@
 // PostgreSQL equivalents of the JDBC multiple-types and statement L2 tests.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -15,47 +17,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the PostgreSQL connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else if (character != '\r') {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in PostgreSQL CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -641,29 +603,8 @@ void verify_large_types(SQLHSTMT statement, const std::string& table) {
     close_and_reset(statement);
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error("expected PostgreSQL CSV path, enable variable, and endpoint variable");
-    }
-    const std::string enable_variable = argv[2];
-    const std::string endpoint_variable = argv[3];
-    const char* enabled_value = std::getenv(enable_variable.c_str());
-    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
-    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
-        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
-        std::cout << "Skipped: set " << enable_variable << "=true to run the PostgreSQL L2 suite\n";
-        return 77;
-    }
-    if (enabled != "true" && enabled != "1" && enabled != "yes") {
-        throw std::runtime_error(enable_variable + " must be true or false");
-    }
-    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
-    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
-    if (endpoint.empty()) {
-        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable + "=true");
-    }
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::string& endpoint) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
@@ -684,7 +625,7 @@ int run_integration_test(int argc, char** argv) {
         const std::string connection_string =
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+            ";PWD=" + brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,
                                          nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
@@ -736,6 +677,33 @@ int run_integration_test(int argc, char** argv) {
                  "explicit SQL casts. Native Java/PGobject binding, arrays, callable/batch APIs, "
                  "and L5 LOB/stream semantics are not covered.\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error("expected PostgreSQL CSV path, enable variable, and endpoint variable");
+    }
+    const std::string enable_variable = argv[2];
+    const std::string endpoint_variable = argv[3];
+    const char* enabled_value = std::getenv(enable_variable.c_str());
+    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
+    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
+        std::cout << "Skipped: set " << enable_variable << "=true to run the PostgreSQL L2 suite\n";
+        return 77;
+    }
+    if (enabled != "true" && enabled != "1" && enabled != "yes") {
+        throw std::runtime_error(enable_variable + " must be true or false");
+    }
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
+    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
+    if (endpoint.empty()) {
+        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable + "=true");
+    }
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoint);
+    });
 }
 
 }  // namespace

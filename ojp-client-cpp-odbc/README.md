@@ -12,7 +12,7 @@ communicates with the server over gRPC.
 | H2 | **L9** |
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
-| MySQL | Not established |
+| MySQL | **L10** |
 | MariaDB | **L10** |
 | Oracle | Not established |
 | DB2 | Not established |
@@ -369,7 +369,7 @@ connection strings. See the [ebook integration chapter](../documents/ebook/part2
 
 ## Integration tests
 
-The H2, PostgreSQL, MariaDB, and SQL Server tests read backend connection details from
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server tests read backend connection details from
 their respective fixtures:
 [`h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
 [`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
@@ -379,20 +379,55 @@ and
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
-The MariaDB L7-L8 suites use the MariaDB fixture and require two OJP endpoints
-connected to the same MariaDB database. MariaDB L8 stops and recovers its first
+Every integration executable runs its original assertions sequentially for every
+CSV record, with fresh ODBC handles and cleanup for each connection. Records have
+three fields: JDBC URL, username, and password. Quoted commas, doubled quotes,
+CRLF, and quoted multiline fields are supported. Empty lines are ignored; empty
+input and malformed nonempty records fail before contacting a server. Reports
+identify the physical starting row and an allowlisted backend label only.
+Raw driver diagnostics are not logged because they can reformat credentials.
+Failures stop the suite immediately.
+Disabled suites return 77 without opening the CSV or contacting a server.
+
+MySQL and MariaDB share all ten MariaDB test executables and the
+`mariadb_l1_connection.csv` fixture, which contains both JDBC URLs.
+The existing `OJP_TEST_MARIADB*` flags enable both records. CTest registers only
+`OjpOdbcMariaDBL1Integration` through `OjpOdbcMariaDBL10Integration`; there are no
+separate MySQL registrations or flags. Main CI starts MariaDB 10.11 and MySQL 8.4
+simultaneously and runs these suites once.
+The MySQL row uses port 3306; the MariaDB row uses port 3307. Both require
+`defaultdb` and a disposable `testuser` account. The MySQL row disables TLS
+and allows public-key retrieval for local tests only; do not use these settings
+for production connections. Supply each backend's JDBC driver to OJP.
+For MySQL L9/L10 recovery scans, grant the disposable test account
+`XA_RECOVER_ADMIN` on `*.*` in addition to its privileges on `defaultdb`;
+Main CI applies this grant automatically.
+The shared MariaDB/MySQL L7-L8 suites require two OJP endpoints that can both
+reach each database in the shared fixture. L8 stops and recovers its first
 endpoint, so that server must be supervised by a restart loop and its PID file
 must identify the server process. Configure it with
 `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
+For L9/L10, restart it with the default unlimited concurrency (`0`); the L8-only
+limit can reject concurrent health probes and XA calls. Main CI makes this
+transition between L8 and L9 while retaining the same restart supervisor.
 The PostgreSQL L7-L9 suites use the PostgreSQL fixture and require two OJP endpoints
 connected to the same PostgreSQL database. PostgreSQL L8 stops the first endpoint,
 so its PID file must identify the server process that a supervisor will restart.
 Configure that server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion
 assertion. PostgreSQL L9 exercises XA, including two-phase commit and prepared
 transaction recovery, so configure PostgreSQL with `max_prepared_transactions > 0`.
-Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and SQL Server L8-L10 stop an OJP server.
+Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and MariaDB/MySQL and SQL Server L8-L10 stop an OJP server.
 PID files must identify the endpoint being stopped, and a supervisor must
 restart that server.
+L8–L10 wait for the stopped server's new PID and a successful readiness query on
+that endpoint, not a fixed sleep. L9 checks XA node loss before waiting, then
+waits before continuing to the next record. Run restart suites sequentially,
+not with parallel CTest jobs.
+Execution deadlines apply separately to each record (180 seconds; 120 for H2
+L8), so CSV files can contain any number of connections without exhausting a
+single suite-wide CTest timeout. A timed-out record reports its row and
+terminates the test process immediately, as a CTest timeout would; subsequent
+records cannot hide it.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -431,6 +466,9 @@ OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_MARIADB_L9=true \
 OJP_TEST_MARIADB_L9_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_MARIADB_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB_L10=true \
+OJP_TEST_MARIADB_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -452,11 +490,13 @@ fail the test instead of silently skipping it. Set
 `OJP_TEST_POSTGRESQL_L7_UNAVAILABLE_ADDR`, or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
-The H2, PostgreSQL, MariaDB, and SQL Server L8 tests require a PID file for their first endpoint and
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server L8 tests require a PID file for their first endpoint and
 restart that server automatically through the test supervisor. The PostgreSQL,
-MariaDB, and SQL Server L9/L10 tests also require a PID file for their first
+MariaDB, MySQL, and SQL Server L9/L10 tests also require a PID file for their first
 endpoint, which must be restarted by a supervisor. Their endpoint lists put the
 restartable server first.
+H2 L9 instead puts the surviving server first and the restartable XA server
+last; its target PID file must identify that last endpoint.
 Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3

@@ -1,3 +1,5 @@
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -15,65 +17,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-std::vector<std::string> parse_csv_record(const std::string& line) {
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',' && !quoted) {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    if (quoted) {
-        throw std::runtime_error("database connection CSV contains an unterminated quoted field");
-    }
-    fields.push_back(field);
-    return fields;
-}
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    if (!input) {
-        throw std::runtime_error("cannot open the database connection CSV");
-    }
-    std::string line;
-    if (!std::getline(input, line)) {
-        throw std::runtime_error("database connection CSV is empty");
-    }
-    if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-    }
-    const auto fields = parse_csv_record(line);
-    if (fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected one CSV record with JDBC URL, username, and password");
-    }
-    std::string extra;
-    if (std::getline(input, extra)) {
-        throw std::runtime_error("expected exactly one database connection CSV record");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -163,45 +107,10 @@ void assert_sql_error(SQLHSTMT statement, const std::string& sql, const char* sq
     }
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 6) {
-        throw std::runtime_error(
-            "expected database name, CSV path, enable variable, endpoint variable, and SQLSTATE");
-    }
-    const std::string database = argv[1];
-    const std::string csv_path = argv[2];
-    const std::string enable_variable = argv[3];
-    const std::string endpoint_variable = argv[4];
-    const std::string expected_sql_state = argv[5];
-    const char* enabled = std::getenv(enable_variable.c_str());
-    std::string enabled_value = enabled == nullptr ? "" : enabled;
-    std::transform(enabled_value.begin(), enabled_value.end(), enabled_value.begin(),
-        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-    const auto first = enabled_value.find_first_not_of(" \t\r\n");
-    const auto last = enabled_value.find_last_not_of(" \t\r\n");
-    enabled_value = first == std::string::npos
-        ? "" : enabled_value.substr(first, last - first + 1);
-    if (enabled_value.empty() || enabled_value == "false" || enabled_value == "0" ||
-        enabled_value == "no") {
-        std::cout << "Skipped: set " << enable_variable
-                  << "=true to run the real-server " << database << " L1 suite\n";
-        return 77;
-    }
-    if (enabled_value != "true" && enabled_value != "1" && enabled_value != "yes") {
-        throw std::runtime_error(enable_variable + " must be true or false");
-    }
-    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
-    std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
-    const auto endpoint_first = endpoint.find_first_not_of(" \t\r\n");
-    const auto endpoint_last = endpoint.find_last_not_of(" \t\r\n");
-    endpoint = endpoint_first == std::string::npos
-        ? "" : endpoint.substr(endpoint_first, endpoint_last - endpoint_first + 1);
-    if (endpoint.empty()) {
-        throw std::runtime_error(endpoint_variable + " is required when " +
-                                 enable_variable + "=true");
-    }
-
-    const DatabaseConfig config = read_connection_config(csv_path);
+int run_connection(const DatabaseConfig& config,
+                   const std::string& database,
+                   const std::string& expected_sql_state,
+                   const std::string& endpoint) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
@@ -223,7 +132,7 @@ int run_integration_test(int argc, char** argv) {
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+            ";PWD=" + brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr,
             reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.c_str())),
             SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
@@ -391,6 +300,49 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC L1 " << database << " integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 6) {
+        throw std::runtime_error(
+            "expected database name, CSV path, enable variable, endpoint variable, and SQLSTATE");
+    }
+    const std::string database = argv[1];
+    const std::string csv_path = argv[2];
+    const std::string enable_variable = argv[3];
+    const std::string endpoint_variable = argv[4];
+    const std::string expected_sql_state = argv[5];
+    const char* enabled = std::getenv(enable_variable.c_str());
+    std::string enabled_value = enabled == nullptr ? "" : enabled;
+    std::transform(enabled_value.begin(), enabled_value.end(), enabled_value.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    const auto first = enabled_value.find_first_not_of(" \t\r\n");
+    const auto last = enabled_value.find_last_not_of(" \t\r\n");
+    enabled_value = first == std::string::npos
+        ? "" : enabled_value.substr(first, last - first + 1);
+    if (enabled_value.empty() || enabled_value == "false" || enabled_value == "0" ||
+        enabled_value == "no") {
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the real-server " << database << " L1 suite\n";
+        return 77;
+    }
+    if (enabled_value != "true" && enabled_value != "1" && enabled_value != "yes") {
+        throw std::runtime_error(enable_variable + " must be true or false");
+    }
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
+    std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
+    const auto endpoint_first = endpoint.find_first_not_of(" \t\r\n");
+    const auto endpoint_last = endpoint.find_last_not_of(" \t\r\n");
+    endpoint = endpoint_first == std::string::npos
+        ? "" : endpoint.substr(endpoint_first, endpoint_last - endpoint_first + 1);
+    if (endpoint.empty()) {
+        throw std::runtime_error(endpoint_variable + " is required when " +
+                                 enable_variable + "=true");
+    }
+
+    return ojp::test::run_connections(csv_path, [&](const DatabaseConfig& config) {
+        return run_connection(config, database, expected_sql_state, endpoint);
+    });
 }
 
 }  // namespace

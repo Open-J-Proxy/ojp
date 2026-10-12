@@ -51,17 +51,34 @@ DatabaseConfig read_connection_config(const std::string& path) {
     if (!input || !std::getline(input, line)) {
         throw std::runtime_error("cannot read the MariaDB L9 connection CSV");
     }
-    std::istringstream fields(line);
-    DatabaseConfig config;
-    if (!std::getline(fields, config.url, ',') ||
-        !std::getline(fields, config.user, ',') ||
-        !std::getline(fields, config.password) || config.url.empty()) {
+    std::vector<std::string> fields;
+    std::string field;
+    bool quoted = false;
+    for (std::size_t index = 0; index < line.size(); ++index) {
+        const char character = line[index];
+        if (quoted) {
+            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
+                field.push_back('"');
+                ++index;
+            } else if (character == '"') {
+                quoted = false;
+            } else {
+                field.push_back(character);
+            }
+        } else if (character == ',') {
+            fields.push_back(field);
+            field.clear();
+        } else if (character == '"' && field.empty()) {
+            quoted = true;
+        } else if (character != '\r') {
+            field.push_back(character);
+        }
+    }
+    fields.push_back(field);
+    if (quoted || fields.size() != 3 || fields[0].empty()) {
         throw std::runtime_error("expected JDBC URL, username, and password in MariaDB L9 CSV");
     }
-    if (!config.password.empty() && config.password.back() == '\r') {
-        config.password.pop_back();
-    }
-    return config;
+    return {fields[0], fields[1], fields[2]};
 }
 
 std::string environment_value(const char* name) {

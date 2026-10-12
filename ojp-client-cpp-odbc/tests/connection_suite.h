@@ -4,7 +4,6 @@
 #include <sql.h>
 #include <sqlext.h>
 
-#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -14,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace ojp::test {
@@ -24,6 +24,24 @@ struct DatabaseConfig {
     std::string password;
     std::size_t row;
 };
+
+inline const char* backend_label(const std::string& url) {
+    const std::pair<const char*, const char*> backends[] = {
+        {"jdbc:h2:", "H2"},
+        {"jdbc:postgresql:", "PostgreSQL"},
+        {"jdbc:mariadb:", "MariaDB"},
+        {"jdbc:mysql:", "MySQL"},
+        {"jdbc:sqlserver:", "SQL Server"},
+        {"jdbc:oracle:", "Oracle"},
+        {"jdbc:db2:", "DB2"}
+    };
+    for (const auto& backend : backends) {
+        if (url.rfind(backend.first, 0) == 0) {
+            return backend.second;
+        }
+    }
+    return "Unknown";
+}
 
 inline std::vector<DatabaseConfig> read_connections(const std::string& path) {
     std::ifstream input(path, std::ios::binary);
@@ -40,7 +58,8 @@ inline std::vector<DatabaseConfig> read_connections(const std::string& path) {
     bool nonempty = false;
     const auto invalid = [&] {
         return std::runtime_error("invalid database connection CSV at row " +
-                                  std::to_string(row) +
+                                  std::to_string(row) + " [" +
+                                  backend_label(fields.empty() ? field : fields[0]) + "]" +
                                   ": expected JDBC URL, username, and password");
     };
     const auto finish_record = [&] {
@@ -63,7 +82,7 @@ inline std::vector<DatabaseConfig> read_connections(const std::string& path) {
                 state = State::closed;
             } else {
                 field.push_back(character);
-                if (character == '\n') {
+                if (character == '\n' || (character == '\r' && input.peek() != '\n')) {
                     ++line;
                 }
             }
@@ -110,24 +129,6 @@ inline std::vector<DatabaseConfig> read_connections(const std::string& path) {
         throw std::runtime_error("database connection CSV is empty");
     }
     return connections;
-}
-
-inline std::string redact(std::string message, const DatabaseConfig& config) {
-    std::vector<std::string> values{config.url, config.user, config.password};
-    std::sort(values.begin(), values.end(), [](const auto& left, const auto& right) {
-        return left.size() > right.size();
-    });
-    for (const auto& value : values) {
-        if (value.empty()) {
-            continue;
-        }
-        std::size_t offset = 0;
-        while ((offset = message.find(value, offset)) != std::string::npos) {
-            message.replace(offset, value.size(), "[redacted]");
-            offset += 10;
-        }
-    }
-    return message;
 }
 
 inline void wait_for_restart(const std::string& pid_file, long stopped_pid,
@@ -192,11 +193,11 @@ inline void wait_for_restart(const std::string& pid_file, long stopped_pid,
 
 class RowDeadline {
 public:
-    RowDeadline(std::size_t row, std::chrono::milliseconds timeout)
-        : watcher([this, row, timeout] {
+    RowDeadline(const std::string& identity, std::chrono::milliseconds timeout)
+        : watcher([this, identity, timeout] {
             std::unique_lock<std::mutex> lock(mutex);
             if (!finished.wait_for(lock, timeout, [this] { return complete; })) {
-                std::cerr << "CSV row " << row << " exceeded its execution deadline\n"
+                std::cerr << identity << " exceeded its execution deadline\n"
                           << std::flush;
                 std::_Exit(EXIT_FAILURE);
             }
@@ -224,19 +225,20 @@ int run_connections(const std::string& path, Suite suite,
     // Validate the entire fixture before allocating handles or contacting any server.
     const auto connections = read_connections(path);
     for (const auto& config : connections) {
-        std::cout << "Running CSV row " << config.row << '\n' << std::flush;
+        const std::string identity = "CSV row " + std::to_string(config.row) +
+                                     " [" + backend_label(config.url) + "]";
+        std::cout << "Running " << identity << '\n' << std::flush;
         try {
-            RowDeadline deadline(config.row, row_timeout);
+            RowDeadline deadline(identity, row_timeout);
             const int result = suite(config);
             if (result != 0) {
                 throw std::runtime_error("suite returned " + std::to_string(result));
             }
-        } catch (const std::exception& error) {
-            throw std::runtime_error("CSV row " + std::to_string(config.row) +
-                                     " failed: " + redact(error.what(), config));
+        } catch (const std::exception&) {
+            // Driver diagnostics can reformat credentials, making string redaction unsafe.
+            throw std::runtime_error(identity + " failed");
         } catch (...) {
-            throw std::runtime_error("CSV row " + std::to_string(config.row) +
-                                     " failed with an unknown exception");
+            throw std::runtime_error(identity + " failed with an unknown exception");
         }
     }
     return 0;

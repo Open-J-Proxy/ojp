@@ -383,8 +383,10 @@ Every integration executable runs its original assertions sequentially for every
 CSV record, with fresh ODBC handles and cleanup for each connection. Records have
 three fields: JDBC URL, username, and password. Quoted commas, doubled quotes,
 CRLF, and quoted multiline fields are supported. Empty lines are ignored; empty
-input and malformed nonempty records fail before contacting a server. Failures
-identify the CSV row, redact connection values, and stop the suite immediately.
+input and malformed nonempty records fail before contacting a server. Reports
+identify the physical starting row and an allowlisted backend label only.
+Raw driver diagnostics are not logged because they can reformat credentials.
+Failures stop the suite immediately.
 Disabled suites return 77 without opening the CSV or contacting a server.
 
 MySQL and MariaDB share all ten MariaDB test executables and the

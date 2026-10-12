@@ -141,30 +141,45 @@ inline void wait_for_restart(const std::string& pid_file, long stopped_pid,
             SQLHDBC connection = SQL_NULL_HDBC;
             SQLHSTMT statement = SQL_NULL_HSTMT;
             bool ready = false;
+            bool connected = false;
+            bool cleaned = true;
             if (SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &environment)) &&
                 SQL_SUCCEEDED(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
                     reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER)) &&
-                SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_DBC, environment, &connection)) &&
-                SQL_SUCCEEDED(SQLDriverConnect(connection, nullptr,
+                SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_DBC, environment, &connection))) {
+                connected = SQL_SUCCEEDED(SQLDriverConnect(connection, nullptr,
                     reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.c_str())),
-                    SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT)) &&
-                SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement))) {
-                SQLCHAR query[] = "SELECT 1";
-                ready = SQL_SUCCEEDED(SQLExecDirect(statement, query, SQL_NTS)) &&
-                        SQL_SUCCEEDED(SQLFetch(statement));
+                    SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT));
+                if (connected &&
+                    SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement))) {
+                    SQLCHAR query[] = "SELECT 1";
+                    SQLINTEGER value = 0;
+                    SQLLEN length = 0;
+                    ready = SQL_SUCCEEDED(SQLExecDirect(statement, query, SQL_NTS)) &&
+                            SQL_SUCCEEDED(SQLFetch(statement)) &&
+                            SQL_SUCCEEDED(SQLGetData(statement, 1, SQL_C_SLONG, &value,
+                                                     sizeof(value), &length)) &&
+                            length != SQL_NULL_DATA && value == 1;
+                }
             }
             if (statement != SQL_NULL_HSTMT) {
                 const auto result = SQLFreeHandle(SQL_HANDLE_STMT, statement);
-                ready = SQL_SUCCEEDED(result) && ready;
+                cleaned = SQL_SUCCEEDED(result) && cleaned;
             }
             if (connection != SQL_NULL_HDBC) {
-                const auto disconnect = SQLDisconnect(connection);
+                if (connected) {
+                    const auto disconnect = SQLDisconnect(connection);
+                    cleaned = SQL_SUCCEEDED(disconnect) && cleaned;
+                }
                 const auto release = SQLFreeHandle(SQL_HANDLE_DBC, connection);
-                ready = SQL_SUCCEEDED(disconnect) && SQL_SUCCEEDED(release) && ready;
+                cleaned = SQL_SUCCEEDED(release) && cleaned;
             }
             if (environment != SQL_NULL_HENV) {
                 const auto result = SQLFreeHandle(SQL_HANDLE_ENV, environment);
-                ready = SQL_SUCCEEDED(result) && ready;
+                cleaned = SQL_SUCCEEDED(result) && cleaned;
+            }
+            if (!cleaned) {
+                throw std::runtime_error("failed to clean up OJP restart readiness handles");
             }
             if (ready) {
                 return;

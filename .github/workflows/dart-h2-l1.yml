@@ -13,7 +13,6 @@ on:
   push:
     branches: [ main, 'lts/**' ]
   pull_request:
-    branches: [ main, 'lts/**' ]
   workflow_dispatch:
     inputs:
       full_suite:

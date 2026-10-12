@@ -12,13 +12,6 @@ import (
 	ojpclient "github.com/open-j-proxy/ojp-client-go-database-sql/client"
 )
 
-// TestH2DatabaseShouldSupportL2Capabilities covers the L2 capabilities
-// defined in ../../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md:
-//
-//   - Broad ParameterTypeProto coverage (bool, int64, float64, string, []byte, time.Time)
-//   - PreparedStatement and Statement variants
-//   - Generated keys
-//   - Basic metadata (column labels, result-set structure)
 func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	enabled, err := integrationEnabled(os.Getenv("OJP_TEST_H2"))
 	if err != nil {
@@ -77,8 +70,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		}
 	})
 
-	// --- Broad ParameterTypeProto coverage ---
-	// Insert with bool, string, double, binary, timestamp
 	insertResult, err := db.ExecContext(ctx, fmt.Sprintf(
 		"INSERT INTO %s (name, active, score, data, created) VALUES (?, ?, ?, ?, ?)",
 		table,
@@ -91,7 +82,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		t.Fatalf("expected insert count 1, got %d (error %v)", insertCount, err)
 	}
 
-	// Read back with broad types
 	var name string
 	var active bool
 	var score float64
@@ -106,7 +96,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		t.Fatalf("unexpected broad-type row: name=%q active=%v score=%v data=%q", name, active, score, data)
 	}
 
-	// --- PreparedStatement ---
 	stmt, err := db.Prepare(fmt.Sprintf(
 		"INSERT INTO %s (name, active, score) VALUES (?, ?, ?)",
 		table,
@@ -137,7 +126,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		t.Fatalf("unexpected prepared row: name=%q active=%v score=%v", psName, psActive, psScore)
 	}
 
-	// --- Generated keys ---
 	genResult, err := db.ExecContext(ctx, fmt.Sprintf(
 		"INSERT INTO %s (name) VALUES (?)",
 		table,
@@ -147,7 +135,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	lastID, err := genResult.LastInsertId()
 	if err != nil {
-		// OJP may not support LastInsertId; fall back to identity query
 		t.Logf("LastInsertId not supported (%v), querying identity", err)
 		if err := db.QueryRowContext(ctx, fmt.Sprintf(
 			"SELECT id FROM %s WHERE name='gen-keys'", table,
@@ -159,7 +146,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		t.Fatal("expected non-zero generated key")
 	}
 
-	// --- Basic metadata ---
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(
 		"SELECT id, name, active, score FROM %s WHERE name=?", table,
 	), "l2-test")
@@ -182,7 +168,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		t.Fatalf("rows error: %v", err)
 	}
 
-	// --- Statement variant (direct Exec/Query without Prepare) ---
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
 		"UPDATE %s SET score=? WHERE name=?", table,
 	), 100.0, "l2-test"); err != nil {
@@ -198,7 +183,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 		t.Fatalf("expected updated score 100.0, got %v", updatedScore)
 	}
 
-	// Cleanup
 	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 		t.Fatalf("drop isolated table: %v", err)
 	}

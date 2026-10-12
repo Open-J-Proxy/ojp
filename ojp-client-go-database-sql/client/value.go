@@ -10,26 +10,7 @@ import (
 )
 
 // decodeValue converts a protobuf ParameterValue into the matching Go
-// type. It covers the full OJP parameter type system:
-//
-//	PT_BOOLEAN       → bool
-//	PT_INT           → int32
-//	PT_LONG          → int64
-//	PT_FLOAT         → float32
-//	PT_DOUBLE        → float64
-//	PT_STRING        → string
-//	PT_BYTES         → []byte
-//	PT_TIMESTAMP     → time.Time
-//	PT_DATE          → time.Time (date component, UTC midnight)
-//	PT_TIME          → time.Time (time component, Jan 1 year 0)
-//	PT_INT_ARRAY     → []int32
-//	PT_LONG_ARRAY    → []int64
-//	PT_STRING_ARRAY  → []string
-//	PT_URL           → string
-//	PT_ROW_ID        → string
-//	PT_UUID          → string
-//	PT_BIG_INTEGER   → *big.Int
-//	PT_NULL          → nil
+// type, covering the full OJP parameter type system.
 func decodeValue(value *pb.ParameterValue) (any, error) {
 	if value == nil {
 		return nil, nil
@@ -113,10 +94,6 @@ func decodeValue(value *pb.ParameterValue) (any, error) {
 	}
 }
 
-// decodeValueTo decodes a protobuf ParameterValue into a specific Go type.
-// It is the typed counterpart to decodeValue and is used by the L2
-// metadata and generated-keys paths where the caller knows the target
-// type.
 func decodeValueTo[T any](value *pb.ParameterValue) (T, error) {
 	var zero T
 	decoded, err := decodeValue(value)

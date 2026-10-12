@@ -458,10 +458,7 @@ func (s *sqlPreparedStatement) QueryContext(ctx context.Context, args []driver.N
 	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
 }
 
-// sqlCallableStatement is a L2 callable statement variant. It wraps a
-// sqlPreparedStatement and reserves out-parameter slots for stored
-// procedure calls. The OJP protocol uses CallResource for actual
-// invocation; this type reserves the interface for future use.
+// sqlCallableStatement wraps sqlPreparedStatement for stored-procedure calls.
 type sqlCallableStatement struct {
 	*sqlPreparedStatement
 	outParams []driver.NamedValue
@@ -503,8 +500,6 @@ func (s *sqlCallableStatement) QueryContext(ctx context.Context, args []driver.N
 	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
 }
 
-// PrepareContext creates a L2 prepared statement with a server-side
-// statement UUID. The UUID is resolved lazily on first execution.
 func (c *sqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, errors.New("SQL query must not be empty")
@@ -513,17 +508,13 @@ func (c *sqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt
 	return stmt, nil
 }
 
-// GeneratedKeysRequest carries the parameters for a CallResource call
-// that retrieves generated keys from the server.
 type GeneratedKeysRequest struct {
 	StatementUUID string
 	ColumnNames   []string
 	ColumnIndexes []int32
 }
 
-// GeneratedKeys extracts auto-generated keys (e.g. identity columns)
-// for the given statement UUID via the CallResource RPC. It returns the
-// decoded key values as []any, one per column.
+// GeneratedKeys extracts auto-generated keys via the CallResource RPC.
 func (c *rpcConnection) GeneratedKeys(ctx context.Context, req *GeneratedKeysRequest) ([][]any, error) {
 	props := make([]*pb.PropertyEntry, 0, 2)
 	if req.StatementUUID != "" {
@@ -572,13 +563,10 @@ func (c *rpcConnection) GeneratedKeys(ctx context.Context, req *GeneratedKeysReq
 	})
 }
 
-// MetadataRequest carries the parameters for a CallResource call that
-// retrieves result-set metadata from the server.
 type MetadataRequest struct {
 	ResultSetUUID string
 }
 
-// ColumnMetadata describes a single column in a result set.
 type ColumnMetadata struct {
 	Name     string
 	SQLType  int32
@@ -587,8 +575,6 @@ type ColumnMetadata struct {
 	ReadOnly bool
 }
 
-// Metadata retrieves column metadata for a result set via the
-// CallResource RPC. It returns one ColumnMetadata per result column.
 func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]ColumnMetadata, error) {
 	request := &pb.CallResourceRequest{
 		Session:      cloneSession(c.session),

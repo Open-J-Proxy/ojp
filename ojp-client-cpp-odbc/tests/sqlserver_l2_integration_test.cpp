@@ -171,9 +171,19 @@ void expect_column(SQLHSTMT statement, SQLUSMALLINT column, const std::string& n
                                    &name_length, &data_type, &column_size, &decimal_digits,
                                    &nullable),
                     "SQLDescribeCol", SQL_HANDLE_STMT, statement);
-    expect(std::string(reinterpret_cast<const char*>(column_name)) == name &&
-           data_type == expected_type,
-           "result metadata for column " + std::to_string(column) + " should be " + name);
+    const std::string actual_name(reinterpret_cast<const char*>(column_name));
+    if (actual_name != name || data_type != expected_type) {
+        std::cerr << "SQLDescribeCol metadata mismatch: column=" << column
+                 << ", expected_name=" << name
+                 << ", actual_name=" << actual_name
+                 << ", expected_type=" << expected_type
+                 << ", actual_type=" << data_type
+                 << ", size=" << column_size
+                 << ", decimal_digits=" << decimal_digits
+                 << ", nullable=" << nullable << '\n' << std::flush;
+        throw std::runtime_error("result metadata for column " + std::to_string(column) +
+                                " did not match expected name and type");
+    }
 }
 
 SQLBIGINT current_identity(SQLHSTMT statement, const std::string& table) {

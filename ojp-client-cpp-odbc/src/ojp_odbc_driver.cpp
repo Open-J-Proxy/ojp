@@ -4596,9 +4596,44 @@ SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT statement, SQLSMALLINT data_type) {
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
         return SQL_INVALID_HANDLE;
     }
-    ParameterValue parameter;
-    parameter.set_int_value(data_type);
-    return execute_catalog_api(statement, "TypeInfo", {parameter});
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> statement_lock(target->operation_mutex);
+    std::lock_guard<std::mutex> connection_lock(target->connection->operation_mutex);
+    const SQLRETURN result = execute_metadata_statement(target, "TypeInfo", {});
+    if (!SQL_SUCCEEDED(result) || data_type == SQL_ALL_TYPES) {
+        return result;
+    }
+
+    const auto type_column = std::find_if(target->columns.begin(), target->columns.end(),
+        [](const std::string& column) {
+            if (column.size() != sizeof("DATA_TYPE") - 1) {
+                return false;
+            }
+            return std::equal(column.begin(), column.end(), "DATA_TYPE",
+                [](unsigned char left, unsigned char right) {
+                    return std::toupper(left) == std::toupper(right);
+                });
+        });
+    if (type_column == target->columns.end()) {
+        return fail(target, "JDBC type metadata is missing the DATA_TYPE column", "HY000");
+    }
+    const auto type_column_index = static_cast<std::size_t>(
+        std::distance(target->columns.begin(), type_column));
+    for (const auto& row : target->rows) {
+        if (type_column_index >= row.size() ||
+            (!std::holds_alternative<std::int32_t>(row[type_column_index]) &&
+             !std::holds_alternative<std::int64_t>(row[type_column_index]))) {
+            return fail(target, "JDBC type metadata contains an invalid DATA_TYPE value", "HY000");
+        }
+    }
+    target->rows.erase(std::remove_if(target->rows.begin(), target->rows.end(),
+        [type_column_index, data_type](const std::vector<Cell>& row) {
+            const auto* type_code = std::get_if<std::int32_t>(&row[type_column_index]);
+            const auto* long_type_code = std::get_if<std::int64_t>(&row[type_column_index]);
+            return type_code != nullptr ? *type_code != data_type : *long_type_code != data_type;
+        }), target->rows.end());
+    target->row_count = static_cast<SQLLEN>(target->rows.size());
+    return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,

@@ -463,6 +463,23 @@ int run_connection(const DatabaseConfig& config,
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLGetTypeInfo)",
                         SQL_HANDLE_STMT, statement);
+        require_success(SQLGetTypeInfo(statement, SQL_INTEGER), "SQLGetTypeInfo(SQL_INTEGER)",
+                        SQL_HANDLE_STMT, statement);
+        if (SQLFetch(statement) != SQL_SUCCESS) {
+            throw std::runtime_error("SQLGetTypeInfo(SQL_INTEGER) returned no integer type");
+        }
+        do {
+            SQLINTEGER reported_type = 0;
+            SQLLEN reported_type_length = 0;
+            require_success(SQLGetData(statement, 2, SQL_C_SLONG, &reported_type,
+                                       sizeof(reported_type), &reported_type_length),
+                            "SQLGetData(SQLGetTypeInfo DATA_TYPE)", SQL_HANDLE_STMT, statement);
+            if (reported_type != SQL_INTEGER) {
+                throw std::runtime_error("SQLGetTypeInfo returned a different type than requested");
+            }
+        } while (SQLFetch(statement) == SQL_SUCCESS);
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLGetTypeInfo filtered)",
+                        SQL_HANDLE_STMT, statement);
 
         SQLINTEGER row_id = 1;
         SQLLEN id_length = sizeof(row_id);

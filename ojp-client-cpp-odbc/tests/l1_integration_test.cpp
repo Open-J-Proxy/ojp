@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -88,6 +89,33 @@ void require_success(SQLRETURN result, const std::string& operation,
             std::cerr << operation << " failed with SQLSTATE "
                       << reinterpret_cast<const char*>(state)
                       << " and native error " << native_error << '\n';
+            if (std::string(reinterpret_cast<const char*>(state)) == "IM012") {
+                const std::string diagnostic(reinterpret_cast<const char*>(detail));
+                const std::vector<std::pair<std::string, std::string>> known_diagnostics = {
+                    {"ODBC connection string field is missing '='", "missing equals"},
+                    {"ODBC connection string contains an unterminated braced value",
+                     "unterminated braced value"},
+                    {"ODBC connection string has text after a braced value",
+                     "text after braced value"},
+                    {"ODBC connection string contains an empty field name", "empty field name"},
+                    {"OJP.XA must be true or false", "invalid XA option"},
+                    {"OJP.LOADAWARE.SELECTION.ENABLED must be true or false",
+                     "invalid load-aware option"},
+                    {"OJP.MULTINODE.RETRY.ATTEMPTS must be between 0 and 10",
+                     "invalid retry attempts option"},
+                    {"OJP.MULTINODE.RETRY.DELAY must be between 0 and 60000 ms",
+                     "invalid retry delay option"}};
+                const auto known = std::find_if(
+                    known_diagnostics.begin(), known_diagnostics.end(),
+                    [&diagnostic](const auto& candidate) {
+                        return candidate.first == diagnostic;
+                    });
+                std::cerr << "IM012 diagnostic category: "
+                          << (known == known_diagnostics.end()
+                                  ? "unrecognized connection-string diagnostic"
+                                  : known->second)
+                          << '\n';
+            }
         }
     }
     throw std::runtime_error(message.str());

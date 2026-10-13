@@ -629,6 +629,158 @@ SQLRETURN fail(HandleBase* handle, std::string message, std::string state = "HY0
     return SQL_ERROR;
 }
 
+void append_utf8(std::uint32_t code_point, std::string* output) {
+    if (code_point <= 0x7f) {
+        output->push_back(static_cast<char>(code_point));
+    } else if (code_point <= 0x7ff) {
+        output->push_back(static_cast<char>(0xc0 | (code_point >> 6)));
+        output->push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    } else if (code_point <= 0xffff) {
+        output->push_back(static_cast<char>(0xe0 | (code_point >> 12)));
+        output->push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
+        output->push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    } else {
+        output->push_back(static_cast<char>(0xf0 | (code_point >> 18)));
+        output->push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3f)));
+        output->push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
+        output->push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
+    }
+}
+
+bool next_utf8_code_point(const std::string& input, std::size_t* offset,
+                          std::uint32_t* code_point) {
+    if (*offset >= input.size()) {
+        return false;
+    }
+    const auto first = static_cast<unsigned char>(input[*offset]);
+    std::size_t width = 0;
+    std::uint32_t value = 0;
+    if (first <= 0x7f) {
+        width = 1;
+        value = first;
+    } else if (first >= 0xc2 && first <= 0xdf) {
+        width = 2;
+        value = first & 0x1f;
+    } else if (first >= 0xe0 && first <= 0xef) {
+        width = 3;
+        value = first & 0x0f;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+        width = 4;
+        value = first & 0x07;
+    } else {
+        return false;
+    }
+    if (width > input.size() - *offset) {
+        return false;
+    }
+    for (std::size_t index = 1; index < width; ++index) {
+        const auto continuation = static_cast<unsigned char>(input[*offset + index]);
+        if ((continuation & 0xc0) != 0x80) {
+            return false;
+        }
+        value = (value << 6) | (continuation & 0x3f);
+    }
+    if ((width == 2 && value < 0x80) || (width == 3 && value < 0x800) ||
+        (width == 4 && value < 0x10000) || value > 0x10ffff ||
+        (value >= 0xd800 && value <= 0xdfff)) {
+        return false;
+    }
+    *offset += width;
+    *code_point = value;
+    return true;
+}
+
+bool wide_to_utf8(const SQLWCHAR* input, std::size_t units, std::string* output) {
+    output->clear();
+    output->reserve(units * 2);
+    for (std::size_t index = 0; index < units; ++index) {
+        std::uint32_t code_point = static_cast<std::uint32_t>(input[index]);
+        if (sizeof(SQLWCHAR) == 2) {
+            if (code_point >= 0xd800 && code_point <= 0xdbff) {
+                if (++index >= units) {
+                    return false;
+                }
+                const auto low = static_cast<std::uint32_t>(input[index]);
+                if (low < 0xdc00 || low > 0xdfff) {
+                    return false;
+                }
+                code_point = 0x10000 + ((code_point - 0xd800) << 10) + (low - 0xdc00);
+            } else if (code_point >= 0xdc00 && code_point <= 0xdfff) {
+                return false;
+            }
+        } else if (code_point > 0x10ffff ||
+                   (code_point >= 0xd800 && code_point <= 0xdfff)) {
+            return false;
+        }
+        append_utf8(code_point, output);
+    }
+    return true;
+}
+
+bool utf8_to_wide(const std::string& input, std::vector<SQLWCHAR>* output) {
+    output->clear();
+    output->reserve(input.size());
+    for (std::size_t offset = 0; offset < input.size();) {
+        std::uint32_t code_point = 0;
+        if (!next_utf8_code_point(input, &offset, &code_point)) {
+            return false;
+        }
+        if (sizeof(SQLWCHAR) == 2 && code_point > 0xffff) {
+            code_point -= 0x10000;
+            output->push_back(static_cast<SQLWCHAR>(0xd800 + (code_point >> 10)));
+            output->push_back(static_cast<SQLWCHAR>(0xdc00 + (code_point & 0x3ff)));
+        } else {
+            output->push_back(static_cast<SQLWCHAR>(code_point));
+        }
+    }
+    return true;
+}
+
+bool read_wide_string(const SQLWCHAR* input, SQLINTEGER length, std::string* output) {
+    if (input == nullptr || (length < 0 && length != SQL_NTS)) {
+        return false;
+    }
+    std::size_t units = 0;
+    if (length == SQL_NTS) {
+        while (input[units] != 0) {
+            ++units;
+        }
+    } else {
+        units = static_cast<std::size_t>(length);
+    }
+    return wide_to_utf8(input, units, output);
+}
+
+SQLRETURN write_wide_string(HandleBase* handle, const std::string& text,
+                            SQLWCHAR* output, SQLSMALLINT buffer_length,
+                            SQLSMALLINT* output_length) {
+    std::vector<SQLWCHAR> wide;
+    if (!utf8_to_wide(text, &wide)) {
+        return fail(handle, "Server returned invalid UTF-8 text", "22018");
+    }
+    if (wide.size() > static_cast<std::size_t>(std::numeric_limits<SQLSMALLINT>::max())) {
+        return fail(handle, "Wide-character output is too long", "22001");
+    }
+    if (output_length != nullptr) {
+        *output_length = static_cast<SQLSMALLINT>(wide.size());
+    }
+    if (buffer_length < 0) {
+        return fail(handle, "Invalid wide-character output buffer length", "HY090");
+    }
+    if (output == nullptr || buffer_length <= 0) {
+        return SQL_SUCCESS;
+    }
+    const auto copy_count = std::min<std::size_t>(
+        wide.size(), static_cast<std::size_t>(buffer_length - 1));
+    std::copy_n(wide.begin(), copy_count, output);
+    output[copy_count] = 0;
+    if (copy_count < wide.size()) {
+        handle->diagnostics.push_back({"01004", 0, "Wide-character output was truncated"});
+        return SQL_SUCCESS_WITH_INFO;
+    }
+    return SQL_SUCCESS;
+}
+
 SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
                     const grpc::ClientContext& context) {
     std::string sql_state;
@@ -1072,6 +1224,30 @@ SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_ty
         }
         return SQL_SUCCESS;
     }
+    if (target_type == SQL_C_WCHAR) {
+        const std::string text = cell_as_string(cell);
+        std::vector<SQLWCHAR> wide;
+        if (!utf8_to_wide(text, &wide)) {
+            return fail(handle, "Result text is not valid UTF-8", "22018");
+        }
+        if (indicator != nullptr) {
+            *indicator = static_cast<SQLLEN>(wide.size() * sizeof(SQLWCHAR));
+        }
+        if (buffer_length < 0) {
+            return fail(handle, "Invalid wide-character output buffer length", "HY090");
+        }
+        const auto capacity = static_cast<std::size_t>(buffer_length) / sizeof(SQLWCHAR);
+        const auto copy_count = std::min(wide.size(), capacity > 0 ? capacity - 1 : 0);
+        std::copy_n(wide.begin(), copy_count, static_cast<SQLWCHAR*>(target_value));
+        if (capacity > 0) {
+            static_cast<SQLWCHAR*>(target_value)[copy_count] = 0;
+        }
+        if (copy_count < wide.size()) {
+            handle->diagnostics.push_back({"01004", 0, "Wide-character result was truncated"});
+            return SQL_SUCCESS_WITH_INFO;
+        }
+        return SQL_SUCCESS;
+    }
     if (target_type == SQL_C_BINARY) {
         const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&cell);
         const std::string text = bytes == nullptr ? cell_as_string(cell) :
@@ -1311,17 +1487,45 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         }
         return false;
     };
-    if (c_type == SQL_C_CHAR) {
+    if (c_type == SQL_C_CHAR || c_type == SQL_C_WCHAR) {
+        const bool wide = c_type == SQL_C_WCHAR;
         std::size_t text_length = length == SQL_NTS
-            ? std::strlen(reinterpret_cast<const char*>(data))
+            ? (wide
+                ? [&]() {
+                    const auto* characters = reinterpret_cast<const SQLWCHAR*>(data);
+                    std::size_t count = 0;
+                    while (characters[count] != 0) {
+                        ++count;
+                    }
+                    return count * sizeof(SQLWCHAR);
+                }()
+                : std::strlen(reinterpret_cast<const char*>(data)))
             : static_cast<std::size_t>(std::max<SQLLEN>(0, length));
-        if (bound.buffer_length > 0 && length != SQL_NTS) {
+        if (bound.buffer_length > 0) {
             text_length = std::min(text_length, static_cast<std::size_t>(bound.buffer_length));
         }
-        if (bound.parameter_type == SQL_DECIMAL || bound.parameter_type == SQL_NUMERIC) {
-            return set_decimal(std::string(reinterpret_cast<const char*>(data), text_length));
+        if (wide && text_length % sizeof(SQLWCHAR) != 0) {
+            error->state = "HY090";
+            error->message = "Wide-character parameter length is not a whole number of SQLWCHAR units";
+            error->native_error = static_cast<SQLINTEGER>(parameter_index);
+            return false;
         }
-        value->set_string_value(std::string(reinterpret_cast<const char*>(data), text_length));
+        std::string text;
+        if (wide) {
+            if (!wide_to_utf8(reinterpret_cast<const SQLWCHAR*>(data),
+                              text_length / sizeof(SQLWCHAR), &text)) {
+                error->state = "22018";
+                error->message = "Wide-character parameter contains invalid Unicode";
+                error->native_error = static_cast<SQLINTEGER>(parameter_index);
+                return false;
+            }
+        } else {
+            text.assign(reinterpret_cast<const char*>(data), text_length);
+        }
+        if (bound.parameter_type == SQL_DECIMAL || bound.parameter_type == SQL_NUMERIC) {
+            return set_decimal(text);
+        }
+        value->set_string_value(text);
         return true;
     }
     if (c_type == SQL_C_NUMERIC) {
@@ -1413,8 +1617,10 @@ ParameterTypeProto parameter_type(const BoundParameter& bound) {
         case SQL_BINARY:
         case SQL_VARBINARY: return PT_BYTES;
         case SQL_LONGVARBINARY: return PT_BLOB;
-        case SQL_LONGVARCHAR:
-        case SQL_WLONGVARCHAR: return PT_CLOB;
+        case SQL_LONGVARCHAR: return PT_CLOB;
+        case SQL_WLONGVARCHAR: return PT_N_CLOB;
+        case SQL_WCHAR:
+        case SQL_WVARCHAR: return PT_N_STRING;
         case SQL_BIT: return PT_BOOLEAN;
         case SQL_TYPE_DATE: return PT_DATE;
         case SQL_TYPE_TIME: return PT_TIME;
@@ -1447,7 +1653,17 @@ bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diag
                 return false;
             }
         }
-        *data = bound.streamed_data;
+        if (bound.value_type == SQL_C_WCHAR) {
+            if (bound.streamed_data.size() % sizeof(SQLWCHAR) != 0 ||
+                !wide_to_utf8(reinterpret_cast<const SQLWCHAR*>(bound.streamed_data.data()),
+                              bound.streamed_data.size() / sizeof(SQLWCHAR), data)) {
+                error->state = "22018";
+                error->message = "Wide-character LOB stream contains invalid Unicode";
+                return false;
+            }
+        } else {
+            *data = bound.streamed_data;
+        }
         return true;
     }
     if (bound.value == nullptr) {
@@ -1456,6 +1672,7 @@ bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diag
         return false;
     }
     if (bound.value_type != SQL_C_DEFAULT && bound.value_type != SQL_C_CHAR &&
+        bound.value_type != SQL_C_WCHAR &&
         bound.value_type != SQL_C_BINARY) {
         error->state = "07006";
         error->message = "LOB parameters require SQL_C_CHAR or SQL_C_BINARY values";
@@ -1464,12 +1681,21 @@ bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diag
     const auto* bytes = static_cast<const char*>(bound.value);
     SQLLEN length = bound.indicator == nullptr ? bound.buffer_length : *bound.indicator;
     if (length == SQL_NTS) {
-        if (bound.value_type != SQL_C_CHAR) {
+        if (bound.value_type != SQL_C_CHAR && bound.value_type != SQL_C_WCHAR) {
             error->state = "HY090";
             error->message = "SQL_NTS is only valid for character LOB parameters";
             return false;
         }
-        length = static_cast<SQLLEN>(std::strlen(bytes));
+        if (bound.value_type == SQL_C_WCHAR) {
+            const auto* characters = reinterpret_cast<const SQLWCHAR*>(bytes);
+            std::size_t units = 0;
+            while (characters[units] != 0) {
+                ++units;
+            }
+            length = static_cast<SQLLEN>(units * sizeof(SQLWCHAR));
+        } else {
+            length = static_cast<SQLLEN>(std::strlen(bytes));
+        }
     }
     if (length < 0) {
         error->state = "HY090";
@@ -1481,7 +1707,21 @@ bool get_lob_parameter_data(const BoundParameter& bound, std::string* data, Diag
         error->message = "LOB parameter length exceeds its bound buffer";
         return false;
     }
-    data->assign(bytes, static_cast<std::size_t>(length));
+    if (bound.value_type == SQL_C_WCHAR) {
+        if (length % sizeof(SQLWCHAR) != 0) {
+            error->state = "HY090";
+            error->message = "Wide-character LOB length is invalid";
+            return false;
+        }
+        if (!wide_to_utf8(reinterpret_cast<const SQLWCHAR*>(bytes),
+                          static_cast<std::size_t>(length) / sizeof(SQLWCHAR), data)) {
+            error->state = "22018";
+            error->message = "Wide-character LOB contains invalid Unicode";
+            return false;
+        }
+    } else {
+        data->assign(bytes, static_cast<std::size_t>(length));
+    }
     return true;
 }
 
@@ -1743,7 +1983,8 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
                         com::openjproxy::grpc::CallType call_type,
                         const std::string& resource_name,
                         const std::vector<ParameterValue>& parameters,
-                        com::openjproxy::grpc::CallResourceResponse* output) {
+                        com::openjproxy::grpc::CallResourceResponse* output,
+                        const com::openjproxy::grpc::TargetCall* next_call = nullptr) {
     if (!connection->connected || !connection->stub) {
         return fail(handle, "ODBC connection is not open", "08003");
     }
@@ -1756,6 +1997,9 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     target->set_resourcename(resource_name);
     for (const auto& parameter : parameters) {
         target->add_params()->CopyFrom(parameter);
+    }
+    if (next_call != nullptr) {
+        target->mutable_nextcall()->CopyFrom(*next_call);
     }
     std::set<std::string> attempted_endpoints;
     bool not_found_retried = false;
@@ -2136,7 +2380,10 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                 return lob_result;
             }
             parameter->set_type(bound.parameter_type == SQL_LONGVARBINARY
-                ? com::openjproxy::grpc::PT_BLOB : com::openjproxy::grpc::PT_CLOB);
+                ? com::openjproxy::grpc::PT_BLOB
+                : (bound.parameter_type == SQL_WLONGVARCHAR
+                    ? com::openjproxy::grpc::PT_N_CLOB
+                    : com::openjproxy::grpc::PT_CLOB));
             value->set_string_value(lob_uuid);
             continue;
         }
@@ -2294,6 +2541,457 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     }
     statement->row_count = result.int_value();
     return SQL_SUCCESS;
+}
+
+SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::string& method,
+                                    const std::vector<ParameterValue>& parameters) {
+    clear_diagnostics(statement);
+    statement->columns.clear();
+    statement->rows.clear();
+    statement->get_data_offsets.clear();
+    statement->row_index = 0;
+    statement->row_count = -1;
+    statement->has_result_set = false;
+    auto* connection = statement->connection;
+
+    com::openjproxy::grpc::TargetCall metadata_call;
+    metadata_call.set_calltype(com::openjproxy::grpc::CALL_GET);
+    metadata_call.set_resourcename(method);
+    for (const auto& parameter : parameters) {
+        metadata_call.add_params()->CopyFrom(parameter);
+    }
+    com::openjproxy::grpc::CallResourceResponse metadata_response;
+    SQLRETURN result = call_resource(connection, statement,
+        com::openjproxy::grpc::RES_CONNECTION, "", com::openjproxy::grpc::CALL_GET,
+        "MetaData", {}, &metadata_response, &metadata_call);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    if (metadata_response.values_size() == 0 ||
+        metadata_response.values(0).value_case() != ParameterValue::kStringValue ||
+        metadata_response.values(0).string_value().empty()) {
+        return fail(statement, "JDBC metadata call did not return a result set", "HY000");
+    }
+    const std::string result_set_uuid = metadata_response.values(0).string_value();
+    bool row_by_row = false;
+    bool decoded_all = true;
+    auto append_result = [&](const OpResult& fetched) {
+        if (fetched.has_session()) {
+            update_session(connection, fetched.session(), connection->session);
+        }
+        row_by_row = fetched.flag() == kRowByRowMode;
+        if (!fetched.has_query_result()) {
+            return std::size_t{0};
+        }
+        const auto& query = fetched.query_result();
+        if (statement->columns.empty()) {
+            statement->columns.assign(query.labels().begin(), query.labels().end());
+        }
+        for (const auto& row : query.rows()) {
+            std::vector<Cell> decoded;
+            decoded.reserve(static_cast<std::size_t>(row.columns_size()));
+            for (const auto& column : row.columns()) {
+                Cell cell;
+                if (!decode_value(column, &cell)) {
+                    decoded_all = false;
+                }
+                decoded.push_back(std::move(cell));
+            }
+            statement->rows.push_back(std::move(decoded));
+        }
+        return static_cast<std::size_t>(query.rows_size());
+    };
+    for (;;) {
+        StatementService::Stub* stub = route_session_rpc(connection);
+        com::openjproxy::grpc::ResultSetFetchRequest fetch;
+        fetch.mutable_session()->CopyFrom(connection->session);
+        fetch.set_resultsetuuid(result_set_uuid);
+        fetch.set_size(1);
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        OpResult fetched;
+        const auto status = stub->fetchNextRows(&context, fetch, &fetched);
+        if (!status.ok()) {
+            note_transport_failure(connection, status, context);
+            close_result_set(connection, result_set_uuid, statement);
+            return fail_grpc(statement, status, context);
+        }
+        const auto rows_fetched = append_result(fetched);
+        if (!row_by_row || rows_fetched == 0) {
+            break;
+        }
+    }
+    result = close_result_set(connection, result_set_uuid, statement);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    if (!decoded_all) {
+        return fail(statement, "JDBC metadata contains a result type unsupported by the ODBC client",
+                    "HY000");
+    }
+    statement->has_result_set = true;
+    statement->row_count = static_cast<SQLLEN>(statement->rows.size());
+    return SQL_SUCCESS;
+}
+
+ParameterValue metadata_string(const std::string* value) {
+    ParameterValue parameter;
+    if (value == nullptr) {
+        parameter.set_is_null(true);
+    } else {
+        parameter.set_string_value(*value);
+    }
+    return parameter;
+}
+
+bool read_ansi_string(const SQLCHAR* input, SQLSMALLINT length, std::string* output) {
+    if (input == nullptr || (length < 0 && length != SQL_NTS)) {
+        return false;
+    }
+    const auto* text = reinterpret_cast<const char*>(input);
+    const auto size = length == SQL_NTS
+        ? std::strlen(text) : static_cast<std::size_t>(length);
+    output->assign(text, size);
+    return true;
+}
+
+SQLRETURN append_ansi_metadata_parameter(HandleBase* handle, const SQLCHAR* input,
+                                         SQLSMALLINT length,
+                                         std::vector<ParameterValue>* parameters) {
+    if (input == nullptr) {
+        parameters->push_back(metadata_string(nullptr));
+        return SQL_SUCCESS;
+    }
+    std::string value;
+    if (!read_ansi_string(input, length, &value)) {
+        return fail(handle, "Metadata string length is invalid", "HY090");
+    }
+    parameters->push_back(metadata_string(&value));
+    return SQL_SUCCESS;
+}
+
+SQLRETURN append_wide_metadata_parameter(HandleBase* handle, const SQLWCHAR* input,
+                                         SQLSMALLINT length,
+                                         std::vector<ParameterValue>* parameters) {
+    if (input == nullptr) {
+        parameters->push_back(metadata_string(nullptr));
+        return SQL_SUCCESS;
+    }
+    if (length < 0 && length != SQL_NTS) {
+        return fail(handle, "Metadata string length is invalid", "HY090");
+    }
+    std::string value;
+    if (!read_wide_string(input, length, &value)) {
+        return fail(handle, "Metadata string contains invalid Unicode or length", "22018");
+    }
+    parameters->push_back(metadata_string(&value));
+    return SQL_SUCCESS;
+}
+
+std::vector<std::string> parse_table_types(const std::string& table_types) {
+    std::vector<std::string> types;
+    std::size_t position = 0;
+    while (position <= table_types.size()) {
+        const auto separator = table_types.find(',', position);
+        const auto end = separator == std::string::npos ? table_types.size() : separator;
+        std::string type = trim(table_types.substr(position, end - position));
+        if (!type.empty()) {
+            types.push_back(std::move(type));
+        }
+        if (separator == std::string::npos) {
+            break;
+        }
+        position = separator + 1;
+    }
+    return types;
+}
+
+SQLRETURN append_table_types(HandleBase* handle, const SQLCHAR* input, SQLSMALLINT length,
+                             std::vector<ParameterValue>* parameters) {
+    if (input == nullptr) {
+        parameters->push_back(metadata_string(nullptr));
+        return SQL_SUCCESS;
+    }
+    std::string value;
+    if (!read_ansi_string(input, length, &value)) {
+        return fail(handle, "Table type string length is invalid", "HY090");
+    }
+    ParameterValue parameter;
+    const auto types = parse_table_types(value);
+    if (types.empty()) {
+        parameter.set_is_null(true);
+    }
+    for (const auto& type : types) {
+        parameter.mutable_string_array_value()->add_values(type);
+    }
+    parameters->push_back(std::move(parameter));
+    return SQL_SUCCESS;
+}
+
+SQLRETURN append_wide_table_types(HandleBase* handle, const SQLWCHAR* input, SQLSMALLINT length,
+                                  std::vector<ParameterValue>* parameters) {
+    if (input == nullptr) {
+        parameters->push_back(metadata_string(nullptr));
+        return SQL_SUCCESS;
+    }
+    if (length < 0 && length != SQL_NTS) {
+        return fail(handle, "Table type string length is invalid", "HY090");
+    }
+    std::string value;
+    if (!read_wide_string(input, length, &value)) {
+        return fail(handle, "Table type string contains invalid Unicode or length", "22018");
+    }
+    ParameterValue parameter;
+    const auto types = parse_table_types(value);
+    if (types.empty()) {
+        parameter.set_is_null(true);
+    }
+    for (const auto& type : types) {
+        parameter.mutable_string_array_value()->add_values(type);
+    }
+    parameters->push_back(std::move(parameter));
+    return SQL_SUCCESS;
+}
+
+SQLRETURN execute_catalog_api(SQLHSTMT statement, const std::string& method,
+                              const std::vector<ParameterValue>& parameters) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> statement_lock(target->operation_mutex);
+    std::lock_guard<std::mutex> connection_lock(target->connection->operation_mutex);
+    return execute_metadata_statement(target, method, parameters);
+}
+
+SQLRETURN get_database_metadata(ConnectionHandle* connection, HandleBase* handle,
+                                const std::string& method,
+                                const std::vector<ParameterValue>& parameters,
+                                ParameterValue* value,
+                                com::openjproxy::grpc::CallType call_type =
+                                    com::openjproxy::grpc::CALL_GET) {
+    com::openjproxy::grpc::TargetCall metadata_call;
+    metadata_call.set_calltype(call_type);
+    metadata_call.set_resourcename(method);
+    for (const auto& parameter : parameters) {
+        metadata_call.add_params()->CopyFrom(parameter);
+    }
+    com::openjproxy::grpc::CallResourceResponse response;
+    const SQLRETURN result = call_resource(connection, handle,
+        com::openjproxy::grpc::RES_CONNECTION, "", com::openjproxy::grpc::CALL_GET,
+        "MetaData", {}, &response, &metadata_call);
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    if (response.values_size() == 0) {
+        return fail(handle, "JDBC metadata call returned no value", "HY000");
+    }
+    value->CopyFrom(response.values(0));
+    return SQL_SUCCESS;
+}
+
+struct ColumnDescription {
+    std::string name;
+    std::string type_name = "VARCHAR";
+    SQLSMALLINT type = SQL_VARCHAR;
+    SQLULEN size = 255;
+    SQLSMALLINT decimal_digits = 0;
+    SQLSMALLINT nullable = SQL_NULLABLE;
+};
+
+bool describe_column(const StatementHandle* statement, SQLUSMALLINT column_number,
+                     ColumnDescription* description) {
+    if (column_number == 0 || column_number > statement->columns.size()) {
+        return false;
+    }
+    description->name = statement->columns[column_number - 1];
+    if (statement->rows.empty() || column_number > statement->rows.front().size()) {
+        return true;
+    }
+    const Cell& cell = statement->rows.front()[column_number - 1];
+    if (std::holds_alternative<std::int64_t>(cell)) {
+        description->type = SQL_BIGINT;
+        description->type_name = "BIGINT";
+        description->size = 19;
+    } else if (std::holds_alternative<std::int32_t>(cell)) {
+        description->type = SQL_INTEGER;
+        description->type_name = "INTEGER";
+        description->size = 10;
+    } else if (std::holds_alternative<double>(cell)) {
+        description->type = SQL_DOUBLE;
+        description->type_name = "DOUBLE";
+        description->size = 15;
+    } else if (std::holds_alternative<bool>(cell)) {
+        description->type = SQL_BIT;
+        description->type_name = "BOOLEAN";
+        description->size = 1;
+    } else if (std::holds_alternative<std::vector<std::uint8_t>>(cell)) {
+        description->type = SQL_VARBINARY;
+        description->type_name = "VARBINARY";
+        description->size = static_cast<SQLULEN>(
+            std::get<std::vector<std::uint8_t>>(cell).size());
+    } else if (std::holds_alternative<UuidCell>(cell)) {
+        description->type = SQL_GUID;
+        description->type_name = "GUID";
+        description->size = 36;
+    } else if (const auto* text = std::get_if<std::string>(&cell)) {
+        description->size = static_cast<SQLULEN>(text->size());
+        if (text->compare(0, 16, "OJP_CLOB_PREFIX:") == 0) {
+            description->type = SQL_LONGVARCHAR;
+            description->type_name = "LONGVARCHAR";
+        } else if (is_uuid(*text)) {
+            description->type = SQL_LONGVARBINARY;
+            description->type_name = "LONGVARBINARY";
+        }
+    }
+    return true;
+}
+
+SQLRETURN metadata_boolean(ConnectionHandle* connection, HandleBase* handle,
+                           const std::string& method, bool* value,
+                           com::openjproxy::grpc::CallType call_type =
+                               com::openjproxy::grpc::CALL_SUPPORTS) {
+    ParameterValue result;
+    const SQLRETURN status = get_database_metadata(
+        connection, handle, method, {}, &result, call_type);
+    if (!SQL_SUCCEEDED(status)) {
+        return status;
+    }
+    if (result.value_case() == ParameterValue::kBoolValue) {
+        *value = result.bool_value();
+    } else if (result.value_case() == ParameterValue::kIsNull) {
+        *value = false;
+    } else {
+        return fail(handle, "JDBC metadata returned a non-boolean value", "HY000");
+    }
+    return SQL_SUCCESS;
+}
+
+SQLRETURN metadata_integer(ConnectionHandle* connection, HandleBase* handle,
+                           const std::string& method, SQLUINTEGER* value) {
+    ParameterValue result;
+    const SQLRETURN status = get_database_metadata(connection, handle, method, {}, &result);
+    if (!SQL_SUCCEEDED(status)) {
+        return status;
+    }
+    if (result.value_case() == ParameterValue::kIntValue) {
+        *value = static_cast<SQLUINTEGER>(std::max(0, result.int_value()));
+    } else {
+        return fail(handle, "JDBC metadata returned a non-integer value", "HY000");
+    }
+    return SQL_SUCCESS;
+}
+
+SQLRETURN metadata_text(ConnectionHandle* connection, HandleBase* handle,
+                        const std::string& method, std::string* text) {
+    ParameterValue result;
+    const SQLRETURN status = get_database_metadata(connection, handle, method, {}, &result);
+    if (!SQL_SUCCEEDED(status)) {
+        return status;
+    }
+    if (result.value_case() == ParameterValue::kStringValue) {
+        *text = result.string_value();
+    } else if (result.value_case() == ParameterValue::kIsNull) {
+        text->clear();
+    } else {
+        return fail(handle, "JDBC metadata returned a non-string value", "HY000");
+    }
+    return SQL_SUCCESS;
+}
+
+SQLRETURN get_sql_info_text(ConnectionHandle* connection, HandleBase* handle,
+                            SQLUSMALLINT info_type, std::string* text) {
+    switch (info_type) {
+        case SQL_DRIVER_NAME: *text = "libojp_odbc"; return SQL_SUCCESS;
+        case SQL_DRIVER_VER: *text = "00.01.0000"; return SQL_SUCCESS;
+        case SQL_DRIVER_ODBC_VER:
+        case SQL_ODBC_VER: *text = "03.80"; return SQL_SUCCESS;
+        case SQL_DBMS_NAME:
+            return metadata_text(connection, handle, "DatabaseProductName", text);
+        case SQL_DBMS_VER:
+            return metadata_text(connection, handle, "DatabaseProductVersion", text);
+        case SQL_IDENTIFIER_QUOTE_CHAR:
+            return metadata_text(connection, handle, "IdentifierQuoteString", text);
+        case SQL_KEYWORDS:
+            return metadata_text(connection, handle, "SQLKeywords", text);
+        case SQL_CATALOG_NAME_SEPARATOR:
+            return metadata_text(connection, handle, "CatalogSeparator", text);
+        case SQL_CATALOG_TERM:
+            return metadata_text(connection, handle, "CatalogTerm", text);
+        case SQL_SCHEMA_TERM:
+            return metadata_text(connection, handle, "SchemaTerm", text);
+        case SQL_USER_NAME:
+            *text = connection->user;
+            return SQL_SUCCESS;
+        default:
+            return fail(handle, "Requested SQLGetInfo value is not supported", "HYC00");
+    }
+}
+
+SQLRETURN get_sql_info_number(ConnectionHandle* connection, HandleBase* handle,
+                              SQLUSMALLINT info_type, SQLUINTEGER* value) {
+    switch (info_type) {
+        case SQL_GETDATA_EXTENSIONS:
+            *value = SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER;
+            return SQL_SUCCESS;
+        case SQL_MAX_COLUMN_NAME_LEN:
+            return metadata_integer(connection, handle, "MaxColumnNameLength", value);
+        case SQL_MAX_TABLE_NAME_LEN:
+            return metadata_integer(connection, handle, "MaxTableNameLength", value);
+        case SQL_MAX_SCHEMA_NAME_LEN:
+            return metadata_integer(connection, handle, "MaxSchemaNameLength", value);
+        case SQL_MAX_CATALOG_NAME_LEN:
+            return metadata_integer(connection, handle, "MaxCatalogNameLength", value);
+        case SQL_MAX_COLUMNS_IN_SELECT:
+            return metadata_integer(connection, handle, "MaxColumnsInSelect", value);
+        case SQL_MAX_COLUMNS_IN_TABLE:
+            return metadata_integer(connection, handle, "MaxColumnsInTable", value);
+        case SQL_MAX_TABLES_IN_SELECT:
+            return metadata_integer(connection, handle, "MaxTablesInSelect", value);
+        case SQL_IDENTIFIER_CASE: {
+            bool upper = false;
+            bool lower = false;
+            bool mixed = false;
+            SQLRETURN status = metadata_boolean(connection, handle, "UpperCaseIdentifiers", &upper,
+                com::openjproxy::grpc::CALL_STORES);
+            if (!SQL_SUCCEEDED(status)) {
+                return status;
+            }
+            status = metadata_boolean(connection, handle, "LowerCaseIdentifiers", &lower,
+                com::openjproxy::grpc::CALL_STORES);
+            if (!SQL_SUCCEEDED(status)) {
+                return status;
+            }
+            status = metadata_boolean(connection, handle, "MixedCaseIdentifiers", &mixed,
+                com::openjproxy::grpc::CALL_STORES);
+            if (!SQL_SUCCEEDED(status)) {
+                return status;
+            }
+            *value = upper ? SQL_IC_UPPER : (lower ? SQL_IC_LOWER :
+                     (mixed ? SQL_IC_MIXED : SQL_IC_SENSITIVE));
+            return SQL_SUCCESS;
+        }
+        case SQL_TXN_CAPABLE: {
+            bool full_transactions = false;
+            bool dml_transactions = false;
+            SQLRETURN status = metadata_boolean(connection, handle,
+                "DataDefinitionAndDataManipulationTransactions", &full_transactions);
+            if (!SQL_SUCCEEDED(status)) {
+                return status;
+            }
+            status = metadata_boolean(connection, handle,
+                "DataManipulationTransactionsOnly", &dml_transactions);
+            if (!SQL_SUCCEEDED(status)) {
+                return status;
+            }
+            *value = full_transactions ? SQL_TC_ALL :
+                (dml_transactions ? SQL_TC_DML : SQL_TC_NONE);
+            return SQL_SUCCESS;
+        }
+        default:
+            return fail(handle, "Requested SQLGetInfo value is not supported", "HYC00");
+    }
 }
 
 SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_string) {
@@ -2487,6 +3185,35 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         }
     }
     return SQL_SUCCESS;
+}
+
+std::string brace_connection_value(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char character : value) {
+        escaped.push_back(character);
+        if (character == '}') {
+            escaped.push_back('}');
+        }
+    }
+    return "{" + escaped + "}";
+}
+
+SQLRETURN connect_with_options(ConnectionHandle* connection, const std::string& source,
+                               const std::string& user, const std::string& password) {
+    const auto parsed = parse_connection_string(source);
+    if (!parsed.error.empty()) {
+        return fail(connection, parsed.error, "IM012");
+    }
+    if (parsed.values.find("SERVER") == parsed.values.end() ||
+        parsed.values.find("DATABASE") == parsed.values.end()) {
+        return fail(connection,
+                    "SQLConnect requires SERVER and DATABASE options in its server name; "
+                    "use SQLDriverConnect for standard DSN-less connections",
+                    "IM002");
+    }
+    return connect(connection, source + ";UID=" + brace_connection_value(user) +
+                                   ";PWD=" + brace_connection_value(password));
 }
 
 SQLRETURN disconnect(ConnectionHandle* connection) {
@@ -3115,14 +3842,91 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connection, SQLHWND, SQLCHAR* input_s
     return SQL_SUCCESS;
 }
 
-SQLRETURN SQL_API SQLConnect(SQLHDBC connection, SQLCHAR*, SQLSMALLINT,
-                             SQLCHAR*, SQLSMALLINT, SQLCHAR*, SQLSMALLINT) {
+SQLRETURN SQL_API SQLDriverConnectW(SQLHDBC connection, SQLHWND, SQLWCHAR* input_string,
+                                    SQLSMALLINT input_length, SQLWCHAR* output_string,
+                                    SQLSMALLINT output_buffer_length,
+                                    SQLSMALLINT* output_length, SQLUSMALLINT) {
     if (connection == SQL_NULL_HDBC ||
         static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
         return SQL_INVALID_HANDLE;
     }
-    return fail(static_cast<HandleBase*>(connection),
-                "Use SQLDriverConnect with SERVER and DATABASE fields", "IM002");
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    if (input_string == nullptr) {
+        return fail(target, "Connection string is required", "HY009");
+    }
+    if (input_length < 0 && input_length != SQL_NTS) {
+        return fail(target, "Connection string length is invalid", "HY090");
+    }
+    std::string input;
+    if (!read_wide_string(input_string, input_length, &input)) {
+        return fail(target, "Connection string contains invalid wide-character Unicode", "22018");
+    }
+    const auto status = connect(target, input);
+    if (!SQL_SUCCEEDED(status)) {
+        return status;
+    }
+    return write_wide_string(target, input, output_string, output_buffer_length, output_length);
+}
+
+SQLRETURN SQL_API SQLConnect(SQLHDBC connection, SQLCHAR* server_name,
+                             SQLSMALLINT server_name_length, SQLCHAR* user_name,
+                             SQLSMALLINT user_name_length, SQLCHAR* authentication,
+                             SQLSMALLINT authentication_length) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    if (server_name == nullptr) {
+        return fail(target, "SQLConnect server name is required", "HY009");
+    }
+    const auto ansi_value = [](SQLCHAR* value, SQLSMALLINT length) {
+        if (value == nullptr) {
+            return std::string{};
+        }
+        const auto* text = reinterpret_cast<const char*>(value);
+        const auto size = length == SQL_NTS
+            ? std::strlen(text)
+            : static_cast<std::size_t>(std::max<SQLSMALLINT>(0, length));
+        return std::string(text, size);
+    };
+    if ((server_name_length < 0 && server_name_length != SQL_NTS) ||
+        (user_name_length < 0 && user_name_length != SQL_NTS) ||
+        (authentication_length < 0 && authentication_length != SQL_NTS)) {
+        return fail(target, "SQLConnect string length is invalid", "HY090");
+    }
+    return connect_with_options(target, ansi_value(server_name, server_name_length),
+                                ansi_value(user_name, user_name_length),
+                                ansi_value(authentication, authentication_length));
+}
+
+SQLRETURN SQL_API SQLConnectW(SQLHDBC connection, SQLWCHAR* server_name,
+                              SQLSMALLINT server_name_length, SQLWCHAR* user_name,
+                              SQLSMALLINT user_name_length, SQLWCHAR* authentication,
+                              SQLSMALLINT authentication_length) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    std::string endpoint;
+    std::string user;
+    std::string password;
+    if (server_name == nullptr) {
+        return fail(target, "SQLConnect server name is required", "HY009");
+    }
+    if ((server_name_length < 0 && server_name_length != SQL_NTS) ||
+        (user_name_length < 0 && user_name_length != SQL_NTS) ||
+        (authentication_length < 0 && authentication_length != SQL_NTS)) {
+        return fail(target, "SQLConnect string length is invalid", "HY090");
+    }
+    if (!read_wide_string(server_name, server_name_length, &endpoint) ||
+        (user_name != nullptr && !read_wide_string(user_name, user_name_length, &user)) ||
+        (authentication != nullptr &&
+         !read_wide_string(authentication, authentication_length, &password))) {
+        return fail(target, "SQLConnect contains invalid wide-character Unicode", "22018");
+    }
+    return connect_with_options(target, endpoint, user, password);
 }
 
 SQLRETURN SQL_API SQLDisconnect(SQLHDBC connection) {
@@ -3151,6 +3955,28 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER len
     return execute_statement(target);
 }
 
+SQLRETURN SQL_API SQLExecDirectW(SQLHSTMT statement, SQLWCHAR* sql, SQLINTEGER length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
+    clear_diagnostics(target);
+    reset_data_at_execution(target);
+    if (sql == nullptr) {
+        return fail(target, "SQL text is required", "HY009");
+    }
+    if (length < 0 && length != SQL_NTS) {
+        return fail(target, "SQL text length is invalid", "HY090");
+    }
+    if (!read_wide_string(sql, length, &target->sql)) {
+        return fail(target, "SQL text contains invalid wide-character Unicode", "22018");
+    }
+    target->parameters.clear();
+    return execute_statement(target);
+}
+
 SQLRETURN SQL_API SQLPrepare(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER length) {
     if (statement == SQL_NULL_HSTMT ||
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
@@ -3165,6 +3991,28 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT statement, SQLCHAR* sql, SQLINTEGER length
     target->sql.assign(reinterpret_cast<const char*>(sql),
         length == SQL_NTS ? std::strlen(reinterpret_cast<const char*>(sql))
                           : static_cast<std::size_t>(std::max<SQLINTEGER>(0, length)));
+    target->parameters.clear();
+    return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLPrepareW(SQLHSTMT statement, SQLWCHAR* sql, SQLINTEGER length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
+    clear_diagnostics(target);
+    reset_data_at_execution(target);
+    if (sql == nullptr) {
+        return fail(target, "SQL text is required", "HY009");
+    }
+    if (length < 0 && length != SQL_NTS) {
+        return fail(target, "SQL text length is invalid", "HY090");
+    }
+    if (!read_wide_string(sql, length, &target->sql)) {
+        return fail(target, "SQL text contains invalid wide-character Unicode", "22018");
+    }
     target->parameters.clear();
     return SQL_SUCCESS;
 }
@@ -3316,16 +4164,29 @@ SQLRETURN SQL_API SQLPutData(SQLHSTMT statement, SQLPOINTER data, SQLLEN length)
     }
     auto& bound = parameter->second;
     if (length == SQL_NTS) {
-        if (bound.value_type != SQL_C_CHAR || data == nullptr) {
+        if ((bound.value_type != SQL_C_CHAR && bound.value_type != SQL_C_WCHAR) ||
+            data == nullptr) {
             return fail(target, "SQL_NTS is valid only for character LOB data", "HY090");
         }
-        length = static_cast<SQLLEN>(std::strlen(static_cast<const char*>(data)));
+        if (bound.value_type == SQL_C_WCHAR) {
+            const auto* characters = static_cast<const SQLWCHAR*>(data);
+            std::size_t units = 0;
+            while (characters[units] != 0) {
+                ++units;
+            }
+            length = static_cast<SQLLEN>(units * sizeof(SQLWCHAR));
+        } else {
+            length = static_cast<SQLLEN>(std::strlen(static_cast<const char*>(data)));
+        }
     }
     if (length < 0) {
         return fail(target, "LOB stream chunk length is invalid", "HY090");
     }
     if (length > 0 && data == nullptr) {
         return fail(target, "LOB stream chunk buffer is required", "HY009");
+    }
+    if (bound.value_type == SQL_C_WCHAR && length % sizeof(SQLWCHAR) != 0) {
+        return fail(target, "Wide-character LOB chunk length must align to SQLWCHAR units", "HY090");
     }
     if (length > 0) {
         auto& parameter = bound;
@@ -3408,13 +4269,27 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
         }
         result_cell = &materialized_cell;
     }
-    if (target_type == SQL_C_BINARY || target_type == SQL_C_CHAR) {
+    if (target_type == SQL_C_BINARY || target_type == SQL_C_CHAR ||
+        target_type == SQL_C_WCHAR) {
         const auto* bytes = std::get_if<std::vector<std::uint8_t>>(result_cell);
         const auto* text = std::get_if<std::string>(result_cell);
-        if (bytes != nullptr || (target_type == SQL_C_CHAR && text != nullptr)) {
-            const std::size_t size = bytes != nullptr ? bytes->size() : text->size();
+        if (bytes != nullptr && target_type == SQL_C_WCHAR) {
+            return fail(target, "Binary result cannot be converted to SQL_C_WCHAR", "07006");
+        }
+        if ((bytes != nullptr && target_type != SQL_C_WCHAR) ||
+            ((target_type == SQL_C_CHAR || target_type == SQL_C_WCHAR) && text != nullptr)) {
+            std::vector<SQLWCHAR> wide_text;
+            if (target_type == SQL_C_WCHAR && text != nullptr &&
+                !utf8_to_wide(*text, &wide_text)) {
+                return fail(target, "Result text is not valid UTF-8", "22018");
+            }
+            const std::size_t size = target_type == SQL_C_WCHAR
+                ? wide_text.size() : (bytes != nullptr ? bytes->size() : text->size());
             const void* data = bytes != nullptr
-                ? static_cast<const void*>(bytes->data()) : static_cast<const void*>(text->data());
+                ? static_cast<const void*>(bytes->data())
+                : target_type == SQL_C_WCHAR
+                    ? static_cast<const void*>(wide_text.data())
+                    : static_cast<const void*>(text->data());
             const auto offset = target->get_data_offsets[column_number];
             if (offset > size) {
                 return SQL_NO_DATA;
@@ -3425,19 +4300,35 @@ SQLRETURN SQL_API SQLGetData(SQLHSTMT statement, SQLUSMALLINT column_number,
             if (buffer_length < 0) {
                 return fail(target, "Invalid binary output buffer length", "HY090");
             }
+            const auto unit_size = target_type == SQL_C_WCHAR ? sizeof(SQLWCHAR) : 1;
             const auto capacity = target_type == SQL_C_CHAR
                 ? (buffer_length > 0 ? static_cast<std::size_t>(buffer_length - 1) : 0)
-                : static_cast<std::size_t>(buffer_length);
+                : target_type == SQL_C_WCHAR
+                    ? (static_cast<std::size_t>(buffer_length) / unit_size > 0
+                        ? static_cast<std::size_t>(buffer_length) / unit_size - 1 : 0)
+                    : static_cast<std::size_t>(buffer_length);
             const auto available = size - offset;
-            const auto copy_count = std::min(capacity, available);
+            auto copy_count = std::min(capacity, available);
+            if (target_type == SQL_C_WCHAR && copy_count > 0 &&
+                sizeof(SQLWCHAR) == 2 && offset + copy_count < size) {
+                const auto last = static_cast<std::uint32_t>(
+                    wide_text[offset + copy_count - 1]);
+                if (last >= 0xd800 && last <= 0xdbff) {
+                    --copy_count;
+                }
+            }
             if (copy_count > 0) {
-                std::memcpy(target_value, static_cast<const char*>(data) + offset, copy_count);
+                std::memcpy(target_value, static_cast<const char*>(data) + offset * unit_size,
+                            copy_count * unit_size);
             }
             if (target_type == SQL_C_CHAR && buffer_length > 0) {
                 static_cast<char*>(target_value)[copy_count] = '\0';
+            } else if (target_type == SQL_C_WCHAR &&
+                       static_cast<std::size_t>(buffer_length) / unit_size > 0) {
+                static_cast<SQLWCHAR*>(target_value)[copy_count] = 0;
             }
             if (indicator != nullptr) {
-                *indicator = static_cast<SQLLEN>(available);
+                *indicator = static_cast<SQLLEN>(available * unit_size);
             }
             target->get_data_offsets[column_number] =
                 copy_count < available ? offset + copy_count : size + 1;
@@ -3466,6 +4357,250 @@ SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT statement, SQLSMALLINT* column_count
     return SQL_SUCCESS;
 }
 
+SQLRETURN SQL_API SQLTables(SQLHSTMT statement, SQLCHAR* catalog, SQLSMALLINT catalog_length,
+                            SQLCHAR* schema, SQLSMALLINT schema_length, SQLCHAR* table,
+                            SQLSMALLINT table_length, SQLCHAR* table_types,
+                            SQLSMALLINT table_types_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_ansi_metadata_parameter(handle, catalog, catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, schema, schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, table, table_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_table_types(handle, table_types, table_types_length, &parameters);
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, "Tables", parameters) : result;
+}
+
+SQLRETURN SQL_API SQLTablesW(SQLHSTMT statement, SQLWCHAR* catalog, SQLSMALLINT catalog_length,
+                             SQLWCHAR* schema, SQLSMALLINT schema_length, SQLWCHAR* table,
+                             SQLSMALLINT table_length, SQLWCHAR* table_types,
+                             SQLSMALLINT table_types_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_wide_metadata_parameter(handle, catalog, catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, schema, schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, table, table_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_table_types(handle, table_types, table_types_length, &parameters);
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, "Tables", parameters) : result;
+}
+
+SQLRETURN SQL_API SQLColumns(SQLHSTMT statement, SQLCHAR* catalog, SQLSMALLINT catalog_length,
+                             SQLCHAR* schema, SQLSMALLINT schema_length, SQLCHAR* table,
+                             SQLSMALLINT table_length, SQLCHAR* column,
+                             SQLSMALLINT column_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_ansi_metadata_parameter(handle, catalog, catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, schema, schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, table, table_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, column, column_length, &parameters);
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, "Columns", parameters) : result;
+}
+
+SQLRETURN SQL_API SQLColumnsW(SQLHSTMT statement, SQLWCHAR* catalog, SQLSMALLINT catalog_length,
+                              SQLWCHAR* schema, SQLSMALLINT schema_length, SQLWCHAR* table,
+                              SQLSMALLINT table_length, SQLWCHAR* column,
+                              SQLSMALLINT column_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_wide_metadata_parameter(handle, catalog, catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, schema, schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, table, table_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, column, column_length, &parameters);
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, "Columns", parameters) : result;
+}
+
+SQLRETURN SQL_API SQLPrimaryKeys(SQLHSTMT statement, SQLCHAR* catalog,
+                                 SQLSMALLINT catalog_length, SQLCHAR* schema,
+                                 SQLSMALLINT schema_length, SQLCHAR* table,
+                                 SQLSMALLINT table_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_ansi_metadata_parameter(handle, catalog, catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, schema, schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, table, table_length, &parameters);
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, "PrimaryKeys", parameters) : result;
+}
+
+SQLRETURN SQL_API SQLPrimaryKeysW(SQLHSTMT statement, SQLWCHAR* catalog,
+                                  SQLSMALLINT catalog_length, SQLWCHAR* schema,
+                                  SQLSMALLINT schema_length, SQLWCHAR* table,
+                                  SQLSMALLINT table_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_wide_metadata_parameter(handle, catalog, catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, schema, schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, table, table_length, &parameters);
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, "PrimaryKeys", parameters) : result;
+}
+
+SQLRETURN SQL_API SQLForeignKeys(
+    SQLHSTMT statement, SQLCHAR* primary_catalog, SQLSMALLINT primary_catalog_length,
+    SQLCHAR* primary_schema, SQLSMALLINT primary_schema_length, SQLCHAR* primary_table,
+    SQLSMALLINT primary_table_length, SQLCHAR* foreign_catalog,
+    SQLSMALLINT foreign_catalog_length, SQLCHAR* foreign_schema,
+    SQLSMALLINT foreign_schema_length, SQLCHAR* foreign_table,
+    SQLSMALLINT foreign_table_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_ansi_metadata_parameter(handle, primary_catalog,
+        primary_catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, primary_schema,
+            primary_schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, primary_table,
+            primary_table_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, foreign_catalog,
+            foreign_catalog_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, foreign_schema,
+            foreign_schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_ansi_metadata_parameter(handle, foreign_table,
+            foreign_table_length, &parameters);
+    }
+    const std::string method = primary_table != nullptr && foreign_table != nullptr
+        ? "CrossReference" : (primary_table != nullptr ? "ExportedKeys" : "ImportedKeys");
+    if (SQL_SUCCEEDED(result)) {
+        if (primary_table == nullptr) {
+            parameters.erase(parameters.begin(), parameters.begin() + 3);
+        } else if (foreign_table == nullptr) {
+            parameters.resize(3);
+        }
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, method, parameters) : result;
+}
+
+SQLRETURN SQL_API SQLForeignKeysW(
+    SQLHSTMT statement, SQLWCHAR* primary_catalog, SQLSMALLINT primary_catalog_length,
+    SQLWCHAR* primary_schema, SQLSMALLINT primary_schema_length, SQLWCHAR* primary_table,
+    SQLSMALLINT primary_table_length, SQLWCHAR* foreign_catalog,
+    SQLSMALLINT foreign_catalog_length, SQLWCHAR* foreign_schema,
+    SQLSMALLINT foreign_schema_length, SQLWCHAR* foreign_table,
+    SQLSMALLINT foreign_table_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* handle = static_cast<HandleBase*>(statement);
+    std::vector<ParameterValue> parameters;
+    SQLRETURN result = append_wide_metadata_parameter(handle, primary_catalog,
+        primary_catalog_length, &parameters);
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, primary_schema,
+            primary_schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, primary_table,
+            primary_table_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, foreign_catalog,
+            foreign_catalog_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, foreign_schema,
+            foreign_schema_length, &parameters);
+    }
+    if (SQL_SUCCEEDED(result)) {
+        result = append_wide_metadata_parameter(handle, foreign_table,
+            foreign_table_length, &parameters);
+    }
+    const std::string method = primary_table != nullptr && foreign_table != nullptr
+        ? "CrossReference" : (primary_table != nullptr ? "ExportedKeys" : "ImportedKeys");
+    if (SQL_SUCCEEDED(result)) {
+        if (primary_table == nullptr) {
+            parameters.erase(parameters.begin(), parameters.begin() + 3);
+        } else if (foreign_table == nullptr) {
+            parameters.resize(3);
+        }
+    }
+    return SQL_SUCCEEDED(result)
+        ? execute_catalog_api(statement, method, parameters) : result;
+}
+
+SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT statement, SQLSMALLINT data_type) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    ParameterValue parameter;
+    parameter.set_int_value(data_type);
+    return execute_catalog_api(statement, "TypeInfo", {parameter});
+}
+
 SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,
                                  SQLCHAR* column_name, SQLSMALLINT name_buffer_length,
                                  SQLSMALLINT* name_length, SQLSMALLINT* data_type,
@@ -3476,56 +4611,227 @@ SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,
         return SQL_INVALID_HANDLE;
     }
     auto* target = static_cast<StatementHandle*>(statement);
-    if (column_number == 0 || column_number > target->columns.size()) {
+    ColumnDescription description;
+    if (!describe_column(target, column_number, &description)) {
         return fail(target, "Invalid column number", "07009");
     }
-    const std::string& name = target->columns[column_number - 1];
     if (name_length != nullptr) {
-        *name_length = static_cast<SQLSMALLINT>(name.size());
+        *name_length = static_cast<SQLSMALLINT>(std::min<std::size_t>(
+            description.name.size(), std::numeric_limits<SQLSMALLINT>::max()));
+    }
+    if (name_buffer_length < 0) {
+        return fail(target, "Invalid column name buffer length", "HY090");
     }
     if (column_name != nullptr && name_buffer_length > 0) {
         const auto copy_count = std::min<std::size_t>(
-            name.size(), static_cast<std::size_t>(name_buffer_length - 1));
-        std::memcpy(column_name, name.data(), copy_count);
+            description.name.size(), static_cast<std::size_t>(name_buffer_length - 1));
+        std::memcpy(column_name, description.name.data(), copy_count);
         column_name[copy_count] = '\0';
-    }
-    SQLSMALLINT inferred_type = SQL_VARCHAR;
-    if (!target->rows.empty() && column_number <= target->rows.front().size()) {
-        const Cell& cell = target->rows.front()[column_number - 1];
-        if (std::holds_alternative<std::int64_t>(cell)) {
-            inferred_type = SQL_BIGINT;
-        } else if (std::holds_alternative<std::int32_t>(cell)) {
-            inferred_type = SQL_INTEGER;
-        } else if (std::holds_alternative<double>(cell)) {
-            inferred_type = SQL_DOUBLE;
-        } else if (std::holds_alternative<bool>(cell)) {
-            inferred_type = SQL_BIT;
-        } else if (std::holds_alternative<std::vector<std::uint8_t>>(cell)) {
-            inferred_type = SQL_VARBINARY;
-        } else if (std::holds_alternative<UuidCell>(cell)) {
-            inferred_type = SQL_GUID;
-        } else if (const auto* text = std::get_if<std::string>(&cell)) {
-            if (text->compare(0, 16, "OJP_CLOB_PREFIX:") == 0) {
-                inferred_type = SQL_LONGVARCHAR;
-            } else if (is_uuid(*text)) {
-                inferred_type = SQL_LONGVARBINARY;
-            }
+        if (copy_count < description.name.size()) {
+            target->diagnostics.push_back({"01004", 0, "Column name was truncated"});
         }
     }
     if (data_type != nullptr) {
-        *data_type = inferred_type;
+        *data_type = description.type;
     }
     if (column_size != nullptr) {
-        *column_size = 255;
+        *column_size = description.size;
     }
     if (decimal_digits != nullptr) {
-        *decimal_digits = 0;
+        *decimal_digits = description.decimal_digits;
     }
     if (nullable != nullptr) {
-        *nullable = SQL_NULLABLE;
+        *nullable = description.nullable;
     }
-    return column_name != nullptr && name.size() >= static_cast<std::size_t>(name_buffer_length)
+    return column_name != nullptr && name_buffer_length > 0 &&
+           description.name.size() >= static_cast<std::size_t>(name_buffer_length)
         ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLDescribeColW(SQLHSTMT statement, SQLUSMALLINT column_number,
+                                  SQLWCHAR* column_name, SQLSMALLINT name_buffer_length,
+                                  SQLSMALLINT* name_length, SQLSMALLINT* data_type,
+                                  SQLULEN* column_size, SQLSMALLINT* decimal_digits,
+                                  SQLSMALLINT* nullable) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    ColumnDescription description;
+    if (!describe_column(target, column_number, &description)) {
+        return fail(target, "Invalid column number", "07009");
+    }
+    const SQLRETURN name_result = write_wide_string(
+        target, description.name, column_name, name_buffer_length, name_length);
+    if (!SQL_SUCCEEDED(name_result)) {
+        return name_result;
+    }
+    if (data_type != nullptr) {
+        *data_type = description.type;
+    }
+    if (column_size != nullptr) {
+        *column_size = description.size;
+    }
+    if (decimal_digits != nullptr) {
+        *decimal_digits = description.decimal_digits;
+    }
+    if (nullable != nullptr) {
+        *nullable = description.nullable;
+    }
+    return name_result;
+}
+
+SQLRETURN SQL_API SQLColAttribute(SQLHSTMT statement, SQLUSMALLINT column_number,
+                                  SQLUSMALLINT field_identifier, SQLPOINTER character_attribute,
+                                  SQLSMALLINT buffer_length, SQLSMALLINT* string_length,
+                                  SQLLEN* numeric_attribute) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    ColumnDescription description;
+    if (!describe_column(target, column_number, &description)) {
+        return fail(target, "Invalid column number", "07009");
+    }
+    std::string text;
+    switch (field_identifier) {
+        case SQL_DESC_NAME:
+        case SQL_DESC_LABEL:
+        case SQL_COLUMN_NAME:
+            text = description.name;
+            break;
+        case SQL_DESC_TYPE_NAME:
+            text = description.type_name;
+            break;
+        case SQL_DESC_TYPE:
+        case SQL_DESC_CONCISE_TYPE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = description.type;
+            return SQL_SUCCESS;
+        case SQL_DESC_LENGTH:
+        case SQL_DESC_PRECISION:
+        case SQL_DESC_DISPLAY_SIZE:
+        case SQL_COLUMN_LENGTH:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = static_cast<SQLLEN>(description.size);
+            return SQL_SUCCESS;
+        case SQL_DESC_OCTET_LENGTH:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = static_cast<SQLLEN>(description.size);
+            return SQL_SUCCESS;
+        case SQL_DESC_SCALE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = description.decimal_digits;
+            return SQL_SUCCESS;
+        case SQL_DESC_NULLABLE:
+        case SQL_COLUMN_NULLABLE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = description.nullable;
+            return SQL_SUCCESS;
+        case SQL_DESC_UNSIGNED:
+        case SQL_DESC_AUTO_UNIQUE_VALUE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = SQL_FALSE;
+            return SQL_SUCCESS;
+        default:
+            return fail(target, "Requested column attribute is not supported", "HYC00");
+    }
+    if (buffer_length < 0) {
+        return fail(target, "Invalid column attribute buffer length", "HY090");
+    }
+    if (string_length != nullptr) {
+        *string_length = static_cast<SQLSMALLINT>(std::min<std::size_t>(
+            text.size(), std::numeric_limits<SQLSMALLINT>::max()));
+    }
+    if (character_attribute == nullptr || buffer_length == 0) {
+        return SQL_SUCCESS;
+    }
+    const auto copy_count = std::min<std::size_t>(
+        text.size(), static_cast<std::size_t>(buffer_length - 1));
+    std::memcpy(character_attribute, text.data(), copy_count);
+    static_cast<char*>(character_attribute)[copy_count] = '\0';
+    return copy_count < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLColAttributeW(SQLHSTMT statement, SQLUSMALLINT column_number,
+                                   SQLUSMALLINT field_identifier,
+                                   SQLPOINTER character_attribute, SQLSMALLINT buffer_length,
+                                   SQLSMALLINT* string_length, SQLLEN* numeric_attribute) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    ColumnDescription description;
+    if (!describe_column(target, column_number, &description)) {
+        return fail(target, "Invalid column number", "07009");
+    }
+    std::string text;
+    switch (field_identifier) {
+        case SQL_DESC_NAME:
+        case SQL_DESC_LABEL:
+        case SQL_COLUMN_NAME:
+            text = description.name;
+            break;
+        case SQL_DESC_TYPE_NAME:
+            text = description.type_name;
+            break;
+        case SQL_DESC_TYPE:
+        case SQL_DESC_CONCISE_TYPE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = description.type;
+            return SQL_SUCCESS;
+        case SQL_DESC_LENGTH:
+        case SQL_DESC_PRECISION:
+        case SQL_DESC_DISPLAY_SIZE:
+        case SQL_COLUMN_LENGTH:
+        case SQL_DESC_OCTET_LENGTH:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = static_cast<SQLLEN>(description.size);
+            return SQL_SUCCESS;
+        case SQL_DESC_SCALE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = description.decimal_digits;
+            return SQL_SUCCESS;
+        case SQL_DESC_NULLABLE:
+        case SQL_COLUMN_NULLABLE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = description.nullable;
+            return SQL_SUCCESS;
+        case SQL_DESC_UNSIGNED:
+        case SQL_DESC_AUTO_UNIQUE_VALUE:
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required", "HY009");
+            }
+            *numeric_attribute = SQL_FALSE;
+            return SQL_SUCCESS;
+        default:
+            return fail(target, "Requested column attribute is not supported", "HYC00");
+    }
+    return write_wide_string(target, text, static_cast<SQLWCHAR*>(character_attribute),
+                             buffer_length, string_length);
 }
 
 SQLRETURN SQL_API SQLRowCount(SQLHSTMT statement, SQLLEN* row_count) {
@@ -3698,30 +5004,20 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
     }
     auto* target = static_cast<ConnectionHandle*>(connection);
     clear_diagnostics(target);
-    if (info_type == SQL_TXN_CAPABLE) {
-        const auto database_url = uppercase_ascii(target->url);
-        const SQLUSMALLINT numeric_value =
-            database_url.find("SQLSERVER") != std::string::npos ||
-            database_url.find("POSTGRESQL") != std::string::npos
-                ? SQL_TC_ALL : SQL_TC_DML;
-        if (output_length != nullptr) {
-            *output_length = static_cast<SQLSMALLINT>(sizeof(numeric_value));
-        }
-        if (value == nullptr) {
-            return SQL_SUCCESS;
-        }
-        std::memcpy(value, &numeric_value, sizeof(numeric_value));
-        return SQL_SUCCESS;
-    }
     if (info_type == SQL_DEFAULT_TXN_ISOLATION) {
-        if (value == nullptr) {
-            return SQL_SUCCESS;
-        }
-        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
         SQLULEN isolation = 0;
-        const auto result = get_transaction_isolation(target, target, &isolation);
-        if (!SQL_SUCCEEDED(result)) {
-            return result;
+        {
+            std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+            const auto result = get_transaction_isolation(target, target, &isolation);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+        }
+        if (value == nullptr) {
+            if (output_length != nullptr) {
+                *output_length = static_cast<SQLSMALLINT>(sizeof(SQLUINTEGER));
+            }
+            return SQL_SUCCESS;
         }
         const auto isolation_value = static_cast<SQLUINTEGER>(isolation);
         std::memcpy(value, &isolation_value, sizeof(isolation_value));
@@ -3731,9 +5027,30 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         return SQL_SUCCESS;
     }
     if (info_type == SQL_TXN_ISOLATION_OPTION) {
-        const SQLUINTEGER isolation_options =
-            SQL_TXN_READ_UNCOMMITTED | SQL_TXN_READ_COMMITTED |
-            SQL_TXN_REPEATABLE_READ | SQL_TXN_SERIALIZABLE;
+        SQLUINTEGER isolation_options = 0;
+        const SQLULEN levels[] = {SQL_TXN_READ_UNCOMMITTED, SQL_TXN_READ_COMMITTED,
+                                  SQL_TXN_REPEATABLE_READ, SQL_TXN_SERIALIZABLE};
+        const std::int32_t jdbc_levels[] = {1, 2, 4, 8};
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        for (std::size_t index = 0; index < std::size(levels); ++index) {
+            ParameterValue parameter;
+            parameter.set_int_value(jdbc_levels[index]);
+            bool supported = false;
+            ParameterValue result_value;
+            const SQLRETURN result = get_database_metadata(target, target,
+                "TransactionIsolationLevel", {parameter}, &result_value,
+                com::openjproxy::grpc::CALL_SUPPORTS);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+            if (result_value.value_case() != ParameterValue::kBoolValue) {
+                return fail(target, "JDBC metadata returned an invalid isolation capability", "HY000");
+            }
+            supported = result_value.bool_value();
+            if (supported) {
+                isolation_options |= static_cast<SQLUINTEGER>(levels[index]);
+            }
+        }
         if (output_length != nullptr) {
             *output_length = static_cast<SQLSMALLINT>(sizeof(isolation_options));
         }
@@ -3742,29 +5059,167 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOIN
         }
         return SQL_SUCCESS;
     }
+    if (info_type == SQL_TXN_CAPABLE || info_type == SQL_GETDATA_EXTENSIONS ||
+        info_type == SQL_MAX_COLUMN_NAME_LEN || info_type == SQL_MAX_TABLE_NAME_LEN ||
+        info_type == SQL_MAX_SCHEMA_NAME_LEN || info_type == SQL_MAX_CATALOG_NAME_LEN ||
+        info_type == SQL_MAX_COLUMNS_IN_SELECT || info_type == SQL_MAX_COLUMNS_IN_TABLE ||
+        info_type == SQL_MAX_TABLES_IN_SELECT || info_type == SQL_IDENTIFIER_CASE) {
+        SQLUINTEGER numeric_value = 0;
+        SQLRETURN result;
+        {
+            std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+            result = get_sql_info_number(target, target, info_type, &numeric_value);
+        }
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        const bool small_value = info_type != SQL_GETDATA_EXTENSIONS;
+        const SQLSMALLINT length = small_value
+            ? static_cast<SQLSMALLINT>(sizeof(SQLUSMALLINT))
+            : static_cast<SQLSMALLINT>(sizeof(numeric_value));
+        if (output_length != nullptr) {
+            *output_length = length;
+        }
+        if (value != nullptr) {
+            if (small_value) {
+                const auto converted = static_cast<SQLUSMALLINT>(numeric_value);
+                std::memcpy(value, &converted, sizeof(converted));
+            } else {
+                std::memcpy(value, &numeric_value, sizeof(numeric_value));
+            }
+        }
+        return SQL_SUCCESS;
+    }
     std::string text;
-    switch (info_type) {
-        case SQL_DRIVER_NAME: text = "libojp_odbc"; break;
-        case SQL_DRIVER_VER: text = "00.01.0000"; break;
-        case SQL_DRIVER_ODBC_VER: text = "03.80"; break;
-        case SQL_DBMS_NAME: text = "OJP"; break;
-        case SQL_DBMS_VER: text = "00.01.0000"; break;
-        case SQL_ODBC_VER: text = "03.80"; break;
-        case SQL_IDENTIFIER_QUOTE_CHAR: text = "\""; break;
-        default:
-            return fail(target, "Requested SQLGetInfo value is not supported", "HYC00");
+    SQLRETURN result;
+    {
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        result = get_sql_info_text(target, target, info_type, &text);
+    }
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
     }
     if (output_length != nullptr) {
         *output_length = static_cast<SQLSMALLINT>(text.size());
     }
-    if (value == nullptr || buffer_length <= 0) {
+    if (buffer_length < 0) {
+        return fail(target, "Invalid SQLGetInfo output buffer length", "HY090");
+    }
+    if (value == nullptr) {
         return SQL_SUCCESS;
+    }
+    if (buffer_length == 0) {
+        return text.empty() ? SQL_SUCCESS : SQL_SUCCESS_WITH_INFO;
     }
     const auto copy_count = std::min<std::size_t>(
         text.size(), static_cast<std::size_t>(buffer_length - 1));
     std::memcpy(value, text.data(), copy_count);
     static_cast<char*>(value)[copy_count] = '\0';
+    if (copy_count < text.size()) {
+        target->diagnostics.push_back({"01004", 0, "SQLGetInfo text was truncated"});
+    }
     return copy_count < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLGetInfoW(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOINTER value,
+                              SQLSMALLINT buffer_length, SQLSMALLINT* output_length) {
+    if (connection == SQL_NULL_HDBC ||
+        static_cast<HandleBase*>(connection)->type != SQL_HANDLE_DBC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<ConnectionHandle*>(connection);
+    clear_diagnostics(target);
+    if (info_type == SQL_DEFAULT_TXN_ISOLATION) {
+        SQLULEN isolation = 0;
+        {
+            std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+            const auto result = get_transaction_isolation(target, target, &isolation);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+        }
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(SQLUINTEGER));
+        }
+        if (value != nullptr) {
+            const auto converted = static_cast<SQLUINTEGER>(isolation);
+            std::memcpy(value, &converted, sizeof(converted));
+        }
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_TXN_ISOLATION_OPTION) {
+        SQLUINTEGER isolation_options = 0;
+        const SQLULEN levels[] = {SQL_TXN_READ_UNCOMMITTED, SQL_TXN_READ_COMMITTED,
+                                  SQL_TXN_REPEATABLE_READ, SQL_TXN_SERIALIZABLE};
+        const std::int32_t jdbc_levels[] = {1, 2, 4, 8};
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        for (std::size_t index = 0; index < std::size(levels); ++index) {
+            ParameterValue parameter;
+            parameter.set_int_value(jdbc_levels[index]);
+            ParameterValue result_value;
+            const SQLRETURN result = get_database_metadata(target, target,
+                "TransactionIsolationLevel", {parameter}, &result_value,
+                com::openjproxy::grpc::CALL_SUPPORTS);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+            if (result_value.value_case() != ParameterValue::kBoolValue) {
+                return fail(target, "JDBC metadata returned an invalid isolation capability", "HY000");
+            }
+            if (result_value.bool_value()) {
+                isolation_options |= static_cast<SQLUINTEGER>(levels[index]);
+            }
+        }
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(sizeof(isolation_options));
+        }
+        if (value != nullptr) {
+            std::memcpy(value, &isolation_options, sizeof(isolation_options));
+        }
+        return SQL_SUCCESS;
+    }
+    if (info_type == SQL_TXN_CAPABLE || info_type == SQL_GETDATA_EXTENSIONS ||
+        info_type == SQL_MAX_COLUMN_NAME_LEN || info_type == SQL_MAX_TABLE_NAME_LEN ||
+        info_type == SQL_MAX_SCHEMA_NAME_LEN || info_type == SQL_MAX_CATALOG_NAME_LEN ||
+        info_type == SQL_MAX_COLUMNS_IN_SELECT || info_type == SQL_MAX_COLUMNS_IN_TABLE ||
+        info_type == SQL_MAX_TABLES_IN_SELECT || info_type == SQL_IDENTIFIER_CASE) {
+        SQLUINTEGER numeric_value = 0;
+        SQLRETURN result;
+        {
+            std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+            result = get_sql_info_number(target, target, info_type, &numeric_value);
+        }
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        const bool small_value = info_type != SQL_GETDATA_EXTENSIONS;
+        const SQLSMALLINT length = small_value
+            ? static_cast<SQLSMALLINT>(sizeof(SQLUSMALLINT))
+            : static_cast<SQLSMALLINT>(sizeof(numeric_value));
+        if (output_length != nullptr) {
+            *output_length = length;
+        }
+        if (value != nullptr) {
+            if (small_value) {
+                const auto converted = static_cast<SQLUSMALLINT>(numeric_value);
+                std::memcpy(value, &converted, sizeof(converted));
+            } else {
+                std::memcpy(value, &numeric_value, sizeof(numeric_value));
+            }
+        }
+        return SQL_SUCCESS;
+    }
+    std::string text;
+    SQLRETURN result;
+    {
+        std::lock_guard<std::mutex> connection_lock(target->operation_mutex);
+        result = get_sql_info_text(target, target, info_type, &text);
+    }
+    if (!SQL_SUCCEEDED(result)) {
+        return result;
+    }
+    return write_wide_string(target, text, static_cast<SQLWCHAR*>(value),
+                             buffer_length, output_length);
 }
 
 SQLRETURN SQL_API SQLGetDiagRec(SQLSMALLINT handle_type, SQLHANDLE handle,
@@ -3805,8 +5260,70 @@ SQLRETURN SQL_API SQLGetDiagRecA(SQLSMALLINT handle_type, SQLHANDLE handle,
                                  SQLSMALLINT record_number, SQLCHAR* sql_state,
                                  SQLINTEGER* native_error, SQLCHAR* message_text,
                                  SQLSMALLINT buffer_length, SQLSMALLINT* text_length) {
-    return SQLGetDiagRec(handle_type, handle, record_number, sql_state, native_error,
-                         message_text, buffer_length, text_length);
+    if (handle == SQL_NULL_HANDLE ||
+        static_cast<HandleBase*>(handle)->type != handle_type) {
+        return SQL_INVALID_HANDLE;
+    }
+    const auto* base = static_cast<HandleBase*>(handle);
+    if (record_number < 1 ||
+        static_cast<std::size_t>(record_number) > base->diagnostics.size()) {
+        return SQL_NO_DATA;
+    }
+    const auto& diagnostic = base->diagnostics[static_cast<std::size_t>(record_number - 1)];
+    if (sql_state != nullptr) {
+        std::memcpy(sql_state, diagnostic.state.data(),
+                    std::min<std::size_t>(5, diagnostic.state.size()));
+        sql_state[5] = '\0';
+    }
+    if (native_error != nullptr) {
+        *native_error = diagnostic.native_error;
+    }
+    if (diagnostic.message.size() > static_cast<std::size_t>(
+            std::numeric_limits<SQLSMALLINT>::max())) {
+        return fail(const_cast<HandleBase*>(base), "Diagnostic message is too long", "HY000");
+    }
+    if (text_length != nullptr) {
+        *text_length = static_cast<SQLSMALLINT>(diagnostic.message.size());
+    }
+    if (buffer_length < 0) {
+        return fail(const_cast<HandleBase*>(base), "Invalid diagnostic buffer length", "HY090");
+    }
+    if (message_text == nullptr || buffer_length == 0) {
+        return SQL_SUCCESS;
+    }
+    const auto copy_count = std::min<std::size_t>(
+        diagnostic.message.size(), static_cast<std::size_t>(buffer_length - 1));
+    std::memcpy(message_text, diagnostic.message.data(), copy_count);
+    message_text[copy_count] = '\0';
+    return copy_count < diagnostic.message.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLGetDiagRecW(SQLSMALLINT handle_type, SQLHANDLE handle,
+                                 SQLSMALLINT record_number, SQLWCHAR* sql_state,
+                                 SQLINTEGER* native_error, SQLWCHAR* message_text,
+                                 SQLSMALLINT buffer_length, SQLSMALLINT* text_length) {
+    if (handle == SQL_NULL_HANDLE ||
+        static_cast<HandleBase*>(handle)->type != handle_type) {
+        return SQL_INVALID_HANDLE;
+    }
+    const auto* base = static_cast<HandleBase*>(handle);
+    if (record_number < 1 ||
+        static_cast<std::size_t>(record_number) > base->diagnostics.size()) {
+        return SQL_NO_DATA;
+    }
+    const auto& diagnostic = base->diagnostics[static_cast<std::size_t>(record_number - 1)];
+    if (sql_state != nullptr) {
+        for (std::size_t index = 0; index < 5; ++index) {
+            sql_state[index] = static_cast<SQLWCHAR>(index < diagnostic.state.size()
+                ? diagnostic.state[index] : '\0');
+        }
+        sql_state[5] = 0;
+    }
+    if (native_error != nullptr) {
+        *native_error = diagnostic.native_error;
+    }
+    return write_wide_string(const_cast<HandleBase*>(base), diagnostic.message,
+                             message_text, buffer_length, text_length);
 }
 
 SQLRETURN SQL_API SQLGetDiagField(SQLSMALLINT handle_type, SQLHANDLE handle,
@@ -3859,6 +5376,45 @@ SQLRETURN SQL_API SQLGetDiagField(SQLSMALLINT handle_type, SQLHANDLE handle,
     return copy_count < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 
+SQLRETURN SQL_API SQLGetDiagFieldW(SQLSMALLINT handle_type, SQLHANDLE handle,
+                                   SQLSMALLINT record_number, SQLSMALLINT diagnostic_id,
+                                   SQLPOINTER diagnostic_info, SQLSMALLINT buffer_length,
+                                   SQLSMALLINT* string_length) {
+    if (handle == SQL_NULL_HANDLE ||
+        static_cast<HandleBase*>(handle)->type != handle_type) {
+        return SQL_INVALID_HANDLE;
+    }
+    const auto* base = static_cast<HandleBase*>(handle);
+    if (diagnostic_id == SQL_DIAG_NUMBER) {
+        if (diagnostic_info == nullptr) {
+            return SQL_ERROR;
+        }
+        *static_cast<SQLINTEGER*>(diagnostic_info) =
+            static_cast<SQLINTEGER>(base->diagnostics.size());
+        return SQL_SUCCESS;
+    }
+    if (record_number < 1 ||
+        static_cast<std::size_t>(record_number) > base->diagnostics.size()) {
+        return SQL_NO_DATA;
+    }
+    const auto& diagnostic = base->diagnostics[static_cast<std::size_t>(record_number - 1)];
+    if (diagnostic_id == SQL_DIAG_NATIVE) {
+        if (diagnostic_info == nullptr) {
+            return SQL_ERROR;
+        }
+        *static_cast<SQLINTEGER*>(diagnostic_info) = diagnostic.native_error;
+        return SQL_SUCCESS;
+    }
+    const std::string& text = diagnostic_id == SQL_DIAG_SQLSTATE
+        ? diagnostic.state : diagnostic.message;
+    if (diagnostic_id != SQL_DIAG_SQLSTATE && diagnostic_id != SQL_DIAG_MESSAGE_TEXT) {
+        return SQL_ERROR;
+    }
+    return write_wide_string(const_cast<HandleBase*>(base), text,
+                             static_cast<SQLWCHAR*>(diagnostic_info),
+                             buffer_length, string_length);
+}
+
 SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
                                   SQLUSMALLINT* supported) {
     if (connection == SQL_NULL_HDBC ||
@@ -3877,8 +5433,11 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLCANCEL,
         SQL_API_SQLPARAMDATA, SQL_API_SQLPUTDATA,
         SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
-        SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL, SQL_API_SQLROWCOUNT,
-        SQL_API_SQLFREESTMT, SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
+        SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL,
+        SQL_API_SQLROWCOUNT, SQL_API_SQLFREESTMT,
+        SQL_API_SQLTABLES, SQL_API_SQLCOLUMNS, SQL_API_SQLPRIMARYKEYS,
+        SQL_API_SQLFOREIGNKEYS, SQL_API_SQLGETTYPEINFO, SQL_API_SQLCOLATTRIBUTE,
+        SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
         SQL_API_SQLGETFUNCTIONS};
     if (function_id == SQL_API_ALL_FUNCTIONS) {
         constexpr SQLUSMALLINT function_count = 100;

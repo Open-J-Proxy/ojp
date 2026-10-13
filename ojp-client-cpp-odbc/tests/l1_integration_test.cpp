@@ -115,6 +115,13 @@ void require_success(SQLRETURN result, const std::string& operation,
                                   ? "unrecognized connection-string diagnostic"
                                   : known->second)
                           << '\n';
+            } else if (std::string(reinterpret_cast<const char*>(state)) == "HY090") {
+                const std::string diagnostic(reinterpret_cast<const char*>(detail));
+                std::cerr << "HY090 diagnostic category: "
+                          << (diagnostic == "Invalid string or buffer length"
+                                  ? "invalid string or buffer length"
+                                  : "unrecognized string-length diagnostic")
+                          << '\n';
             }
         }
     }
@@ -247,6 +254,11 @@ int run_connection(const DatabaseConfig& config,
         auto wide_connect_options = to_sql_wide(connect_options);
         auto wide_user = to_sql_wide(config.user);
         auto wide_password = to_sql_wide(config.password);
+        test_stage = "wide SQLConnectW (SQLWCHAR bytes " +
+                     std::to_string(sizeof(SQLWCHAR)) + ", lengths " +
+                     std::to_string(wide_connect_options.size() - 1) + "/" +
+                     std::to_string(wide_user.size() - 1) + "/" +
+                     std::to_string(wide_password.size() - 1) + ")";
         require_success(
             SQLConnectW(wide_connection, wide_connect_options.data(),
                         static_cast<SQLSMALLINT>(wide_connect_options.size() - 1),

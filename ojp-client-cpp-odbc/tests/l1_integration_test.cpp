@@ -61,6 +61,15 @@ std::vector<SQLWCHAR> to_sql_wide(const std::string& ascii) {
     return to_sql_wide(wide);
 }
 
+bool equal_ascii_case_insensitive(std::string first, std::string second) {
+    const auto uppercase = [](unsigned char character) {
+        return static_cast<char>(std::toupper(character));
+    };
+    std::transform(first.begin(), first.end(), first.begin(), uppercase);
+    std::transform(second.begin(), second.end(), second.begin(), uppercase);
+    return first == second;
+}
+
 void require_success(SQLRETURN result, const std::string& operation,
                      SQLSMALLINT handle_type = SQL_HANDLE_ENV, SQLHANDLE handle = SQL_NULL_HANDLE) {
     if (SQL_SUCCEEDED(result)) {
@@ -148,6 +157,17 @@ int run_connection(const DatabaseConfig& config,
     SQLHSTMT wide_statement = SQL_NULL_HSTMT;
     std::string table = "ojp_cpp_l1_" + random_suffix();
     const std::string child_table = table + "_child";
+    std::string metadata_table = table;
+    std::string metadata_child_table = child_table;
+    if (config.url.rfind("jdbc:h2:", 0) == 0) {
+        const auto uppercase = [](unsigned char character) {
+            return static_cast<char>(std::toupper(character));
+        };
+        std::transform(metadata_table.begin(), metadata_table.end(), metadata_table.begin(),
+                       uppercase);
+        std::transform(metadata_child_table.begin(), metadata_child_table.end(),
+                       metadata_child_table.begin(), uppercase);
+    }
     bool table_created = false;
     bool child_table_created = false;
     bool wide_connected = false;
@@ -333,7 +353,7 @@ int run_connection(const DatabaseConfig& config,
 
         SQLCHAR table_type[] = "TABLE";
         require_success(SQLTables(statement, nullptr, 0, nullptr, 0,
-                                  reinterpret_cast<SQLCHAR*>(table.data()), SQL_NTS,
+                                  reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS,
                                   table_type, SQL_NTS),
                         "SQLTables", SQL_HANDLE_STMT, statement);
         SQLSMALLINT metadata_column_count = 0;
@@ -348,14 +368,40 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLGetData(statement, 3, SQL_C_CHAR, metadata_text,
                                    sizeof(metadata_text), &metadata_text_length),
                         "SQLGetData(SQLTables table name)", SQL_HANDLE_STMT, statement);
-        if (std::string(reinterpret_cast<const char*>(metadata_text)) != table) {
+        if (!equal_ascii_case_insensitive(
+                std::string(reinterpret_cast<const char*>(metadata_text)), table)) {
             throw std::runtime_error("SQLTables returned an unexpected table name");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLTables)",
                         SQL_HANDLE_STMT, statement);
 
+        auto wide_table_name = to_sql_wide(metadata_table);
+        auto wide_table_type = to_sql_wide(u"TABLE");
+        require_success(SQLTablesW(wide_statement, nullptr, 0, nullptr, 0,
+                                   wide_table_name.data(), SQL_NTS,
+                                   wide_table_type.data(), SQL_NTS),
+                        "SQLTablesW", SQL_HANDLE_STMT, wide_statement);
+        if (SQLFetch(wide_statement) != SQL_SUCCESS) {
+            throw std::runtime_error("SQLTablesW did not return the created table");
+        }
+        std::vector<SQLWCHAR> wide_catalog_name(metadata_table.size() + 1, 0);
+        SQLLEN wide_catalog_name_length = 0;
+        require_success(SQLGetData(wide_statement, 3, SQL_C_WCHAR, wide_catalog_name.data(),
+                                   static_cast<SQLLEN>(
+                                       wide_catalog_name.size() * sizeof(SQLWCHAR)),
+                                   &wide_catalog_name_length),
+                        "SQLGetData(SQLTablesW)", SQL_HANDLE_STMT, wide_statement);
+        if (wide_catalog_name_length !=
+                static_cast<SQLLEN>(metadata_table.size() * sizeof(SQLWCHAR)) ||
+            !std::equal(wide_table_name.begin(), wide_table_name.end() - 1,
+                        wide_catalog_name.begin())) {
+            throw std::runtime_error("SQLTablesW returned an unexpected table name");
+        }
+        require_success(SQLFreeStmt(wide_statement, SQL_CLOSE), "SQLFreeStmt(SQLTablesW)",
+                        SQL_HANDLE_STMT, wide_statement);
+
         require_success(SQLColumns(statement, nullptr, 0, nullptr, 0,
-                                   reinterpret_cast<SQLCHAR*>(table.data()), SQL_NTS,
+                                   reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS,
                                    nullptr, 0),
                         "SQLColumns", SQL_HANDLE_STMT, statement);
         require_success(SQLNumResultCols(statement, &metadata_column_count),
@@ -367,14 +413,15 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLGetData(statement, 4, SQL_C_CHAR, metadata_text,
                                    sizeof(metadata_text), &metadata_text_length),
                         "SQLGetData(SQLColumns column name)", SQL_HANDLE_STMT, statement);
-        if (std::string(reinterpret_cast<const char*>(metadata_text)) != "id") {
+        if (!equal_ascii_case_insensitive(
+                std::string(reinterpret_cast<const char*>(metadata_text)), "id")) {
             throw std::runtime_error("SQLColumns did not identify the primary key column");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLColumns)",
                         SQL_HANDLE_STMT, statement);
 
         require_success(SQLPrimaryKeys(statement, nullptr, 0, nullptr, 0,
-                                       reinterpret_cast<SQLCHAR*>(table.data()), SQL_NTS),
+                                       reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS),
                         "SQLPrimaryKeys", SQL_HANDLE_STMT, statement);
         if (SQLFetch(statement) != SQL_SUCCESS) {
             throw std::runtime_error("SQLPrimaryKeys did not return the primary key");
@@ -383,7 +430,8 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLGetData(statement, 4, SQL_C_CHAR, metadata_text,
                                    sizeof(metadata_text), &metadata_text_length),
                         "SQLGetData(SQLPrimaryKeys column name)", SQL_HANDLE_STMT, statement);
-        if (std::string(reinterpret_cast<const char*>(metadata_text)) != "id") {
+        if (!equal_ascii_case_insensitive(
+                std::string(reinterpret_cast<const char*>(metadata_text)), "id")) {
             throw std::runtime_error("SQLPrimaryKeys returned an unexpected key column");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLPrimaryKeys)",
@@ -392,7 +440,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLForeignKeys(statement, nullptr, 0, nullptr, 0, nullptr, 0,
                                        nullptr, 0, nullptr, 0,
                                        reinterpret_cast<SQLCHAR*>(
-                                           const_cast<char*>(child_table.data())), SQL_NTS),
+                                           metadata_child_table.data()), SQL_NTS),
                         "SQLForeignKeys", SQL_HANDLE_STMT, statement);
         if (SQLFetch(statement) != SQL_SUCCESS) {
             throw std::runtime_error("SQLForeignKeys did not return the declared foreign key");
@@ -401,7 +449,8 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLGetData(statement, 8, SQL_C_CHAR, metadata_text,
                                    sizeof(metadata_text), &metadata_text_length),
                         "SQLGetData(SQLForeignKeys column name)", SQL_HANDLE_STMT, statement);
-        if (std::string(reinterpret_cast<const char*>(metadata_text)) != "parent_id") {
+        if (!equal_ascii_case_insensitive(
+                std::string(reinterpret_cast<const char*>(metadata_text)), "parent_id")) {
             throw std::runtime_error("SQLForeignKeys returned an unexpected foreign key column");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLForeignKeys)",

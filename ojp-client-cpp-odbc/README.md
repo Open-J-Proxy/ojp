@@ -1,7 +1,7 @@
 # OJP C++ ODBC Client
 
-This module provides an ANSI ODBC driver for applications that access OJP
-servers from C++.
+This module provides an ANSI and Unicode ODBC 3.x driver for applications that
+access OJP servers from C++.
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
 
@@ -341,13 +341,96 @@ standard Python, ADO.NET, or FireDAC local transaction APIs.
 
 ### Using other languages through ODBC
 
-The driver implements advanced OJP capabilities, but it is **not a complete
-ODBC API implementation**. It exports ANSI functions, not the `...W` Unicode
-entry points. `SQLConnect`/DSN-only connections, catalog functions such as
-`SQLTables`/`SQLColumns`, `SQLColAttribute`, `SQLGetStmtAttr`, and
-`SQLMoreResults` are not implemented; `SQLGetInfo` covers only a subset.
-Driver Manager ANSI/Unicode conversion does not establish wrapper compatibility.
-Some wrappers request unsupported metadata even for a simple query.
+The driver implements the common connection, statement, transaction, result,
+and metadata paths, but is **not a complete ODBC API implementation**. The
+supported functions include `SQLDriverConnect[W]`, `SQLConnect[W]`,
+`SQLExecDirect[W]`, `SQLPrepare[W]`, `SQLBindParameter`, `SQLBindCol`,
+`SQLGetData`, `SQLTables[W]`, `SQLColumns[W]`, `SQLPrimaryKeys[W]`,
+`SQLForeignKeys[W]`, `SQLGetTypeInfo`, `SQLDescribeCol[W]`,
+`SQLColAttribute[W]`, `SQLGetInfo[W]`, `SQLGetFunctions`, and
+`SQLGetDiagRec[W]`. The W entry points share their ODBC function IDs with the
+ANSI forms in `SQLGetFunctions`.
+
+#### Unicode encoding and lengths
+
+ANSI `SQLCHAR` text is treated as UTF-8; the driver does not convert from the
+process locale or Windows code page. W entry points convert between UTF-8 and
+the platform's `SQLWCHAR` representation (UTF-16 code units where
+`sizeof(SQLWCHAR) == 2`, otherwise UTF-32 code units). Invalid wide sequences
+fail with SQLSTATE `22018`. Use `SQL_C_WCHAR` with `SQL_WCHAR`, `SQL_WVARCHAR`,
+or `SQL_WLONGVARCHAR` for Unicode parameters and results.
+
+String lengths passed to W connection, statement, and catalog functions count
+`SQLWCHAR` units; `SQL_NTS` is supported. `SQLBindParameter`, `SQLBindCol`, and
+`SQLGetData` buffer lengths and indicators for `SQL_C_WCHAR` are byte counts.
+Output buffers are terminated when they have room for a terminator, and
+truncation returns `SQL_SUCCESS_WITH_INFO` with SQLSTATE `01004`. Applications
+should size wide buffers using `sizeof(SQLWCHAR)`, not `sizeof(wchar_t)`.
+
+Example prepared Unicode query (the input buffer includes a trailing zero, but
+the indicator reports only the payload bytes):
+
+```cpp
+SQLWCHAR sql[] = { 'S','E','L','E','C','T',' ','?','\0' };
+SQLWCHAR text[] = { 0x6771, 0x4eac, 0 };
+SQLLEN text_bytes = 2 * sizeof(SQLWCHAR);
+SQLPrepareW(statement, sql, SQL_NTS);
+SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+                 32, 0, text, sizeof(text), &text_bytes);
+SQLExecute(statement);
+```
+
+For a Unicode connection, build the same `DRIVER`, `SERVER`, `DATABASE`, `UID`,
+and `PWD` fields in a `SQLWCHAR` buffer and pass it to `SQLDriverConnectW`
+(connection-string syntax is unchanged). The earlier ANSI example shows the
+corresponding `SQLDriverConnect` path.
+
+Metadata and transaction calls use the regular ODBC statement/connection
+handles:
+
+```cpp
+SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
+                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+SQLCHAR table_type[] = "TABLE";
+SQLTables(statement, nullptr, 0, nullptr, 0, table_name, SQL_NTS,
+          table_type, SQL_NTS);
+while (SQLFetch(statement) == SQL_SUCCESS) {
+    // Read TABLE_NAME with SQLGetData(statement, 3, SQL_C_CHAR, ...).
+}
+SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
+```
+
+Use `SQLDriverConnect` or `SQLDriverConnectW` for normal DSN-less connections.
+There is no DSN lookup/setup dialog. `SQLConnect`/`SQLConnectW` are available
+for an OJP options string (`SERVER=...;DATABASE=...`) passed as the server name;
+they do not resolve a conventional DSN.
+
+#### Metadata and known limitations
+
+`SQLTables`, `SQLColumns`, `SQLPrimaryKeys`, `SQLForeignKeys`, and
+`SQLGetTypeInfo` call the connected JDBC driver's `DatabaseMetaData` through
+OJP Server, so catalog discovery does not embed database-specific SQL. Their
+result sets can be fetched with the normal statement APIs. `SQLGetInfo` reports
+the backend product/transaction information and a supported subset of ODBC
+capabilities; unrecognized information types return `HYC00`.
+
+`SQLDescribeCol` and `SQLColAttribute` can report the result label and infer a
+limited type/size from returned values. The current gRPC query result does not
+carry the complete JDBC `ResultSetMetaData`, so these functions cannot promise
+the database's declared precision, scale, nullability, or base-table identity
+for arbitrary query expressions. Use `SQLColumns` for authoritative declared
+table-column metadata. Catalog functions not listed above (including
+`SQLStatistics`, `SQLProcedures`, `SQLSpecialColumns`, and privilege catalogs),
+`SQLGetStmtAttr`, and `SQLMoreResults` remain unsupported. A Driver Manager or
+language wrapper may require one of these functions; verify its exact calls
+with the target Driver Manager and database.
+
+The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
+paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,
+and SQL Server fixtures. Tests require a running OJP Server and database;
+disabled database suites skip unless their existing `OJP_TEST_*` variables are
+enabled. Driver Manager ANSI/Unicode conversion alone does not establish
+wrapper compatibility.
 
 | Application API | Bridge | Status / guide |
 |---|---|---|

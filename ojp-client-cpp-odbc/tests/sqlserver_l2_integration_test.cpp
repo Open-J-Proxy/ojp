@@ -184,7 +184,8 @@ SQLBIGINT current_identity(SQLHSTMT statement, const std::string& table) {
 }
 
 // Mirrors typesCoverageTestSuccessful, typesPartialSupportTest, and testSqlServerNullValues.
-void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
+void verify_multiple_types(SQLHSTMT statement, const std::string& table, std::string& stage) {
+    stage = "create typed-columns table";
     execute_direct(statement, "CREATE TABLE " + table + " (id INT IDENTITY(1,1) PRIMARY KEY,"
         " val_int INT NOT NULL, val_varchar NVARCHAR(50), val_double_precision FLOAT,"
         " val_bigint BIGINT, val_tinyint TINYINT, val_smallint SMALLINT, val_boolean BIT,"
@@ -193,6 +194,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
         " val_instant DATETIME2, val_offsetdatetime DATETIMEOFFSET,"
         " val_offsettime DATETIMEOFFSET)");
 
+    stage = "insert SQL Server standard types";
     prepare(statement, "INSERT INTO " + table + " (val_int, val_varchar, val_double_precision,"
         " val_bigint, val_tinyint, val_smallint, val_boolean, val_decimal, val_float, val_byte,"
         " val_binary, val_date, val_time, val_timestamp, val_instant, val_offsetdatetime,"
@@ -273,6 +275,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
 
     // Partial-support types: Instant as a UTC DATETIME2, and OffsetDateTime/OffsetTime as
     // DATETIMEOFFSET text because ODBC has no portable timezone-aware C type.
+    stage = "update timezone-related values";
     prepare(statement, "UPDATE " + table + " SET val_instant = ?, val_offsetdatetime = ?,"
         " val_offsettime = ? WHERE id = ?");
     SQL_TIMESTAMP_STRUCT instant_value{2024, 12, 1, 10, 10, 10, 0};
@@ -295,6 +298,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect_one_row_affected(statement, "prepared UPDATE");
     close_and_reset(statement);
 
+    stage = "select and validate typed values";
     prepare(statement, "SELECT id, val_int, val_varchar, val_double_precision, val_bigint,"
         " val_tinyint, val_smallint, val_boolean, val_decimal,"
         " val_float, val_byte, val_binary, val_date, val_time, val_timestamp, val_instant,"
@@ -345,6 +349,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect_text(statement, 19, "1900-01-01 21:20:30");
     close_and_reset(statement);
 
+    stage = "insert row containing NULL values";
     execute_direct(statement, "INSERT INTO " + table + " (val_int, val_varchar)"
         " VALUES (2, 'Test')");
     expect_one_row_affected(statement, "direct INSERT");
@@ -372,6 +377,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect(SQLFetch(statement) == SQL_NO_DATA, "NULL row query returned too many rows");
     close_and_reset(statement);
 
+    stage = "fetch SQL Server VARBINARY rows";
     // VARBINARY columns make the server stream SQL Server rows one at a time.
     execute_direct(statement, "SELECT val_int, val_byte FROM " + table + " ORDER BY id");
     require_success(SQLFetch(statement), "SQLFetch(binary row 1)", SQL_HANDLE_STMT, statement);
@@ -386,7 +392,9 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
 }
 
 // Mirrors testSqlServerSpecificTypes and testSqlServerLargeTypes.
-void verify_specific_and_large_types(SQLHSTMT statement, const std::string& table) {
+void verify_specific_and_large_types(SQLHSTMT statement, const std::string& table,
+                                     std::string& stage) {
+    stage = "create SQL Server-specific types table";
     execute_direct(statement, "CREATE TABLE " + table + " (id INT IDENTITY(1,1) PRIMARY KEY,"
         " ntext_col NTEXT, text_col TEXT, image_col IMAGE, xml_col XML, money_col MONEY,"
         " smallmoney_col SMALLMONEY, uniqueidentifier_col UNIQUEIDENTIFIER,"
@@ -411,6 +419,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
         " smallmoney_col, uniqueidentifier_col, datetimeoffset_col, datetime2_col,"
         " smalldatetime_col, nvarchar_max, varchar_max, varbinary_max)"
         " VALUES (?, ?, ?, ?, NEWID(), ?, ?, ?, ?, ?, ?)";
+    stage = "insert SQL Server-specific and large values";
     prepare(statement, insert);
     std::string ntext_value = "NTEXT content with Unicode: \xE4\xB8\xAD\xE6\x96\x87 "
         "\xF0\x9F\x9A\x80";
@@ -458,6 +467,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     close_and_reset(statement);
     SQLBIGINT generated_id = current_identity(statement, table);
 
+    stage = "select SQL Server-specific and large values";
     prepare(statement, "SELECT id, ntext_col, text_col,"
         " money_col, smallmoney_col, uniqueidentifier_col,"
         " datetimeoffset_col, datetime2_col, smalldatetime_col, nvarchar_max, varchar_max,"
@@ -506,6 +516,7 @@ int run_connection(const DatabaseConfig& config,
     const std::string suffix = random_suffix();
     const std::vector<std::string> tables = {
         "ojp_cpp_mssql_l2_types_" + suffix, "ojp_cpp_mssql_l2_specific_" + suffix};
+    std::string stage = "allocate ODBC handles";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -522,6 +533,7 @@ int run_connection(const DatabaseConfig& config,
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
             ";PWD=" + brace_value(config.password) + ";";
+        stage = "connect to SQL Server through OJP";
         require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string),
                                          SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
@@ -529,9 +541,10 @@ int run_connection(const DatabaseConfig& config,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
-        verify_multiple_types(statement, tables[0]);
-        verify_specific_and_large_types(statement, tables[1]);
+        verify_multiple_types(statement, tables[0], stage);
+        verify_specific_and_large_types(statement, tables[1], stage);
 
+        stage = "drop test tables";
         for (const auto& table : tables) {
             execute_direct(statement, "DROP TABLE IF EXISTS " + table);
         }
@@ -545,6 +558,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeHandle(SQL_HANDLE_ENV, environment), "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        std::cerr << "SQL Server L2 failed during stage: " << stage << '\n' << std::flush;
         if (statement != SQL_NULL_HSTMT) {
             SQLFreeStmt(statement, SQL_CLOSE);
             SQLFreeStmt(statement, SQL_RESET_PARAMS);

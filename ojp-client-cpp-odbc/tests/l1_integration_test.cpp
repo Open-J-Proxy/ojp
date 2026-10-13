@@ -438,20 +438,33 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(wide_statement, SQL_CLOSE), "SQLFreeStmt(SQLTablesW)",
                         SQL_HANDLE_STMT, wide_statement);
 
-        test_stage = "SQLColumns";
-        require_success(SQLColumns(statement, nullptr, 0, nullptr, 0,
-                                   reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS,
-                                   nullptr, 0),
+        test_stage = "SQLColumns API call";
+        const SQLRETURN columns_result = SQLColumns(
+            statement, nullptr, 0, nullptr, 0,
+            reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS, nullptr, 0);
+        require_success(columns_result,
                         "SQLColumns", SQL_HANDLE_STMT, statement);
+        test_stage = "SQLColumns result shape";
         require_success(SQLNumResultCols(statement, &metadata_column_count),
                         "SQLNumResultCols(SQLColumns)", SQL_HANDLE_STMT, statement);
-        if (metadata_column_count != 24 || SQLFetch(statement) != SQL_SUCCESS) {
+        if (metadata_column_count != 24) {
+            std::cerr << "SQLColumns returned " << metadata_column_count
+                      << " result columns; expected 24\n";
+            throw std::runtime_error("SQLColumns returned an unexpected result column count");
+        }
+        test_stage = "SQLColumns first row fetch";
+        const SQLRETURN columns_fetch_result = SQLFetch(statement);
+        if (columns_fetch_result != SQL_SUCCESS) {
+            std::cerr << "SQLColumns first fetch returned ODBC code "
+                      << columns_fetch_result << '\n';
             throw std::runtime_error("SQLColumns did not return JDBC column metadata");
         }
+        test_stage = "SQLColumns column-name retrieval";
         std::memset(metadata_text, 0, sizeof(metadata_text));
         require_success(SQLGetData(statement, 4, SQL_C_CHAR, metadata_text,
                                    sizeof(metadata_text), &metadata_text_length),
                         "SQLGetData(SQLColumns column name)", SQL_HANDLE_STMT, statement);
+        test_stage = "SQLColumns column-name validation";
         if (!equal_ascii_case_insensitive(
                 std::string(reinterpret_cast<const char*>(metadata_text)), "id")) {
             throw std::runtime_error("SQLColumns did not identify the primary key column");

@@ -247,9 +247,12 @@ int run_connection(const DatabaseConfig& config,
         auto wide_connect_options = to_sql_wide(connect_options);
         auto wide_user = to_sql_wide(config.user);
         auto wide_password = to_sql_wide(config.password);
-        require_success(SQLConnectW(wide_connection, wide_connect_options.data(), SQL_NTS,
-                                    wide_user.data(), SQL_NTS, wide_password.data(), SQL_NTS),
-                        "SQLConnectW", SQL_HANDLE_DBC, wide_connection);
+        require_success(
+            SQLConnectW(wide_connection, wide_connect_options.data(),
+                        static_cast<SQLSMALLINT>(wide_connect_options.size() - 1),
+                        wide_user.data(), static_cast<SQLSMALLINT>(wide_user.size() - 1),
+                        wide_password.data(), static_cast<SQLSMALLINT>(wide_password.size() - 1)),
+            "SQLConnectW", SQL_HANDLE_DBC, wide_connection);
         wide_connected = true;
         test_stage = "allocate wide statement";
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, wide_connection,

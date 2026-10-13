@@ -171,6 +171,7 @@ int run_connection(const DatabaseConfig& config,
     bool table_created = false;
     bool child_table_created = false;
     bool wide_connected = false;
+    const char* test_stage = "connection setup";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -224,6 +225,7 @@ int run_connection(const DatabaseConfig& config,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
+        test_stage = "readiness query";
         execute_direct(statement, "SELECT 1");
         require_success(SQLFetch(statement), "SQLFetch(readiness)", SQL_HANDLE_STMT, statement);
         SQLINTEGER readiness = 0;
@@ -237,6 +239,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(readiness)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "Unicode parameter and result round trip";
         const std::u16string unicode_text = u"A\U0001f642B";
         const auto unicode_parameter = to_sql_wide(unicode_text);
         SQLLEN unicode_length = static_cast<SQLLEN>(
@@ -295,6 +298,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(wide_statement, SQL_CLOSE), "SQLFreeStmt(Unicode get data)",
                         SQL_HANDLE_STMT, wide_statement);
 
+        test_stage = "wide direct SQL execution";
         const auto direct_wide_query = to_sql_wide(u"SELECT 2 /* Unicode direct */");
         require_success(SQLExecDirectW(wide_statement,
                                        const_cast<SQLWCHAR*>(direct_wide_query.data()), SQL_NTS),
@@ -312,6 +316,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(wide_statement, SQL_CLOSE), "SQLFreeStmt(SQLExecDirectW)",
                         SQL_HANDLE_STMT, wide_statement);
 
+        test_stage = "Unicode diagnostics and wide connection info";
         SQLWCHAR invalid_sql[] = {static_cast<SQLWCHAR>(0xd800), 0};
         if (SQLExecDirectW(wide_statement, invalid_sql, SQL_NTS) != SQL_ERROR) {
             throw std::runtime_error("invalid SQLWCHAR surrogate did not return SQL_ERROR");
@@ -342,6 +347,7 @@ int run_connection(const DatabaseConfig& config,
             throw std::runtime_error("SQLGetInfoW returned an empty DBMS name");
         }
 
+        test_stage = "create metadata test tables";
         execute_direct(statement, "CREATE TABLE " + table +
                                   " (id INT PRIMARY KEY, name VARCHAR(100) NOT NULL)");
         table_created = true;
@@ -351,6 +357,7 @@ int run_connection(const DatabaseConfig& config,
                                   table + "(id))");
         child_table_created = true;
 
+        test_stage = "SQLTables";
         SQLCHAR table_type[] = "TABLE";
         require_success(SQLTables(statement, nullptr, 0, nullptr, 0,
                                   reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS,
@@ -375,6 +382,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLTables)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "SQLTablesW";
         auto wide_table_name = to_sql_wide(metadata_table);
         auto wide_table_type = to_sql_wide(u"TABLE");
         require_success(SQLTablesW(wide_statement, nullptr, 0, nullptr, 0,
@@ -400,6 +408,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(wide_statement, SQL_CLOSE), "SQLFreeStmt(SQLTablesW)",
                         SQL_HANDLE_STMT, wide_statement);
 
+        test_stage = "SQLColumns";
         require_success(SQLColumns(statement, nullptr, 0, nullptr, 0,
                                    reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS,
                                    nullptr, 0),
@@ -420,6 +429,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLColumns)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "SQLPrimaryKeys";
         require_success(SQLPrimaryKeys(statement, nullptr, 0, nullptr, 0,
                                        reinterpret_cast<SQLCHAR*>(metadata_table.data()), SQL_NTS),
                         "SQLPrimaryKeys", SQL_HANDLE_STMT, statement);
@@ -437,6 +447,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLPrimaryKeys)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "SQLForeignKeys";
         require_success(SQLForeignKeys(statement, nullptr, 0, nullptr, 0, nullptr, 0,
                                        nullptr, 0, nullptr, 0,
                                        reinterpret_cast<SQLCHAR*>(
@@ -456,6 +467,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLForeignKeys)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "SQLGetTypeInfo all types";
         require_success(SQLGetTypeInfo(statement, SQL_ALL_TYPES), "SQLGetTypeInfo",
                         SQL_HANDLE_STMT, statement);
         if (SQLFetch(statement) != SQL_SUCCESS) {
@@ -463,6 +475,7 @@ int run_connection(const DatabaseConfig& config,
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLGetTypeInfo)",
                         SQL_HANDLE_STMT, statement);
+        test_stage = "SQLGetTypeInfo SQL_INTEGER filter";
         require_success(SQLGetTypeInfo(statement, SQL_INTEGER), "SQLGetTypeInfo(SQL_INTEGER)",
                         SQL_HANDLE_STMT, statement);
         if (SQLFetch(statement) != SQL_SUCCESS) {
@@ -481,6 +494,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLGetTypeInfo filtered)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "prepared CRUD";
         SQLINTEGER row_id = 1;
         SQLLEN id_length = sizeof(row_id);
         char name[] = "before";
@@ -618,6 +632,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(empty select)",
                         SQL_HANDLE_STMT, statement);
 
+        test_stage = "SQLSTATE error diagnostics";
         assert_sql_error(statement, "THIS IS NOT VALID SQL", expected_sql_state.c_str());
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(invalid SQL)",
                         SQL_HANDLE_STMT, statement);
@@ -646,6 +661,8 @@ int run_connection(const DatabaseConfig& config,
                         "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        std::cerr << database << " L1 failed during stage: " << test_stage << '\n'
+                  << std::flush;
         if (child_table_created && statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + child_table;
             SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(

@@ -208,7 +208,7 @@ int run_connection(const DatabaseConfig& config,
     bool table_created = false;
     bool child_table_created = false;
     bool wide_connected = false;
-    const char* test_stage = "allocate environment";
+    std::string test_stage = "allocate environment";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),

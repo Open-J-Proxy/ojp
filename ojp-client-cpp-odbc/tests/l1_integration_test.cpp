@@ -72,8 +72,7 @@ bool equal_ascii_case_insensitive(std::string first, std::string second) {
 }
 
 void require_success(SQLRETURN result, const std::string& operation,
-                     SQLSMALLINT handle_type = SQL_HANDLE_ENV, SQLHANDLE handle = SQL_NULL_HANDLE,
-                     const std::vector<std::string>& redacted_values = {}) {
+                     SQLSMALLINT handle_type = SQL_HANDLE_ENV, SQLHANDLE handle = SQL_NULL_HANDLE) {
     if (SQL_SUCCEEDED(result)) {
         return;
     }
@@ -116,27 +115,6 @@ void require_success(SQLRETURN result, const std::string& operation,
                                   ? "unrecognized connection-string diagnostic"
                                   : known->second)
                           << '\n';
-            } else if (std::string(reinterpret_cast<const char*>(state)) == "HY090") {
-                std::string diagnostic(reinterpret_cast<const char*>(detail));
-                std::cerr << "HY090 diagnostic category: "
-                          << (diagnostic == "Invalid string or buffer length"
-                                  ? "invalid string or buffer length"
-                                  : "unrecognized string-length diagnostic")
-                          << '\n';
-                if (!redacted_values.empty()) {
-                    for (const auto& value : redacted_values) {
-                        if (value.empty()) {
-                            continue;
-                        }
-                        std::size_t position = 0;
-                        while ((position = diagnostic.find(value, position)) !=
-                               std::string::npos) {
-                            diagnostic.replace(position, value.size(), "[redacted]");
-                            position += sizeof("[redacted]") - 1;
-                        }
-                    }
-                    std::cerr << "HY090 diagnostic (redacted): " << diagnostic << '\n';
-                }
             }
         }
     }
@@ -223,7 +201,7 @@ int run_connection(const DatabaseConfig& config,
     bool table_created = false;
     bool child_table_created = false;
     bool wide_connected = false;
-    std::string test_stage = "allocate environment";
+    const char* test_stage = "allocate environment";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -258,29 +236,6 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLDriverConnectW(wide_connection, nullptr, wide_connection_buffer.data(),
                                           SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnectW", SQL_HANDLE_DBC, wide_connection);
-        wide_connected = true;
-        test_stage = "disconnect after SQLDriverConnectW";
-        require_success(SQLDisconnect(wide_connection), "SQLDisconnect(wide)",
-                        SQL_HANDLE_DBC, wide_connection);
-        wide_connected = false;
-        test_stage = "wide SQLConnectW";
-        const std::string connect_options =
-            "SERVER=" + brace_value(endpoint) + ";DATABASE=" + brace_value(config.url);
-        auto wide_connect_options = to_sql_wide(connect_options);
-        auto wide_user = to_sql_wide(config.user);
-        auto wide_password = to_sql_wide(config.password);
-        test_stage = "wide SQLConnectW (SQLWCHAR bytes " +
-                     std::to_string(sizeof(SQLWCHAR)) + ", lengths " +
-                     std::to_string(wide_connect_options.size() - 1) + "/" +
-                     std::to_string(wide_user.size() - 1) + "/" +
-                     std::to_string(wide_password.size() - 1) + ")";
-        require_success(
-            SQLConnectW(wide_connection, wide_connect_options.data(),
-                        static_cast<SQLSMALLINT>(wide_connect_options.size() - 1),
-                        wide_user.data(), static_cast<SQLSMALLINT>(wide_user.size() - 1),
-                        wide_password.data(), static_cast<SQLSMALLINT>(wide_password.size() - 1)),
-            "SQLConnectW", SQL_HANDLE_DBC, wide_connection,
-            {connect_options, config.url, config.user, config.password, endpoint});
         wide_connected = true;
         test_stage = "allocate wide statement";
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, wide_connection,

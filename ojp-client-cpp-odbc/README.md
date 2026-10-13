@@ -400,10 +400,12 @@ while (SQLFetch(statement) == SQL_SUCCESS) {
 SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
 ```
 
-Use `SQLDriverConnect` or `SQLDriverConnectW` for normal DSN-less connections.
-There is no DSN lookup/setup dialog. `SQLConnect`/`SQLConnectW` are available
-for an OJP options string (`SERVER=...;DATABASE=...`) passed as the server name;
-they do not resolve a conventional DSN.
+Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections. The
+driver does not currently resolve conventional DSNs, so `SQLConnect` and
+`SQLConnectW` are not supported through a Driver Manager. In particular, do not
+pass a `SERVER=...;DATABASE=...` options string as the server name: the Driver
+Manager interprets that argument as a DSN name and may reject it before calling
+the driver.
 
 #### Metadata and known limitations
 

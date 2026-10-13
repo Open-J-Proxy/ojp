@@ -387,8 +387,15 @@ int run_connection(const DatabaseConfig& config,
         SQLSMALLINT metadata_column_count = 0;
         require_success(SQLNumResultCols(statement, &metadata_column_count),
                         "SQLNumResultCols(SQLTables)", SQL_HANDLE_STMT, statement);
-        if (metadata_column_count != 5 ||
-            SQLFetch(statement) != SQL_SUCCESS) {
+        if (metadata_column_count != 5) {
+            std::cerr << "SQLTables returned " << metadata_column_count
+                      << " result columns; expected 5\n";
+            throw std::runtime_error("SQLTables returned an unexpected result column count");
+        }
+        const SQLRETURN tables_fetch_result = SQLFetch(statement);
+        if (!SQL_SUCCEEDED(tables_fetch_result)) {
+            std::cerr << "SQLTables first fetch returned ODBC code "
+                      << tables_fetch_result << '\n';
             throw std::runtime_error("SQLTables did not return the created table");
         }
         SQLCHAR metadata_text[128] = {};
@@ -398,6 +405,8 @@ int run_connection(const DatabaseConfig& config,
                         "SQLGetData(SQLTables table name)", SQL_HANDLE_STMT, statement);
         if (!equal_ascii_case_insensitive(
                 std::string(reinterpret_cast<const char*>(metadata_text)), table)) {
+            std::cerr << "SQLTables fetched a row, but its table name did not match "
+                         "the created table\n";
             throw std::runtime_error("SQLTables returned an unexpected table name");
         }
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(SQLTables)",

@@ -194,8 +194,9 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLGetInfo(connection, SQL_TXN_CAPABLE, &capability, sizeof(capability),
                                    nullptr),
                         "SQLGetInfo(transaction capability)", SQL_HANDLE_DBC, connection);
-        test_stage = "validate transaction capability";
-        expect(capability == SQL_TC_DML, "MariaDB should report transactional DML support");
+        test_stage = "validate transaction capability value " + std::to_string(capability);
+        expect(capability == SQL_TC_DML || capability == SQL_TC_ALL,
+               "transaction capability must include DML support");
         SQLUSMALLINT supports_end_transaction = SQL_FALSE;
         test_stage = "read SQLEndTran support";
         require_success(SQLGetFunctions(connection, SQL_API_SQLENDTRAN, &supports_end_transaction),

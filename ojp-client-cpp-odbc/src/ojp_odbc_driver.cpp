@@ -2629,6 +2629,21 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
         return fail(statement, "JDBC metadata contains a result type unsupported by the ODBC client",
                     "HY000");
     }
+    if (method == "Tables") {
+        constexpr std::size_t ODBC_TABLES_COLUMN_COUNT = 5;
+        if (statement->columns.size() < ODBC_TABLES_COLUMN_COUNT ||
+            std::any_of(statement->rows.begin(), statement->rows.end(),
+                        [](const std::vector<Cell>& row) {
+                            return row.size() < ODBC_TABLES_COLUMN_COUNT;
+                        })) {
+            return fail(statement, "JDBC table metadata does not contain the required columns",
+                        "HY000");
+        }
+        statement->columns.resize(ODBC_TABLES_COLUMN_COUNT);
+        for (auto& row : statement->rows) {
+            row.resize(ODBC_TABLES_COLUMN_COUNT);
+        }
+    }
     statement->has_result_set = true;
     statement->row_count = static_cast<SQLLEN>(statement->rows.size());
     return SQL_SUCCESS;

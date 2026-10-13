@@ -80,7 +80,7 @@ Each target language has its own standard database-access API. When implementing
 | **PHP** | `PDO` (PHP Data Objects) | A lightweight, consistent interface for accessing various databases in PHP. |
 | **Dart** | `sql_conn` / `drift` | Uses specific community packages or the Drift library for structured data access. |
 
-> **Important operational rule:** Application-side connection pools **must be disabled** when using OJP. Double-pooling causes incorrect behavior and resource waste. This is the single most common misconfiguration.
+> **Important operational rule:** Neither an OJP client nor the application/framework integrating it may implement or enable a client-side connection pool. OJP's pool belongs on the server. Close each virtual connection promptly when its unit of work is complete; `close()` sends `terminateSession` so the server can release session resources and return any checked-out database connection to its pool for reuse. Do not keep a virtual connection open just to reuse it later.
 
 ---
 
@@ -93,6 +93,8 @@ Before diving into implementation details, understand these four foundational id
 An OJP "connection" is not a real database connection. The real JDBC connections are held exclusively in the server's connection pool. What the client holds is a `SessionInfo` — a lightweight proto message containing a `connHash` (a pool identifier), the `clientUUID`, and (once assigned) a `sessionUUID`.
 
 Opening a connection is cheap. For non-XA connections after the first one, the client can satisfy the `connect()` call entirely from a local cache: it looks up the `connHash` for the given database credentials and builds the `SessionInfo` locally without making any gRPC call. This means connection acquisition for cached credentials costs only a hash-map lookup.
+
+The `connHash` cache is metadata, not a connection pool: it MUST NOT retain or reuse virtual connections. When the application finishes a unit of work, it must close the virtual connection; the client calls `terminateSession` to notify the server to clean up session state and make server-side resources available again. Complete or roll back active transactions before closing.
 
 Multiple client connections sharing the same database credentials share the same server-side pool through the same `connHash`. The server distributes real JDBC connections across all these logical client connections.
 
@@ -1295,7 +1297,7 @@ ojp.cache.queries.2.invalidateOn=users
 
 Provide a higher-level `DataSource` (or equivalent) object that holds connection configuration and exposes a `getConnection()` method. Integrate cleanly with the host language's database access conventions (e.g., Python's DB-API 2.0, Go's `database/sql`, Node.js connection objects).
 
-**Disable** the framework's own built-in connection pool when OJP is in use. For Spring Boot (Java), provide a `spring-boot-starter-ojp` auto-configuration module that excludes `DataSourceAutoConfiguration`. For other languages, document this clearly in the library README.
+The DataSource (or equivalent) is a connection factory, **not a pool**. The client and host framework MUST NOT pool virtual connections; disable any framework-provided application-side connection pool when OJP is in use. Applications MUST close each connection promptly after its unit of work (after committing or rolling back any transaction), which calls `terminateSession` and releases server-side session resources for reuse. For Spring Boot (Java), provide a `spring-boot-starter-ojp` auto-configuration module that excludes `DataSourceAutoConfiguration`. For other languages, document this clearly in the library README.
 
 > **Reference implementation:**
 > - `ojp-jdbc-driver` — [`OjpDataSource`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/OjpDataSource.java): implements `javax.sql.DataSource`; `getConnection()` delegates to `DriverManager.getConnection(url, info)`.

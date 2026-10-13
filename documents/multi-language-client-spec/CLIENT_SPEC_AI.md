@@ -18,6 +18,7 @@
 | **Endpoint** | A `host:port` pair identifying one Server. |
 | **Virtual Connection** | A client-side object representing logical access to a database pool, identified by a `SessionInfo` token. Does not correspond 1:1 to a real database connection. |
 | **Real Connection** | A JDBC connection held by the Server's connection pool. The Client never holds one directly. |
+| **Client-side connection pool** | Prohibited. The Client and integrating application/framework MUST NOT pool virtual connections; pool real database connections only on the Server. |
 | **connHash** | A server-computed SHA-256 string keying a specific connection pool. Computed as SHA-256(`url + user + password + datasource_name`). |
 | **SessionInfo** | A proto message propagated on every RPC. Contains `connHash`, `clientUUID`, `sessionUUID`, `transactionInfo`, `sessionStatus`, `isXA`, `targetServer`, `clusterHealth`, `clientCount`, `maxAdmission`, `observedPeak`. |
 | **sessionUUID** | A server-assigned handle for a stateful session (transaction, LOB, cursor). Absent until the Server assigns it. |
@@ -238,6 +239,12 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 
 ### 4.2 Connection Rules
 
+**Pool and close requirements:**
+
+- The client and integrating application/framework MUST NOT create or use a client-side pool of virtual connections. A `DataSource` or equivalent MUST act only as a connection factory. Reusing cached `connHash` metadata is permitted and is not connection pooling.
+- The application MUST close each virtual connection promptly when its unit of work is complete. It MUST commit or roll back any active transaction before closing.
+- On connection close, the client MUST call `terminateSession(session)` to notify the server to clean up session state and release any checked-out real database connection back to the server-side pool for reuse. After termination, the virtual connection MUST NOT be reused.
+
 **Non-XA first connect (cache miss):**
 
 1. Build `ConnectionDetails` with `url`, `user`, `password`, `clientUUID`, `serverEndpoints`, `clusterHealth`, `isXA=false`, and applicable `properties`.
@@ -270,7 +277,7 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 1. The client MUST include the current `SessionInfo` in every outgoing RPC request.
 2. The client MUST replace its local `SessionInfo` with the `SessionInfo` returned in every RPC response.
 3. When the response `SessionInfo` contains a `sessionUUID` not present in the request, the client MUST immediately register: `sessionUUID → response.targetServer`.
-4. The client MUST call `terminateSession(session)` exactly once when closing a connection. After this call, the connection MUST be considered unusable.
+4. The client MUST call `terminateSession(session)` exactly once when closing a connection. This notifies the server to release session resources, including any checked-out database connection, back to its pool for reuse. After this call, the connection MUST be considered unusable.
 
 ### 4.4 Statement Execution Rules
 
@@ -502,7 +509,7 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 
 - Async / non-blocking RPC API surface
 - Metrics / telemetry export (OpenTelemetry recommended)
-- Client-side connection pooling — NOTE: if implemented, pool size MUST effectively be 1 per virtual connection; double-pooling causes incorrect behavior
+- Client-side connection pooling — MUST NOT be implemented; the application-side framework's connection pool MUST also be disabled
 
 ---
 

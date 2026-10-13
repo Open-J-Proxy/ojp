@@ -3,27 +3,25 @@ package client
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	pb "github.com/open-j-proxy/ojp-client-go-database-sql/internal/gen/go/com/openjproxy/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// driverVal constrains the Go types that map to OJP parameter types.
-// The ~ operator lets named types satisfy the constraint through their
-// underlying type. time.Time is listed directly because it is a struct,
-// not a named scalar.
+// driverVal constrains Go types that map to OJP parameter types.
+// ~ lets named types satisfy the constraint; time.Time is a struct.
 type driverVal interface {
-	~bool | ~int64 | ~float64 | ~string | ~[]byte | time.Time
+	~bool | ~int | ~int64 | ~float32 | ~float64 | ~string | ~[]byte | time.Time
 }
 
-// encodeParam converts a Go scalar into the matching protobuf
-// ParameterValue variant.
-//
-// A type switch on any(value) is unavoidable because the protobuf
-// oneof variants carry different concrete types.
 func encodeParam[T driverVal](value T) *pb.ParameterValue {
-	switch v := any(value).(type) {
+	return encodeParamAny(any(value))
+}
+
+func encodeParamAny(value any) *pb.ParameterValue {
+	switch v := value.(type) {
 	case bool:
 		return &pb.ParameterValue{Value: &pb.ParameterValue_BoolValue{BoolValue: v}}
 	case int64:
@@ -40,15 +38,32 @@ func encodeParam[T driverVal](value T) *pb.ParameterValue {
 			TimestampValue: &pb.TimestampWithZone{Instant: ts},
 		}}
 	default:
-		return nil
+		return encodeParamAny(normalizeType(v))
 	}
 }
 
-// encodeParamTyped converts a Go scalar into a *pb.ParameterProto with
-// the matching ParameterTypeProto. Zero values map to PT_NULL.
+// normalizeType converts named scalar types to their underlying type.
+func normalizeType(v any) any {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Bool:
+		return rv.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return rv.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return int64(rv.Uint())
+	case reflect.Float32, reflect.Float64:
+		return rv.Float()
+	case reflect.String:
+		return rv.String()
+	default:
+		return v
+	}
+}
+
 func encodeParamTyped[T driverVal](index int, value T) *pb.ParameterProto {
 	param := &pb.ParameterProto{Index: int32(index)}
-	switch v := any(value).(type) {
+	switch v := normalizeType(any(value)).(type) {
 	case bool:
 		param.Type = pb.ParameterTypeProto_PT_BOOLEAN
 		param.Values = []*pb.ParameterValue{encodeParam(v)}
@@ -69,7 +84,7 @@ func encodeParamTyped[T driverVal](index int, value T) *pb.ParameterProto {
 		param.Values = []*pb.ParameterValue{encodeParam(v)}
 	default:
 		param.Type = pb.ParameterTypeProto_PT_NULL
-		param.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_IsNull{IsNull: true}}}
+		param.Values = []*pb.ParameterValue{{Value: &pb.ParameterValue_IntValue{IntValue: 0}}}
 	}
 	return param
 }
@@ -83,9 +98,6 @@ func decodeResult[T any](value any) (T, error) {
 	return v, nil
 }
 
-// withConnectionLock acquires the connection and client read-locks,
-// runs fn, and returns a typed result. Centralises the closed-check
-// boilerplate across executeUpdate, query, close, and BeginTx.
 func withConnectionLock[T any](c *rpcConnection, fn func() (T, error)) (T, error) {
 	var zero T
 	c.mu.Lock()
@@ -173,14 +185,12 @@ func (r *queryResult) Scan3[T1, T2, T3 any](d1 *T1, d2 *T2, d3 *T3) error {
 	return nil
 }
 
-// ScanInto is the untyped variant for any number of destinations,
-// mirroring the database/sql Rows.Scan signature.
 func (r *queryResult) ScanInto(dest ...any) error {
 	if r.cursor >= len(r.Rows) {
 		return errNoMoreRows
 	}
 	row := r.Rows[r.cursor]
-	if len(dest) > len(row) {
+	if len(dest) != len(row) {
 		return fmt.Errorf("ScanInto: got %d columns, need %d", len(row), len(dest))
 	}
 	for i, d := range dest {

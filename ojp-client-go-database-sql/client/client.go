@@ -48,9 +48,10 @@ type rpcConnection struct {
 }
 
 type queryResult struct {
-	Columns []string
-	Rows    [][]any
-	cursor  int
+	Columns       []string
+	Rows          [][]any
+	cursor        int
+	resultSetUUID string
 }
 
 var processUUIDOnce sync.Once
@@ -136,12 +137,17 @@ func (c *rpcClient) close() error {
 }
 
 func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
+	return c.executeUpdateWithStatement(ctx, sql, parameters, "")
+}
+
+func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (int64, error) {
 	return withConnectionLock(c, func() (int64, error) {
 		var trailer metadata.MD
 		result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
-			Session:    cloneSession(c.session),
-			Sql:        sql,
-			Parameters: parameters,
+			Session:       cloneSession(c.session),
+			Sql:           sql,
+			Parameters:    parameters,
+			StatementUUID: statementUUID,
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			return 0, grpcError(ctx, err, trailer)
@@ -162,11 +168,16 @@ func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameter
 }
 
 func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
+	return c.queryWithStatement(ctx, sql, parameters, "")
+}
+
+func (c *rpcConnection) queryWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (*queryResult, error) {
 	return withConnectionLock(c, func() (*queryResult, error) {
 		stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
-			Session:    cloneSession(c.session),
-			Sql:        sql,
-			Parameters: parameters,
+			Session:       cloneSession(c.session),
+			Sql:           sql,
+			Parameters:    parameters,
+			StatementUUID: statementUUID,
 		})
 		if err != nil {
 			return nil, grpcError(ctx, err, nil)
@@ -186,6 +197,9 @@ func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.
 			if queryResult == nil {
 				continue
 			}
+			if result.resultSetUUID == "" {
+				result.resultSetUUID = queryResult.GetResultSetUUID()
+			}
 			if len(result.Columns) == 0 {
 				result.Columns = append(result.Columns, queryResult.GetLabels()...)
 			}
@@ -203,8 +217,73 @@ func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.
 	})
 }
 
+func (c *rpcConnection) fetchNextRows(ctx context.Context, resultSetUUID string, size int32) (*queryResult, error) {
+	return withConnectionLock(c, func() (*queryResult, error) {
+		var trailer metadata.MD
+		result, err := c.client.rpc.FetchNextRows(ctx, &pb.ResultSetFetchRequest{
+			Session:       cloneSession(c.session),
+			ResultSetUUID: resultSetUUID,
+			Size:          size,
+		}, grpc.Trailer(&trailer))
+		if err != nil {
+			return nil, grpcError(ctx, err, trailer)
+		}
+		if result == nil {
+			return nil, errors.New("OJP server returned an empty fetch result")
+		}
+		c.applySession(result.GetSession())
+		qr := &queryResult{resultSetUUID: resultSetUUID}
+		queryResult := result.GetQueryResult()
+		if queryResult == nil {
+			return qr, nil
+		}
+		if len(qr.Columns) == 0 {
+			qr.Columns = append(qr.Columns, queryResult.GetLabels()...)
+		}
+		for _, row := range queryResult.GetRows() {
+			columns := make([]any, len(row.GetColumns()))
+			for index, value := range row.GetColumns() {
+				columns[index], err = decodeValue(value)
+				if err != nil {
+					return nil, fmt.Errorf("decode fetch result column %d: %w", index, err)
+				}
+			}
+			qr.Rows = append(qr.Rows, columns)
+		}
+		return qr, nil
+	})
+}
+
+func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
+	request := &pb.CallResourceRequest{
+		Session:      cloneSession(c.session),
+		ResourceType: pb.ResourceType_RES_RESULT_SET,
+		ResourceUUID: resultSetUUID,
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_CLOSE,
+			ResourceName: "close",
+		},
+	}
+	_, err := withConnectionLock(c, func() (any, error) {
+		var trailer metadata.MD
+		resp, rpcErr := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
+		if rpcErr != nil {
+			return nil, grpcError(ctx, rpcErr, trailer)
+		}
+		if resp == nil {
+			return nil, errors.New("OJP server returned an empty close response")
+		}
+		c.applySession(resp.GetSession())
+		return nil, nil
+	})
+	return err
+}
+
 func (c *rpcConnection) close(ctx context.Context) error {
 	_, err := withConnectionLock(c, func() (any, error) {
+		if c.closed {
+			return nil, nil
+		}
 		var trailer metadata.MD
 		response, rpcErr := c.client.rpc.TerminateSession(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
 		if rpcErr != nil {

@@ -251,13 +251,15 @@ func (s *sqlStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (d
 	if err != nil {
 		return nil, err
 	}
-	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
+	return &sqlRows{columns: result.Columns, rows: result.Rows, resultSetUUID: result.resultSetUUID, connection: s.connection}, nil
 }
 
 type sqlRows struct {
-	columns []string
-	rows    [][]any
-	index   int
+	columns       []string
+	rows          [][]any
+	index         int
+	resultSetUUID string
+	connection    *rpcConnection
 }
 
 func (r *sqlRows) Columns() []string {
@@ -267,6 +269,11 @@ func (r *sqlRows) Columns() []string {
 func (r *sqlRows) Close() error {
 	r.rows = nil
 	r.index = 0
+	if r.connection != nil && r.resultSetUUID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = r.connection.closeResultSet(ctx, r.resultSetUUID)
+	}
 	return nil
 }
 
@@ -359,7 +366,7 @@ func toProtoParameters(args []driver.NamedValue) ([]*pb.ParameterProto, error) {
 		var parameter *pb.ParameterProto
 		switch value := argument.Value.(type) {
 		case nil:
-			parameter = &pb.ParameterProto{Index: int32(index + 1), Type: pb.ParameterTypeProto_PT_NULL, Values: []*pb.ParameterValue{{Value: &pb.ParameterValue_IsNull{IsNull: true}}}}
+			parameter = &pb.ParameterProto{Index: int32(index + 1), Type: pb.ParameterTypeProto_PT_NULL, Values: []*pb.ParameterValue{{Value: &pb.ParameterValue_IntValue{IntValue: 0}}}}
 		case bool:
 			parameter = encodeParamTyped(index+1, value)
 		case int64:
@@ -397,10 +404,6 @@ func toDriverValue(value any) (driver.Value, error) {
 	}
 }
 
-// buildParameter is a small generic helper that combines an index, a
-// protobuf parameter type, and a pre-encoded value into a
-// *pb.ParameterProto. It removes the boilerplate of constructing the
-// struct literal at each call site.
 func buildParameter[T pb.ParameterTypeProto](index int, paramType T, value *pb.ParameterValue) *pb.ParameterProto {
 	return &pb.ParameterProto{
 		Index:  int32(index),
@@ -409,13 +412,7 @@ func buildParameter[T pb.ParameterTypeProto](index int, paramType T, value *pb.P
 	}
 }
 
-// ---------------------------------------------------------------------------
-// L2: PreparedStatement / Statement variants, generated keys, basic metadata
-// ---------------------------------------------------------------------------
-
-// sqlPreparedStatement is a L2 prepared statement. It is created by
-// sqlConn.Prepare and supports the same Exec/Query paths as sqlStmt but
-// carries a StatementUUID so the server can cache the execution plan.
+// sqlPreparedStatement carries a StatementUUID for server-side plan reuse.
 type sqlPreparedStatement struct {
 	connection *rpcConnection
 	query      string
@@ -439,7 +436,7 @@ func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.Na
 	if err != nil {
 		return nil, err
 	}
-	count, err := s.connection.executeUpdate(ctx, s.query, parameters)
+	count, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -451,14 +448,13 @@ func (s *sqlPreparedStatement) QueryContext(ctx context.Context, args []driver.N
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.connection.query(ctx, s.query, parameters)
+	result, err := s.connection.queryWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
 	}
-	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
+	return &sqlRows{columns: result.Columns, rows: result.Rows, resultSetUUID: result.resultSetUUID, connection: s.connection}, nil
 }
 
-// sqlCallableStatement wraps sqlPreparedStatement for stored-procedure calls.
 type sqlCallableStatement struct {
 	*sqlPreparedStatement
 	outParams []driver.NamedValue
@@ -493,18 +489,22 @@ func (s *sqlCallableStatement) QueryContext(ctx context.Context, args []driver.N
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.connection.query(ctx, s.query, parameters)
+	result, err := s.connection.queryWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
 	}
-	return &sqlRows{columns: result.Columns, rows: result.Rows}, nil
+	return &sqlRows{columns: result.Columns, rows: result.Rows, resultSetUUID: result.resultSetUUID, connection: s.connection}, nil
 }
 
 func (c *sqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, errors.New("SQL query must not be empty")
 	}
-	stmt := &sqlPreparedStatement{connection: c.connection, query: query}
+	stmtUUID, err := getProcessUUID()
+	if err != nil {
+		return nil, fmt.Errorf("generate statement UUID: %w", err)
+	}
+	stmt := &sqlPreparedStatement{connection: c.connection, query: query, statementUUID: stmtUUID}
 	return stmt, nil
 }
 
@@ -533,11 +533,11 @@ func (c *rpcConnection) GeneratedKeys(ctx context.Context, req *GeneratedKeysReq
 	}
 	request := &pb.CallResourceRequest{
 		Session:      cloneSession(c.session),
-		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+		ResourceType: pb.ResourceType_RES_RESULT_SET,
 		ResourceUUID: req.StatementUUID,
 		Target: &pb.TargetCall{
-			CallType:     pb.CallType_CALL_GENERATED,
-			ResourceName: "getGeneratedKeys",
+			CallType:     pb.CallType_CALL_GET,
+			ResourceName: "GeneratedKeys",
 		},
 		Properties: props,
 	}
@@ -581,8 +581,8 @@ func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]C
 		ResourceType: pb.ResourceType_RES_RESULT_SET,
 		ResourceUUID: req.ResultSetUUID,
 		Target: &pb.TargetCall{
-			CallType:     pb.CallType_CALL_ALL,
-			ResourceName: "getColumns",
+			CallType:     pb.CallType_CALL_GET,
+			ResourceName: "getMetadata",
 		},
 	}
 	return withConnectionLock(c, func() ([]ColumnMetadata, error) {
@@ -595,31 +595,18 @@ func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]C
 			return nil, errors.New("OJP server returned an empty metadata response")
 		}
 		c.applySession(resp.GetSession())
-		cols := make([]ColumnMetadata, 0, len(resp.GetValues()))
-		for _, v := range resp.GetValues() {
-			decoded, derr := decodeValue(v)
-			if derr != nil {
-				return nil, fmt.Errorf("decode metadata value: %w", derr)
-			}
-			if m, ok := decoded.(map[string]any); ok {
-				col := ColumnMetadata{}
-				if name, ok := m["name"].(string); ok {
-					col.Name = name
-				}
-				if typ, ok := m["type"].(int32); ok {
-					col.SQLType = typ
-				}
-				if typ, ok := m["typeName"].(string); ok {
-					col.TypeName = typ
-				}
-				if nul, ok := m["nullable"].(bool); ok {
-					col.Nullable = nul
-				}
-				if ro, ok := m["readOnly"].(bool); ok {
-					col.ReadOnly = ro
-				}
-				cols = append(cols, col)
-			}
+		// The server returns a ResultSet UUID for the metadata.
+		resultSetUUID := resp.GetResourceUUID()
+		if resultSetUUID == "" {
+			return nil, errors.New("OJP server returned no ResultSet UUID for metadata")
+		}
+		rows, err := c.fetchNextRows(ctx, resultSetUUID, 100)
+		if err != nil {
+			return nil, err
+		}
+		cols := make([]ColumnMetadata, 0, len(rows.Columns))
+		for _, name := range rows.Columns {
+			cols = append(cols, ColumnMetadata{Name: name})
 		}
 		return cols, nil
 	})

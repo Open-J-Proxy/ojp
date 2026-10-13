@@ -9,8 +9,6 @@ import (
 	pb "github.com/open-j-proxy/ojp-client-go-database-sql/internal/gen/go/com/openjproxy/grpc"
 )
 
-// decodeValue converts a protobuf ParameterValue into the matching Go
-// type, covering the full OJP parameter type system.
 func decodeValue(value *pb.ParameterValue) (any, error) {
 	if value == nil {
 		return nil, nil
@@ -81,7 +79,12 @@ func decodeValue(value *pb.ParameterValue) (any, error) {
 		if typed.BigintegerValue == nil {
 			return nil, nil
 		}
-		return new(big.Int).SetBytes([]byte(typed.BigintegerValue.GetValue())), nil
+		s := typed.BigintegerValue.GetValue()
+		n, ok := new(big.Int).SetString(s, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid big integer value %q", s)
+		}
+		return n, nil
 	case *pb.ParameterValue_StringArrayValue:
 		if typed.StringArrayValue == nil {
 			return []string(nil), nil

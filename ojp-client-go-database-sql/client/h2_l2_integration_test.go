@@ -135,12 +135,7 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	lastID, err := genResult.LastInsertId()
 	if err != nil {
-		t.Logf("LastInsertId not supported (%v), querying identity", err)
-		if err := db.QueryRowContext(ctx, fmt.Sprintf(
-			"SELECT id FROM %s WHERE name='gen-keys'", table,
-		)).Scan(&lastID); err != nil {
-			t.Fatalf("query generated key: %v", err)
-		}
+		t.Fatalf("LastInsertId: %v", err)
 	}
 	if lastID == 0 {
 		t.Fatal("expected non-zero generated key")
@@ -166,6 +161,9 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows error: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close rows: %v", err)
 	}
 
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(

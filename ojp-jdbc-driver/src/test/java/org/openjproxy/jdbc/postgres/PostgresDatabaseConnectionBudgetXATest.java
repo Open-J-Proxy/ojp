@@ -6,10 +6,10 @@ import org.openjproxy.jdbc.xa.OjpXADataSource;
 
 import javax.sql.XAConnection;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -36,7 +36,10 @@ class PostgresDatabaseConnectionBudgetXATest {
             application = createXAConnection(url, "application", user, password);
             reporting = createXAConnection(url, "reporting", user, password);
 
-            try (Connection observer = DriverManager.getConnection(backendUrl, user, password)) {
+            Properties observerProperties = new Properties();
+            observerProperties.setProperty("user", user);
+            observerProperties.setProperty("password", password);
+            try (Connection observer = new org.postgresql.Driver().connect(backendUrl, observerProperties)) {
                 assertEquals(GROUP_LIMIT, awaitBackendSessionCount(observer),
                         "Two XA pools requesting 16 backend sessions must stabilize at the group limit of 10");
             }

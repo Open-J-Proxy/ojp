@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class H2DatabaseConnectionBudgetIntegrationTest {
     private static final int GROUP_LIMIT = 10;
+    private static final int REQUESTED_POOL_SIZE = 8;
     private static final long WAIT_TIMEOUT_MILLIS = 10_000L;
     private static final long POLL_INTERVAL_MILLIS = 100L;
 
@@ -28,10 +29,12 @@ class H2DatabaseConnectionBudgetIntegrationTest {
                 "H2 integration tests are disabled");
         Class.forName(driverClass);
 
+        // Each pool requests 8 (16 total); equal weights should cap them at 5 each under the 10-connection budget.
         try (Connection application = DriverManager.getConnection(url, poolProperties("application", user, password));
              Connection reporting = DriverManager.getConnection(url, poolProperties("reporting", user, password))) {
+            // Count H2's backend sessions, not the client connections opened through OJP.
             assertEquals(GROUP_LIMIT, awaitBackendSessionCount(application),
-                    "H2 should report exactly the group limit of backend sessions opened through OJP");
+                    "Two pools requesting 16 backend sessions must be capped at the group limit of 10");
         }
     }
 
@@ -40,8 +43,9 @@ class H2DatabaseConnectionBudgetIntegrationTest {
         properties.setProperty("user", user);
         properties.setProperty("password", password == null ? "" : password);
         properties.setProperty("ojp.datasource.name", dataSourceName + "-" + UUID.randomUUID());
-        properties.setProperty("ojp.connection.pool.maximumPoolSize", "8");
-        properties.setProperty("ojp.connection.pool.minimumIdle", "8");
+        properties.setProperty("ojp.connection.pool.maximumPoolSize", String.valueOf(REQUESTED_POOL_SIZE));
+        // Keep every requested connection open so the test exercises the shared cap.
+        properties.setProperty("ojp.connection.pool.minimumIdle", String.valueOf(REQUESTED_POOL_SIZE));
         return properties;
     }
 

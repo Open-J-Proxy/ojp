@@ -209,6 +209,7 @@ jobs:
 
           # Verify setting
           PGPASSWORD=testpassword psql -h 127.0.0.1 -U testuser -d defaultdb -c "SHOW max_prepared_transactions;"
+          docker exec ojp-postgres createdb -U testuser ojp_budget_test
 
       - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
@@ -242,6 +243,14 @@ jobs:
           docker run -d --name ojp-server \
             --network host \
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            ${{ env.OJP_IMAGE }}
+
+      # Isolate the XA connection budget test from the other PostgreSQL integration tests.
+      - name: Start OJP Server container for XA budget test
+        run: |
+          docker run -d --name ojp-server-xa-budget \
+            --network host \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10594 -Dojp.prometheus.port=9164 -Dojp.server.databaseBudgets.xaTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_budget_test* -Dojp.server.databaseBudgets.xaTest.maxTotalConnections=10 -Dojp.server.databaseBudgets.xaTest.priorities.username.testuser.weight=1" \
             ${{ env.OJP_IMAGE }}
 
       # Start second OJP server WITH SQL enhancer enabled in OPTIMIZE mode
@@ -300,6 +309,9 @@ jobs:
         run: |
           echo "=== OJP Server (default) log ==="
           docker logs ojp-server 2>&1 || echo "ojp-server container not found"
+          echo ""
+          echo "=== OJP Server (XA budget test) log ==="
+          docker logs ojp-server-xa-budget 2>&1 || echo "ojp-server-xa-budget container not found"
           echo ""
           echo "=== OJP Server (with SQL enhancer) log ==="
           docker logs ojp-server-enhancer 2>&1 || echo "ojp-server-enhancer container not found"

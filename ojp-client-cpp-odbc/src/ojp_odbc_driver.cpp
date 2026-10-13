@@ -2641,6 +2641,20 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
         for (auto& row : statement->rows) {
             row.resize(ODBC_TABLES_COLUMN_COUNT);
         }
+    } else if (method == "Columns") {
+        constexpr std::size_t ODBC_COLUMNS_COLUMN_COUNT = 24;
+        if (statement->columns.size() < ODBC_COLUMNS_COLUMN_COUNT ||
+            std::any_of(statement->rows.begin(), statement->rows.end(),
+                        [](const std::vector<Cell>& row) {
+                            return row.size() < ODBC_COLUMNS_COLUMN_COUNT;
+                        })) {
+            return fail(statement, "JDBC column metadata does not contain the required columns",
+                        "HY000");
+        }
+        statement->columns.resize(ODBC_COLUMNS_COLUMN_COUNT);
+        for (auto& row : statement->rows) {
+            row.resize(ODBC_COLUMNS_COLUMN_COUNT);
+        }
     }
     statement->has_result_set = true;
     statement->row_count = static_cast<SQLLEN>(statement->rows.size());

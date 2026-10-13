@@ -450,14 +450,14 @@ int run_connection(const DatabaseConfig& config,
         if (metadata_column_count != 24) {
             std::cerr << "SQLColumns returned " << metadata_column_count
                       << " result columns; expected 24\n";
-            throw std::runtime_error("SQLColumns returned an unexpected result column count");
+            throw std::runtime_error("SQLColumns returned an unexpected ODBC result column count");
         }
         test_stage = "SQLColumns first row fetch";
         const SQLRETURN columns_fetch_result = SQLFetch(statement);
         if (columns_fetch_result != SQL_SUCCESS) {
             std::cerr << "SQLColumns first fetch returned ODBC code "
                       << columns_fetch_result << '\n';
-            throw std::runtime_error("SQLColumns did not return JDBC column metadata");
+            throw std::runtime_error("SQLColumns did not return column metadata");
         }
         test_stage = "SQLColumns column-name retrieval";
         std::memset(metadata_text, 0, sizeof(metadata_text));

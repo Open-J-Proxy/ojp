@@ -45,6 +45,9 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLSMALLINT detail_length = 0;
         if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail,
                           sizeof(detail), &detail_length) == SQL_SUCCESS) {
+            std::cerr << operation << " failed with SQLSTATE "
+                      << reinterpret_cast<const char*>(state)
+                      << " and native error " << native_error << '\n' << std::flush;
             message << " [" << state << ", " << native_error << "] "
                     << reinterpret_cast<const char*>(detail);
         }
@@ -467,7 +470,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     close_and_reset(statement);
     SQLBIGINT generated_id = current_identity(statement, table);
 
-    stage = "select SQL Server-specific and large values";
+    stage = "prepare SQL Server-specific and large-values SELECT";
     prepare(statement, "SELECT id, ntext_col, text_col,"
         " money_col, smallmoney_col, uniqueidentifier_col,"
         " datetimeoffset_col, datetime2_col, smalldatetime_col, nvarchar_max, varchar_max,"
@@ -475,33 +478,53 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
         " CAST(geography_col AS VARBINARY(MAX)) AS geography_bytes,"
         " CAST(hierarchyid_col AS VARBINARY(MAX)) AS hierarchyid_bytes, sql_variant_col"
         " FROM " + table + " WHERE id = ?");
+    stage = "bind SQL Server-specific SELECT parameter";
     SQLLEN id_length = sizeof(generated_id);
     bind(statement, 1, SQL_C_SBIGINT, SQL_BIGINT, 0, 0, &generated_id, sizeof(generated_id),
          &id_length, "id");
+    stage = "execute SQL Server-specific and large-values SELECT";
     require_success(SQLExecute(statement), "SQLExecute(select specific types)",
                     SQL_HANDLE_STMT, statement);
     SQLSMALLINT column_count = 0;
+    stage = "read SQL Server-specific SELECT column count";
     require_success(SQLNumResultCols(statement, &column_count), "SQLNumResultCols",
                     SQL_HANDLE_STMT, statement);
+    stage = "validate SQL Server-specific SELECT column count";
     expect(column_count == 18, "expected eighteen SQL Server specific result columns");
+    stage = "fetch SQL Server-specific and large-values row";
     require_success(SQLFetch(statement), "SQLFetch(select specific types)",
                     SQL_HANDLE_STMT, statement);
+    stage = "describe SQL Server NTEXT result";
     expect_column(statement, 2, "ntext_col", SQL_VARCHAR);
+    stage = "describe SQL Server VARBINARY(MAX) result";
     expect_column(statement, 12, "varbinary_max", SQL_VARBINARY);
+    stage = "read SQL Server-specific SELECT identity";
     expect(get_value<SQLBIGINT>(statement, 1, SQL_C_SBIGINT) == generated_id,
            "specific-types SELECT returned the wrong identity");
+    stage = "read SQL Server NTEXT result";
     expect_text(statement, 2, ntext_value);
+    stage = "read SQL Server TEXT result";
     expect_text(statement, 3, "TEXT content");
+    stage = "read SQL Server MONEY result";
     expect_text(statement, 4, "123.4500");
+    stage = "read SQL Server SMALLMONEY result";
     expect_text(statement, 5, "67.8900");
+    stage = "read SQL Server UNIQUEIDENTIFIER result";
     expect(get_text(statement, 6).size() == 36, "UNIQUEIDENTIFIER should use the GUID format");
+    stage = "read SQL Server DATETIMEOFFSET result";
     expect_text(statement, 7, "2024-12-01 10:10:10");
+    stage = "read SQL Server DATETIME2 result";
     expect_text(statement, 8, "2024-12-01 14:30:45.123");
+    stage = "read SQL Server SMALLDATETIME result";
     expect_text(statement, 9, "2024-12-01 14:30:00");
+    stage = "read SQL Server NVARCHAR(MAX) Unicode result";
     expect_text(statement, 10, large_unicode_text);
+    stage = "read SQL Server VARCHAR(MAX) result";
     expect_text(statement, 11, large_text);
+    stage = "read SQL Server VARBINARY(MAX) result";
     expect(get_binary(statement, 12, large_binary.size() + 16) == large_binary,
            "VARBINARY(MAX) did not round-trip");
+    stage = "validate NULL SQL Server-specific result values";
     for (SQLUSMALLINT column = 13; column <= 18; ++column) {
         expect_null(statement, column, column == 14 || column == 18 ? SQL_C_CHAR : SQL_C_BINARY);
     }

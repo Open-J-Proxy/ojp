@@ -231,11 +231,7 @@ int run_connection(const DatabaseConfig& config,
                                        reinterpret_cast<SQLHANDLE*>(&wide_connection)),
                         "SQLAllocHandle(wide connection)", SQL_HANDLE_ENV, environment);
         test_stage = "wide SQLDriverConnectW";
-        const std::string wide_connection_string =
-            "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
-            ";DATABASE=" + brace_value(config.url) +
-            ";UID=" + brace_value(config.user) +
-            ";******;";
+        const std::string wide_connection_string = connection_string;
         auto wide_connection_buffer = to_sql_wide(wide_connection_string);
         require_success(SQLDriverConnectW(wide_connection, nullptr, wide_connection_buffer.data(),
                                           SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),

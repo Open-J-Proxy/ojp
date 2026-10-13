@@ -35,6 +35,8 @@ class PostgresDatabaseConnectionBudgetXATest {
         try {
             application = createXAConnection(url, "application", user, password);
             reporting = createXAConnection(url, "reporting", user, password);
+            application.getConnection();
+            reporting.getConnection();
 
             Properties observerProperties = new Properties();
             observerProperties.setProperty("user", user);

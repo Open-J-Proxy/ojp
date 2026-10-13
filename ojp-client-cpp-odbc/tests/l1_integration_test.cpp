@@ -82,10 +82,12 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLCHAR detail[1024] = {};
         SQLINTEGER native_error = 0;
         SQLSMALLINT detail_length = 0;
-        if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail,
-                          sizeof(detail), &detail_length) == SQL_SUCCESS) {
-            message << " [" << state << ", " << native_error << "] "
-                    << reinterpret_cast<const char*>(detail);
+        const auto diagnostic_result = SQLGetDiagRec(
+            handle_type, handle, 1, state, &native_error, detail, sizeof(detail), &detail_length);
+        if (SQL_SUCCEEDED(diagnostic_result)) {
+            std::cerr << operation << " failed with SQLSTATE "
+                      << reinterpret_cast<const char*>(state)
+                      << " and native error " << native_error << '\n';
         }
     }
     throw std::runtime_error(message.str());

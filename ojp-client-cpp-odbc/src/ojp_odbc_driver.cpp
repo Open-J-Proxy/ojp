@@ -2573,13 +2573,11 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
         return fail(statement, "JDBC metadata call did not return a result set", "HY000");
     }
     const std::string result_set_uuid = metadata_response.values(0).string_value();
-    bool row_by_row = false;
     bool decoded_all = true;
     auto append_result = [&](const OpResult& fetched) {
         if (fetched.has_session()) {
             update_session(connection, fetched.session(), connection->session);
         }
-        row_by_row = fetched.flag() == kRowByRowMode;
         if (!fetched.has_query_result()) {
             return std::size_t{0};
         }
@@ -2617,7 +2615,7 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
             return fail_grpc(statement, status, context);
         }
         const auto rows_fetched = append_result(fetched);
-        if (!row_by_row || rows_fetched == 0) {
+        if (rows_fetched == 0) {
             break;
         }
     }

@@ -77,6 +77,23 @@ public class ResultSetHelper {
     public static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
             StreamObserver<OpResult> responseObserver)
             throws SQLException {
+        handleResultSet(context, session, resultSetUUID, responseObserver, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Processes up to {@code maxRowsPerCall} rows and sends exactly one result block.
+     * This overload is used by unary fetch RPCs, which must return one response per call.
+     *
+     * @param context          the action context providing session and database access
+     * @param session          the session information for the current client
+     * @param resultSetUUID    the unique identifier of the result set to process
+     * @param responseObserver the gRPC observer to send the result block to
+     * @param maxRowsPerCall   the maximum number of rows to include in this response
+     * @throws SQLException if a database access error occurs while reading the result set
+     */
+    public static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
+            StreamObserver<OpResult> responseObserver, int maxRowsPerCall)
+            throws SQLException {
         var sessionManager = context.getSessionManager();
 
         ResultSet rs = sessionManager.getResultSet(session, resultSetUUID);
@@ -229,6 +246,9 @@ public class ResultSetHelper {
                         resultSetUUID, resultSetMode));
                 labels = null; // Labels only included in the first block
                 results = new ArrayList<>();
+            }
+            if (row >= maxRowsPerCall) {
+                break;
             }
         }
 

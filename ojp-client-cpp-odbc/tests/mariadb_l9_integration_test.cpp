@@ -273,6 +273,7 @@ int run_connection(const DatabaseConfig& config,
     void* driver_module = nullptr;
     bool table_created = false;
     long stopped_process_id = 0;
+    std::string stage = "environment setup";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -281,9 +282,13 @@ int run_connection(const DatabaseConfig& config,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
 
+        stage = "open XA connection";
         xa_connection = open_connection(environment, config, environment_value(argv[3]), true);
+        stage = "open same-resource-manager connection";
         same_rm_connection = open_connection(environment, config, endpoints.front(), true);
+        stage = "open regular connection";
         regular_connection = open_connection(environment, config, endpoints.back(), false);
+        stage = "allocate statements and create test table";
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, xa_connection,
                                        reinterpret_cast<SQLHANDLE*>(&xa_statement)),
                         "SQLAllocHandle(XA statement)", SQL_HANDLE_DBC, xa_connection);
@@ -294,6 +299,7 @@ int run_connection(const DatabaseConfig& config,
                                            " (id INT PRIMARY KEY, label VARCHAR(100) NOT NULL) ENGINE=InnoDB");
         table_created = true;
 
+        stage = "verify XA autocommit mode";
         SQLULEN auto_commit = SQL_AUTOCOMMIT_ON;
         require_success(SQLGetConnectAttr(xa_connection, SQL_ATTR_AUTOCOMMIT, &auto_commit,
                                           sizeof(auto_commit), nullptr),
@@ -302,6 +308,7 @@ int run_connection(const DatabaseConfig& config,
             throw std::runtime_error("OJP XA connections must have autocommit disabled");
         }
 
+        stage = "load and inspect XA API";
         driver_module = dlopen(argv[5], RTLD_NOW | RTLD_LOCAL);
         if (driver_module == nullptr) {
             throw std::runtime_error(std::string("cannot load OJP driver XA API: ") + dlerror());
@@ -321,11 +328,15 @@ int run_connection(const DatabaseConfig& config,
         }
 
         const OjpXid two_phase_xid = xid_for(table + "_two_phase", "branch-1");
+        stage = "start two-phase XA transaction";
         require_success(xa.start(xa_connection, &two_phase_xid, OJP_XA_TMNOFLAGS),
                         "OjpXAStart(two-phase)", SQL_HANDLE_DBC, xa_connection);
+        stage = "insert in two-phase XA transaction";
         execute_direct(xa_statement, "INSERT INTO " + table + " VALUES (1, 'two-phase')");
+        stage = "end two-phase XA transaction";
         require_success(xa.end(xa_connection, &two_phase_xid, OJP_XA_TMSUCCESS),
                         "OjpXAEnd(two-phase)", SQL_HANDLE_DBC, xa_connection);
+        stage = "prepare two-phase XA transaction";
         SQLINTEGER prepare_result = -1;
         require_success(xa.prepare(xa_connection, &two_phase_xid, &prepare_result),
                         "OjpXAPrepare", SQL_HANDLE_DBC, xa_connection);
@@ -334,6 +345,7 @@ int run_connection(const DatabaseConfig& config,
         }
         OjpXid recovered_xids[16]{};
         SQLSMALLINT recovered_count = 0;
+        stage = "start XA recovery scan";
         require_success(xa.recover(xa_connection, OJP_XA_TMSTARTRSCAN,
                                    recovered_xids, 16, &recovered_count),
                         "OjpXARecover(start scan)", SQL_HANDLE_DBC, xa_connection);
@@ -344,41 +356,55 @@ int run_connection(const DatabaseConfig& config,
                          })) {
             throw std::runtime_error("XA recovery scan did not return the prepared XID");
         }
+        stage = "end XA recovery scan";
         require_success(xa.recover(xa_connection, OJP_XA_TMENDRSCAN,
                                    recovered_xids, 16, &recovered_count),
                         "OjpXARecover(end scan)", SQL_HANDLE_DBC, xa_connection);
         if (prepare_result == OJP_XA_XA_OK) {
+            stage = "commit two-phase XA transaction";
             require_success(xa.commit(xa_connection, &two_phase_xid, SQL_FALSE),
                             "OjpXACommit(two-phase)", SQL_HANDLE_DBC, xa_connection);
         }
+        stage = "verify two-phase XA commit";
         if (row_count(regular_statement, table, 1) != 1) {
             throw std::runtime_error("two-phase XA commit did not persist the inserted row");
         }
 
         const OjpXid rollback_xid = xid_for(table + "_rollback", "branch-2");
+        stage = "start rollback XA transaction";
         require_success(xa.start(xa_connection, &rollback_xid, OJP_XA_TMNOFLAGS),
                         "OjpXAStart(rollback)", SQL_HANDLE_DBC, xa_connection);
+        stage = "insert in rollback XA transaction";
         execute_direct(xa_statement, "INSERT INTO " + table + " VALUES (2, 'rollback')");
+        stage = "end rollback XA transaction";
         require_success(xa.end(xa_connection, &rollback_xid, OJP_XA_TMSUCCESS),
                         "OjpXAEnd(rollback)", SQL_HANDLE_DBC, xa_connection);
+        stage = "rollback XA transaction";
         require_success(xa.rollback(xa_connection, &rollback_xid),
                         "OjpXARollback", SQL_HANDLE_DBC, xa_connection);
+        stage = "verify XA rollback";
         if (row_count(regular_statement, table, 2) != 0) {
             throw std::runtime_error("XA rollback left the inserted row visible");
         }
 
         const OjpXid one_phase_xid = xid_for(table + "_one_phase", "branch-3");
+        stage = "start one-phase XA transaction";
         require_success(xa.start(xa_connection, &one_phase_xid, OJP_XA_TMNOFLAGS),
                         "OjpXAStart(one-phase)", SQL_HANDLE_DBC, xa_connection);
+        stage = "insert in one-phase XA transaction";
         execute_direct(xa_statement, "INSERT INTO " + table + " VALUES (3, 'one-phase')");
+        stage = "end one-phase XA transaction";
         require_success(xa.end(xa_connection, &one_phase_xid, OJP_XA_TMSUCCESS),
                         "OjpXAEnd(one-phase)", SQL_HANDLE_DBC, xa_connection);
+        stage = "commit one-phase XA transaction";
         require_success(xa.commit(xa_connection, &one_phase_xid, SQL_TRUE),
                         "OjpXACommit(one-phase)", SQL_HANDLE_DBC, xa_connection);
+        stage = "verify one-phase XA commit";
         if (row_count(regular_statement, table, 3) != 1) {
             throw std::runtime_error("one-phase XA commit did not persist the inserted row");
         }
 
+        stage = "set and read XA transaction timeout";
         SQLSMALLINT timeout_set = SQL_FALSE;
         require_success(xa.set_timeout(xa_connection, 30, &timeout_set),
                         "OjpXASetTransactionTimeout", SQL_HANDLE_DBC, xa_connection);
@@ -389,21 +415,27 @@ int run_connection(const DatabaseConfig& config,
             (timeout_set == SQL_FALSE && timeout != 0)) {
             throw std::runtime_error("MariaDB XA timeout did not match the set/get result");
         }
+        stage = "reset XA transaction timeout";
         require_success(xa.set_timeout(xa_connection, 0, &timeout_set),
                         "OjpXASetTransactionTimeout(reset)", SQL_HANDLE_DBC, xa_connection);
 
+        stage = "forget XA transaction";
         const SQLRETURN forget_result = xa.forget(xa_connection, &two_phase_xid);
         if (!SQL_SUCCEEDED(forget_result) && forget_result != SQL_ERROR) {
             throw std::runtime_error("OjpXAForget returned an unexpected status");
         }
 
         const OjpXid unavailable_branch = xid_for(table + "_unavailable", "branch-4");
+        stage = "start XA transaction for server-affinity failure";
         require_success(xa.start(xa_connection, &unavailable_branch, OJP_XA_TMNOFLAGS),
                         "OjpXAStart(unavailable server)", SQL_HANDLE_DBC, xa_connection);
+        stage = "stop XA-pinned OJP server";
         stopped_process_id = stop_server(pid_file, endpoints.front());
+        stage = "verify XA end fails without rerouting";
         if (xa.end(xa_connection, &unavailable_branch, OJP_XA_TMSUCCESS) != SQL_ERROR) {
             throw std::runtime_error("XA end should fail when its pinned OJP server is unavailable");
         }
+        stage = "verify XA affinity diagnostic";
         SQLCHAR error_state[6] = {};
         SQLCHAR error_message[512] = {};
         SQLINTEGER xa_error = 0;
@@ -416,6 +448,7 @@ int run_connection(const DatabaseConfig& config,
             throw std::runtime_error("XA affinity failure must report XAER_RMFAIL without rerouting");
         }
 
+        stage = "verify other OJP endpoint remains available";
         execute_direct(regular_statement, "SELECT 1");
         require_success(SQLFetch(regular_statement), "SQLFetch(other endpoint)",
                         SQL_HANDLE_STMT, regular_statement);
@@ -430,6 +463,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(regular_statement, SQL_CLOSE), "SQLFreeStmt(other endpoint)",
                         SQL_HANDLE_STMT, regular_statement);
 
+        stage = "drop test table and release handles";
         execute_direct(regular_statement, "DROP TABLE " + table);
         table_created = false;
         require_success(SQLFreeHandle(SQL_HANDLE_STMT, xa_statement),
@@ -447,6 +481,8 @@ int run_connection(const DatabaseConfig& config,
         dlclose(driver_module);
         driver_module = nullptr;
     } catch (...) {
+        std::cerr << ojp::test::backend_label(config.url)
+                  << " L9 failed during stage: " << stage << '\n' << std::flush;
         if (table_created && regular_statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
             SQLExecDirect(regular_statement, sql_text(drop), SQL_NTS);
@@ -468,6 +504,9 @@ int run_connection(const DatabaseConfig& config,
         }
         throw;
     }
+    stage = "wait for restarted OJP server";
+    std::cout << ojp::test::backend_label(config.url)
+              << " L9 stage: " << stage << '\n' << std::flush;
     ojp::test::wait_for_restart(pid_file, stopped_process_id,
         "DRIVER={OJP};SERVER=" + brace_value(endpoints.front()) +
         ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +

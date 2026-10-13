@@ -171,19 +171,22 @@ int run_connection(const DatabaseConfig& config,
     bool table_created = false;
     bool child_table_created = false;
     bool wide_connected = false;
-    const char* test_stage = "connection setup";
+    const char* test_stage = "allocate environment";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
                         "SQLAllocHandle(environment)");
+        test_stage = "set ODBC version";
         require_success(SQLSetEnvAttr(environment, SQL_ATTR_ODBC_VERSION,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3),
                                       SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
+        test_stage = "allocate ANSI connection";
         require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment,
                                        reinterpret_cast<SQLHANDLE*>(&connection)),
                         "SQLAllocHandle(connection)", SQL_HANDLE_ENV, environment);
 
+        test_stage = "ANSI SQLDriverConnect";
         const std::string connection_string =
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
@@ -193,9 +196,11 @@ int run_connection(const DatabaseConfig& config,
             reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.c_str())),
             SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
             "SQLDriverConnect", SQL_HANDLE_DBC, connection);
+        test_stage = "allocate wide connection";
         require_success(SQLAllocHandle(SQL_HANDLE_DBC, environment,
                                        reinterpret_cast<SQLHANDLE*>(&wide_connection)),
                         "SQLAllocHandle(wide connection)", SQL_HANDLE_ENV, environment);
+        test_stage = "wide SQLDriverConnectW";
         const std::string wide_connection_string =
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
@@ -206,9 +211,11 @@ int run_connection(const DatabaseConfig& config,
                                           SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnectW", SQL_HANDLE_DBC, wide_connection);
         wide_connected = true;
+        test_stage = "disconnect after SQLDriverConnectW";
         require_success(SQLDisconnect(wide_connection), "SQLDisconnect(wide)",
                         SQL_HANDLE_DBC, wide_connection);
         wide_connected = false;
+        test_stage = "wide SQLConnectW";
         const std::string connect_options =
             "SERVER=" + brace_value(endpoint) + ";DATABASE=" + brace_value(config.url);
         auto wide_connect_options = to_sql_wide(connect_options);
@@ -218,9 +225,11 @@ int run_connection(const DatabaseConfig& config,
                                     wide_user.data(), SQL_NTS, wide_password.data(), SQL_NTS),
                         "SQLConnectW", SQL_HANDLE_DBC, wide_connection);
         wide_connected = true;
+        test_stage = "allocate wide statement";
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, wide_connection,
                                        reinterpret_cast<SQLHANDLE*>(&wide_statement)),
                         "SQLAllocHandle(wide statement)", SQL_HANDLE_DBC, wide_connection);
+        test_stage = "allocate ANSI statement";
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);

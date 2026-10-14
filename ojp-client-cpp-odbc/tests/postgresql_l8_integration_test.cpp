@@ -319,6 +319,7 @@ int run_connection(const DatabaseConfig& config,
     SQLHSTMT recovered_statement = SQL_NULL_HSTMT;
     SQLHSTMT redistributed_statement = SQL_NULL_HSTMT;
     bool table_created = false;
+    std::string stage = "configure ODBC environment";
     try {
         require_success(SQLSetEnvAttr(SQL_NULL_HENV, SQL_ATTR_CONNECTION_POOLING,
                                       reinterpret_cast<SQLPOINTER>(SQL_CP_OFF), 0),
@@ -330,24 +331,32 @@ int run_connection(const DatabaseConfig& config,
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
 
+        stage = "open initial multinode connection";
         first_connection = open_connection(environment, config, endpoints[0] + "," + endpoints[1]);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, first_connection,
                                        reinterpret_cast<SQLHANDLE*>(&first_statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, first_connection);
+        stage = "create failover table";
         execute_direct(first_statement, "CREATE TABLE " + table +
                                        " (id INT PRIMARY KEY, label VARCHAR(100) NOT NULL)");
         table_created = true;
+        stage = "insert initial failover row";
         execute_direct(first_statement, "INSERT INTO " + table +
                                        " VALUES (1, 'before-failover')");
+        stage = "verify pool exhaustion is not retried";
         require_pool_exhaustion_not_retried(environment, config, endpoints[0], endpoints[1]);
 
+        stage = "stop first OJP server";
         const long stopped_process_id = stop_server(pid_file, endpoints[0]);
+        stage = "execute query after failover";
         execute_direct(first_statement, "UPDATE " + table +
                                         " SET label = 'after-failover' WHERE id = 1");
+        stage = "verify existing session after failover";
         verify_label(first_statement, table, 1, "after-failover");
 
         const std::string duplicate_insert =
             "INSERT INTO " + table + " VALUES (1, 'duplicate')";
+        stage = "verify SQL error is not reported as transport failure";
         expect(!SQL_SUCCEEDED(SQLExecDirect(first_statement, sql_text(duplicate_insert), SQL_NTS)),
                "PostgreSQL L8 duplicate-key error unexpectedly succeeded");
         SQLCHAR sql_state[6] = {};
@@ -360,32 +369,40 @@ int run_connection(const DatabaseConfig& config,
                "PostgreSQL SQL errors must not be reported as transport failures");
         verify_label(first_statement, table, 1, "after-failover");
 
+        stage = "wait for first OJP server restart";
         ojp::test::wait_for_restart(pid_file, stopped_process_id,
             "DRIVER={OJP};SERVER=" + brace_value(endpoints[0]) +
             ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
             ";PWD=" + brace_value(config.password) + ";");
+        stage = "open connection to recovered OJP server";
         recovered_connection = open_connection(environment, config, endpoints[0]);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, recovered_connection,
                                        reinterpret_cast<SQLHANDLE*>(&recovered_statement)),
                         "SQLAllocHandle(recovered statement)", SQL_HANDLE_DBC,
                         recovered_connection);
+        stage = "verify recovered OJP server data";
         verify_label(recovered_statement, table, 1, "after-failover");
         execute_direct(recovered_statement, "INSERT INTO " + table +
                                             " VALUES (2, 'recovered-node reuse')");
 
+        stage = "open load-aware multinode connection";
         redistributed_connection = open_connection(
             environment, config, endpoints[0] + "," + endpoints[1], true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, redistributed_connection,
                                        reinterpret_cast<SQLHANDLE*>(&redistributed_statement)),
                         "SQLAllocHandle(redistributed statement)", SQL_HANDLE_DBC,
                         redistributed_connection);
+        stage = "verify load-aware connection sees recovered data";
         verify_label(redistributed_statement, table, 2, "recovered-node reuse");
         execute_direct(redistributed_statement, "UPDATE " + table +
                                                 " SET label = 'cluster reuse' WHERE id = 2");
+        stage = "verify update through load-aware connection";
         verify_label(recovered_statement, table, 2, "cluster reuse");
 
+        stage = "drop failover table";
         execute_direct(first_statement, "DROP TABLE " + table);
         table_created = false;
+        stage = "free ODBC handles";
         require_success(SQLFreeHandle(SQL_HANDLE_STMT, redistributed_statement),
                         "SQLFreeHandle(redistributed statement)", SQL_HANDLE_DBC,
                         redistributed_connection);
@@ -417,6 +434,7 @@ int run_connection(const DatabaseConfig& config,
                         "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        std::cerr << "PostgreSQL L8 failed during stage: " << stage << '\n' << std::flush;
         if (table_created && first_statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
             SQLExecDirect(first_statement, sql_text(drop), SQL_NTS);

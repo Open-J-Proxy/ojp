@@ -223,6 +223,9 @@ public class ParameterHandler {
             case CLOB:
                 setClobParameter(sessionManager, session, ps, idx, param);
                 break;
+            case N_CLOB:
+                setNClobParameter(sessionManager, session, ps, idx, param);
+                break;
             case BINARY_STREAM:
                 setBinaryStreamParameter(ps, idx, param);
                 break;
@@ -308,6 +311,17 @@ public class ParameterHandler {
         } else {
             Clob clob = sessionManager.getLob(session, (String) clobUUID);
             ps.setClob(idx, clob.getCharacterStream());
+        }
+    }
+
+    private static void setNClobParameter(SessionManager sessionManager, SessionInfo session,
+                                          PreparedStatement ps, int idx, Parameter param) throws SQLException {
+        Object clobUUID = param.getValues().get(0);
+        if (clobUUID == null) {
+            ps.setNull(idx, java.sql.Types.NCLOB);
+        } else {
+            Clob clob = sessionManager.getLob(session, (String) clobUUID);
+            ps.setNClob(idx, clob.getCharacterStream());
         }
     }
 

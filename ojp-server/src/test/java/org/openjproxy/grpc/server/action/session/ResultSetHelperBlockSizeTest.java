@@ -21,6 +21,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -28,7 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -291,6 +294,36 @@ class ResultSetHelperBlockSizeTest {
             OpQueryResult qr = ProtoConverter.fromProto(block.getQueryResult());
             assertEquals(1, qr.getRows().size());
         }
+    }
+
+    @Test
+    void shouldSendOnlyOneBlockPerFetchCall() throws SQLException {
+        int rowCount = 25;
+        int blockSize = 10;
+        System.setProperty("ojp.resultset.rowsPerBlock", Integer.toString(blockSize));
+
+        java.sql.ResultSet rs = buildMockResultSet(rowCount);
+        when(sessionManager.getResultSet(buildSession(), RS_UUID)).thenReturn(rs);
+
+        ActionContext context = buildActionContext();
+        List<OpResult> blocks = new ArrayList<>();
+        for (int call = 0; call < 4; call++) {
+            clearInvocations(responseObserver);
+            ResultSetHelper.handleResultSet(
+                    context, buildSession(), RS_UUID, responseObserver, blockSize);
+
+            ArgumentCaptor<OpResult> captor = ArgumentCaptor.forClass(OpResult.class);
+            verify(responseObserver, times(1)).onNext(captor.capture());
+            verify(responseObserver).onCompleted();
+            blocks.add(captor.getValue());
+        }
+
+        assertEquals(4, blocks.size());
+        assertEquals(rowCount, countTotalRowsDelivered(blocks));
+        assertEquals(blockSize, ProtoConverter.fromProto(blocks.get(0).getQueryResult()).getRows().size());
+        assertEquals(blockSize, ProtoConverter.fromProto(blocks.get(1).getQueryResult()).getRows().size());
+        assertEquals(5, ProtoConverter.fromProto(blocks.get(2).getQueryResult()).getRows().size());
+        assertEquals(0, ProtoConverter.fromProto(blocks.get(3).getQueryResult()).getRows().size());
     }
 
     @Test

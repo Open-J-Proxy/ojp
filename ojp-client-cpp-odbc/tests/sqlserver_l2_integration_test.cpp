@@ -45,6 +45,9 @@ void require_success(SQLRETURN result, const std::string& operation,
         SQLSMALLINT detail_length = 0;
         if (SQLGetDiagRec(handle_type, handle, 1, state, &native_error, detail,
                           sizeof(detail), &detail_length) == SQL_SUCCESS) {
+            std::cerr << operation << " failed with SQLSTATE "
+                      << reinterpret_cast<const char*>(state)
+                      << " and native error " << native_error << '\n' << std::flush;
             message << " [" << state << ", " << native_error << "] "
                     << reinterpret_cast<const char*>(detail);
         }
@@ -168,9 +171,19 @@ void expect_column(SQLHSTMT statement, SQLUSMALLINT column, const std::string& n
                                    &name_length, &data_type, &column_size, &decimal_digits,
                                    &nullable),
                     "SQLDescribeCol", SQL_HANDLE_STMT, statement);
-    expect(std::string(reinterpret_cast<const char*>(column_name)) == name &&
-           data_type == expected_type,
-           "result metadata for column " + std::to_string(column) + " should be " + name);
+    const std::string actual_name(reinterpret_cast<const char*>(column_name));
+    if (actual_name != name || data_type != expected_type) {
+        std::cerr << "SQLDescribeCol metadata mismatch: column=" << column
+                 << ", expected_name=" << name
+                 << ", actual_name=" << actual_name
+                 << ", expected_type=" << expected_type
+                 << ", actual_type=" << data_type
+                 << ", size=" << column_size
+                 << ", decimal_digits=" << decimal_digits
+                 << ", nullable=" << nullable << '\n' << std::flush;
+        throw std::runtime_error("result metadata for column " + std::to_string(column) +
+                                " did not match expected name and type");
+    }
 }
 
 SQLBIGINT current_identity(SQLHSTMT statement, const std::string& table) {
@@ -184,7 +197,8 @@ SQLBIGINT current_identity(SQLHSTMT statement, const std::string& table) {
 }
 
 // Mirrors typesCoverageTestSuccessful, typesPartialSupportTest, and testSqlServerNullValues.
-void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
+void verify_multiple_types(SQLHSTMT statement, const std::string& table, std::string& stage) {
+    stage = "create typed-columns table";
     execute_direct(statement, "CREATE TABLE " + table + " (id INT IDENTITY(1,1) PRIMARY KEY,"
         " val_int INT NOT NULL, val_varchar NVARCHAR(50), val_double_precision FLOAT,"
         " val_bigint BIGINT, val_tinyint TINYINT, val_smallint SMALLINT, val_boolean BIT,"
@@ -193,6 +207,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
         " val_instant DATETIME2, val_offsetdatetime DATETIMEOFFSET,"
         " val_offsettime DATETIMEOFFSET)");
 
+    stage = "insert SQL Server standard types";
     prepare(statement, "INSERT INTO " + table + " (val_int, val_varchar, val_double_precision,"
         " val_bigint, val_tinyint, val_smallint, val_boolean, val_decimal, val_float, val_byte,"
         " val_binary, val_date, val_time, val_timestamp, val_instant, val_offsetdatetime,"
@@ -273,6 +288,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
 
     // Partial-support types: Instant as a UTC DATETIME2, and OffsetDateTime/OffsetTime as
     // DATETIMEOFFSET text because ODBC has no portable timezone-aware C type.
+    stage = "update timezone-related values";
     prepare(statement, "UPDATE " + table + " SET val_instant = ?, val_offsetdatetime = ?,"
         " val_offsettime = ? WHERE id = ?");
     SQL_TIMESTAMP_STRUCT instant_value{2024, 12, 1, 10, 10, 10, 0};
@@ -295,6 +311,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect_one_row_affected(statement, "prepared UPDATE");
     close_and_reset(statement);
 
+    stage = "select and validate typed values";
     prepare(statement, "SELECT id, val_int, val_varchar, val_double_precision, val_bigint,"
         " val_tinyint, val_smallint, val_boolean, val_decimal,"
         " val_float, val_byte, val_binary, val_date, val_time, val_timestamp, val_instant,"
@@ -345,6 +362,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect_text(statement, 19, "1900-01-01 21:20:30");
     close_and_reset(statement);
 
+    stage = "insert row containing NULL values";
     execute_direct(statement, "INSERT INTO " + table + " (val_int, val_varchar)"
         " VALUES (2, 'Test')");
     expect_one_row_affected(statement, "direct INSERT");
@@ -372,6 +390,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
     expect(SQLFetch(statement) == SQL_NO_DATA, "NULL row query returned too many rows");
     close_and_reset(statement);
 
+    stage = "fetch SQL Server VARBINARY rows";
     // VARBINARY columns make the server stream SQL Server rows one at a time.
     execute_direct(statement, "SELECT val_int, val_byte FROM " + table + " ORDER BY id");
     require_success(SQLFetch(statement), "SQLFetch(binary row 1)", SQL_HANDLE_STMT, statement);
@@ -386,7 +405,9 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table) {
 }
 
 // Mirrors testSqlServerSpecificTypes and testSqlServerLargeTypes.
-void verify_specific_and_large_types(SQLHSTMT statement, const std::string& table) {
+void verify_specific_and_large_types(SQLHSTMT statement, const std::string& table,
+                                     std::string& stage) {
+    stage = "create SQL Server-specific types table";
     execute_direct(statement, "CREATE TABLE " + table + " (id INT IDENTITY(1,1) PRIMARY KEY,"
         " ntext_col NTEXT, text_col TEXT, image_col IMAGE, xml_col XML, money_col MONEY,"
         " smallmoney_col SMALLMONEY, uniqueidentifier_col UNIQUEIDENTIFIER,"
@@ -411,6 +432,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
         " smallmoney_col, uniqueidentifier_col, datetimeoffset_col, datetime2_col,"
         " smalldatetime_col, nvarchar_max, varchar_max, varbinary_max)"
         " VALUES (?, ?, ?, ?, NEWID(), ?, ?, ?, ?, ?, ?)";
+    stage = "insert SQL Server-specific and large values";
     prepare(statement, insert);
     std::string ntext_value = "NTEXT content with Unicode: \xE4\xB8\xAD\xE6\x96\x87 "
         "\xF0\x9F\x9A\x80";
@@ -458,6 +480,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     close_and_reset(statement);
     SQLBIGINT generated_id = current_identity(statement, table);
 
+    stage = "prepare SQL Server-specific and large-values SELECT";
     prepare(statement, "SELECT id, ntext_col, text_col,"
         " money_col, smallmoney_col, uniqueidentifier_col,"
         " datetimeoffset_col, datetime2_col, smalldatetime_col, nvarchar_max, varchar_max,"
@@ -465,33 +488,53 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
         " CAST(geography_col AS VARBINARY(MAX)) AS geography_bytes,"
         " CAST(hierarchyid_col AS VARBINARY(MAX)) AS hierarchyid_bytes, sql_variant_col"
         " FROM " + table + " WHERE id = ?");
+    stage = "bind SQL Server-specific SELECT parameter";
     SQLLEN id_length = sizeof(generated_id);
     bind(statement, 1, SQL_C_SBIGINT, SQL_BIGINT, 0, 0, &generated_id, sizeof(generated_id),
          &id_length, "id");
+    stage = "execute SQL Server-specific and large-values SELECT";
     require_success(SQLExecute(statement), "SQLExecute(select specific types)",
                     SQL_HANDLE_STMT, statement);
     SQLSMALLINT column_count = 0;
+    stage = "read SQL Server-specific SELECT column count";
     require_success(SQLNumResultCols(statement, &column_count), "SQLNumResultCols",
                     SQL_HANDLE_STMT, statement);
+    stage = "validate SQL Server-specific SELECT column count";
     expect(column_count == 18, "expected eighteen SQL Server specific result columns");
+    stage = "fetch SQL Server-specific and large-values row";
     require_success(SQLFetch(statement), "SQLFetch(select specific types)",
                     SQL_HANDLE_STMT, statement);
+    stage = "describe SQL Server NTEXT result";
     expect_column(statement, 2, "ntext_col", SQL_VARCHAR);
+    stage = "describe SQL Server VARBINARY(MAX) result";
     expect_column(statement, 12, "varbinary_max", SQL_VARBINARY);
+    stage = "read SQL Server-specific SELECT identity";
     expect(get_value<SQLBIGINT>(statement, 1, SQL_C_SBIGINT) == generated_id,
            "specific-types SELECT returned the wrong identity");
+    stage = "read SQL Server NTEXT result";
     expect_text(statement, 2, ntext_value);
+    stage = "read SQL Server TEXT result";
     expect_text(statement, 3, "TEXT content");
+    stage = "read SQL Server MONEY result";
     expect_text(statement, 4, "123.4500");
+    stage = "read SQL Server SMALLMONEY result";
     expect_text(statement, 5, "67.8900");
+    stage = "read SQL Server UNIQUEIDENTIFIER result";
     expect(get_text(statement, 6).size() == 36, "UNIQUEIDENTIFIER should use the GUID format");
+    stage = "read SQL Server DATETIMEOFFSET result";
     expect_text(statement, 7, "2024-12-01 10:10:10");
+    stage = "read SQL Server DATETIME2 result";
     expect_text(statement, 8, "2024-12-01 14:30:45.123");
+    stage = "read SQL Server SMALLDATETIME result";
     expect_text(statement, 9, "2024-12-01 14:30:00");
+    stage = "read SQL Server NVARCHAR(MAX) Unicode result";
     expect_text(statement, 10, large_unicode_text);
+    stage = "read SQL Server VARCHAR(MAX) result";
     expect_text(statement, 11, large_text);
+    stage = "read SQL Server VARBINARY(MAX) result";
     expect(get_binary(statement, 12, large_binary.size() + 16) == large_binary,
            "VARBINARY(MAX) did not round-trip");
+    stage = "validate NULL SQL Server-specific result values";
     for (SQLUSMALLINT column = 13; column <= 18; ++column) {
         expect_null(statement, column, column == 14 || column == 18 ? SQL_C_CHAR : SQL_C_BINARY);
     }
@@ -506,6 +549,7 @@ int run_connection(const DatabaseConfig& config,
     const std::string suffix = random_suffix();
     const std::vector<std::string> tables = {
         "ojp_cpp_mssql_l2_types_" + suffix, "ojp_cpp_mssql_l2_specific_" + suffix};
+    std::string stage = "allocate ODBC handles";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -522,6 +566,7 @@ int run_connection(const DatabaseConfig& config,
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
             ";PWD=" + brace_value(config.password) + ";";
+        stage = "connect to SQL Server through OJP";
         require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string),
                                          SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
@@ -529,9 +574,10 @@ int run_connection(const DatabaseConfig& config,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
-        verify_multiple_types(statement, tables[0]);
-        verify_specific_and_large_types(statement, tables[1]);
+        verify_multiple_types(statement, tables[0], stage);
+        verify_specific_and_large_types(statement, tables[1], stage);
 
+        stage = "drop test tables";
         for (const auto& table : tables) {
             execute_direct(statement, "DROP TABLE IF EXISTS " + table);
         }
@@ -545,6 +591,7 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeHandle(SQL_HANDLE_ENV, environment), "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        std::cerr << "SQL Server L2 failed during stage: " << stage << '\n' << std::flush;
         if (statement != SQL_NULL_HSTMT) {
             SQLFreeStmt(statement, SQL_CLOSE);
             SQLFreeStmt(statement, SQL_RESET_PARAMS);

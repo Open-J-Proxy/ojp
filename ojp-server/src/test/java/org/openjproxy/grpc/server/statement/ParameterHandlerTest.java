@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.postgresql.util.PGobject;
@@ -13,21 +14,28 @@ import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.dto.ParameterType;
 import org.openjproxy.grpc.server.SessionManager;
 
+import javax.sql.rowset.serial.SerialClob;
+import java.io.Reader;
 import java.math.BigDecimal;
+import java.sql.Clob;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.util.Arrays;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link ParameterHandler}.
@@ -225,6 +233,37 @@ class ParameterHandlerTest {
                 .values(List.of(java.sql.Types.VARCHAR)).build();
         ParameterHandler.addParam(sessionManager, session, 1, ps, param);
         verify(ps).setNull(1, java.sql.Types.VARCHAR);
+    }
+
+    @Test
+    void shouldBindNationalClobParameterFromSessionLob() throws Exception {
+        String clobId = "clob-id";
+        String expectedValue = "Unicode text: 東京";
+        Clob clob = new SerialClob(expectedValue.toCharArray());
+        when(sessionManager.getLob(session, clobId)).thenReturn(clob);
+        Parameter param = Parameter.builder().index(1).type(ParameterType.N_CLOB)
+                .values(List.of(clobId)).build();
+
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+
+        ArgumentCaptor<Reader> readerCaptor = ArgumentCaptor.forClass(Reader.class);
+        verify(ps).setNClob(eq(1), readerCaptor.capture());
+        Reader reader = readerCaptor.getValue();
+        assertNotNull(reader);
+        char[] actualValue = new char[expectedValue.length()];
+        int charsRead = reader.read(actualValue);
+        assertEquals(expectedValue, new String(actualValue, 0, charsRead));
+    }
+
+    @Test
+    void shouldBindNullNationalClobParameterAsSqlNClob() throws SQLException {
+        Parameter param = Parameter.builder().index(1).type(ParameterType.N_CLOB)
+                .values(Arrays.asList((Object) null)).build();
+
+        ParameterHandler.addParam(sessionManager, session, 1, ps, param);
+
+        verify(ps).setNull(1, java.sql.Types.NCLOB);
+        verifyNoInteractions(sessionManager);
     }
 
     @Test

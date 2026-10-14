@@ -1,7 +1,7 @@
 # OJP C++ ODBC Client
 
-This module provides an ANSI ODBC driver for applications that access OJP
-servers from C++.
+This module provides an ANSI and Unicode ODBC 3.x driver for applications that
+access OJP servers from C++.
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
 
@@ -12,7 +12,7 @@ communicates with the server over gRPC.
 | H2 | **L9** |
 | PostgreSQL | **L10** |
 | SQL Server | **L10** |
-| MySQL | Not established |
+| MySQL | **L10** |
 | MariaDB | **L10** |
 | Oracle | Not established |
 | DB2 | Not established |
@@ -341,13 +341,98 @@ standard Python, ADO.NET, or FireDAC local transaction APIs.
 
 ### Using other languages through ODBC
 
-The driver implements advanced OJP capabilities, but it is **not a complete
-ODBC API implementation**. It exports ANSI functions, not the `...W` Unicode
-entry points. `SQLConnect`/DSN-only connections, catalog functions such as
-`SQLTables`/`SQLColumns`, `SQLColAttribute`, `SQLGetStmtAttr`, and
-`SQLMoreResults` are not implemented; `SQLGetInfo` covers only a subset.
-Driver Manager ANSI/Unicode conversion does not establish wrapper compatibility.
-Some wrappers request unsupported metadata even for a simple query.
+The driver implements the common connection, statement, transaction, result,
+and metadata paths, but is **not a complete ODBC API implementation**. The
+supported functions include `SQLDriverConnect[W]`, `SQLConnect[W]`,
+`SQLExecDirect[W]`, `SQLPrepare[W]`, `SQLBindParameter`, `SQLBindCol`,
+`SQLGetData`, `SQLTables[W]`, `SQLColumns[W]`, `SQLPrimaryKeys[W]`,
+`SQLForeignKeys[W]`, `SQLGetTypeInfo`, `SQLDescribeCol[W]`,
+`SQLColAttribute[W]`, `SQLGetInfo[W]`, `SQLGetFunctions`, and
+`SQLGetDiagRec[W]`. The W entry points share their ODBC function IDs with the
+ANSI forms in `SQLGetFunctions`.
+
+#### Unicode encoding and lengths
+
+ANSI `SQLCHAR` text is treated as UTF-8; the driver does not convert from the
+process locale or Windows code page. W entry points convert between UTF-8 and
+the platform's `SQLWCHAR` representation (UTF-16 code units where
+`sizeof(SQLWCHAR) == 2`, otherwise UTF-32 code units). Invalid wide sequences
+fail with SQLSTATE `22018`. Use `SQL_C_WCHAR` with `SQL_WCHAR`, `SQL_WVARCHAR`,
+or `SQL_WLONGVARCHAR` for Unicode parameters and results.
+
+String lengths passed to W connection, statement, and catalog functions count
+`SQLWCHAR` units; `SQL_NTS` is supported. `SQLBindParameter`, `SQLBindCol`, and
+`SQLGetData` buffer lengths and indicators for `SQL_C_WCHAR` are byte counts.
+Output buffers are terminated when they have room for a terminator, and
+truncation returns `SQL_SUCCESS_WITH_INFO` with SQLSTATE `01004`. Applications
+should size wide buffers using `sizeof(SQLWCHAR)`, not `sizeof(wchar_t)`.
+
+Example prepared Unicode query (the input buffer includes a trailing zero, but
+the indicator reports only the payload bytes):
+
+```cpp
+SQLWCHAR sql[] = { 'S','E','L','E','C','T',' ','?','\0' };
+SQLWCHAR text[] = { 0x6771, 0x4eac, 0 };
+SQLLEN text_bytes = 2 * sizeof(SQLWCHAR);
+SQLPrepareW(statement, sql, SQL_NTS);
+SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+                 32, 0, text, sizeof(text), &text_bytes);
+SQLExecute(statement);
+```
+
+For a Unicode connection, build the same `DRIVER`, `SERVER`, `DATABASE`, `UID`,
+and `PWD` fields in a `SQLWCHAR` buffer and pass it to `SQLDriverConnectW`
+(connection-string syntax is unchanged). The earlier ANSI example shows the
+corresponding `SQLDriverConnect` path.
+
+Metadata and transaction calls use the regular ODBC statement/connection
+handles:
+
+```cpp
+SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
+                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+SQLCHAR table_type[] = "TABLE";
+SQLTables(statement, nullptr, 0, nullptr, 0, table_name, SQL_NTS,
+          table_type, SQL_NTS);
+while (SQLFetch(statement) == SQL_SUCCESS) {
+    // Read TABLE_NAME with SQLGetData(statement, 3, SQL_C_CHAR, ...).
+}
+SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
+```
+
+Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections. The
+driver does not currently resolve conventional DSNs, so `SQLConnect` and
+`SQLConnectW` are not supported through a Driver Manager. In particular, do not
+pass a `SERVER=...;DATABASE=...` options string as the server name: the Driver
+Manager interprets that argument as a DSN name and may reject it before calling
+the driver.
+
+#### Metadata and known limitations
+
+`SQLTables`, `SQLColumns`, `SQLPrimaryKeys`, `SQLForeignKeys`, and
+`SQLGetTypeInfo` call the connected JDBC driver's `DatabaseMetaData` through
+OJP Server, so catalog discovery does not embed database-specific SQL. Their
+result sets can be fetched with the normal statement APIs. `SQLGetInfo` reports
+the backend product/transaction information and a supported subset of ODBC
+capabilities; unrecognized information types return `HYC00`.
+
+`SQLDescribeCol` and `SQLColAttribute` can report the result label and infer a
+limited type/size from returned values. The current gRPC query result does not
+carry the complete JDBC `ResultSetMetaData`, so these functions cannot promise
+the database's declared precision, scale, nullability, or base-table identity
+for arbitrary query expressions. Use `SQLColumns` for authoritative declared
+table-column metadata. Catalog functions not listed above (including
+`SQLStatistics`, `SQLProcedures`, `SQLSpecialColumns`, and privilege catalogs),
+`SQLGetStmtAttr`, and `SQLMoreResults` remain unsupported. A Driver Manager or
+language wrapper may require one of these functions; verify its exact calls
+with the target Driver Manager and database.
+
+The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
+paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,
+and SQL Server fixtures. Tests require a running OJP Server and database;
+disabled database suites skip unless their existing `OJP_TEST_*` variables are
+enabled. Driver Manager ANSI/Unicode conversion alone does not establish
+wrapper compatibility.
 
 | Application API | Bridge | Status / guide |
 |---|---|---|
@@ -369,7 +454,7 @@ connection strings. See the [ebook integration chapter](../documents/ebook/part2
 
 ## Integration tests
 
-The H2, PostgreSQL, MariaDB, and SQL Server tests read backend connection details from
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server tests read backend connection details from
 their respective fixtures:
 [`h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
 [`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
@@ -379,20 +464,55 @@ and
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
-The MariaDB L7-L8 suites use the MariaDB fixture and require two OJP endpoints
-connected to the same MariaDB database. MariaDB L8 stops and recovers its first
+Every integration executable runs its original assertions sequentially for every
+CSV record, with fresh ODBC handles and cleanup for each connection. Records have
+three fields: JDBC URL, username, and password. Quoted commas, doubled quotes,
+CRLF, and quoted multiline fields are supported. Empty lines are ignored; empty
+input and malformed nonempty records fail before contacting a server. Reports
+identify the physical starting row and an allowlisted backend label only.
+Raw driver diagnostics are not logged because they can reformat credentials.
+Failures stop the suite immediately.
+Disabled suites return 77 without opening the CSV or contacting a server.
+
+MySQL and MariaDB share all ten MariaDB test executables and the
+`mariadb_l1_connection.csv` fixture, which contains both JDBC URLs.
+The existing `OJP_TEST_MARIADB*` flags enable both records. CTest registers only
+`OjpOdbcMariaDBL1Integration` through `OjpOdbcMariaDBL10Integration`; there are no
+separate MySQL registrations or flags. Main CI starts MariaDB 10.11 and MySQL 8.4
+simultaneously and runs these suites once.
+The MySQL row uses port 3306; the MariaDB row uses port 3307. Both require
+`defaultdb` and a disposable `testuser` account. The MySQL row disables TLS
+and allows public-key retrieval for local tests only; do not use these settings
+for production connections. Supply each backend's JDBC driver to OJP.
+For MySQL L9/L10 recovery scans, grant the disposable test account
+`XA_RECOVER_ADMIN` on `*.*` in addition to its privileges on `defaultdb`;
+Main CI applies this grant automatically.
+The shared MariaDB/MySQL L7-L8 suites require two OJP endpoints that can both
+reach each database in the shared fixture. L8 stops and recovers its first
 endpoint, so that server must be supervised by a restart loop and its PID file
 must identify the server process. Configure it with
 `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
+For L9/L10, restart it with the default unlimited concurrency (`0`); the L8-only
+limit can reject concurrent health probes and XA calls. Main CI makes this
+transition between L8 and L9 while retaining the same restart supervisor.
 The PostgreSQL L7-L9 suites use the PostgreSQL fixture and require two OJP endpoints
 connected to the same PostgreSQL database. PostgreSQL L8 stops the first endpoint,
 so its PID file must identify the server process that a supervisor will restart.
 Configure that server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion
 assertion. PostgreSQL L9 exercises XA, including two-phase commit and prepared
 transaction recovery, so configure PostgreSQL with `max_prepared_transactions > 0`.
-Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and SQL Server L8-L10 stop an OJP server.
+Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and MariaDB/MySQL and SQL Server L8-L10 stop an OJP server.
 PID files must identify the endpoint being stopped, and a supervisor must
 restart that server.
+L8–L10 wait for the stopped server's new PID and a successful readiness query on
+that endpoint, not a fixed sleep. L9 checks XA node loss before waiting, then
+waits before continuing to the next record. Run restart suites sequentially,
+not with parallel CTest jobs.
+Execution deadlines apply separately to each record (180 seconds; 120 for H2
+L8), so CSV files can contain any number of connections without exhausting a
+single suite-wide CTest timeout. A timed-out record reports its row and
+terminates the test process immediately, as a CTest timeout would; subsequent
+records cannot hide it.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
@@ -431,6 +551,9 @@ OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_MARIADB_L9=true \
 OJP_TEST_MARIADB_L9_ADDRS=localhost:1060,localhost:1059 \
 OJP_TEST_MARIADB_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB_L10=true \
+OJP_TEST_MARIADB_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -452,11 +575,13 @@ fail the test instead of silently skipping it. Set
 `OJP_TEST_POSTGRESQL_L7_UNAVAILABLE_ADDR`, or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
-The H2, PostgreSQL, MariaDB, and SQL Server L8 tests require a PID file for their first endpoint and
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server L8 tests require a PID file for their first endpoint and
 restart that server automatically through the test supervisor. The PostgreSQL,
-MariaDB, and SQL Server L9/L10 tests also require a PID file for their first
+MariaDB, MySQL, and SQL Server L9/L10 tests also require a PID file for their first
 endpoint, which must be restarted by a supervisor. Their endpoint lists put the
 restartable server first.
+H2 L9 instead puts the surviving server first and the restartable XA server
+last; its target PID file must identify that last endpoint.
 Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3

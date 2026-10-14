@@ -1,1 +1,2 @@
 "jdbc:mariadb://localhost:3307/defaultdb",testuser,testpassword
+"jdbc:mysql://localhost:3306/defaultdb?allowPublicKeyRetrieval=true&useSSL=false",testuser,testpassword

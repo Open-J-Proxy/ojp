@@ -1,4 +1,6 @@
 // Verifies PostgreSQL failover, pool-exhaustion handling, and server recovery through ODBC.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -24,47 +26,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the PostgreSQL connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else if (character != '\r') {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in PostgreSQL CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -184,7 +146,7 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         "DRIVER={OJP};SERVER=" + brace_value(endpoints) +
         ";DATABASE=" + brace_value(config.url) +
         ";UID=" + brace_value(config.user) +
-        ";P" "WD=" + brace_value(config.password) +
+        ";PWD=" + brace_value(config.password) +
         ";OJP.LOADAWARE.SELECTION.ENABLED=" + std::string(load_aware ? "true" : "false") +
         ";OJP.MULTINODE.RETRY.ATTEMPTS=3;OJP.MULTINODE.RETRY.DELAY=25;";
     require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,
@@ -222,15 +184,21 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
                                          const std::string& alternate_endpoint) {
     SQLHDBC busy_connection = SQL_NULL_HDBC;
     SQLHDBC overloaded_connection = SQL_NULL_HDBC;
+    std::vector<SQLHDBC> alternate_connections;
     SQLHSTMT busy_statement = SQL_NULL_HSTMT;
     SQLHSTMT overloaded_statement = SQL_NULL_HSTMT;
     std::atomic<bool> query_started{false};
     SQLRETURN long_query_result = SQL_ERROR;
     std::thread long_query_thread;
     try {
+        // Make load-aware routing prefer the busy endpoint, not a round-robin
+        // position changed by previous records or restart readiness probes.
+        for (int index = 0; index < 3; ++index) {
+            alternate_connections.push_back(open_connection(environment, config, alternate_endpoint));
+        }
         busy_connection = open_connection(environment, config, endpoint);
         overloaded_connection = open_connection(
-            environment, config, endpoint + "," + alternate_endpoint);
+            environment, config, endpoint + "," + alternate_endpoint, true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, busy_connection,
                                        reinterpret_cast<SQLHANDLE*>(&busy_statement)),
                         "SQLAllocHandle(busy statement)", SQL_HANDLE_DBC, busy_connection);
@@ -285,6 +253,13 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
         require_success(SQLFreeHandle(SQL_HANDLE_DBC, busy_connection),
                         "SQLFreeHandle(busy connection)", SQL_HANDLE_ENV, environment);
         busy_connection = SQL_NULL_HDBC;
+        for (auto& alternate : alternate_connections) {
+            require_success(SQLDisconnect(alternate), "SQLDisconnect(alternate)",
+                            SQL_HANDLE_DBC, alternate);
+            require_success(SQLFreeHandle(SQL_HANDLE_DBC, alternate),
+                            "SQLFreeHandle(alternate)", SQL_HANDLE_ENV, environment);
+            alternate = SQL_NULL_HDBC;
+        }
     } catch (...) {
         if (long_query_thread.joinable()) {
             long_query_thread.join();
@@ -302,6 +277,12 @@ void require_pool_exhaustion_not_retried(SQLHENV environment, const DatabaseConf
         if (busy_connection != SQL_NULL_HDBC) {
             SQLDisconnect(busy_connection);
             SQLFreeHandle(SQL_HANDLE_DBC, busy_connection);
+        }
+        for (const auto alternate : alternate_connections) {
+            if (alternate != SQL_NULL_HDBC) {
+                SQLDisconnect(alternate);
+                SQLFreeHandle(SQL_HANDLE_DBC, alternate);
+            }
         }
         throw;
     }
@@ -326,38 +307,9 @@ long stop_server(const std::string& pid_file, const std::string& endpoint) {
     return process_id;
 }
 
-void wait_for_server_restart(const std::string& pid_file, long stopped_process_id) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (std::chrono::steady_clock::now() < deadline) {
-        const long restarted_process_id = read_process_id(pid_file);
-        if (restarted_process_id > 0 && restarted_process_id != stopped_process_id) {
-            std::this_thread::sleep_for(std::chrono::seconds(8));
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    throw std::runtime_error("the PostgreSQL L8 OJP server did not restart within 30 seconds");
-}
-
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error(
-            "expected PostgreSQL L8 CSV path, enable variable, and endpoint variable");
-    }
-    const std::string enable_variable = argv[2];
-    if (!enabled(environment_value(enable_variable.c_str()))) {
-        std::cout << "Skipped: set " << enable_variable
-                  << "=true to run the PostgreSQL L8 suite\n";
-        return 77;
-    }
-    const std::vector<std::string> endpoints = split_endpoints(environment_value(argv[3]));
-    const std::string pid_file =
-        environment_value("OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE");
-    if (pid_file.empty()) {
-        throw std::runtime_error(
-            "OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE is required when PostgreSQL L8 is enabled");
-    }
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::vector<std::string>& endpoints,
+                   const std::string& pid_file) {
     const std::string table = "ojp_cpp_pg_l8_" + random_suffix();
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC first_connection = SQL_NULL_HDBC;
@@ -367,6 +319,7 @@ int run_integration_test(int argc, char** argv) {
     SQLHSTMT recovered_statement = SQL_NULL_HSTMT;
     SQLHSTMT redistributed_statement = SQL_NULL_HSTMT;
     bool table_created = false;
+    std::string stage = "configure ODBC environment";
     try {
         require_success(SQLSetEnvAttr(SQL_NULL_HENV, SQL_ATTR_CONNECTION_POOLING,
                                       reinterpret_cast<SQLPOINTER>(SQL_CP_OFF), 0),
@@ -378,24 +331,32 @@ int run_integration_test(int argc, char** argv) {
                                       reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), SQL_IS_INTEGER),
                         "SQLSetEnvAttr", SQL_HANDLE_ENV, environment);
 
+        stage = "open initial multinode connection";
         first_connection = open_connection(environment, config, endpoints[0] + "," + endpoints[1]);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, first_connection,
                                        reinterpret_cast<SQLHANDLE*>(&first_statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, first_connection);
+        stage = "create failover table";
         execute_direct(first_statement, "CREATE TABLE " + table +
                                        " (id INT PRIMARY KEY, label VARCHAR(100) NOT NULL)");
         table_created = true;
+        stage = "insert initial failover row";
         execute_direct(first_statement, "INSERT INTO " + table +
                                        " VALUES (1, 'before-failover')");
+        stage = "verify pool exhaustion is not retried";
         require_pool_exhaustion_not_retried(environment, config, endpoints[0], endpoints[1]);
 
+        stage = "stop first OJP server";
         const long stopped_process_id = stop_server(pid_file, endpoints[0]);
+        stage = "execute query after failover";
         execute_direct(first_statement, "UPDATE " + table +
                                         " SET label = 'after-failover' WHERE id = 1");
+        stage = "verify existing session after failover";
         verify_label(first_statement, table, 1, "after-failover");
 
         const std::string duplicate_insert =
             "INSERT INTO " + table + " VALUES (1, 'duplicate')";
+        stage = "verify SQL error is not reported as transport failure";
         expect(!SQL_SUCCEEDED(SQLExecDirect(first_statement, sql_text(duplicate_insert), SQL_NTS)),
                "PostgreSQL L8 duplicate-key error unexpectedly succeeded");
         SQLCHAR sql_state[6] = {};
@@ -408,29 +369,40 @@ int run_integration_test(int argc, char** argv) {
                "PostgreSQL SQL errors must not be reported as transport failures");
         verify_label(first_statement, table, 1, "after-failover");
 
-        wait_for_server_restart(pid_file, stopped_process_id);
+        stage = "wait for first OJP server restart";
+        ojp::test::wait_for_restart(pid_file, stopped_process_id,
+            "DRIVER={OJP};SERVER=" + brace_value(endpoints[0]) +
+            ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
+            ";PWD=" + brace_value(config.password) + ";");
+        stage = "open connection to recovered OJP server";
         recovered_connection = open_connection(environment, config, endpoints[0]);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, recovered_connection,
                                        reinterpret_cast<SQLHANDLE*>(&recovered_statement)),
                         "SQLAllocHandle(recovered statement)", SQL_HANDLE_DBC,
                         recovered_connection);
+        stage = "verify recovered OJP server data";
         verify_label(recovered_statement, table, 1, "after-failover");
         execute_direct(recovered_statement, "INSERT INTO " + table +
                                             " VALUES (2, 'recovered-node reuse')");
 
+        stage = "open load-aware multinode connection";
         redistributed_connection = open_connection(
             environment, config, endpoints[0] + "," + endpoints[1], true);
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, redistributed_connection,
                                        reinterpret_cast<SQLHANDLE*>(&redistributed_statement)),
                         "SQLAllocHandle(redistributed statement)", SQL_HANDLE_DBC,
                         redistributed_connection);
+        stage = "verify load-aware connection sees recovered data";
         verify_label(redistributed_statement, table, 2, "recovered-node reuse");
         execute_direct(redistributed_statement, "UPDATE " + table +
                                                 " SET label = 'cluster reuse' WHERE id = 2");
+        stage = "verify update through load-aware connection";
         verify_label(recovered_statement, table, 2, "cluster reuse");
 
+        stage = "drop failover table";
         execute_direct(first_statement, "DROP TABLE " + table);
         table_created = false;
+        stage = "free ODBC handles";
         require_success(SQLFreeHandle(SQL_HANDLE_STMT, redistributed_statement),
                         "SQLFreeHandle(redistributed statement)", SQL_HANDLE_DBC,
                         redistributed_connection);
@@ -462,6 +434,7 @@ int run_integration_test(int argc, char** argv) {
                         "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        std::cerr << "PostgreSQL L8 failed during stage: " << stage << '\n' << std::flush;
         if (table_created && first_statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
             SQLExecDirect(first_statement, sql_text(drop), SQL_NTS);
@@ -494,6 +467,29 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC PostgreSQL L8 failover and recovery integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error(
+            "expected PostgreSQL L8 CSV path, enable variable, and endpoint variable");
+    }
+    const std::string enable_variable = argv[2];
+    if (!enabled(environment_value(enable_variable.c_str()))) {
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the PostgreSQL L8 suite\n";
+        return 77;
+    }
+    const std::vector<std::string> endpoints = split_endpoints(environment_value(argv[3]));
+    const std::string pid_file =
+        environment_value("OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE");
+    if (pid_file.empty()) {
+        throw std::runtime_error(
+            "OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE is required when PostgreSQL L8 is enabled");
+    }
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoints, pid_file);
+    });
 }
 
 }  // namespace

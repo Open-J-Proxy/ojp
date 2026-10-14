@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -136,35 +137,43 @@ func (c *rpcClient) close() error {
 	return nil
 }
 
-func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
+func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, string, error) {
 	return c.executeUpdateWithStatement(ctx, sql, parameters, "")
 }
 
-func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (int64, error) {
-	return withConnectionLock(c, func() (int64, error) {
-		var trailer metadata.MD
+func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (int64, string, error) {
+	var generatedKeysUUID string
+	var updateCount int64
+	err := withConnectionLockError(c, func() error {
 		result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
 			Session:       cloneSession(c.session),
 			Sql:           sql,
 			Parameters:    parameters,
 			StatementUUID: statementUUID,
-		}, grpc.Trailer(&trailer))
+		})
 		if err != nil {
-			return 0, grpcError(ctx, err, trailer)
+			return grpcError(ctx, err, nil)
 		}
 		if result == nil {
-			return 0, errors.New("OJP server returned an empty update result")
+			return errors.New("OJP server returned an empty update result")
 		}
 		c.applySession(result.GetSession())
-		if result.GetType() != pb.ResultType_INTEGER {
-			return 0, fmt.Errorf("unexpected update result type %s", result.GetType())
+		generatedKeysUUID = result.GetUuid()
+		if result.GetType() == pb.ResultType_INTEGER {
+			if v, ok := result.GetResult().(*pb.OpResult_IntValue); ok {
+				updateCount = int64(v.IntValue)
+			}
 		}
-		updateCount, ok := result.GetResult().(*pb.OpResult_IntValue)
-		if !ok {
-			return 0, errors.New("OJP server returned an update result without an affected-row count")
-		}
-		return int64(updateCount.IntValue), nil
+		return nil
 	})
+	return updateCount, generatedKeysUUID, err
+}
+
+func withConnectionLockError(c *rpcConnection, fn func() error) error {
+	_, err := withConnectionLock(c, func() (any, error) {
+		return nil, fn()
+	})
+	return err
 }
 
 func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
@@ -254,31 +263,10 @@ func (c *rpcConnection) fetchNextRows(ctx context.Context, resultSetUUID string,
 	})
 }
 
-// generatedKeys retrieves the last generated key via CallResource + fetchNextRows.
-func (c *rpcConnection) generatedKeys(ctx context.Context, session *pb.SessionInfo) (int64, error) {
-	request := &pb.CallResourceRequest{
-		Session:      cloneSession(session),
-		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
-		ResourceUUID: session.GetSessionUUID(),
-		Target: &pb.TargetCall{
-			CallType:     pb.CallType_CALL_GENERATED,
-			ResourceName: "getGeneratedKeys",
-		},
-	}
-	var trailer metadata.MD
-	resp, rpcErr := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
-	if rpcErr != nil {
-		return 0, grpcError(ctx, rpcErr, trailer)
-	}
-	if resp == nil {
-		return 0, errors.New("OJP server returned an empty generated-keys response")
-	}
-	c.applySession(resp.GetSession())
-	resultSetUUID := resp.GetResourceUUID()
-	if resultSetUUID == "" {
-		return 0, nil
-	}
-	rows, err := c.fetchNextRows(ctx, resultSetUUID, 100)
+// fetchGeneratedKeys fetches a generated key by ResultSet UUID.
+// It must be called from within a locked context (e.g. ExecContext).
+func (c *rpcConnection) fetchGeneratedKeys(ctx context.Context, resultSetUUID string) (int64, error) {
+	rows, err := c.fetchNextRowsUnlocked(ctx, resultSetUUID, 100)
 	if err != nil {
 		return 0, err
 	}
@@ -289,6 +277,43 @@ func (c *rpcConnection) generatedKeys(ctx context.Context, session *pb.SessionIn
 		return v, nil
 	}
 	return 0, nil
+}
+
+// fetchNextRowsUnlocked is like fetchNextRows but does not acquire the
+// connection lock. It must be called from within a locked context.
+func (c *rpcConnection) fetchNextRowsUnlocked(ctx context.Context, resultSetUUID string, size int32) (*queryResult, error) {
+	var trailer metadata.MD
+	result, err := c.client.rpc.FetchNextRows(ctx, &pb.ResultSetFetchRequest{
+		Session:       cloneSession(c.session),
+		ResultSetUUID: resultSetUUID,
+		Size:          size,
+	}, grpc.Trailer(&trailer))
+	if err != nil {
+		return nil, grpcError(ctx, err, trailer)
+	}
+	if result == nil {
+		return nil, errors.New("OJP server returned an empty fetch result")
+	}
+	c.applySession(result.GetSession())
+	qr := &queryResult{resultSetUUID: resultSetUUID}
+	queryResult := result.GetQueryResult()
+	if queryResult == nil {
+		return qr, nil
+	}
+	if len(qr.Columns) == 0 {
+		qr.Columns = append(qr.Columns, queryResult.GetLabels()...)
+	}
+	for _, row := range queryResult.GetRows() {
+		columns := make([]any, len(row.GetColumns()))
+		for index, value := range row.GetColumns() {
+			columns[index], err = decodeValue(value)
+			if err != nil {
+				return nil, fmt.Errorf("decode fetch result column %d: %w", index, err)
+			}
+		}
+		qr.Rows = append(qr.Rows, columns)
+	}
+	return qr, nil
 }
 
 func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
@@ -374,6 +399,20 @@ func grpcError(ctx context.Context, err error, trailer metadata.MD) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// Check gRPC status metadata (server sends SqlErrorResponse here).
+	if statusErr, ok := status.FromError(err); ok {
+		for _, detail := range statusErr.Details() {
+			if sqlErr, ok := detail.(*pb.SqlErrorResponse); ok {
+				return &SQLError{
+					SQLState:   sqlErr.GetSqlState(),
+					VendorCode: sqlErr.GetVendorCode(),
+					Message:    sqlErr.GetReason(),
+					Cause:      err,
+				}
+			}
+		}
+	}
+	// Check trailer metadata.
 	const trailerName = "com.openjproxy.grpc.sqlerrorresponse-bin"
 	for key, values := range trailer {
 		if strings.EqualFold(key, trailerName) || strings.HasSuffix(strings.ToLower(key), "sqlerrorresponse-bin") {

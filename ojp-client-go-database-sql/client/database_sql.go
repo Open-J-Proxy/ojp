@@ -166,11 +166,15 @@ func (c *sqlConn) ExecContext(ctx context.Context, query string, args []driver.N
 	if err != nil {
 		return nil, err
 	}
-	count, err := c.connection.executeUpdate(ctx, query, parameters)
+	count, generatedKeysUUID, err := c.connection.executeUpdate(ctx, query, parameters)
 	if err != nil {
 		return nil, err
 	}
-	return sqlResult{rowsAffected: count}, nil
+	var lastID int64
+	if generatedKeysUUID != "" {
+		lastID, _ = c.connection.fetchGeneratedKeys(ctx, generatedKeysUUID)
+	}
+	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 
 func (c *sqlConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -235,11 +239,14 @@ func (s *sqlStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (dr
 	if err != nil {
 		return nil, err
 	}
-	count, err := s.connection.executeUpdate(ctx, s.query, parameters)
+	count, generatedKeysUUID, err := s.connection.executeUpdate(ctx, s.query, parameters)
 	if err != nil {
 		return nil, err
 	}
-	lastID, _ := s.connection.generatedKeys(ctx, cloneSession(s.connection.session))
+	var lastID int64
+	if generatedKeysUUID != "" {
+		lastID, _ = s.connection.fetchGeneratedKeys(ctx, generatedKeysUUID)
+	}
 	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 
@@ -438,11 +445,14 @@ func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.Na
 	if err != nil {
 		return nil, err
 	}
-	count, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
+	count, generatedKeysUUID, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
 	}
-	lastID, _ := s.connection.generatedKeys(ctx, cloneSession(s.connection.session))
+	var lastID int64
+	if generatedKeysUUID != "" {
+		lastID, _ = s.connection.fetchGeneratedKeys(ctx, generatedKeysUUID)
+	}
 	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 
@@ -480,11 +490,14 @@ func (s *sqlCallableStatement) ExecContext(ctx context.Context, args []driver.Na
 	if err != nil {
 		return nil, err
 	}
-	count, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
+	count, generatedKeysUUID, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
 	}
-	lastID, _ := s.connection.generatedKeys(ctx, cloneSession(s.connection.session))
+	var lastID int64
+	if generatedKeysUUID != "" {
+		lastID, _ = s.connection.fetchGeneratedKeys(ctx, generatedKeysUUID)
+	}
 	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 

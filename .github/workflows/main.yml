@@ -210,6 +210,7 @@ jobs:
           # Verify setting
           PGPASSWORD=testpassword psql -h 127.0.0.1 -U testuser -d defaultdb -c "SHOW max_prepared_transactions;"
           docker exec ojp-postgres createdb -U testuser ojp_budget_test
+          docker exec ojp-postgres createdb -U testuser ojp_multinode_budget_test
 
       - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
@@ -260,7 +261,7 @@ jobs:
             prometheus_port=$((port - 1430))
             docker run -d --name "ojp-server-budget-$port" \
               --network host \
-              -e JAVA_TOOL_OPTIONS="-Dojp.server.port=$port -Dojp.prometheus.port=$prometheus_port -Dojp.server.databaseBudgets.multinodeTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_budget_test* -Dojp.server.databaseBudgets.multinodeTest.maxTotalConnections=24 -Dojp.server.databaseBudgets.multinodeTest.priorities.username.testuser.weight=1" \
+              -e JAVA_TOOL_OPTIONS="-Dojp.server.port=$port -Dojp.prometheus.port=$prometheus_port -Dojp.server.databaseBudgets.multinodeTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_multinode_budget_test* -Dojp.server.databaseBudgets.multinodeTest.maxTotalConnections=24 -Dojp.server.databaseBudgets.multinodeTest.priorities.username.testuser.weight=1" \
               ${{ env.OJP_IMAGE }}
           done
           sleep 10

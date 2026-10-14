@@ -59,6 +59,15 @@ public class ReadWriteDataSourceManager {
             String primaryConnHash,
             DataSource primaryDs,
             String datasourceName) {
+        return setupReadWriteSplitting(connectionDetails, primaryConnHash, primaryDs, datasourceName, 1);
+    }
+
+    public ReadWriteConfiguration setupReadWriteSplitting(
+            ConnectionDetails connectionDetails,
+            String primaryConnHash,
+            DataSource primaryDs,
+            String datasourceName,
+            int healthyServerCount) {
 
         // Idempotency: if the primary is already mapped and has replicas registered, nothing to do.
         if (registry.getPrimaryName(primaryConnHash) != null && registry.hasReplicas(datasourceName)) {
@@ -103,7 +112,8 @@ public class ReadWriteDataSourceManager {
         List<String> successfulReplicas = new ArrayList<>();
         for (String replicaName : config.getReplicaNames()) {
             try {
-                DataSource replicaDs = createReplicaDataSource(replicaName, props, primaryConnHash);
+                DataSource replicaDs = createReplicaDataSource(
+                        replicaName, props, primaryConnHash, healthyServerCount);
                 if (replicaDs != null) {
                     registry.registerReplica(datasourceName, replicaDs);
                     successfulReplicas.add(replicaName);
@@ -134,7 +144,8 @@ public class ReadWriteDataSourceManager {
      * @param props       configuration properties
      * @return DataSource for the replica, or null if configuration is invalid
      */
-    private DataSource createReplicaDataSource(String replicaName, Properties props, String primaryConnHash) {
+    private DataSource createReplicaDataSource(String replicaName, Properties props, String primaryConnHash,
+                                               int healthyServerCount) {
         // Extract replica-specific properties with ojp. prefix
         String replicaPrefix = replicaName + ".ojp.";
 
@@ -165,7 +176,8 @@ public class ReadWriteDataSourceManager {
                     .orElseThrow(() -> new IllegalStateException("No connection pool providers available"));
             DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
             budgetRegistration = budgetManager.registerPool("replica:" + primaryConnHash + ":" + replicaName,
-                    replicaUrl, replicaUser, maxPoolSize, minIdle, poolProvider.supportsDynamicResizing());
+                    replicaUrl, replicaUser, maxPoolSize, minIdle, poolProvider.supportsDynamicResizing(),
+                    healthyServerCount);
             maxPoolSize = budgetRegistration.getMaximumPoolSize();
             minIdle = budgetRegistration.getMinimumIdle();
 

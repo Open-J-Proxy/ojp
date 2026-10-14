@@ -10,11 +10,13 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -74,6 +76,12 @@ public final class DatabaseConnectionBudgetManager {
 
     public synchronized Registration registerPool(String poolId, String jdbcUrl, String username,
                                                    int requestedMax, int requestedMin, boolean resizable) {
+        return registerPool(poolId, jdbcUrl, username, requestedMax, requestedMin, resizable, 1);
+    }
+
+    public synchronized Registration registerPool(String poolId, String jdbcUrl, String username,
+                                                   int requestedMax, int requestedMin, boolean resizable,
+                                                   int healthyServerCount) {
         if (poolId == null || poolId.isBlank() || requestedMax < 1 || requestedMin < 0) {
             throw new IllegalArgumentException("A pool id and valid requested pool sizes are required");
         }
@@ -89,6 +97,8 @@ public final class DatabaseConnectionBudgetManager {
         }
 
         Pool pool = new Pool(registration, username == null ? "" : username, resizable);
+        int previousHealthyServerCount = budget.healthyServerCount;
+        budget.healthyServerCount = Math.max(1, healthyServerCount);
         pools.put(poolId, pool);
         try {
             rebalance(budget);
@@ -96,6 +106,48 @@ public final class DatabaseConnectionBudgetManager {
             return registration;
         } catch (RuntimeException e) {
             pools.remove(poolId);
+            budget.healthyServerCount = previousHealthyServerCount;
+            try {
+                rebalance(budget);
+            } catch (RuntimeException rollbackFailure) {
+                e.addSuppressed(rollbackFailure);
+            }
+            throw e;
+        }
+    }
+
+    public synchronized void updateHealthyServerCount(String poolId, int healthyServerCount) {
+        Pool pool = pools.get(poolId);
+        if (pool != null) {
+            updateBudgetHealthyServerCount(pool.registration.budget, healthyServerCount);
+        }
+    }
+
+    public synchronized void updateHealthyServerCountForPoolPrefix(String poolIdPrefix, int healthyServerCount) {
+        Set<Budget> affectedBudgets = new HashSet<>();
+        pools.values().stream()
+                .filter(pool -> pool.registration.poolId.startsWith(poolIdPrefix))
+                .map(pool -> pool.registration.budget)
+                .filter(budget -> budget != null)
+                .forEach(affectedBudgets::add);
+        affectedBudgets.forEach(budget -> updateBudgetHealthyServerCount(budget, healthyServerCount));
+    }
+
+    private void updateBudgetHealthyServerCount(Budget budget, int healthyServerCount) {
+        if (budget == null) {
+            return;
+        }
+        int updatedHealthyServerCount = Math.max(1, healthyServerCount);
+        if (budget.healthyServerCount == updatedHealthyServerCount) {
+            return;
+        }
+
+        int previousHealthyServerCount = budget.healthyServerCount;
+        budget.healthyServerCount = updatedHealthyServerCount;
+        try {
+            rebalance(budget);
+        } catch (RuntimeException e) {
+            budget.healthyServerCount = previousHealthyServerCount;
             try {
                 rebalance(budget);
             } catch (RuntimeException rollbackFailure) {
@@ -189,7 +241,7 @@ public final class DatabaseConnectionBudgetManager {
             return;
         }
 
-        int capacity = budget.maxConnections - budget.reserveConnections;
+        int capacity = (budget.maxConnections - budget.reserveConnections) / budget.healthyServerCount;
         validatePoolCapacity(budget, capacity, members.size());
         Map<Pool, Integer> allocations = allocate(members, capacity, budget);
         keepFixedPoolsAtCurrentAllocation(members, allocations);
@@ -555,6 +607,7 @@ public final class DatabaseConnectionBudgetManager {
         private final int maxConnections;
         private final int reserveConnections;
         private final Map<String, Double> usernameWeights;
+        private int healthyServerCount = 1;
 
         private Budget(String name, Pattern urlPattern, int maxConnections,
                        int reserveConnections, Map<String, Double> usernameWeights) {

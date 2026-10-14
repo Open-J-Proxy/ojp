@@ -244,7 +244,8 @@ public class HandleXAConnectionWithPoolingAction {
                 DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
                 budgetRegistration = budgetManager.registerPool("xa:" + connHash, parsedUrl,
                         connectionDetails.getUser(), maxPoolSize, minIdle,
-                        context.getXaPoolProvider().supportsDynamicResizing());
+                        context.getXaPoolProvider().supportsDynamicResizing(),
+                        ConnectionPoolConfigurer.getHealthyServerCount(connectionDetails));
                 maxPoolSize = budgetRegistration.getMaximumPoolSize();
                 minIdle = budgetRegistration.getMinimumIdle();
 

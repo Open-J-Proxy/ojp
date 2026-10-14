@@ -68,6 +68,11 @@ public class ProcessClusterHealthAction {
         log.info("[XA-REBALANCE] Cluster health changed for {}, healthy servers: {}, triggering pool rebalancing, isXA={}",
                 connHash, healthyServerCount, sessionInfo.getIsXA());
 
+        DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+        budgetManager.updateHealthyServerCount("regular:" + connHash, healthyServerCount);
+        budgetManager.updateHealthyServerCount("xa:" + connHash, healthyServerCount);
+        budgetManager.updateHealthyServerCountForPoolPrefix("replica:" + connHash + ":", healthyServerCount);
+
         // Update the pool coordinator with new healthy server count.
         // IMPORTANT: Use the returned allocation reference directly (not a second getPoolAllocation() call)
         // to prevent a race condition where a concurrent calculatePoolSizes() call can overwrite
@@ -98,7 +103,6 @@ public class ProcessClusterHealthAction {
                 return;
             }
 
-            DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
             int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
             int newMinIdle = allocation.getCurrentMinIdle();
             if (!budgetManager.updatePoolRequest("xa:" + connHash, newMaxPoolSize, newMinIdle)) {

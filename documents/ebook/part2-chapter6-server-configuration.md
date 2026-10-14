@@ -104,7 +104,7 @@ ojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1
 
 The server reads `ojp.properties` from its working directory, or from the classpath if there is no file in the working directory. You can also pass these settings as JVM properties; JVM values override file values. Restart the server after changing the budget. This is a server configuration file, not the client application's `ojp.properties` described in Chapter 5.
 
-The budget applies to pooled primary, XA, and read/write replica connections on this OJP server. It does not count unpooled connections or pools on other OJP servers. When a budget reduces a pool's maximum, active work is allowed to finish, so the number of open database connections may take time to decrease.
+In a multinode cluster, set the same budget on every OJP server. Each server divides the usable maximum (`maxTotalConnections - reserveConnections`) by the number of healthy servers, rounding down, and applies that share to its local pools. A budget of 24 gives each of 3 healthy servers a local cap of 8; if one server fails, the other 2 recalculate to 12 each. Remainders are left unused. The JDBC driver's health reports trigger these updates, so this relies on servers receiving a consistent cluster-health view; it is not a distributed consensus mechanism for network partitions. The budget counts pooled primary, XA, and read/write replica connections, but not unpooled connections or connections from other applications. When a budget reduces a pool's maximum, active work is allowed to finish, so the number of open database connections may take time to decrease.
 
 ## 6.3 Security Configuration
 

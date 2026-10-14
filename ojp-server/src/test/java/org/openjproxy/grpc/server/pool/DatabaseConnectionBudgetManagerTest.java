@@ -74,6 +74,33 @@ class DatabaseConnectionBudgetManagerTest {
     }
 
     @Test
+    void shouldDivideClusterBudgetAcrossHealthyServersAndExpandOnFailure() {
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(24, 0));
+        DatabaseConnectionBudgetManager.Registration application = manager.registerPool(
+                "regular:application", "jdbc:postgresql://db/orders", "user-a", 24, 24, true, 3);
+        RecordingPoolResizer applicationResizer = new RecordingPoolResizer();
+        manager.attachPool(application, applicationResizer, application.getMaximumPoolSize(),
+                application.getMinimumIdle());
+        DatabaseConnectionBudgetManager.Registration reporting = manager.registerPool(
+                "regular:reporting", "jdbc:postgresql://db/orders", "user-b", 24, 24, true, 3);
+        RecordingPoolResizer reportingResizer = new RecordingPoolResizer();
+        manager.attachPool(reporting, reportingResizer, reporting.getMaximumPoolSize(),
+                reporting.getMinimumIdle());
+
+        assertEquals(4, application.getMaximumPoolSize());
+        assertEquals(4, reporting.getMaximumPoolSize());
+        assertEquals(8, application.getMaximumPoolSize() + reporting.getMaximumPoolSize());
+
+        manager.updateHealthyServerCount("regular:application", 2);
+
+        assertEquals(6, application.getMaximumPoolSize());
+        assertEquals(6, reporting.getMaximumPoolSize());
+        assertEquals(12, application.getMaximumPoolSize() + reporting.getMaximumPoolSize());
+        assertEquals(6, applicationResizer.maximumPoolSize);
+        assertEquals(6, reportingResizer.maximumPoolSize);
+    }
+
+    @Test
     void shouldApplyReserveAndClampMinimumIdleToAllocatedCap() {
         DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(8, 2));
 

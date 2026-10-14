@@ -253,6 +253,18 @@ jobs:
             -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10594 -Dojp.prometheus.port=9164 -Dojp.server.databaseBudgets.xaTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_budget_test* -Dojp.server.databaseBudgets.xaTest.maxTotalConnections=10 -Dojp.server.databaseBudgets.xaTest.priorities.username.testuser.weight=1" \
             ${{ env.OJP_IMAGE }}
 
+      - name: Start three OJP servers for multinode budget test
+        if: matrix.java-version == 25
+        run: |
+          for port in 10595 10596 10597; do
+            prometheus_port=$((port - 1430))
+            docker run -d --name "ojp-server-budget-$port" \
+              --network host \
+              -e JAVA_TOOL_OPTIONS="-Dojp.server.port=$port -Dojp.prometheus.port=$prometheus_port -Dojp.server.databaseBudgets.multinodeTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_budget_test* -Dojp.server.databaseBudgets.multinodeTest.maxTotalConnections=24 -Dojp.server.databaseBudgets.multinodeTest.priorities.username.testuser.weight=1" \
+              ${{ env.OJP_IMAGE }}
+          done
+          sleep 10
+
       # Start second OJP server WITH SQL enhancer enabled in OPTIMIZE mode
       # Tests will run against this server via postgres_connection.csv (port 10593)
       # OPTIMIZE mode enables conversion and optimization with schema loading support
@@ -281,6 +293,18 @@ jobs:
       # Run PostgreSQL-specific tests with -DenablePostgresTests flag
       - name: Test (ojp-jdbc-driver) with PostgreSQL enabled
         run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenablePostgresTests=true
+
+      - name: Verify multinode budget with three healthy servers
+        if: matrix.java-version == 25
+        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenablePostgresTests=true -DenablePostgresMultinodeBudgetTests=true -Dtest=PostgresMultinodeDatabaseConnectionBudgetIntegrationTest
+
+      - name: Stop one multinode budget server
+        if: matrix.java-version == 25
+        run: docker stop ojp-server-budget-10597
+
+      - name: Verify multinode budget is redistributed after server failure
+        if: matrix.java-version == 25
+        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenablePostgresTests=true -DenablePostgresMultinodeBudgetTests=true -Dtest=PostgresMultinodeDatabaseConnectionBudgetIntegrationTest
 
       # ===================================================================
       # SQL Enhancer Integration Test

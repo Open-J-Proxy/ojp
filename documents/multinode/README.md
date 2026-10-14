@@ -153,7 +153,9 @@ Each OJP server in a multinode setup should be configured identically with the s
 
 **XA Backend Session Pools**: XA backend session pool sizes (`ojp.xa.connection.pool.maxTotal`, `ojp.xa.connection.pool.minIdle`) are also divided among healthy servers, with dynamic rebalancing on server failure or recovery.
 
-**Database budgets are per server, not cluster-wide.** OJP first divides each configured pool's maximum and minimum across healthy servers (rounding up), then applies that server's database budget to the pools on that server. For example, with 3 healthy servers, a configured pool maximum of 30 gives each server a local maximum of 10. A database budget of 8 on each server can therefore allow up to 24 connections across the cluster, not 8. If a server fails, the remaining servers receive larger local pool requests, but each server's budget still caps its own pools; the budget may limit how much capacity failover can restore. Set the same budget on every server, and account for the number of servers and failover capacity when choosing its value.
+**Database budgets are cluster-wide for a multinode cluster.** Set the same budget on every OJP server. Each server divides the usable budget (`maxTotalConnections - reserveConnections`) by the number of healthy servers, rounding down, then shares its local portion among matching pools. For example, a budget of 24 gives each of 3 healthy servers a local cap of 8. If one server fails, the 2 remaining servers raise their local caps to 12 each. Any remainder from division is left unused, so the cluster does not exceed the configured maximum.
+
+Pool maxima are first divided among healthy servers too. When a server fails, the JDBC driver's health updates cause the remaining servers to recalculate both their pool requests and their budget shares. All servers must use the same budget configuration and receive a consistent health view; updates follow the driver's health reporting and are not a distributed consensus mechanism for network partitions.
 
 #### XA Multinode Example
 

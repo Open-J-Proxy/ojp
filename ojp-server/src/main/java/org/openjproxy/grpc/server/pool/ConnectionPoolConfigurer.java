@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
+import org.openjproxy.grpc.server.ClusterHealthTracker;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.action.ActionContext;
 
@@ -21,6 +22,17 @@ import java.util.Properties;
 public class ConnectionPoolConfigurer {
 
     private static final MultinodePoolCoordinator POOL_COORDINATOR = new MultinodePoolCoordinator();
+
+    public static int getHealthyServerCount(ConnectionDetails connectionDetails) {
+        if (!connectionDetails.getClusterHealth().isEmpty()) {
+            int healthyServerCount =
+                    new ClusterHealthTracker().countHealthyServers(connectionDetails.getClusterHealth());
+            if (healthyServerCount > 0) {
+                return healthyServerCount;
+            }
+        }
+        return Math.max(1, connectionDetails.getServerEndpointsCount());
+    }
 
     /**
      * Configures a HikariCP connection pool with connection details and client properties.

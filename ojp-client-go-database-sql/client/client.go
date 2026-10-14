@@ -254,6 +254,43 @@ func (c *rpcConnection) fetchNextRows(ctx context.Context, resultSetUUID string,
 	})
 }
 
+// generatedKeys retrieves the last generated key via CallResource + fetchNextRows.
+func (c *rpcConnection) generatedKeys(ctx context.Context, session *pb.SessionInfo) (int64, error) {
+	request := &pb.CallResourceRequest{
+		Session:      cloneSession(session),
+		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+		ResourceUUID: session.GetSessionUUID(),
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_GENERATED,
+			ResourceName: "getGeneratedKeys",
+		},
+	}
+	var trailer metadata.MD
+	resp, rpcErr := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
+	if rpcErr != nil {
+		return 0, grpcError(ctx, rpcErr, trailer)
+	}
+	if resp == nil {
+		return 0, errors.New("OJP server returned an empty generated-keys response")
+	}
+	c.applySession(resp.GetSession())
+	resultSetUUID := resp.GetResourceUUID()
+	if resultSetUUID == "" {
+		return 0, nil
+	}
+	rows, err := c.fetchNextRows(ctx, resultSetUUID, 100)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
+		return 0, nil
+	}
+	if v, ok := rows.Rows[0][0].(int64); ok {
+		return v, nil
+	}
+	return 0, nil
+}
+
 func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
 	request := &pb.CallResourceRequest{
 		Session:      cloneSession(c.session),

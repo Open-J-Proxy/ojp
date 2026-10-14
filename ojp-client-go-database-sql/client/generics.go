@@ -34,8 +34,12 @@ func encodeParamAny(value any) *pb.ParameterValue {
 		return &pb.ParameterValue{Value: &pb.ParameterValue_BytesValue{BytesValue: append([]byte(nil), v...)}}
 	case time.Time:
 		ts := timestamppb.New(v)
+		zone := v.Location().String()
+		if zone == "" {
+			zone = "UTC"
+		}
 		return &pb.ParameterValue{Value: &pb.ParameterValue_TimestampValue{
-			TimestampValue: &pb.TimestampWithZone{Instant: ts},
+			TimestampValue: &pb.TimestampWithZone{Instant: ts, Timezone: zone},
 		}}
 	default:
 		return encodeParamAny(normalizeType(v))

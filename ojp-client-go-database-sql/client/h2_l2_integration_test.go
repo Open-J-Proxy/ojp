@@ -55,7 +55,7 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	// Give this run a unique table so repeated or parallel runs do not collide.
 	table := fmt.Sprintf("ojp_go_l2_%d", time.Now().UnixNano())
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
-		"CREATE TABLE %s (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, active BOOLEAN, score DOUBLE, data BINARY, created TIMESTAMP)",
+		"CREATE TABLE %s (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, active BOOLEAN, score DOUBLE, data VARBINARY, created TIMESTAMP)",
 		table,
 	)); err != nil {
 		t.Fatalf("create isolated table: %v", err)
@@ -73,7 +73,7 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	insertResult, err := db.ExecContext(ctx, fmt.Sprintf(
 		"INSERT INTO %s (name, active, score, data, created) VALUES (?, ?, ?, ?, ?)",
 		table,
-	), "l2-test", true, 99.5, []byte("binary-data"), time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
+	), "l2-test", true, 99.5, []byte("binary-data"), time.Date(2026, 10, 12, 12, 0, 0, 0, time.FixedZone("UTC", 0)))
 	if err != nil {
 		t.Fatalf("insert with broad types: %v", err)
 	}

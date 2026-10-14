@@ -239,7 +239,8 @@ func (s *sqlStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (dr
 	if err != nil {
 		return nil, err
 	}
-	return sqlResult{rowsAffected: count}, nil
+	lastID, _ := s.connection.generatedKeys(ctx, cloneSession(s.connection.session))
+	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 
 func (s *sqlStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
@@ -298,10 +299,11 @@ func (r *sqlRows) Next(dest []driver.Value) error {
 
 type sqlResult struct {
 	rowsAffected int64
+	lastID       int64
 }
 
 func (r sqlResult) LastInsertId() (int64, error) {
-	return 0, errors.New("OJP does not return last-insert IDs")
+	return r.lastID, nil
 }
 
 func (r sqlResult) RowsAffected() (int64, error) {
@@ -440,7 +442,8 @@ func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.Na
 	if err != nil {
 		return nil, err
 	}
-	return sqlResult{rowsAffected: count}, nil
+	lastID, _ := s.connection.generatedKeys(ctx, cloneSession(s.connection.session))
+	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 
 func (s *sqlPreparedStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
@@ -477,11 +480,12 @@ func (s *sqlCallableStatement) ExecContext(ctx context.Context, args []driver.Na
 	if err != nil {
 		return nil, err
 	}
-	count, err := s.connection.executeUpdate(ctx, s.query, parameters)
+	count, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
 	}
-	return sqlResult{rowsAffected: count}, nil
+	lastID, _ := s.connection.generatedKeys(ctx, cloneSession(s.connection.session))
+	return sqlResult{rowsAffected: count, lastID: lastID}, nil
 }
 
 func (s *sqlCallableStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {

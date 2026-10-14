@@ -331,7 +331,7 @@ func (SessionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_StatementService_proto_rawDescGZIP(), []int{3}
 }
 
-// TRX stands for transaction
+//TRX stands for transaction
 type TransactionStatus int32
 
 const (

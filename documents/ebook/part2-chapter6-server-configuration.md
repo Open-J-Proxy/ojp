@@ -91,20 +91,18 @@ sequenceDiagram
 
 ### Database Connection Budgets
 
-If two or more OJP pools connect to the same database, each pool's own maximum can add up to more connections than the database can safely handle. A database budget sets one combined maximum for matching pools.
+There are two limits: a pool's maximum limits that one pool, while the database budget limits all matching pools combined. The budget takes precedence if the pool maxima add up to more than the database can handle.
 
-For example, if the `app_rw` and `reporting_ro` pools can each grow to 8 connections, a budget of 10 with weights `2:1` gives them about 7 and 3 connections when both need capacity. Add this to `ojp.properties` on the OJP server:
+For example, two pools can each request up to 20 connections (40 total), while the database budget is 24. With 3 healthy OJP servers, each gets a shared local cap of 8 across its matching pools. If one server goes down, the other 2 recalculate to 12 each. The pool maxima still apply: a pool cannot use more than its configured maximum. Add this to `ojp.properties` on each OJP server:
 
 ```properties
 ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db1:5432/orders*
-ojp.server.databaseBudgets.orders.maxTotalConnections=10
-ojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2
-ojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1
+ojp.server.databaseBudgets.orders.maxTotalConnections=24
 ```
 
 The server reads `ojp.properties` from its working directory, or from the classpath if there is no file in the working directory. You can also pass these settings as JVM properties; JVM values override file values. Restart the server after changing the budget. This is a server configuration file, not the client application's `ojp.properties` described in Chapter 5.
 
-In a multinode cluster, set the same budget on every OJP server. Each server divides the usable maximum (`maxTotalConnections - reserveConnections`) by the number of healthy servers, rounding down, and applies that share to its local pools. A budget of 24 gives each of 3 healthy servers a local cap of 8; if one server fails, the other 2 recalculate to 12 each. Remainders are left unused. The JDBC driver's health reports trigger these updates, so this relies on servers receiving a consistent cluster-health view; it is not a distributed consensus mechanism for network partitions. The budget counts pooled primary, XA, and read/write replica connections, but not unpooled connections or connections from other applications. When a budget reduces a pool's maximum, active work is allowed to finish, so the number of open database connections may take time to decrease.
+The JDBC driver's health reports trigger recalculation, so servers need a consistent cluster-health view; this is not distributed consensus during network partitions. The budget covers pooled primary, XA, and read/write replica connections, not unpooled connections or connections from other applications. When a pool's maximum is reduced, active work may take time to finish.
 
 ## 6.3 Security Configuration
 

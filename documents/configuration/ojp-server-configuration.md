@@ -43,31 +43,32 @@ Each budget has a name you choose (shown as `<group>` below):
 | `ojp.server.databaseBudgets.<group>.reserveConnections` | Leaves connections unused by OJP (optional; defaults to `0`). |
 | `ojp.server.databaseBudgets.<group>.priorities.username.<username>.weight` | Gives that database username a larger or smaller share (optional; defaults to `1`). |
 
-For example, suppose two pools match the URL below. Their requested maxima are 8 for `app_rw` and 8 for `reporting_ro`. Set the budget to 10 and weights to 2:1. OJP assigns about 7 connections to `app_rw` and 3 to `reporting_ro`; together, the pool maxima stay at 10.
+There are two different limits:
+
+- A pool's `maximumPoolSize` is the most that **one pool** may open.
+- `maxTotalConnections` is the combined maximum for **all matching pools**. When the two limits conflict, the database budget wins.
+
+For example, two pools can each request up to 20 connections (40 total), while the database budget is 24. With 3 healthy OJP servers, each server gets a shared budget cap of 8 across its matching pools. If one server goes down, the 2 remaining servers recalculate to 12 each. The pool maxima still apply: a pool cannot use more than its own maximum, even when the shared budget allows more.
 
 Put the following in the OJP server's `ojp.properties` file:
 
 ```properties
 ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db1:5432/orders*
-ojp.server.databaseBudgets.orders.maxTotalConnections=10
-ojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2
-ojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1
+ojp.server.databaseBudgets.orders.maxTotalConnections=24
 ```
 
-You can use the same keys as JVM options instead. For example, `-Dojp.server.databaseBudgets.orders.maxTotalConnections=10` overrides the file's value. This server-side file is separate from the JDBC driver's `ojp.properties`; a file in the client application's classpath does not configure the server.
+You can use the same keys as JVM options instead. For example, `-Dojp.server.databaseBudgets.orders.maxTotalConnections=30` overrides the file's value. This server-side file is separate from the JDBC driver's `ojp.properties`; a file in the client application's classpath does not configure the server.
 
 ```bash
 java -Duser.timezone=UTC \
   -Dojp.server.databaseBudgets.orders.match.jdbcUrlPattern='jdbc:postgresql://db1:5432/orders*' \
-  -Dojp.server.databaseBudgets.orders.maxTotalConnections=10 \
-  -Dojp.server.databaseBudgets.orders.priorities.username.app_rw.weight=2 \
-  -Dojp.server.databaseBudgets.orders.priorities.username.reporting_ro.weight=1 \
+  -Dojp.server.databaseBudgets.orders.maxTotalConnections=24 \
   -jar ojp-server.jar
 ```
 
-The weights are shares, not connection counts: `2:1` means the first username gets about twice the share of the second when the budget is tight. Pools using the same username share that username's weight. If the requested pool maxima already fit, OJP leaves them unchanged. When a matching pool is created or removed, OJP recalculates the maxima and resizes supported pools. Each matching pool is assigned at least one connection, so the budget must have at least one available connection per pool. A reserve reduces the capacity available to OJP; for example, a total of 10 with a reserve of 2 leaves 8 for OJP's pools.
+Weights are optional shares, not connection counts: `2:1` gives one username about twice the share of another when the budget is tight. Pools using the same username share that username's weight. If requested pool maxima already fit under the budget, OJP leaves them unchanged. A reserve reduces the capacity available to OJP.
 
-The budget applies to OJP-managed pooled primary, XA, and read/write replica connections. In a multinode cluster, configure the same budget on every server; each server divides the usable maximum by the number of healthy servers, rounding down, then applies its share to its local pools. For example, a usable budget of 24 gives each of 3 healthy servers a local cap of 8; if one server fails, the remaining 2 servers recalculate to 12 each. Any remainder is left unused. Health updates come from the JDBC driver's cluster-health reports, so servers must have a consistent view; this is not a distributed consensus mechanism for network partitions. Unpooled connections and connections from other applications are not counted. When OJP reduces a live pool, it does not terminate active work, so the actual number of open connections may take time to fall to the new limit. No shared queue or semaphore is added to connection borrowing.
+The budget covers OJP-managed pooled primary, XA, and read/write replica connections. It does not count unpooled connections or connections from other applications. Configure the same budget on every server in a multinode cluster. Servers recalculate their shares from the JDBC driver's health reports; they must have a consistent view. This is not distributed consensus, so a network partition can temporarily produce inconsistent views. When a pool shrinks, active work is not terminated, so open connections may take time to fall. The budget adds no queue or semaphore to connection borrowing.
 
 
 > **Note on `ojp.server.virtualThreads.enabled`:** Virtual threads are disabled by default because, during heavy-concurrency testing with the current OJP code, they proved less efficient than platform threads. This may change as the OJP code evolves — further investigation is needed to determine whether future improvements could make virtual threads beneficial. You can still opt in by setting this property to `true`.

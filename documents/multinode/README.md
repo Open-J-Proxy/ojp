@@ -153,9 +153,9 @@ Each OJP server in a multinode setup should be configured identically with the s
 
 **XA Backend Session Pools**: XA backend session pool sizes (`ojp.xa.connection.pool.maxTotal`, `ojp.xa.connection.pool.minIdle`) are also divided among healthy servers, with dynamic rebalancing on server failure or recovery.
 
-**Database budgets are cluster-wide for a multinode cluster.** Set the same budget on every OJP server. Each server divides the usable budget (`maxTotalConnections - reserveConnections`) by the number of healthy servers, rounding down, then shares its local portion among matching pools. For example, a budget of 24 gives each of 3 healthy servers a local cap of 8. If one server fails, the 2 remaining servers raise their local caps to 12 each. Any remainder from division is left unused, so the cluster does not exceed the configured maximum.
+**The pool maximum and database budget are different limits.** A pool's configured maximum limits that one pool; `maxTotalConnections` caps the combined connections of all matching pools. The database budget takes precedence when the pool maxima add up to more.
 
-Pool maxima are first divided among healthy servers too. When a server fails, the JDBC driver's health updates cause the remaining servers to recalculate both their pool requests and their budget shares. All servers must use the same budget configuration and receive a consistent health view; updates follow the driver's health reporting and are not a distributed consensus mechanism for network partitions.
+For example, two pools can each request up to 20 connections (40 total), while the database budget is 24. With 3 healthy OJP servers, each server applies a shared local cap of 8 across its matching pools. If one server goes down, the 2 remaining servers recalculate their local caps to 12 each. The pool maxima still apply, so a pool can use only its configured maximum. Set the same budget on every server. The JDBC driver's health reports trigger recalculation; servers need a consistent health view, as this is not distributed consensus during network partitions.
 
 #### XA Multinode Example
 

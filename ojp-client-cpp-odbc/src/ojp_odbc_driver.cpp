@@ -2867,9 +2867,6 @@ bool describe_column(const StatementHandle* statement, SQLUSMALLINT column_numbe
         if (text->compare(0, 16, "OJP_CLOB_PREFIX:") == 0) {
             description->type = SQL_LONGVARCHAR;
             description->type_name = "LONGVARCHAR";
-        } else if (is_uuid(*text)) {
-            description->type = SQL_LONGVARBINARY;
-            description->type_name = "LONGVARBINARY";
         }
     }
     return true;

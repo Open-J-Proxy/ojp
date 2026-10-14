@@ -101,6 +101,19 @@ class DatabaseConnectionBudgetManagerTest {
     }
 
     @Test
+    void shouldRoundNonDivisibleClusterBudgetDown() {
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(26, 1));
+        DatabaseConnectionBudgetManager.Registration application = manager.registerPool(
+                "regular:application", "jdbc:postgresql://db/orders", "user-a", 24, 0, true, 3);
+        DatabaseConnectionBudgetManager.Registration reporting = manager.registerPool(
+                "regular:reporting", "jdbc:postgresql://db/orders", "user-b", 24, 0, true, 3);
+
+        assertEquals(4, application.getMaximumPoolSize());
+        assertEquals(4, reporting.getMaximumPoolSize());
+        assertEquals(8, application.getMaximumPoolSize() + reporting.getMaximumPoolSize());
+    }
+
+    @Test
     void shouldApplyReserveAndClampMinimumIdleToAllocatedCap() {
         DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(8, 2));
 

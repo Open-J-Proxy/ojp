@@ -423,8 +423,8 @@ func buildParameter[T pb.ParameterTypeProto](index int, paramType T, value *pb.P
 
 // sqlPreparedStatement carries a StatementUUID for server-side plan reuse.
 type sqlPreparedStatement struct {
-	connection *rpcConnection
-	query      string
+	connection    *rpcConnection
+	query         string
 	statementUUID string
 }
 
@@ -531,53 +531,39 @@ type GeneratedKeysRequest struct {
 	ColumnIndexes []int32
 }
 
-// GeneratedKeys extracts auto-generated keys via the CallResource RPC.
+// GeneratedKeys returns key rows for a prepared-statement UUID.
 func (c *rpcConnection) GeneratedKeys(ctx context.Context, req *GeneratedKeysRequest) ([][]any, error) {
-	props := make([]*pb.PropertyEntry, 0, 2)
-	if req.StatementUUID != "" {
-		props = append(props, &pb.PropertyEntry{
-			Key:   "statementUUID",
-			Value: &pb.PropertyEntry_StringValue{StringValue: req.StatementUUID},
-		})
-	}
-	if len(req.ColumnNames) > 0 {
-		for _, name := range req.ColumnNames {
-			props = append(props, &pb.PropertyEntry{
-				Key:   "columnName",
-				Value: &pb.PropertyEntry_StringValue{StringValue: name},
-			})
-		}
-	}
-	request := &pb.CallResourceRequest{
-		Session:      cloneSession(c.session),
-		ResourceType: pb.ResourceType_RES_RESULT_SET,
-		ResourceUUID: req.StatementUUID,
-		Target: &pb.TargetCall{
-			CallType:     pb.CallType_CALL_GET,
-			ResourceName: "GeneratedKeys",
-		},
-		Properties: props,
-	}
-	return withConnectionLock(c, func() ([][]any, error) {
+	rsUUID, err := withConnectionLock(c, func() (string, error) {
 		var trailer metadata.MD
-		resp, err := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
+		resp, err := c.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
+			Session:      cloneSession(c.session),
+			ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+			ResourceUUID: req.StatementUUID,
+			Target: &pb.TargetCall{
+				CallType:     pb.CallType_CALL_GET,
+				ResourceName: "GeneratedKeys",
+			},
+		}, grpc.Trailer(&trailer))
 		if err != nil {
-			return nil, grpcError(ctx, err, trailer)
+			return "", grpcError(ctx, err, trailer)
 		}
 		if resp == nil {
-			return nil, errors.New("OJP server returned an empty generated-keys response")
+			return "", errors.New("OJP server returned an empty generated-keys response")
 		}
 		c.applySession(resp.GetSession())
-		rows := make([][]any, 0, len(resp.GetValues()))
-		for _, v := range resp.GetValues() {
-			decoded, derr := decodeValue(v)
-			if derr != nil {
-				return nil, fmt.Errorf("decode generated key: %w", derr)
-			}
-			rows = append(rows, []any{decoded})
+		if len(resp.GetValues()) == 0 {
+			return "", nil
 		}
-		return rows, nil
+		return decodeValueTo[string](resp.GetValues()[0])
 	})
+	if err != nil || rsUUID == "" {
+		return nil, err
+	}
+	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
+	if err != nil {
+		return nil, err
+	}
+	return rows.Rows, nil
 }
 
 type MetadataRequest struct {
@@ -602,55 +588,54 @@ func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]C
 			ResourceName: "getMetadata",
 		},
 	}
-	return withConnectionLock(c, func() ([]ColumnMetadata, error) {
+	rsUUID, err := withConnectionLock(c, func() (string, error) {
 		var trailer metadata.MD
 		resp, err := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
 		if err != nil {
-			return nil, grpcError(ctx, err, trailer)
+			return "", grpcError(ctx, err, trailer)
 		}
 		if resp == nil {
-			return nil, errors.New("OJP server returned an empty metadata response")
+			return "", errors.New("OJP server returned an empty metadata response")
 		}
 		c.applySession(resp.GetSession())
-		// The server returns a ResultSet UUID for the metadata.
-		resultSetUUID := resp.GetResourceUUID()
-		if resultSetUUID == "" {
-			return nil, errors.New("OJP server returned no ResultSet UUID for metadata")
-		}
-		rows, err := c.fetchNextRows(ctx, resultSetUUID, 100)
-		if err != nil {
-			return nil, err
-		}
-		cols := make([]ColumnMetadata, 0, len(rows.Columns))
-		for _, name := range rows.Columns {
-			cols = append(cols, ColumnMetadata{Name: name})
-		}
-		return cols, nil
+		return resp.GetResourceUUID(), nil
 	})
+	if err != nil || rsUUID == "" {
+		return nil, err
+	}
+	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
+	if err != nil {
+		return nil, err
+	}
+	cols := make([]ColumnMetadata, 0, len(rows.Columns))
+	for _, name := range rows.Columns {
+		cols = append(cols, ColumnMetadata{Name: name})
+	}
+	return cols, nil
 }
 
 var (
-	_ driver.Driver            = sqlDriver{}
-	_ driver.DriverContext     = sqlDriver{}
-	_ driver.Connector         = (*sqlConnector)(nil)
-	_ driver.Conn              = (*sqlConn)(nil)
+	_ driver.Driver             = sqlDriver{}
+	_ driver.DriverContext      = sqlDriver{}
+	_ driver.Connector          = (*sqlConnector)(nil)
+	_ driver.Conn               = (*sqlConn)(nil)
 	_ driver.ConnPrepareContext = (*sqlConn)(nil)
-	_ driver.ConnBeginTx       = (*sqlConn)(nil)
-	_ driver.ExecerContext     = (*sqlConn)(nil)
-	_ driver.QueryerContext    = (*sqlConn)(nil)
-	_ driver.Pinger            = (*sqlConn)(nil)
-	_ driver.Validator         = (*sqlConn)(nil)
-	_ driver.SessionResetter   = (*sqlConn)(nil)
-	_ driver.Stmt              = (*sqlStmt)(nil)
-	_ driver.StmtExecContext   = (*sqlStmt)(nil)
-	_ driver.StmtQueryContext  = (*sqlStmt)(nil)
-	_ driver.Stmt              = (*sqlPreparedStatement)(nil)
-	_ driver.StmtExecContext   = (*sqlPreparedStatement)(nil)
-	_ driver.StmtQueryContext  = (*sqlPreparedStatement)(nil)
-	_ driver.Stmt              = (*sqlCallableStatement)(nil)
-	_ driver.StmtExecContext   = (*sqlCallableStatement)(nil)
-	_ driver.StmtQueryContext  = (*sqlCallableStatement)(nil)
-	_ driver.Rows              = (*sqlRows)(nil)
-	_ driver.Result            = sqlResult{}
-	_ driver.Tx                = (*sqlTx)(nil)
+	_ driver.ConnBeginTx        = (*sqlConn)(nil)
+	_ driver.ExecerContext      = (*sqlConn)(nil)
+	_ driver.QueryerContext     = (*sqlConn)(nil)
+	_ driver.Pinger             = (*sqlConn)(nil)
+	_ driver.Validator          = (*sqlConn)(nil)
+	_ driver.SessionResetter    = (*sqlConn)(nil)
+	_ driver.Stmt               = (*sqlStmt)(nil)
+	_ driver.StmtExecContext    = (*sqlStmt)(nil)
+	_ driver.StmtQueryContext   = (*sqlStmt)(nil)
+	_ driver.Stmt               = (*sqlPreparedStatement)(nil)
+	_ driver.StmtExecContext    = (*sqlPreparedStatement)(nil)
+	_ driver.StmtQueryContext   = (*sqlPreparedStatement)(nil)
+	_ driver.Stmt               = (*sqlCallableStatement)(nil)
+	_ driver.StmtExecContext    = (*sqlCallableStatement)(nil)
+	_ driver.StmtQueryContext   = (*sqlCallableStatement)(nil)
+	_ driver.Rows               = (*sqlRows)(nil)
+	_ driver.Result             = sqlResult{}
+	_ driver.Tx                 = (*sqlTx)(nil)
 )

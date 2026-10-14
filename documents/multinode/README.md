@@ -153,6 +153,8 @@ Each OJP server in a multinode setup should be configured identically with the s
 
 **XA Backend Session Pools**: XA backend session pool sizes (`ojp.xa.connection.pool.maxTotal`, `ojp.xa.connection.pool.minIdle`) are also divided among healthy servers, with dynamic rebalancing on server failure or recovery.
 
+**Database budgets are per server, not cluster-wide.** OJP first divides each configured pool's maximum and minimum across healthy servers (rounding up), then applies that server's database budget to the pools on that server. For example, with 3 healthy servers, a configured pool maximum of 30 gives each server a local maximum of 10. A database budget of 8 on each server can therefore allow up to 24 connections across the cluster, not 8. If a server fails, the remaining servers receive larger local pool requests, but each server's budget still caps its own pools; the budget may limit how much capacity failover can restore. Set the same budget on every server, and account for the number of servers and failover capacity when choosing its value.
+
 #### XA Multinode Example
 
 With 3 OJP servers and `ojp.xa.connection.pool.maxTotal=30`:

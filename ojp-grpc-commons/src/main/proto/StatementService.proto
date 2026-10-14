@@ -172,7 +172,7 @@ enum SessionStatus {
     SESSION_TERMINATED = 1;
 }
 
-// TRX stands for transaction
+//TRX stands for transaction
 enum TransactionStatus {
     TRX_ACTIVE = 0;
     TRX_COMMITED = 1;
@@ -187,7 +187,7 @@ message TransactionInfo {
 message SessionInfo {
     string connHash = 1;
     string clientUUID = 2;
-    // only set if connection has to be the same among different requests, within transaction boundaries or when using LOB objects.
+    //only set if connection has to be the same among different requests, within transaction boundaries or when using LOB objects.
     string sessionUUID = 3;
     TransactionInfo transactionInfo = 4;
     SessionStatus sessionStatus = 5;
@@ -238,7 +238,7 @@ message SqlErrorResponse {
     SqlErrorType sqlErrorType = 4;
 }
 
-// LT stands for Lob Type
+//LT stands for Lob Type
 enum LobType {
     LT_BLOB = 0;
     LT_CLOB = 1;
@@ -253,7 +253,7 @@ message LobReference {
     string uuid = 2;
     int32 bytesWritten = 3;
     LobType lobType = 4;
-    // 5 till 6 only used to query Binary streams.
+    //5 till 6 only used to query Binary streams.
     int32 columnIndex = 5;
     string stmtUUID = 6;
 }

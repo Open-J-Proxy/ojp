@@ -465,7 +465,15 @@ sequenceDiagram
 
 ### Session Management
 
-OJP sessions provide the bridge between stateless gRPC calls and stateful JDBC behavior. Every driver request carries a `sessionId`, and the server uses that identifier to find the right transaction state, isolation level, connection, and cached statement resources.
+OJP sessions provide the bridge between independent gRPC calls and stateful JDBC behavior. Session-bound requests carry `SessionInfo.sessionUUID` (shown as `sessionId` below), and the server uses that identifier to find the right transaction state, connection, and statement resources.
+
+**A session is not a TCP connection or a gRPC stream.** The Java driver remembers which OJP server owns each session and sends its requests there. XA sessions are bound when `getXAConnection()` connects and remain bound for that `XAConnection`'s lifetime, even across sequential transactions. XA control calls use ordinary unary RPCs; a transaction-long bidirectional stream is not needed for this affinity.
+
+**Simple example:** With servers A and B, an XA connection receives session S from A. Its start, SQL, prepare, and commit requests all go to A with session S. Replacing the underlying transport connection to the same running A does not, by itself, change S or move it to B.
+
+This is not a promise of uninterrupted transactions: a network error can invalidate the driver's session, and a server restart loses its in-memory sessions. The driver reports failure rather than moving an established transaction to B. If a commit reply is lost, the outcome may be unknown; the transaction manager must resolve it through XA recovery, not blindly replay the work. A long-lived stream can also break and would not solve recovery.
+
+**Deployment caveat:** Give the driver stable, node-specific endpoints (as in the multinode JDBC URL), not a shared address that can route successive RPCs or reconnects to different OJP instances. Sessions are not replicated between nodes.
 
 ```mermaid
 graph LR

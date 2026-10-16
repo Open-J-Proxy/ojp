@@ -10,7 +10,7 @@
 
 - **OJP is a Connection Proxy**: OJP provides connection pooling, high availability, load balancing, and transparent proxying of JDBC/XA calls from the application TM to database RMs.
 
-**XA Session Stickiness**: XA sessions are sticky to a single OJP node for the duration of the XA session to guarantee XA integrity. This is distinct from connection stickiness—OJP client connections can load balance sessions across multiple OJP servers for different transactions, but once an XA transaction starts, all operations for that specific transaction must route through the same OJP instance.
+**XA Session Stickiness**: Each new `XAConnection` can be assigned to a different OJP node, but its session stays on that node for the lifetime of the `XAConnection`, including sequential transactions. The driver routes requests using the session UUID and its server binding, not a transaction-long gRPC stream. See [Session Management](../ebook/part1-chapter2-architecture.md#session-management) for a simple example and the limits during network or server failures.
 
 ## Decision Context
 

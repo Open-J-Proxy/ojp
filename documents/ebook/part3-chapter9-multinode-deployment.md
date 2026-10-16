@@ -632,7 +632,7 @@ During migration, update all application instances to use the multinode URL simu
 
 ### Rollback Plan
 
-If issues arise, rolling back is as simple as reverting the URL change. Your original server continues working throughout the migration, so reverting the URL immediately restores single-node behavior. No data loss or state corruption occurs because the servers are stateless proxies.
+If issues arise, revert the URL change for new connections to restore single-node behavior. Existing sessions and transactions still belong to their original OJP server: the servers hold in-memory session state and are not stateless proxies. Drain existing connections before switching; do not expect changing the URL to migrate active transactions. See [Session Management](part1-chapter2-architecture.md#session-management).
 
 ## Summary
 

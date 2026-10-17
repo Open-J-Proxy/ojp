@@ -10,19 +10,24 @@ import com.openjproxy.grpc.TargetCall;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import lombok.Getter;
+import lombok.SneakyThrows;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.client.StatementService;
+import org.openjproxy.grpc.dto.Parameter;
 
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLTransientConnectionException;
 import java.sql.SQLWarning;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 import static org.openjproxy.grpc.client.GrpcExceptionHandler.handle;
 import static org.openjproxy.jdbc.Constants.EMPTY_PARAMETERS_LIST;
@@ -140,6 +145,9 @@ public class Statement implements java.sql.Statement {
         checkClosed();
         this.lastUpdateCount = -1;
         resetMoreResultsState();
+        if (SqlStatementClassifier.returnsRowsFromDml(sql)) {
+            return executeUpdateReturningResultSet(sql, EMPTY_PARAMETERS_LIST, this.statementUUID);
+        }
         ClientThrottleManager throttle = this.connection.getThrottleManager();
         ClientThrottleMode mode = this.connection.getThrottleMode();
         // getAutoCommit() may throw SQLException; evaluate before acquiring a slot
@@ -157,6 +165,64 @@ public class Statement implements java.sql.Statement {
                 throttle.release(mode, inTransaction);
             }
         }
+    }
+
+    protected ResultSet executeUpdateReturningResultSet(String sql, List<Parameter> params,
+                                                        String preparedStatementUUID) throws SQLException {
+        ClientThrottleManager throttle = this.connection.getThrottleManager();
+        ClientThrottleMode mode = this.connection.getThrottleMode();
+        boolean inTransaction = !this.connection.getAutoCommit();
+        boolean acquired = acquireThrottle(throttle, mode, inTransaction);
+        try {
+            Map<String, Object> updateProperties = new HashMap<>();
+            if (this.properties != null) {
+                updateProperties.putAll(this.properties);
+            }
+            updateProperties.put(CommonConstants.STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY, Boolean.TRUE);
+            OpResult result = this.statementService.executeUpdate(this.connection.getSession(), sql, params,
+                    preparedStatementUUID, updateProperties);
+            this.connection.setSession(result.getSession());
+            if (!CommonConstants.UPDATE_RESULT_SET_FLAG.equals(result.getFlag())
+                    || result.getUuid().isBlank()) {
+                throw new SQLException("The DML statement did not return a result set.");
+            }
+            return new ResultSet(updateResultSetPages(result.getUuid()), this.statementService, this);
+        } catch (StatusRuntimeException sre) {
+            throw handle(onServerOverload(throttle, mode, sre));
+        } finally {
+            if (acquired) {
+                throttle.release(mode, inTransaction);
+            }
+        }
+    }
+
+    private Iterator<OpResult> updateResultSetPages(String resultSetUUID) {
+        return new Iterator<>() {
+            private boolean hasNext = true;
+
+            @Override
+            public boolean hasNext() {
+                return this.hasNext;
+            }
+
+            @Override
+            @SneakyThrows
+            public OpResult next() {
+                if (!this.hasNext) {
+                    throw new NoSuchElementException();
+                }
+                OpResult result;
+                try {
+                    result = statementService.fetchNextRows(connection.getSession(), resultSetUUID,
+                            CommonConstants.DEFAULT_RESULTSET_ROWS_PER_BLOCK);
+                } catch (StatusRuntimeException sre) {
+                    throw handle(onServerOverload(connection.getThrottleManager(),
+                            connection.getThrottleMode(), sre));
+                }
+                this.hasNext = result.hasQueryResult() && result.getQueryResult().getRowsCount() > 0;
+                return result;
+            }
+        };
     }
 
     @Override

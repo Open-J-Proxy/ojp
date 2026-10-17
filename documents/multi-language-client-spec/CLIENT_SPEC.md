@@ -133,7 +133,7 @@ The client must implement stubs for every RPC in `StatementService` and `EchoSer
 | RPC | Type | Purpose |
 |---|---|---|
 | `connect` | unary | Open a logical connection and receive `SessionInfo` |
-| `executeUpdate` | unary | DML (INSERT / UPDATE / DELETE / DDL) |
+| `executeUpdate` | unary | DML (INSERT / UPDATE / DELETE / DDL); opt-in result-producing DML returns a result-set UUID |
 | `executeQuery` | server-streaming | SELECT — returns a stream of `OpResult` blocks |
 | `fetchNextRows` | unary | Pull the next page of rows for an open result set |
 | `createLob` | client-streaming | Upload LOB data to the server in chunks |
@@ -705,7 +705,7 @@ StatementRequest {
 }
 ```
 
-**Execution routing:** Use `executeUpdate` for INSERT / UPDATE / DELETE / DDL (returns affected row count in `value.int_value`). Use `executeQuery` for SELECT. Always update the local `SessionInfo` from `OpResult.session`.
+**Execution routing:** Use `executeUpdate` for INSERT / UPDATE / DELETE / DDL (returns affected row count in `value.int_value`). For database-supported DML that returns rows (`RETURNING`, `OUTPUT`, or `SELECT ... FROM FINAL TABLE (...)`), send `STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY=true` with `executeUpdate`; the response carries the result-set UUID in `OpResult.uuid` and `UPDATE_RESULT_SET` in `OpResult.flag`. Fetch rows with `fetchNextRows` and close the result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`. Do not route data-changing `SELECT ... FINAL TABLE` wrappers through `executeQuery`, so writes retain primary/write-side routing. Use `executeQuery` for ordinary SELECT statements. Always update the local `SessionInfo` from every response.
 
 ### Pseudo-code
 
@@ -1636,7 +1636,7 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | Level | Focus |
 |---|---|
 | L1 | Basic connectivity + CRUD |
-| L2 | Typed parameters + statement variants |
+| L2 | Typed parameters + statement variants, including result-producing DML where supported |
 | L3 | Result-set streaming/pagination protocol |
 | L4 | Non-XA transaction semantics + savepoints |
 | L5 | LOB/stream handling |

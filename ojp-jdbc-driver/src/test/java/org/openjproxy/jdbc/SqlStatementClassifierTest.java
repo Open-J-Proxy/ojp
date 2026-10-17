@@ -86,6 +86,29 @@ class SqlStatementClassifierTest {
         assertFalse(SqlStatementClassifier.looksLikeQuery(sql));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "INSERT INTO t VALUES (1) RETURNING id",
+        "UPDATE t SET value = 1 OUTPUT INSERTED.id",
+        "SELECT id FROM FINAL TABLE (INSERT INTO t VALUES (1))",
+        "WITH changed AS (SELECT id FROM FINAL TABLE (UPDATE t SET value = 1)) SELECT id FROM changed",
+    })
+    void shouldRecognizeDmlStatementsThatReturnRows(String sql) {
+        assertTrue(SqlStatementClassifier.returnsRowsFromDml(sql));
+        assertTrue(SqlStatementClassifier.looksLikeQuery(sql));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "INSERT INTO t VALUES ('RETURNING OUTPUT FINAL TABLE')",
+        "/* OUTPUT */ INSERT INTO t VALUES (1)",
+        "SELECT 'FINAL TABLE (INSERT)'",
+        "INSERT INTO t VALUES (1)",
+    })
+    void shouldNotRecognizeSqlTextThatDoesNotReturnDmlRows(String sql) {
+        assertFalse(SqlStatementClassifier.returnsRowsFromDml(sql));
+    }
+
     @Test
     void shouldSkipLeadingLineCommentBeforeSelect() {
         assertTrue(SqlStatementClassifier.looksLikeQuery("-- a leading line comment\nSELECT * FROM t"));

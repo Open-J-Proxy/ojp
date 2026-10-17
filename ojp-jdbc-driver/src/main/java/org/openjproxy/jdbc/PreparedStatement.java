@@ -114,6 +114,10 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
         this.checkClosed();
         this.lastUpdateCount = -1;
         this.resetMoreResultsState();
+        if (SqlStatementClassifier.returnsRowsFromDml(this.sql)) {
+            return executeUpdateReturningResultSet(this.sql, new ArrayList<>(this.paramsMap.values()),
+                    this.getStatementUUID());
+        }
         log.info("Executing query for -> {}", this.sql);
         ClientThrottleManager throttle = this.connection.getThrottleManager();
         ClientThrottleMode mode = this.connection.getThrottleMode();

@@ -112,9 +112,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             // etc.)
             boolean requiresSessionAffinity = SqlSessionAffinityDetector.requiresSessionAffinity(request.getSql());
             boolean requiresGeneratedKeys = StatementRequestValidator.requiresGeneratedKeysTracking(request);
-            boolean returnResultSet = DbName.SQL_SERVER.equals(actionContext.getDbNameMap().get(
-                    request.getSession().getConnHash()))
-                    && StatementRequestValidator.requestsUpdateResultSet(request);
+            boolean returnResultSet = StatementRequestValidator.requestsUpdateResultSet(request);
 
             dto = sessionConnection(actionContext, request.getSession(),
                     StatementRequestValidator.isAddBatchOperation(request)

@@ -1398,21 +1398,50 @@ SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_ty
     return fail(handle, "ODBC C target type is not supported by the OJP client", "07006");
 }
 
-bool is_query_sql(const std::string& sql) {
+std::string first_sql_keyword(const std::string& sql) {
     std::size_t position = 0;
-    while (position < sql.size() && std::isspace(static_cast<unsigned char>(sql[position]))) {
-        ++position;
+    while (position < sql.size()) {
+        while (position < sql.size() && std::isspace(static_cast<unsigned char>(sql[position]))) {
+            ++position;
+        }
+        if (position + 1 < sql.size() && sql[position] == '-' && sql[position + 1] == '-') {
+            const auto end = sql.find_first_of("\r\n", position + 2);
+            position = end == std::string::npos ? sql.size() : end + 1;
+        } else if (position + 1 < sql.size() && sql[position] == '/' && sql[position + 1] == '*') {
+            position += 2;
+            std::size_t depth = 1;
+            while (position < sql.size() && depth != 0) {
+                if (position + 1 < sql.size() && sql[position] == '/' && sql[position + 1] == '*') {
+                    ++depth;
+                    position += 2;
+                } else if (position + 1 < sql.size() && sql[position] == '*' && sql[position + 1] == '/') {
+                    --depth;
+                    position += 2;
+                } else {
+                    ++position;
+                }
+            }
+        } else {
+            break;
+        }
     }
     std::string keyword;
-    while (position < sql.size() && std::isalpha(static_cast<unsigned char>(sql[position]))) {
+    while (position < sql.size() &&
+           (std::isalpha(static_cast<unsigned char>(sql[position])) || sql[position] == '_')) {
         keyword.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(sql[position]))));
         ++position;
     }
+    return keyword;
+}
+
+bool is_query_sql(const std::string& sql) {
+    const std::string keyword = first_sql_keyword(sql);
     return keyword == "SELECT" || keyword == "WITH" || keyword == "VALUES" ||
            keyword == "TABLE" || keyword == "SHOW" || keyword == "EXPLAIN";
 }
 
-bool contains_sql_keyword(const std::string& sql, const std::string& keyword) {
+std::vector<std::string> sql_keywords(const std::string& sql) {
+    std::vector<std::string> keywords;
     for (std::size_t index = 0; index < sql.size();) {
         const char character = sql[index];
         if (std::isspace(static_cast<unsigned char>(character))) {
@@ -1446,6 +1475,21 @@ bool contains_sql_keyword(const std::string& sql, const std::string& keyword) {
                     }
                 }
             }
+        } else if (character == '$' &&
+                   (index == 0 || (!std::isalnum(static_cast<unsigned char>(sql[index - 1])) &&
+                                   sql[index - 1] != '_' && sql[index - 1] != '$'))) {
+            std::size_t tag_end = index + 1;
+            while (tag_end < sql.size() &&
+                   (std::isalnum(static_cast<unsigned char>(sql[tag_end])) || sql[tag_end] == '_')) {
+                ++tag_end;
+            }
+            if (tag_end < sql.size() && sql[tag_end] == '$') {
+                const auto delimiter = sql.substr(index, tag_end - index + 1);
+                const auto end = sql.find(delimiter, tag_end + 1);
+                index = end == std::string::npos ? sql.size() : end + delimiter.size();
+            } else {
+                ++index;
+            }
         } else if (std::isalpha(static_cast<unsigned char>(character)) || character == '_') {
             const auto start = index++;
             while (index < sql.size() &&
@@ -1453,15 +1497,50 @@ bool contains_sql_keyword(const std::string& sql, const std::string& keyword) {
                     sql[index] == '_' || sql[index] == '$' || sql[index] == '#')) {
                 ++index;
             }
-            if (index - start == keyword.size() &&
-                std::equal(keyword.begin(), keyword.end(), sql.begin() + static_cast<std::ptrdiff_t>(start),
-                           [](unsigned char expected, unsigned char actual) {
-                               return std::toupper(expected) == std::toupper(actual);
-                           })) {
-                return true;
+            std::string keyword;
+            keyword.reserve(index - start);
+            for (std::size_t token_index = start; token_index < index; ++token_index) {
+                keyword.push_back(static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(sql[token_index]))));
             }
+            keywords.push_back(std::move(keyword));
         } else {
             ++index;
+        }
+    }
+    return keywords;
+}
+
+bool is_dml_result_set_sql(const std::string& sql) {
+    const std::string first_keyword = first_sql_keyword(sql);
+    const bool is_dml = first_keyword == "INSERT" || first_keyword == "UPDATE" ||
+        first_keyword == "DELETE" || first_keyword == "MERGE";
+    const bool is_query_with_dml = first_keyword == "SELECT" || first_keyword == "WITH";
+    // Oracle RETURNING INTO is an OUT-parameter flow, not a JDBC ResultSet.
+    if (!is_dml && !is_query_with_dml) {
+        return false;
+    }
+
+    const auto keywords = sql_keywords(sql);
+    const auto contains = [&keywords](const std::string& keyword) {
+        return std::find(keywords.begin(), keywords.end(), keyword) != keywords.end();
+    };
+    const bool has_dml = contains("INSERT") || contains("UPDATE") ||
+        contains("DELETE") || contains("MERGE");
+    if (!has_dml) {
+        return false;
+    }
+
+    if (contains("OUTPUT") || contains("RETURNING")) {
+        return true;
+    }
+
+    if (!is_query_sql(sql)) {
+        return false;
+    }
+    for (std::size_t index = 1; index < keywords.size(); ++index) {
+        if (keywords[index - 1] == "FINAL" && keywords[index] == "TABLE") {
+            return true;
         }
     }
     return false;
@@ -2592,9 +2671,8 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
     }
     request.mutable_session()->CopyFrom(connection->session);
-    const bool sql_server = uppercase_ascii(connection->url).find("JDBC:SQLSERVER:") != std::string::npos;
-    if (sql_server && !is_query_sql(statement->sql) &&
-        contains_sql_keyword(statement->sql, "OUTPUT")) {
+    const bool dml_result_set = is_dml_result_set_sql(statement->sql);
+    if (dml_result_set) {
         auto* property = request.add_properties();
         property->set_key(kUpdateResultSetRequestKey);
         property->set_bool_value(true);
@@ -2607,7 +2685,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     bool not_found_retried = false;
     request.mutable_session()->CopyFrom(request_session);
 
-    if (is_query_sql(statement->sql)) {
+    if (is_query_sql(statement->sql) && !dml_result_set) {
         std::string result_set_uuid;
         bool row_by_row = false;
         bool decoded_all = true;

@@ -255,6 +255,17 @@ int run_connection(const DatabaseConfig& config,
             {10002, "SQLSERVER_OUTPUT_DIRECT"}, {10003, "SQLSERVER_OUTPUT_SECOND"}});
         close_statement(statement, "SQLFreeStmt(OUTPUT result)");
 
+        execute_direct(statement, "UPDATE " + text_table +
+                                      " SET label = 'SQLSERVER_OUTPUT_UPDATED' "
+                                      "OUTPUT INSERTED.id, INSERTED.label WHERE id = 10002");
+        verify_output_rows(statement, {{10002, "SQLSERVER_OUTPUT_UPDATED"}});
+        close_statement(statement, "SQLFreeStmt(UPDATE OUTPUT result)");
+
+        execute_direct(statement, "DELETE FROM " + text_table +
+                                      " OUTPUT DELETED.id, DELETED.label WHERE id = 10003");
+        verify_output_rows(statement, {{10003, "SQLSERVER_OUTPUT_SECOND"}});
+        close_statement(statement, "SQLFreeStmt(DELETE OUTPUT result)");
+
         SQLINTEGER output_id = 10004;
         SQLLEN output_id_length = sizeof(output_id);
         SQLCHAR output_label[] = "SQLSERVER_OUTPUT_PREPARED";

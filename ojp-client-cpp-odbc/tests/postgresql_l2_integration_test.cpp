@@ -611,7 +611,7 @@ int run_connection(const DatabaseConfig& config,
     const std::string suffix = random_suffix();
     const std::vector<std::string> tables = {
         "ojp_cpp_pg_l2_types_" + suffix, "ojp_cpp_pg_l2_large_" + suffix,
-        "ojp_cpp_pg_l2_json_" + suffix};
+        "ojp_cpp_pg_l2_json_" + suffix, "ojp_cpp_pg_l2_returning_" + suffix};
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -632,6 +632,38 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLAllocHandle(SQL_HANDLE_STMT, connection,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
+
+        execute_direct(statement, "CREATE TABLE " + tables[3] +
+                                  " (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL)");
+        close_and_reset(statement);
+        execute_direct(statement, "INSERT INTO " + tables[3] +
+                                  " (id, label) VALUES (1, 'POSTGRES_RETURNING') "
+                                  "RETURNING id, label");
+        if (get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) != 1) {
+            throw std::runtime_error("PostgreSQL RETURNING returned the wrong inserted ID");
+        }
+        expect_text(statement, 2, "POSTGRES_RETURNING");
+        expect_end(statement);
+        close_and_reset(statement);
+
+        const std::string returning_sql = "INSERT INTO " + tables[3] +
+            " (id, label) VALUES (?, ?) RETURNING id, label";
+        prepare(statement, returning_sql);
+        SQLINTEGER returning_id = 2;
+        SQLLEN returning_id_length = sizeof(returning_id);
+        bind(statement, 1, SQL_C_SLONG, SQL_INTEGER, 0, 0, &returning_id,
+             sizeof(returning_id), &returning_id_length);
+        SQLCHAR returning_label[] = "POSTGRES_RETURNING_PREPARED";
+        SQLLEN returning_label_length = SQL_NTS;
+        bind(statement, 2, SQL_C_CHAR, SQL_VARCHAR, sizeof(returning_label), 0, returning_label,
+             sizeof(returning_label), &returning_label_length);
+        execute_prepared(statement, "RETURNING");
+        if (get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) != returning_id) {
+            throw std::runtime_error("prepared PostgreSQL RETURNING returned the wrong inserted ID");
+        }
+        expect_text(statement, 2, "POSTGRES_RETURNING_PREPARED");
+        expect_end(statement);
+        close_and_reset(statement);
 
         verify_multiple_types(statement, tables[0]);
         verify_large_types(statement, tables[1]);

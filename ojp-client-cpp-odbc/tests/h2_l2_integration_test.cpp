@@ -91,7 +91,9 @@ int run_connection(const DatabaseConfig& config,
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
     const std::string table = "ojp_cpp_l2_" + random_suffix();
+    const std::string delta_table = table + "_delta";
     bool table_created = false;
+    bool delta_table_created = false;
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -126,6 +128,69 @@ int run_connection(const DatabaseConfig& config,
             " double_value DOUBLE NOT NULL, boolean_value BOOLEAN NOT NULL,"
             " text_value VARCHAR(40) NOT NULL, binary_value VARBINARY(3) NOT NULL)");
         table_created = true;
+        execute_direct(statement, "CREATE TABLE " + delta_table +
+                                  " (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL)");
+        delta_table_created = true;
+
+        execute_direct(statement, "SELECT id, label FROM FINAL TABLE (INSERT INTO " +
+                                  delta_table + " (id, label) VALUES (1, 'H2_DELTA_TABLE'))");
+        SQLSMALLINT delta_columns = 0;
+        require_success(SQLNumResultCols(statement, &delta_columns),
+                        "SQLNumResultCols(FINAL TABLE)", SQL_HANDLE_STMT, statement);
+        if (delta_columns != 2 || SQLFetch(statement) != SQL_SUCCESS) {
+            throw std::runtime_error("H2 FINAL TABLE did not return the inserted row");
+        }
+        SQLINTEGER delta_id = 0;
+        SQLLEN delta_id_length = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &delta_id, sizeof(delta_id),
+                                   &delta_id_length),
+                        "SQLGetData(FINAL TABLE id)", SQL_HANDLE_STMT, statement);
+        assert_text(statement, 2, "H2_DELTA_TABLE");
+        if (delta_id != 1 || SQLFetch(statement) != SQL_NO_DATA) {
+            throw std::runtime_error("H2 FINAL TABLE returned incorrect rows");
+        }
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(FINAL TABLE)",
+                        SQL_HANDLE_STMT, statement);
+
+        const std::string delta_insert = "SELECT id, label FROM FINAL TABLE (INSERT INTO " +
+            delta_table + " (id, label) VALUES (?, ?))";
+        require_success(SQLPrepare(statement, reinterpret_cast<SQLCHAR*>(
+                                      const_cast<char*>(delta_insert.c_str())), SQL_NTS),
+                        "SQLPrepare(FINAL TABLE)", SQL_HANDLE_STMT, statement);
+        SQLINTEGER delta_parameter_id = 2;
+        SQLLEN delta_parameter_id_length = sizeof(delta_parameter_id);
+        require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                                         SQL_INTEGER, 0, 0, &delta_parameter_id,
+                                         sizeof(delta_parameter_id), &delta_parameter_id_length),
+                        "SQLBindParameter(FINAL TABLE id)", SQL_HANDLE_STMT, statement);
+        SQLCHAR delta_parameter_label[] = "H2_DELTA_TABLE_PREPARED";
+        SQLLEN delta_parameter_label_length = SQL_NTS;
+        require_success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                                         SQL_VARCHAR, sizeof(delta_parameter_label), 0,
+                                         delta_parameter_label, sizeof(delta_parameter_label),
+                                         &delta_parameter_label_length),
+                        "SQLBindParameter(FINAL TABLE label)", SQL_HANDLE_STMT, statement);
+        require_success(SQLExecute(statement), "SQLExecute(FINAL TABLE)",
+                        SQL_HANDLE_STMT, statement);
+        delta_columns = 0;
+        require_success(SQLNumResultCols(statement, &delta_columns),
+                        "SQLNumResultCols(prepared FINAL TABLE)", SQL_HANDLE_STMT, statement);
+        if (delta_columns != 2 || SQLFetch(statement) != SQL_SUCCESS) {
+            throw std::runtime_error("prepared H2 FINAL TABLE did not return the inserted row");
+        }
+        delta_id = 0;
+        delta_id_length = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &delta_id, sizeof(delta_id),
+                                   &delta_id_length),
+                        "SQLGetData(prepared FINAL TABLE id)", SQL_HANDLE_STMT, statement);
+        assert_text(statement, 2, "H2_DELTA_TABLE_PREPARED");
+        if (delta_id != delta_parameter_id || SQLFetch(statement) != SQL_NO_DATA) {
+            throw std::runtime_error("prepared H2 FINAL TABLE returned incorrect rows");
+        }
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(prepared FINAL TABLE)",
+                        SQL_HANDLE_STMT, statement);
+        require_success(SQLFreeStmt(statement, SQL_RESET_PARAMS),
+                        "SQLFreeStmt(FINAL TABLE parameters)", SQL_HANDLE_STMT, statement);
 
         const std::string insert = "INSERT INTO " + table +
             " (amount, business_date, business_time, created_at, tiny_value, small_value,"
@@ -335,6 +400,8 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(select)",
                         SQL_HANDLE_STMT, statement);
 
+        execute_direct(statement, "DROP TABLE IF EXISTS " + delta_table);
+        delta_table_created = false;
         execute_direct(statement, "DROP TABLE IF EXISTS " + table);
         table_created = false;
         require_success(SQLFreeHandle(SQL_HANDLE_STMT, statement),
@@ -347,6 +414,11 @@ int run_connection(const DatabaseConfig& config,
         require_success(SQLFreeHandle(SQL_HANDLE_ENV, environment), "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        if (delta_table_created && statement != SQL_NULL_HSTMT) {
+            const std::string drop = "DROP TABLE IF EXISTS " + delta_table;
+            SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(
+                const_cast<char*>(drop.c_str())), SQL_NTS);
+        }
         if (table_created && statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
             SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(

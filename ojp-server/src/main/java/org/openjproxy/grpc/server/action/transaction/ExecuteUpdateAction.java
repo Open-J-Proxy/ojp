@@ -126,6 +126,9 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys) {
                 if (!request.getStatementUUID().isEmpty() && ps != null) {
                     bindLobsAndParameters(sessionManager, dto, ps, params);
+                    if (requiresGeneratedKeys) {
+                        generatedKeysUuid = request.getStatementUUID();
+                    }
                 } else {
                     ps = StatementFactory.createPreparedStatement(sessionManager, dto, request.getSql(), params,
                             request);

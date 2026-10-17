@@ -186,6 +186,11 @@ public class SessionManagerImpl implements SessionManager {
     }
 
     @Override
+    public void removeResultSet(SessionInfo sessionInfo, String uuid) {
+        this.sessionMap.get(sessionInfo.getSessionUUID()).removeResultSet(uuid);
+    }
+
+    @Override
     public String registerStatement(SessionInfo sessionInfo, Statement stmt) {
         String uuid = UUID.randomUUID().toString();
         this.sessionMap.get(sessionInfo.getSessionUUID()).addStatement(uuid, stmt);
@@ -207,6 +212,11 @@ public class SessionManagerImpl implements SessionManager {
     @Override
     public PreparedStatement getPreparedStatement(SessionInfo sessionInfo, String uuid) {
         return this.sessionMap.get(sessionInfo.getSessionUUID()).getPreparedStatement(uuid);
+    }
+
+    @Override
+    public void removePreparedStatement(SessionInfo sessionInfo, String uuid) {
+        this.sessionMap.get(sessionInfo.getSessionUUID()).removePreparedStatement(uuid);
     }
 
     @Override

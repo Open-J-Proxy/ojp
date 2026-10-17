@@ -130,7 +130,7 @@ func executeUpdateAndCloseKeys(ctx context.Context, connection *rpcConnection, s
 		return err
 	}
 	if generatedKeysUUID != "" {
-		_, err = connection.fetchGeneratedKeys(ctx, generatedKeysUUID)
+		_, err = connection.fetchGeneratedKeysAndClose(ctx, generatedKeysUUID)
 	}
 	return err
 }

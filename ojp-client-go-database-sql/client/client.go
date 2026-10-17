@@ -156,7 +156,8 @@ func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql stri
 			Properties: []*pb.PropertyEntry{{
 				Key:   propAutoGenKeys,
 				Value: &pb.PropertyEntry_IntValue{IntValue: 1},
-			}},
+			},
+			},
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			return grpcError(ctx, err, trailer)
@@ -188,10 +189,16 @@ func (c *rpcConnection) prepareStatement(ctx context.Context, sql string) (strin
 					ResourceName: "ParameterCount",
 				},
 			},
-			Properties: []*pb.PropertyEntry{{
-				Key:   "PREPARED_STATEMENT_SQL_KEY",
-				Value: &pb.PropertyEntry_StringValue{StringValue: sql},
-			}},
+			Properties: []*pb.PropertyEntry{
+				{
+					Key:   "PREPARED_STATEMENT_SQL_KEY",
+					Value: &pb.PropertyEntry_StringValue{StringValue: sql},
+				},
+				{
+					Key:   propAutoGenKeys,
+					Value: &pb.PropertyEntry_IntValue{IntValue: 1},
+				},
+			},
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			return "", grpcError(ctx, err, trailer)
@@ -361,31 +368,41 @@ func (c *rpcConnection) fetchGeneratedKeys(ctx context.Context, psUUID string) (
 		return uuid, nil
 	})
 	if err != nil {
-		_ = c.closePreparedStatement(ctx, psUUID)
 		return 0, err
 	}
 	if rsUUID == "" {
-		return 0, c.closePreparedStatement(ctx, psUUID)
+		return 0, nil
 	}
 	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
 	resultSetCloseErr := c.closeResultSet(ctx, rsUUID)
-	statementCloseErr := c.closePreparedStatement(ctx, psUUID)
 	if err != nil {
 		return 0, err
 	}
 	if resultSetCloseErr != nil {
 		return 0, resultSetCloseErr
 	}
-	if statementCloseErr != nil {
-		return 0, statementCloseErr
-	}
 	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
 		return 0, nil
 	}
-	if v, ok := rows.Rows[0][0].(int64); ok {
-		return v, nil
+	switch value := rows.Rows[0][0].(type) {
+	case int32:
+		return int64(value), nil
+	case int64:
+		return value, nil
 	}
 	return 0, nil
+}
+
+func (c *rpcConnection) fetchGeneratedKeysAndClose(ctx context.Context, psUUID string) (int64, error) {
+	lastID, fetchErr := c.fetchGeneratedKeys(ctx, psUUID)
+	closeErr := c.closePreparedStatement(ctx, psUUID)
+	if fetchErr != nil {
+		return 0, fetchErr
+	}
+	if closeErr != nil {
+		return 0, closeErr
+	}
+	return lastID, nil
 }
 
 func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {

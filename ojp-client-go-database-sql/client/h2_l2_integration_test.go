@@ -108,8 +108,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare statement: %v", err)
 	}
-	defer stmt.Close()
-
 	psResult, err := stmt.Exec("ps-row", false, 42.0)
 	if err != nil {
 		t.Fatalf("prepared exec: %v", err)
@@ -120,6 +118,21 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	if _, err := stmt.Exec("rebound-row", true, 43.0); err != nil {
 		t.Fatalf("prepared statement re-execution: %v", err)
+	}
+	preparedKeyResult, err := stmt.Exec("prepared-key", false, 44.0)
+	if err != nil {
+		t.Fatalf("prepared insert for generated keys: %v", err)
+	}
+	preparedLastID, err := preparedKeyResult.LastInsertId()
+	if err != nil || preparedLastID == 0 {
+		t.Fatalf("expected prepared generated key, got %d (error %v)", preparedLastID, err)
+	}
+	var preparedKeyName string
+	if err := db.QueryRowContext(ctx, fmt.Sprintf("SELECT name FROM %s WHERE id=?", table), preparedLastID).Scan(&preparedKeyName); err != nil {
+		t.Fatalf("verify prepared generated key: %v", err)
+	}
+	if preparedKeyName != "prepared-key" {
+		t.Fatalf("prepared generated key %d identified unexpected row %q", preparedLastID, preparedKeyName)
 	}
 
 	var psName string
@@ -146,6 +159,9 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	if err := preparedQuery.Close(); err != nil {
 		t.Fatalf("close prepared query: %v", err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("close prepared statement: %v", err)
 	}
 
 	genResult, err := db.ExecContext(ctx, fmt.Sprintf(

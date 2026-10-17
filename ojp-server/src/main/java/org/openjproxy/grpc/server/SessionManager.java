@@ -52,10 +52,12 @@ public interface SessionManager {
     Connection getConnection(SessionInfo sessionInfo);
     String registerResultSet(SessionInfo sessionInfo, ResultSet rs);
     ResultSet getResultSet(SessionInfo sessionInfo, String uuid);
+    void removeResultSet(SessionInfo sessionInfo, String uuid);
     String registerStatement(SessionInfo sessionInfo, Statement stmt);
     Statement getStatement(SessionInfo sessionInfo, String uuid);
     String registerPreparedStatement(SessionInfo sessionInfo, PreparedStatement ps);
     PreparedStatement getPreparedStatement(SessionInfo sessionInfo, String uuid);
+    void removePreparedStatement(SessionInfo sessionInfo, String uuid);
     String registerCallableStatement(SessionInfo sessionInfo, CallableStatement cs);
     CallableStatement getCallableStatement(SessionInfo sessionInfo, String uuid);
     void registerLob(SessionInfo sessionInfo, Object o, String lobUuid);

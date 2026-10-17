@@ -349,6 +349,11 @@ public class Session {
         return this.resultSetMap.get(uuid);
     }
 
+    public void removeResultSet(String uuid) {
+        this.notClosed();
+        this.resultSetMap.remove(uuid);
+    }
+
     public void addStatement(String uuid, Statement stmt) {
         this.notClosed();
         this.statementMap.put(uuid, stmt);
@@ -367,6 +372,11 @@ public class Session {
     public PreparedStatement getPreparedStatement(String uuid) {
         this.notClosed();
         return this.preparedStatementMap.get(uuid);
+    }
+
+    public void removePreparedStatement(String uuid) {
+        this.notClosed();
+        this.preparedStatementMap.remove(uuid);
     }
 
     public void addCallableStatement(String uuid, CallableStatement cs) {

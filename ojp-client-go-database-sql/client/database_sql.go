@@ -169,7 +169,7 @@ func (c *sqlConn) ExecContext(ctx context.Context, query string, args []driver.N
 	}
 	var lastID int64
 	if generatedKeysUUID != "" {
-		lastID, err = c.connection.fetchGeneratedKeys(ctx, generatedKeysUUID)
+		lastID, err = c.connection.fetchGeneratedKeysAndClose(ctx, generatedKeysUUID)
 		if err != nil {
 			return nil, err
 		}
@@ -190,8 +190,14 @@ func (c *sqlConn) QueryContext(ctx context.Context, query string, args []driver.
 }
 
 func (c *sqlConn) Ping(ctx context.Context) error {
-	_, err := c.connection.query(ctx, "SELECT 1", nil)
-	return err
+	result, err := c.connection.query(ctx, "SELECT 1", nil)
+	if err != nil {
+		return err
+	}
+	if result.resultSetUUID != "" {
+		return c.connection.closeResultSet(ctx, result.resultSetUUID)
+	}
+	return nil
 }
 
 func (c *sqlConn) IsValid() bool {

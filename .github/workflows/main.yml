@@ -8,6 +8,7 @@
 # WORKFLOW STRUCTURE:
 # 0. detect-changes: Shared suite and Java reactor selection
 # 0a. java-verify: Java 25 verification of selected modules
+# 0b. resolve-version / build-ojp-image: Build one shared Java test image per run
 # 1. build-test: Fast H2-only tests (embedded database, no external services)
 # 1a. dotnet-crud-test: .NET ADO.NET H2 L1 tests (independent)
 # 1b. ruby-dbi-test: Ruby DBI client unit and H2 integration tests
@@ -31,6 +32,7 @@
 # SEQUENTIAL EXECUTION:
 # Java and C++ ODBC database-specific jobs wait for the H2 integration gate.
 # The Java H2 matrix, .NET, Ruby, Python, and C++ ODBC H2 jobs run in parallel.
+# Java Docker consumers load the shared image artifact; no registry push is required.
 # This ensures database-specific tests start only after every selected H2 job passes,
 # providing:
 # - Fast feedback (H2 tests complete in seconds)
@@ -128,6 +130,75 @@ jobs:
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
           echo "ojp_image=rrobetti/ojp:${VERSION}" >> $GITHUB_OUTPUT
 
+  # Build once, then distribute the image to every Java integration matrix.
+  # Public GHCR base mirrors allow fork PRs to build without registry credentials.
+  build-ojp-image:
+    name: Build shared OJP Server image
+    runs-on: ubuntu-latest
+    needs: [detect-changes, java-verify, resolve-version]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.java-verify.result == 'success' && needs.resolve-version.result == 'success' }}
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+          cache: maven
+
+      - name: Build OJP Server and dependencies
+        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
+
+      - name: Download JDBC drivers for all Java integration suites
+        run: |
+          bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+          for artifact in \
+            com.ibm.db2:jcc:11.5.9.0 \
+            com.oracle.database.jdbc:ojdbc11:23.8.0.25.04 \
+            com.microsoft.sqlserver:mssql-jdbc:12.8.2.jre11; do
+            mvn dependency:copy \
+              -Dartifact="$artifact" \
+              -DoutputDirectory=ojp-server/ojp-libs \
+              -Dmdep.stripVersion=false
+          done
+
+      - name: Resolve public base image registry
+        id: base
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "registry=ghcr.io/${REPOSITORY,,}/ci-base" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.11.1
+
+      - name: Build OJP Server Docker image
+        uses: docker/build-push-action@v6.18.0
+        with:
+          context: ./ojp-server
+          load: true
+          tags: ${{ needs.resolve-version.outputs.ojp_image }}
+          build-args: |
+            BASE_IMAGE_REGISTRY=${{ steps.base.outputs.registry }}
+          cache-from: type=gha,scope=ojp-server-ci
+          cache-to: type=gha,mode=max,scope=ojp-server-ci
+
+      - name: Save OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
+        run: docker save --output "${{ runner.temp }}/ojp-server-image.tar" "$OJP_IMAGE"
+
+      - name: Upload OJP Server Docker image
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}/ojp-server-image.tar
+          overwrite: true
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
   # ===========================================================================
   # JOB 1: Build & Test with H2 (Fast Fail-Fast Gate)
   # ===========================================================================
@@ -143,8 +214,8 @@ jobs:
   build-test:
     name: Build & Test (H2 - Fast Fail-Fast)
     runs-on: ubuntu-latest
-    needs: [detect-changes, java-verify, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.java-verify.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, java-verify, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.java-verify.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -165,23 +236,21 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          # Avoid Docker Hub's anonymous pull limit across parallel matrix jobs.
-          docker build \
-            --build-arg BASE_IMAGE_REGISTRY=public.ecr.aws/docker/library \
-            -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container
         run: |
@@ -491,8 +560,8 @@ jobs:
     name: PostgreSQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -529,23 +598,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       # Start first OJP server without SQL enhancer (default configuration)
       # Tests will run against this server via postgres_connection.csv (port 1059)
@@ -632,8 +702,8 @@ jobs:
     name: MySQL Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -670,23 +740,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container
         run: |
@@ -731,8 +802,8 @@ jobs:
     name: MariaDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -769,23 +840,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container
         run: |
@@ -831,8 +903,8 @@ jobs:
     name: CockroachDB Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -859,23 +931,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container
         run: |
@@ -923,8 +996,8 @@ jobs:
     name: DB2 Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -1005,24 +1078,6 @@ jobs:
           
           echo "DB2 initialization complete"
 
-      # Download DB2 JDBC driver and place in ojp-server/ojp-libs directory for inclusion in the Docker image
-      # Similar to Oracle, we handle it via the ojp-libs directory copied into the Docker image
-      - name: Download DB2 JDBC Driver to ojp-server/ojp-libs
-        run: |
-          # Create ojp-server/ojp-libs directory for inclusion in the Docker image
-          mkdir -p ojp-server/ojp-libs
-          
-          # Download DB2 JDBC driver from Maven Central
-          echo "=== Downloading DB2 JDBC driver ==="
-          mvn dependency:copy \
-            -Dartifact=com.ibm.db2:jcc:11.5.9.0 \
-            -DoutputDirectory=ojp-server/ojp-libs \
-            -Dmdep.stripVersion=false
-          
-          # Verify the download
-          echo "=== DB2 JDBC driver downloaded to ojp-server/ojp-libs ==="
-          ls -lh ojp-server/ojp-libs/
-
       - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
@@ -1030,23 +1085,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container with DB2 driver from ojp-server/ojp-libs
         run: |
@@ -1095,8 +1151,8 @@ jobs:
     name: Multinode Integration Test (Run ${{ matrix.run }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
     strategy:
       max-parallel: 1
       matrix:
@@ -1133,23 +1189,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       # Start first OJP server instance on port 10591
       - name: Start OJP Server 1 on port 10591
@@ -1507,8 +1564,8 @@ jobs:
     name: Multinode XA Integration Test (Run ${{ matrix.run }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
     strategy:
       max-parallel: 1
       matrix:
@@ -1545,23 +1602,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       # Start first OJP server instance on port 10591 with DEBUG logging
       - name: Start OJP Server 1 on port 10591
@@ -1953,8 +2011,8 @@ jobs:
     name: Oracle Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
     
     permissions:
       contents: read
@@ -2036,25 +2094,6 @@ jobs:
           
           echo "=== XA permissions granted successfully ==="
 
-      # Download Oracle JDBC driver and place in ojp-server/ojp-libs directory for inclusion in the Docker image
-      # We don't include it in the repository due to Oracle licensing
-      # The driver will be loaded at runtime via the ojp-libs directory copied into the Docker image
-      - name: Download Oracle JDBC Driver to ojp-server/ojp-libs
-        run: |
-          # Create ojp-server/ojp-libs directory for inclusion in the Docker image
-          mkdir -p ojp-server/ojp-libs
-          
-          # Download Oracle JDBC driver from Maven Central
-          echo "=== Downloading Oracle JDBC driver ==="
-          mvn dependency:copy \
-            -Dartifact=com.oracle.database.jdbc:ojdbc11:23.8.0.25.04 \
-            -DoutputDirectory=ojp-server/ojp-libs \
-            -Dmdep.stripVersion=false
-          
-          # Verify the download
-          echo "=== Oracle JDBC driver downloaded to ojp-server/ojp-libs ==="
-          ls -lh ojp-server/ojp-libs/
-
       - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
@@ -2062,23 +2101,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container with Oracle driver from ojp-server/ojp-libs
         run: |
@@ -2125,8 +2165,8 @@ jobs:
     name: SQL Server Integration Tests (JDK ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     # DEPENDENCY: This job waits until every selected Main CI H2 job succeeds.
-    needs: [detect-changes, h2-integration-gate, resolve-version]
-    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' }}
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
     
     permissions:
       contents: read
@@ -2142,24 +2182,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Download SQL Server JDBC driver and place in ojp-server/ojp-libs directory for inclusion in the Docker image
-      # Similar to Oracle and DB2, we handle it via the ojp-libs directory copied into the Docker image
-      - name: Download SQL Server JDBC Driver to ojp-server/ojp-libs
-        run: |
-          # Create ojp-server/ojp-libs directory for inclusion in the Docker image
-          mkdir -p ojp-server/ojp-libs
-          
-          # Download SQL Server JDBC driver from Maven Central
-          echo "=== Downloading SQL Server JDBC driver ==="
-          mvn dependency:copy \
-            -Dartifact=com.microsoft.sqlserver:mssql-jdbc:12.8.2.jre11 \
-            -DoutputDirectory=ojp-server/ojp-libs \
-            -Dmdep.stripVersion=false
-          
-          # Verify the download
-          echo "=== SQL Server JDBC driver downloaded to ojp-server/ojp-libs ==="
-          ls -lh ojp-server/ojp-libs/
-
       - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
         with:
@@ -2167,23 +2189,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build and Install (ojp-grpc-commons) with JDK 25
-        run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
+      - name: Install JDBC reactor dependencies with JDK 25
+        run: mvn clean install -pl ojp-grpc-commons,ojp-testcontainers -am -DskipTests -Dgpg.skip=true
 
       - name: Test (ojp-grpc-commons) with JDK 25
         run: mvn test -pl ojp-grpc-commons -Dgpg.skip=true
 
-      # Download open source JDBC drivers into ojp-server/ojp-libs for inclusion in the Docker image
-      - name: Download Open Source Drivers
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+      - name: Download OJP Server Docker image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
 
-      - name: Build (ojp-server) with JDK 25
-        run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
-
-      - name: Build OJP Server Docker image
+      - name: Load OJP Server Docker image
+        env:
+          OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
         run: |
-          docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/
-          echo "OJP_IMAGE=${{ needs.resolve-version.outputs.ojp_image }}" >> $GITHUB_ENV
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          echo "OJP_IMAGE=$OJP_IMAGE" >> "$GITHUB_ENV"
 
       - name: Start OJP Server container with SQL Server driver from ojp-server/ojp-libs
         run: |
@@ -2991,6 +3014,7 @@ jobs:
       - detect-changes
       - java-verify
       - resolve-version
+      - build-ojp-image
       - build-test
       - dotnet-crud-test
       - ruby-dbi-test
@@ -3023,6 +3047,7 @@ jobs:
           const suites = {
             'java-verify': 'java_build',
             'resolve-version': 'java',
+            'build-ojp-image': 'java',
             'build-test': 'java',
             'dotnet-crud-test': 'dotnet',
             'ruby-dbi-test': 'ruby',

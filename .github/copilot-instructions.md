@@ -218,6 +218,14 @@ mvn clean install   # lint + compile + test + package
 - **Circuit breaker timeout** defaults to 60 seconds — account for this in failure-simulation tests.
 - **SPI implementations**: Register via `META-INF/services/` as required by `ServiceLoader`.
 
+### Implementing a client in a non-Java language
+
+- **Start with the [multi-language client specification](../documents/multi-language-client-spec/)**. Read `CLIENT_SPEC_AI.md`, and `CLIENT_IMPLEMENTATION_LEVELS.md`; treat them as the contract for behavior, protocol use, testing, and claimed support levels.
+- Before designing a feature, inspect the JDBC driver and existing non-Java clients for equivalent behavior. Reuse proven protocol and lifecycle patterns, while keeping the public API idiomatic for the target language. Do not copy an implementation blindly when its language runtime has different connection or resource semantics.
+- Prefer the dedicated protobuf RPCs for their intended operations: use `executeQuery` for queries, `executeUpdate` for updates, and the dedicated connection and transaction RPCs where applicable. Use `callResource` only when no dedicated RPC provides the required operation; it is a generic fallback, not the default route for SQL execution. Some operations, such as metadata, cursor/resource management, and savepoints, are specifically represented through `callResource` in the contract.
+- Make real-server integration tests a first-class part of the client, following the parameterized approach used by `ojp-jdbc-driver` integration tests. Start each test scenario from a CSV fixture containing **one or more database connection configurations**, and run the scenario for every row. Do not hardcode a single connection or make the test runner assume the CSV will always contain only one: adding another database/connection should not require rewriting the test. Exercise the public client API against a real OJP server, and only claim implementation levels/databases supported by passing integration coverage. Unit tests supplement, but do not replace, these tests.
+- Never add explicit or implicit client-side pooling of virtual OJP connections. A connection source is a factory, not a pool; disable host-framework pooling when it would retain or reuse virtual connections. Open a fresh virtual connection for each independent operation/unit of work, reuse that connection only for the duration of its explicit transaction or unit of work, then commit or roll back as appropriate and close it promptly so the client terminates the server session. The real database connection pool belongs on the OJP server.
+
 ---
 
 ## Documentation Map

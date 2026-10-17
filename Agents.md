@@ -211,6 +211,14 @@ When implementing either SPI, register the implementation via `META-INF/services
 - Auto-configuration is in `spring-boot-starter-ojp`. It wires `OjpDataSource` automatically when the driver is on the classpath.
 - Disable Spring Boot's own HikariCP auto-configuration when using OJP (see `documents/java-frameworks/spring-boot/`).
 
+### Implementing a client in a non-Java language
+
+- **Follow the [multi-language client specification](documents/multi-language-client-spec/)**. Read `CLIENT_SPEC_AI.md`, and `CLIENT_IMPLEMENTATION_LEVELS.md` before implementation; these define the client contract, protocol behavior, test expectations, and support levels.
+- Look for equivalent functionality in `ojp-jdbc-driver` and existing non-Java clients before designing a new feature. Reuse their proven protocol and lifecycle patterns, but keep the target language's public API idiomatic; do not copy Java assumptions that conflict with that language's resource model.
+- Prefer dedicated protobuf RPCs for their intended work: `executeQuery` for queries, `executeUpdate` for updates, and dedicated connection/transaction RPCs where available. Treat `callResource` as a fallback for operations without a suitable dedicated RPC, not as a generic way to execute ordinary SQL. Metadata, cursor/resource operations, and savepoints are examples that the contract maps to `callResource`.
+- Build real-server integration tests alongside the client, using the parameterized pattern of the JDBC driver's integration tests. Each scenario must read a CSV fixture with **one or more database connection configurations** and run against every row. Avoid hardcoding a single connection or writing a runner that rejects additional rows; the test suite should expand to more databases/connections by adding fixture data, not by redesigning tests. Test through the public client API against a real OJP server. Unit tests are useful, but do not substitute for integration coverage or justify claiming a support level/database that has not passed its required integration tests.
+- **Do not implement explicit or implicit client-side pools of virtual connections.** A client data source/connection provider is a factory, not a pool, and any host-framework pool that reuses virtual connections must be disabled. Open a fresh virtual connection for each independent operation/unit of work; keep it only across the operations in its explicit transaction or unit of work, then commit or roll back and close it promptly. This terminates the server session; only the OJP server pools real database connections.
+
 ---
 
 ## Code Style

@@ -7,14 +7,14 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
 | Assessment                               | Value                                                                                                                                                                                                  |
 |------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Highest stable level in this module     | **L1**                                                                                                                                                                                                 |
-| Summary                                  | L1 CRUD and connection lifecycle are covered by the H2 real-server suite. L2/L3 paths and H2 integration cases are being completed; they are not claimed as covered until the required CI suites pass. |
+| Highest covered level in this module   | **L3 (H2)**                                                                                                                                                                                            |
+| Summary                                  | H2 real-server integration suites cover L1 CRUD and lifecycle, L2 typed parameters, prepared updates, generated keys and metadata, and L3 streaming, pagination and result-set lifecycle.                 |
 
 ### Current Test-Proven Coverage by Database (`ojp-client-go-database-sql`)
 
 | Database        | Highest achieved level (current tests) | Evidence highlights                                                                                                                                                                                  |
 |-----------------|---------------------------------------:|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **H2**          | **L1 stable; L2/L3 in progress** | `TestH2DatabaseShouldSupportL1CRUDAndLifecycle` is the stable claim. L2/L3 integration suites are present but remain unclaimed pending passing CI evidence. |
+| **H2**          | **L3** | L1: `TestH2DatabaseShouldSupportL1CRUDAndLifecycle`; L2: `TestH2DatabaseShouldSupportL2Capabilities`; L3: `TestH2DatabaseShouldSupportL3Capabilities` and `TestH2DatabaseShouldSupportL3FetchNextRowsAndClose`. |
 | **PostgreSQL**  |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
 | **MySQL**       |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
 | **MariaDB**     |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
@@ -25,15 +25,15 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
 ### Level Implementation Status
 
-| Level  | Capability                                                          | Status          | Evidence                                                            |
-|--------|---------------------------------------------------------------------|-----------------|---------------------------------------------------------------------|
-| **L2** | Typed parameter handling (supported `ParameterTypeProto` values)     | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities` (CI validation pending) |
-| **L2** | Prepared updates reuse the server `StatementUUID` returned by `ExecuteUpdate` | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities`                         |
-| **L2** | Generated keys through `CALL_GET` + `GeneratedKeys` + `fetchNextRows`| **In progress** | `TestH2DatabaseShouldSupportL2Capabilities` (`LastInsertId`)        |
-| **L2** | Result-set metadata through chained `getMetaData` calls              | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities` (`ColumnTypes`)         |
-| **L3** | Server-streaming query result handling                               | **In progress** | `TestH2DatabaseShouldSupportL3Capabilities`                         |
-| **L3** | Pagination through `fetchNextRows`                                   | **In progress** | `TestH2DatabaseShouldSupportL3FetchNextRowsAndClose`                |
-| **L3** | ResultSet lifecycle and early close                                  | **In progress** | `TestH2DatabaseShouldSupportL3Capabilities` and fetch test           |
+| Level  | Capability                                                               | Status      | Evidence                                                                       |
+|--------|--------------------------------------------------------------------------|-------------|--------------------------------------------------------------------------------|
+| **L2** | Typed parameter handling (supported `ParameterTypeProto` values)        | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities`                                    |
+| **L2** | Prepared updates reuse the server `StatementUUID` returned by `ExecuteUpdate` | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities`                                    |
+| **L2** | Generated keys through `CALL_GET` + `GeneratedKeys` + `fetchNextRows`   | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities` (`LastInsertId`)                  |
+| **L2** | Result-set metadata through chained `getMetaData` calls                 | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities` (`ColumnTypes`)                    |
+| **L3** | Server-streaming query result handling                                  | **Covered** | `TestH2DatabaseShouldSupportL3Capabilities`                                    |
+| **L3** | Pagination through `fetchNextRows`                                      | **Covered** | `TestH2DatabaseShouldSupportL3FetchNextRowsAndClose`                           |
+| **L3** | ResultSet lifecycle and early close                                     | **Covered** | `TestH2DatabaseShouldSupportL3Capabilities` and fetch test                     |
 
 Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
 

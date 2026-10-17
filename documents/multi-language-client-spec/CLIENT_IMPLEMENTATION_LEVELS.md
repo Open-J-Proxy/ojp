@@ -72,7 +72,7 @@ These entries describe the levels targeted by the language client modules; they 
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server L1-L10 integration suites passed; `sqlserver_l10_integration_test.cpp` combines XA lifecycle/affinity with multinode failover and recovered-node reuse. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L10** | `postgresql_l10_integration_test.cpp` combines PostgreSQL XA behavior with multinode failover, XA affinity failure, SQL-error classification, and recovered-node reuse; L1-L9 suites cover the individual capabilities. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | MariaDB | **L10** | MariaDB L1-L9 suites cover database operations, multinode behavior, and XA lifecycle/recovery; `mariadb_l10_integration_test.cpp` combines XA affinity with multinode failover, SQL-error classification, and recovered-node reuse. |
-| Go (`ojp-client-go-database-sql`) | H2 | **L1 stable; L2/L3 in progress** | L1 is covered by `client/h2_l1_integration_test.go`; L2/L3 suites are awaiting passing CI evidence. |
+| Go (`ojp-client-go-database-sql`) | H2 | **L3** | L1-L3 are covered by `client/h2_l1_integration_test.go`, `client/h2_l2_integration_test.go`, `client/h2_l3_integration_test.go`, and `client/h2_l3_fetch_integration_test.go`. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
 | PHP PDO-compatible (`ojp-client-php-pdo`) | H2 | **L1** | `tests/h2_l1_integration.php` exercises the real-server CRUD and lifecycle path. |
@@ -95,7 +95,7 @@ These levels are based on each language client's own integration tests and are i
 | **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
 | **C++ ODBC** | PostgreSQL | **L8** | L1-L8 real-server suites have existing coverage. PostgreSQL L9 and L10 integration tests are registered in CI. |
 | **C++ ODBC** | MariaDB | **L10** | MariaDB L1-L9 suites cover database operations, multinode behavior, and XA lifecycle/recovery; `ojp-client-cpp-odbc/tests/mariadb_l10_integration_test.cpp` combines XA affinity with multinode failover, SQL-error classification, and recovered-node reuse. |
-| **Go** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go`; L2/L3 remain in progress pending successful real-server CI runs. |
+| **Go** | H2 | **L3** | L1-L3 real-server integration coverage: `ojp-client-go-database-sql/client/h2_l1_integration_test.go`, `h2_l2_integration_test.go`, `h2_l3_integration_test.go`, and `h2_l3_fetch_integration_test.go`. |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
 | **PHP PDO-compatible** | H2 | **L1** | `ojp-client-php-pdo/tests/h2_l1_integration.php` |

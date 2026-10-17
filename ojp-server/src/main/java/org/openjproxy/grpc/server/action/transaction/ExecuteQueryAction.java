@@ -16,6 +16,7 @@ import org.openjproxy.grpc.server.cache.QueryCacheHelper;
 import org.openjproxy.grpc.server.readwrite.ReadReplicaSelector;
 import org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry;
 import org.openjproxy.grpc.server.readwrite.ReadWriteSqlClassifier;
+import org.openjproxy.grpc.server.statement.ParameterHandler;
 import org.openjproxy.grpc.server.statement.StatementFactory;
 
 import javax.sql.DataSource;
@@ -191,7 +192,15 @@ public class ExecuteQueryAction implements Action<StatementRequest, OpResult> {
         StreamObserver<OpResult> finalObserver = QueryCacheHelper.wrapWithCaching(
                 responseObserver, cacheConfig, sql, params, dto.getSession().getConnHash());
 
-        if (CollectionUtils.isNotEmpty(params)) {
+        if (!request.getStatementUUID().isBlank()) {
+            PreparedStatement ps = sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID());
+            if (ps == null) {
+                throw new SQLException("Prepared statement not found: " + request.getStatementUUID());
+            }
+            ParameterHandler.addParametersPreparedStatement(sessionManager, dto.getSession(), ps, params);
+            String resultSetUUID = sessionManager.registerResultSet(dto.getSession(), ps.executeQuery());
+            handleResultSet(actionContext, dto.getSession(), resultSetUUID, finalObserver);
+        } else if (CollectionUtils.isNotEmpty(params)) {
             PreparedStatement ps = StatementFactory.createPreparedStatement(sessionManager, execDto, sql, params, request);
             String resultSetUUID = sessionManager.registerResultSet(dto.getSession(), ps.executeQuery());
             handleResultSet(actionContext, dto.getSession(), resultSetUUID, finalObserver);

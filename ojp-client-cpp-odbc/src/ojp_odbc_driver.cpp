@@ -197,6 +197,78 @@ struct ParsedConnectionString {
     std::string error;
 };
 
+std::size_t count_parameter_markers(const std::string& sql) {
+    std::size_t count = 0;
+    for (std::size_t index = 0; index < sql.size();) {
+        const char character = sql[index];
+        if (character == '-' && index + 1 < sql.size() && sql[index + 1] == '-') {
+            index = sql.find_first_of("\r\n", index + 2);
+            if (index == std::string::npos) {
+                break;
+            }
+        } else if (character == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
+            index += 2;
+            std::size_t depth = 1;
+            while (index < sql.size() && depth != 0) {
+                if (index + 1 < sql.size() && sql[index] == '/' && sql[index + 1] == '*') {
+                    ++depth;
+                    index += 2;
+                } else if (index + 1 < sql.size() && sql[index] == '*' && sql[index + 1] == '/') {
+                    --depth;
+                    index += 2;
+                } else {
+                    ++index;
+                }
+            }
+        } else if (character == '\'' || character == '"' || character == '`' || character == '[') {
+            const char closing = character == '[' ? ']' : character;
+            const bool escape_string = character == '\'' && index > 0 &&
+                (sql[index - 1] == 'E' || sql[index - 1] == 'e') &&
+                (index == 1 || (!std::isalnum(static_cast<unsigned char>(sql[index - 2])) &&
+                               sql[index - 2] != '_' && sql[index - 2] != '$'));
+            ++index;
+            while (index < sql.size()) {
+                if (escape_string && sql[index] == '\\' && index + 1 < sql.size()) {
+                    index += 2;
+                } else if (sql[index++] == closing) {
+                    if (index < sql.size() && sql[index] == closing) {
+                        ++index;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else if (character == '$' &&
+                   (index == 0 || (!std::isalnum(static_cast<unsigned char>(sql[index - 1])) &&
+                                   sql[index - 1] != '_' && sql[index - 1] != '$'))) {
+            std::size_t end = index + 1;
+            if (end < sql.size() &&
+                (std::isalpha(static_cast<unsigned char>(sql[end])) || sql[end] == '_')) {
+                do {
+                    ++end;
+                } while (end < sql.size() &&
+                         (std::isalnum(static_cast<unsigned char>(sql[end])) || sql[end] == '_'));
+            }
+            if (end < sql.size() && sql[end] == '$') {
+                const auto delimiter = sql.substr(index, end - index + 1);
+                const auto closing = sql.find(delimiter, end + 1);
+                if (closing == std::string::npos) {
+                    break;
+                }
+                index = closing + delimiter.size();
+            } else {
+                ++index;
+            }
+        } else {
+            if (character == '?') {
+                ++count;
+            }
+            ++index;
+        }
+    }
+    return count;
+}
+
 ParsedConnectionString parse_connection_string(const std::string& input) {
     ParsedConnectionString parsed;
     std::size_t position = 0;
@@ -1564,12 +1636,15 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         return set_temporal_type(c_type);
     }
     switch (c_type) {
+        case SQL_C_TINYINT:
         case SQL_C_STINYINT:
             value->set_int_value(*reinterpret_cast<const SQLSCHAR*>(data));
             return true;
+        case SQL_C_SHORT:
         case SQL_C_SSHORT:
             value->set_int_value(*reinterpret_cast<const SQLSMALLINT*>(data));
             return true;
+        case SQL_C_LONG:
         case SQL_C_SLONG:
             value->set_int_value(*reinterpret_cast<const SQLINTEGER*>(data));
             return true;
@@ -4381,6 +4456,28 @@ SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT statement, SQLSMALLINT* column_count
     return SQL_SUCCESS;
 }
 
+SQLRETURN SQL_API SQLNumParams(SQLHSTMT statement, SQLSMALLINT* parameter_count) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
+    clear_diagnostics(target);
+    if (parameter_count == nullptr) {
+        return fail(target, "Parameter count output is required", "HY009");
+    }
+    if (target->sql.empty()) {
+        return fail(target, "Statement has not been prepared", "HY010");
+    }
+    const auto count = count_parameter_markers(target->sql);
+    if (count > static_cast<std::size_t>(std::numeric_limits<SQLSMALLINT>::max())) {
+        return fail(target, "Parameter count exceeds SQLSMALLINT range", "22003");
+    }
+    *parameter_count = static_cast<SQLSMALLINT>(count);
+    return SQL_SUCCESS;
+}
+
 SQLRETURN SQL_API SQLTables(SQLHSTMT statement, SQLCHAR* catalog, SQLSMALLINT catalog_length,
                             SQLCHAR* schema, SQLSMALLINT schema_length, SQLCHAR* table,
                             SQLSMALLINT table_length, SQLCHAR* table_types,
@@ -5492,7 +5589,7 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
         SQL_API_SQLBINDCOL, SQL_API_SQLEXECUTE, SQL_API_SQLCANCEL,
         SQL_API_SQLPARAMDATA, SQL_API_SQLPUTDATA,
         SQL_API_SQLFETCH, SQL_API_SQLGETDATA,
-        SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLDESCRIBECOL,
+        SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLNUMPARAMS, SQL_API_SQLDESCRIBECOL,
         SQL_API_SQLROWCOUNT, SQL_API_SQLFREESTMT,
         SQL_API_SQLTABLES, SQL_API_SQLCOLUMNS, SQL_API_SQLPRIMARYKEYS,
         SQL_API_SQLFOREIGNKEYS, SQL_API_SQLGETTYPEINFO, SQL_API_SQLCOLATTRIBUTE,

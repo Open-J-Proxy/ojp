@@ -82,6 +82,12 @@ install(FILES include/ojp_odbc_xa.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(ojp_odbc_parameter_test tests/parameter_test.cpp)
+    target_include_directories(ojp_odbc_parameter_test PRIVATE "${GENERATED_DIR}" ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_parameter_test PRIVATE
+        ojp_odbc gRPC::grpc++ protobuf::libprotobuf)
+    add_test(NAME OjpOdbcParameters COMMAND ojp_odbc_parameter_test)
+
     add_executable(ojp_odbc_l1_integration_test
         tests/l1_integration_test.cpp)
     target_link_libraries(ojp_odbc_l1_integration_test PRIVATE ODBC::ODBC)

@@ -306,6 +306,35 @@ public class HikariConnectionPoolProvider implements ConnectionPoolProvider {
     }
 
     @Override
+    public boolean supportsDynamicResizing() {
+        return true;
+    }
+
+    @Override
+    public void resizeDataSource(DataSource dataSource, int maximumPoolSize, int minimumIdle) throws SQLException {
+        if (!(dataSource instanceof HikariDataSource)) {
+            throw new SQLException("Cannot resize a DataSource not created by the Hikari provider");
+        }
+        if (maximumPoolSize < 1 || minimumIdle < 0 || minimumIdle > maximumPoolSize) {
+            throw new IllegalArgumentException("Invalid pool sizes: max=" + maximumPoolSize + ", min=" + minimumIdle);
+        }
+
+        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+        int currentMaximum = hikariDataSource.getMaximumPoolSize();
+        int currentMinimum = hikariDataSource.getMinimumIdle();
+        if (maximumPoolSize < currentMaximum || minimumIdle < currentMinimum) {
+            hikariDataSource.setMinimumIdle(minimumIdle);
+            hikariDataSource.setMaximumPoolSize(maximumPoolSize);
+            if (hikariDataSource.getHikariPoolMXBean() != null) {
+                hikariDataSource.getHikariPoolMXBean().softEvictConnections();
+            }
+        } else {
+            hikariDataSource.setMaximumPoolSize(maximumPoolSize);
+            hikariDataSource.setMinimumIdle(minimumIdle);
+        }
+    }
+
+    @Override
     public Map<String, Object> getStatistics(DataSource dataSource) {
         Map<String, Object> stats = new HashMap<>();
 

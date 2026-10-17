@@ -344,7 +344,7 @@ standard Python, ADO.NET, or FireDAC local transaction APIs.
 The driver implements the common connection, statement, transaction, result,
 and metadata paths, but is **not a complete ODBC API implementation**. The
 supported functions include `SQLDriverConnect[W]`, `SQLConnect[W]`,
-`SQLExecDirect[W]`, `SQLPrepare[W]`, `SQLBindParameter`, `SQLBindCol`,
+`SQLExecDirect[W]`, `SQLPrepare[W]`, `SQLNumParams`, `SQLBindParameter`, `SQLBindCol`,
 `SQLGetData`, `SQLTables[W]`, `SQLColumns[W]`, `SQLPrimaryKeys[W]`,
 `SQLForeignKeys[W]`, `SQLGetTypeInfo`, `SQLDescribeCol[W]`,
 `SQLColAttribute[W]`, `SQLGetInfo[W]`, `SQLGetFunctions`, and

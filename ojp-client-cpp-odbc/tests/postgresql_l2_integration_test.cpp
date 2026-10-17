@@ -639,6 +639,7 @@ int run_connection(const DatabaseConfig& config,
         execute_direct(statement, "INSERT INTO " + tables[3] +
                                   " (id, label) VALUES (1, 'POSTGRES_RETURNING') "
                                   "RETURNING id, label");
+        fetch(statement);
         if (get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) != 1) {
             throw std::runtime_error("PostgreSQL RETURNING returned the wrong inserted ID");
         }
@@ -658,6 +659,7 @@ int run_connection(const DatabaseConfig& config,
         bind(statement, 2, SQL_C_CHAR, SQL_VARCHAR, sizeof(returning_label), 0, returning_label,
              sizeof(returning_label), &returning_label_length);
         execute_prepared(statement, "RETURNING");
+        fetch(statement);
         if (get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) != returning_id) {
             throw std::runtime_error("prepared PostgreSQL RETURNING returned the wrong inserted ID");
         }

@@ -66,6 +66,7 @@ public class ResultSet extends RemoteProxyResultSet {
     private java.sql.ResultSetMetaData resultSetMetadata;
     private boolean inProxyMode;
     private boolean closed;
+    private boolean resultSetExhausted;
     private final AtomicInteger currentIdx = new AtomicInteger(0);
     private final boolean inRowByRowMode;
 
@@ -92,7 +93,8 @@ public class ResultSet extends RemoteProxyResultSet {
             this.statement = statement;
             OpResult result = nextWithSessionUpdate(itOpResult.next());
             OpQueryResult opQueryResult = ProtoConverter.fromProto(result.getQueryResult());
-            this.inRowByRowMode = CommonConstants.RESULT_SET_ROW_BY_ROW_MODE.equalsIgnoreCase(result.getFlag());
+            this.inRowByRowMode = result.getFlag().contains(CommonConstants.RESULT_SET_ROW_BY_ROW_MODE);
+            this.resultSetExhausted = result.getFlag().contains(CommonConstants.RESULT_SET_LAST_BLOCK_FLAG);
             this.setStatementService(statementService);
             this.setResultSetUUID(opQueryResult.getResultSetUUID());
             this.currentDataBlock = opQueryResult.getRows();
@@ -114,6 +116,9 @@ public class ResultSet extends RemoteProxyResultSet {
         }
         this.currentIdx.incrementAndGet();
         blockIdx.incrementAndGet();
+        if (this.resultSetExhausted && blockIdx.get() >= currentDataBlock.size()) {
+            return false;
+        }
         if (this.inRowByRowMode && blockIdx.get() > 0) {
             try {
                 // Row by row mode is used in SQL Server and DB2 only when working with LOBs as per moving the cursor earlier
@@ -181,6 +186,7 @@ public class ResultSet extends RemoteProxyResultSet {
         this.currentDataBlock = opQueryResult.getRows();
         this.blockCount.incrementAndGet();
         this.blockIdx.set(0);
+        this.resultSetExhausted = result.getFlag().contains(CommonConstants.RESULT_SET_LAST_BLOCK_FLAG);
     }
 
     private OpResult nextWithSessionUpdate(OpResult next) throws SQLException {

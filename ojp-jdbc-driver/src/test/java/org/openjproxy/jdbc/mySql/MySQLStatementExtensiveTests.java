@@ -92,6 +92,28 @@ public class MySQLStatementExtensiveTests {
 
     @ParameterizedTest
     @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
+    void shouldRejectReturningDmlOnMySql(String driverClass, String url, String user,
+                                         String password) throws Exception {
+        assumeFalse(url.toLowerCase().contains("mariadb"), "MySQL does not support MariaDB RETURNING syntax");
+        this.setUp(driverClass, url, user, password);
+        try {
+            assertThrows(SQLException.class, () -> statement.execute(
+                    "INSERT INTO mysql_statement_test (id, name) VALUES (9983, 'unsupported') RETURNING id, name"));
+            assertThrows(SQLException.class, () -> {
+                try (PreparedStatement preparedStatement = connection.prepareStatement(
+                        "INSERT INTO mysql_statement_test (id, name) VALUES (?, ?) RETURNING id, name")) {
+                    preparedStatement.setInt(1, 9984);
+                    preparedStatement.setString(2, "unsupported prepared");
+                    preparedStatement.executeQuery();
+                }
+            });
+        } finally {
+            statement.executeUpdate("DELETE FROM mysql_statement_test WHERE id IN (9983, 9984)");
+        }
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/mysql_mariadb_connection.csv")
     void testExecuteUpdate(String driverClass, String url, String user, String password) throws Exception {
         this.setUp(driverClass, url, user, password);
         int rows = statement.executeUpdate("UPDATE mysql_statement_test SET name = 'Updated Alice' WHERE id = 1");

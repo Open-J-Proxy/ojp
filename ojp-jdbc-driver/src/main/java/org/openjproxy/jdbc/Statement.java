@@ -219,7 +219,8 @@ public class Statement implements java.sql.Statement {
                     throw handle(onServerOverload(connection.getThrottleManager(),
                             connection.getThrottleMode(), sre));
                 }
-                this.hasNext = result.hasQueryResult() && result.getQueryResult().getRowsCount() > 0;
+                this.hasNext = result.hasQueryResult() && result.getQueryResult().getRowsCount() > 0
+                        && !result.getFlag().contains(CommonConstants.RESULT_SET_LAST_BLOCK_FLAG);
                 return result;
             }
         };

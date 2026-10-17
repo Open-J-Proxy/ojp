@@ -63,6 +63,7 @@ using com::openjproxy::grpc::XaStartRequest;
 using com::openjproxy::grpc::XidProto;
 
 constexpr char kRowByRowMode[] = "RESULT_SET_ROW_BY_ROW_MODE";
+constexpr char kResultSetLastBlockFlag[] = "RESULT_SET_LAST_BLOCK";
 constexpr char kUpdateResultSetFlag[] = "UPDATE_RESULT_SET";
 constexpr char kUpdateResultSetRequestKey[] = "STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY";
 using StatementStub = StatementService::Stub;
@@ -2196,7 +2197,8 @@ SQLRETURN fetch_update_result_set(ConnectionHandle* connection, StatementHandle*
             }
             statement->rows.push_back(std::move(decoded));
         }
-        if (query.rows_size() == 0) {
+        if (query.rows_size() == 0 ||
+            result.flag().find(kResultSetLastBlockFlag) != std::string::npos) {
             break;
         }
     }
@@ -2693,7 +2695,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             if (result.has_session()) {
                 update_session(connection, result.session(), request_session);
             }
-            if (result.flag() == kRowByRowMode) {
+            if (result.flag().find(kRowByRowMode) != std::string::npos) {
                 row_by_row = true;
             }
             if (!result.has_query_result()) {

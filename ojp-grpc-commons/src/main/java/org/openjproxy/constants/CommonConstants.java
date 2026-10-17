@@ -20,7 +20,9 @@ public class CommonConstants {
     public static final String STATEMENT_AUTO_GENERATED_KEYS_KEY = "STATEMENT_AUTO_GENERATED_KEYS_KEY";
     public static final String STATEMENT_COLUMN_INDEXES_KEY = "STATEMENT_COLUMN_INDEXES_KEY";
     public static final String STATEMENT_COLUMN_NAMES_KEY = "STATEMENT_COLUMN_NAMES_KEY";
+    public static final String STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY = "STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY";
     public static final String RESULT_SET_ROW_BY_ROW_MODE = "RESULT_SET_ROW_BY_ROW_MODE";
+    public static final String UPDATE_RESULT_SET_FLAG = "UPDATE_RESULT_SET";
     public static final int DEFAULT_PORT_NUMBER = 1059;
     public static final String OJP_REGEX_PATTERN = "ojp\\[([^\\]]+)\\]";
     public static final String OJP_CLOB_PREFIX = "OJP_CLOB_PREFIX:";

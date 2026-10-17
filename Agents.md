@@ -135,6 +135,11 @@ The GitHub Actions workflow (`main.yml`) implements a **fail-fast gate**: H2 tes
 - **Unit tests** (for pure logic: load balancing, circuit breaker, parsing) – test classes in isolation.
 - JUnit 5 is the test framework. Follow the `shouldReturnXxxWhenYyy` naming convention.
 
+### PR tests and documentation
+
+- Tests run with the PR, and a PR is expected to be merged only after its tests pass. Focus on including the correct integration test coverage in the PR.
+- Write documentation describing the intended behavior as implemented, assuming the required tests pass. Do not add conditional status wording such as “remain in progress pending successful real-server CI runs” to Markdown files.
+
 ---
 
 ## Key Architectural Decisions

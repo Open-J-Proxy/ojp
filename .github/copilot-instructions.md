@@ -132,6 +132,11 @@ For IDE runs, always add `-Dfile.encoding=UTF-8 -Duser.timezone=UTC` as JVM argu
 - Use JUnit 5. Follow the `shouldReturnXxxWhenYyy` naming convention.
 - Prefer `ojp-testcontainers` for new tests over manually managed Docker databases.
 
+### PR tests and documentation
+
+- Tests run with the PR, and a PR is expected to be merged only after its tests pass. Focus on including the correct integration test coverage in the PR.
+- Write documentation describing the intended behavior as implemented, assuming the required tests pass. Do not add conditional status wording such as “remain in progress pending successful real-server CI runs” to Markdown files.
+
 ---
 
 ## Code Style

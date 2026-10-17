@@ -52,6 +52,20 @@ public class StatementRequestValidator {
     }
 
     /**
+     * Checks whether the client requested result-set detection for an update.
+     *
+     * @param request the statement request
+     * @return true if executeUpdate should report a result-set reference when JDBC execute produces rows
+     */
+    public boolean requestsUpdateResultSet(StatementRequest request) {
+        if (request.getPropertiesList().isEmpty()) {
+            return false;
+        }
+        Map<String, Object> properties = ProtoConverter.propertiesFromProto(request.getPropertiesList());
+        return Boolean.TRUE.equals(properties.get(CommonConstants.STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY));
+    }
+
+    /**
      * Checks if the request is an add batch operation.
      *
      * @param request The statement request

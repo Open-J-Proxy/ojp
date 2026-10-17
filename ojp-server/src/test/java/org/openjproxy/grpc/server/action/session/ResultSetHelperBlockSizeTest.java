@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.dto.OpQueryResult;
 import org.openjproxy.grpc.server.ServerConfiguration;
@@ -208,6 +209,34 @@ class ResultSetHelperBlockSizeTest {
         verify(responseObserver).onCompleted();
 
         assertEquals(rowCount, countTotalRowsDelivered(captor.getAllValues()));
+    }
+
+    @Test
+    void shouldMarkLastUnaryBlockWhenResultSetEndsBeforeBlockLimit() throws SQLException {
+        java.sql.ResultSet rs = buildMockResultSet(1);
+        when(sessionManager.getResultSet(buildSession(), RS_UUID)).thenReturn(rs);
+
+        ActionContext context = buildActionContext();
+        ResultSetHelper.handleResultSet(context, buildSession(), RS_UUID, responseObserver, 100);
+
+        ArgumentCaptor<OpResult> captor = ArgumentCaptor.forClass(OpResult.class);
+        verify(responseObserver).onNext(captor.capture());
+        assertEquals(CommonConstants.RESULT_SET_LAST_BLOCK_FLAG, captor.getValue().getFlag());
+        assertEquals(1, countTotalRowsDelivered(List.of(captor.getValue())));
+    }
+
+    @Test
+    void shouldNotMarkLastUnaryBlockWhenPageLimitIsReached() throws SQLException {
+        java.sql.ResultSet rs = buildMockResultSet(100);
+        when(sessionManager.getResultSet(buildSession(), RS_UUID)).thenReturn(rs);
+
+        ActionContext context = buildActionContext();
+        ResultSetHelper.handleResultSet(context, buildSession(), RS_UUID, responseObserver, 100);
+
+        ArgumentCaptor<OpResult> captor = ArgumentCaptor.forClass(OpResult.class);
+        verify(responseObserver).onNext(captor.capture());
+        assertEquals("", captor.getValue().getFlag());
+        assertEquals(100, countTotalRowsDelivered(List.of(captor.getValue())));
     }
 
     @Test

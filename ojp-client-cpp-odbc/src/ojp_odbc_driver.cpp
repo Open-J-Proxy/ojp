@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
@@ -62,6 +63,9 @@ using com::openjproxy::grpc::XaStartRequest;
 using com::openjproxy::grpc::XidProto;
 
 constexpr char kRowByRowMode[] = "RESULT_SET_ROW_BY_ROW_MODE";
+constexpr char kResultSetLastBlockFlag[] = "RESULT_SET_LAST_BLOCK";
+constexpr char kUpdateResultSetFlag[] = "UPDATE_RESULT_SET";
+constexpr char kUpdateResultSetRequestKey[] = "STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY";
 using StatementStub = StatementService::Stub;
 
 struct Diagnostic {
@@ -1395,18 +1399,152 @@ SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_ty
     return fail(handle, "ODBC C target type is not supported by the OJP client", "07006");
 }
 
-bool is_query_sql(const std::string& sql) {
+std::string first_sql_keyword(const std::string& sql) {
     std::size_t position = 0;
-    while (position < sql.size() && std::isspace(static_cast<unsigned char>(sql[position]))) {
-        ++position;
+    while (position < sql.size()) {
+        while (position < sql.size() && std::isspace(static_cast<unsigned char>(sql[position]))) {
+            ++position;
+        }
+        if (position + 1 < sql.size() && sql[position] == '-' && sql[position + 1] == '-') {
+            const auto end = sql.find_first_of("\r\n", position + 2);
+            position = end == std::string::npos ? sql.size() : end + 1;
+        } else if (position + 1 < sql.size() && sql[position] == '/' && sql[position + 1] == '*') {
+            position += 2;
+            std::size_t depth = 1;
+            while (position < sql.size() && depth != 0) {
+                if (position + 1 < sql.size() && sql[position] == '/' && sql[position + 1] == '*') {
+                    ++depth;
+                    position += 2;
+                } else if (position + 1 < sql.size() && sql[position] == '*' && sql[position + 1] == '/') {
+                    --depth;
+                    position += 2;
+                } else {
+                    ++position;
+                }
+            }
+        } else {
+            break;
+        }
     }
     std::string keyword;
-    while (position < sql.size() && std::isalpha(static_cast<unsigned char>(sql[position]))) {
+    while (position < sql.size() &&
+           (std::isalpha(static_cast<unsigned char>(sql[position])) || sql[position] == '_')) {
         keyword.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(sql[position]))));
         ++position;
     }
+    return keyword;
+}
+
+bool is_query_sql(const std::string& sql) {
+    const std::string keyword = first_sql_keyword(sql);
     return keyword == "SELECT" || keyword == "WITH" || keyword == "VALUES" ||
            keyword == "TABLE" || keyword == "SHOW" || keyword == "EXPLAIN";
+}
+
+std::vector<std::string> sql_keywords(const std::string& sql) {
+    std::vector<std::string> keywords;
+    for (std::size_t index = 0; index < sql.size();) {
+        const char character = sql[index];
+        if (std::isspace(static_cast<unsigned char>(character))) {
+            ++index;
+        } else if (character == '-' && index + 1 < sql.size() && sql[index + 1] == '-') {
+            const auto end = sql.find_first_of("\r\n", index + 2);
+            index = end == std::string::npos ? sql.size() : end + 1;
+        } else if (character == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
+            index += 2;
+            std::size_t depth = 1;
+            while (index < sql.size() && depth != 0) {
+                if (index + 1 < sql.size() && sql[index] == '/' && sql[index + 1] == '*') {
+                    ++depth;
+                    index += 2;
+                } else if (index + 1 < sql.size() && sql[index] == '*' && sql[index + 1] == '/') {
+                    --depth;
+                    index += 2;
+                } else {
+                    ++index;
+                }
+            }
+        } else if (character == '\'' || character == '"' || character == '`' || character == '[') {
+            const char closing = character == '[' ? ']' : character;
+            ++index;
+            while (index < sql.size()) {
+                if (sql[index++] == closing) {
+                    if (index < sql.size() && sql[index] == closing) {
+                        ++index;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else if (character == '$' &&
+                   (index == 0 || (!std::isalnum(static_cast<unsigned char>(sql[index - 1])) &&
+                                   sql[index - 1] != '_' && sql[index - 1] != '$'))) {
+            std::size_t tag_end = index + 1;
+            while (tag_end < sql.size() &&
+                   (std::isalnum(static_cast<unsigned char>(sql[tag_end])) || sql[tag_end] == '_')) {
+                ++tag_end;
+            }
+            if (tag_end < sql.size() && sql[tag_end] == '$') {
+                const auto delimiter = sql.substr(index, tag_end - index + 1);
+                const auto end = sql.find(delimiter, tag_end + 1);
+                index = end == std::string::npos ? sql.size() : end + delimiter.size();
+            } else {
+                ++index;
+            }
+        } else if (std::isalpha(static_cast<unsigned char>(character)) || character == '_') {
+            const auto start = index++;
+            while (index < sql.size() &&
+                   (std::isalnum(static_cast<unsigned char>(sql[index])) ||
+                    sql[index] == '_' || sql[index] == '$' || sql[index] == '#')) {
+                ++index;
+            }
+            std::string keyword;
+            keyword.reserve(index - start);
+            for (std::size_t token_index = start; token_index < index; ++token_index) {
+                keyword.push_back(static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(sql[token_index]))));
+            }
+            keywords.push_back(std::move(keyword));
+        } else {
+            ++index;
+        }
+    }
+    return keywords;
+}
+
+bool is_dml_result_set_sql(const std::string& sql) {
+    const std::string first_keyword = first_sql_keyword(sql);
+    const bool is_dml = first_keyword == "INSERT" || first_keyword == "UPDATE" ||
+        first_keyword == "DELETE" || first_keyword == "MERGE";
+    const bool is_query_with_dml = first_keyword == "SELECT" || first_keyword == "WITH";
+    // Oracle RETURNING INTO is an OUT-parameter flow, not a JDBC ResultSet.
+    if (!is_dml && !is_query_with_dml) {
+        return false;
+    }
+
+    const auto keywords = sql_keywords(sql);
+    const auto contains = [&keywords](const std::string& keyword) {
+        return std::find(keywords.begin(), keywords.end(), keyword) != keywords.end();
+    };
+    const bool has_dml = contains("INSERT") || contains("UPDATE") ||
+        contains("DELETE") || contains("MERGE");
+    if (!has_dml) {
+        return false;
+    }
+
+    if (contains("OUTPUT") || contains("RETURNING")) {
+        return true;
+    }
+
+    if (!is_query_sql(sql)) {
+        return false;
+    }
+    for (std::size_t index = 1; index < keywords.size(); ++index) {
+        if (keywords[index - 1] == "FINAL" && keywords[index] == "TABLE") {
+            return true;
+        }
+    }
+    return false;
 }
 
 // OJP binds NULL parameters with PreparedStatement.setNull, which needs a java.sql.Types code.
@@ -2018,6 +2156,65 @@ SQLRETURN close_result_set(ConnectionHandle* connection, const std::string& resu
     return fail(statement, "OJP resource close retries were exhausted", "08S01");
 }
 
+SQLRETURN fetch_update_result_set(ConnectionHandle* connection, StatementHandle* statement,
+                                  const std::string& result_set_uuid) {
+    bool decoded_all = true;
+    for (;;) {
+        StatementService::Stub* stub = route_session_rpc(connection);
+        com::openjproxy::grpc::ResultSetFetchRequest fetch;
+        fetch.mutable_session()->CopyFrom(connection->session);
+        fetch.set_resultsetuuid(result_set_uuid);
+        fetch.set_size(1);
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        OpResult result;
+        const auto status = stub->fetchNextRows(&context, fetch, &result);
+        if (!status.ok()) {
+            note_transport_failure(connection, status, context);
+            close_result_set(connection, result_set_uuid, statement);
+            return fail_grpc(statement, status, context);
+        }
+        if (result.has_session()) {
+            update_session(connection, result.session(), fetch.session());
+        }
+        if (!result.has_query_result()) {
+            close_result_set(connection, result_set_uuid, statement);
+            return fail(statement, "OJP returned an invalid update result set", "HY000");
+        }
+        const auto& query = result.query_result();
+        if (statement->columns.empty()) {
+            statement->columns.assign(query.labels().begin(), query.labels().end());
+        }
+        for (const auto& row : query.rows()) {
+            std::vector<Cell> decoded;
+            decoded.reserve(static_cast<std::size_t>(row.columns_size()));
+            for (const auto& column : row.columns()) {
+                Cell cell;
+                if (!decode_value(column, &cell)) {
+                    decoded_all = false;
+                }
+                decoded.push_back(std::move(cell));
+            }
+            statement->rows.push_back(std::move(decoded));
+        }
+        if (query.rows_size() == 0 ||
+            result.flag().find(kResultSetLastBlockFlag) != std::string::npos) {
+            break;
+        }
+    }
+
+    const auto close_result = close_result_set(connection, result_set_uuid, statement);
+    if (!SQL_SUCCEEDED(close_result)) {
+        return close_result;
+    }
+    if (!decoded_all) {
+        return fail(statement, "OJP returned a result type unsupported by the ODBC client", "HY000");
+    }
+    statement->has_result_set = true;
+    statement->row_count = static_cast<SQLLEN>(statement->rows.size());
+    return SQL_SUCCESS;
+}
+
 template <typename Invoke>
 SQLRETURN invoke_session_rpc(ConnectionHandle* connection, HandleBase* handle, Invoke invoke,
                              bool retry_when_stateless = false) {
@@ -2476,6 +2673,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
     }
     request.mutable_session()->CopyFrom(connection->session);
+    const bool dml_result_set = is_dml_result_set_sql(statement->sql);
+    if (dml_result_set) {
+        auto* property = request.add_properties();
+        property->set_key(kUpdateResultSetRequestKey);
+        property->set_bool_value(true);
+    }
 
     StatementService::Stub* stub = route_session_rpc(connection);
     SessionInfo request_session = connection->session;
@@ -2484,7 +2687,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     bool not_found_retried = false;
     request.mutable_session()->CopyFrom(request_session);
 
-    if (is_query_sql(statement->sql)) {
+    if (is_query_sql(statement->sql) && !dml_result_set) {
         std::string result_set_uuid;
         bool row_by_row = false;
         bool decoded_all = true;
@@ -2492,7 +2695,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             if (result.has_session()) {
                 update_session(connection, result.session(), request_session);
             }
-            if (result.flag() == kRowByRowMode) {
+            if (result.flag().find(kRowByRowMode) != std::string::npos) {
                 row_by_row = true;
             }
             if (!result.has_query_result()) {
@@ -2610,6 +2813,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     }
     if (result.has_session()) {
         update_session(connection, result.session(), request_session);
+    }
+    if (result.flag() == kUpdateResultSetFlag) {
+        if (result.uuid().empty()) {
+            return fail(statement, "OJP returned an empty update result-set reference", "HY000");
+        }
+        return fetch_update_result_set(connection, statement, result.uuid());
     }
     if (result.type() != com::openjproxy::grpc::INTEGER || !result.has_int_value()) {
         return fail(statement, "OJP returned an invalid update result", "HY000");

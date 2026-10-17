@@ -519,9 +519,9 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 |---|---|---|
 | `open_connection(endpoint, db_url, user, password)` | `connect(ConnectionDetails)` — only on cache miss | Cache hit: no RPC; build `SessionInfo` locally |
 | `open_xa_connection(...)` | `connect(ConnectionDetails, isXA=true)` | Always RPC; pins to one endpoint |
-| `execute_query(sql, params)` | `executeQuery(StatementRequest)` | Server-streaming; first message has labels + first batch of rows |
+| `execute_query(sql, params)` | `executeQuery(StatementRequest)` | Server-streaming; first message has labels + first batch of rows. Ordinary SELECT only; data-changing SELECT wrappers use the update-result path. |
 | `fetch_more_rows(result_set_uuid, page_size)` | `fetchNextRows(ResultSetFetchRequest)` | Empty `rows` list means result set exhausted |
-| `execute_update(sql, params)` | `executeUpdate(StatementRequest)` | `OpResult.value.int_value` = affected row count |
+| `execute_update(sql, params)` | `executeUpdate(StatementRequest)` | `OpResult.value.int_value` = affected row count; for result-producing DML, set `STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY=true`, then use response `uuid`/`flag` and `fetchNextRows` to retrieve rows. |
 | `call_stored_procedure(sql, params)` | `callResource(CALL_PREPARE)` then `callResource(CALL_EXECUTE)` | `CALL_PREPARE` returns `resourceUUID` |
 | `begin_transaction()` | `startTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_ACTIVE` |
 | `commit()` | `commitTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_COMMITED` |
@@ -562,7 +562,7 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | Level | Required capability set |
 |---|---|
 | **L1** | `connect`, `executeQuery`, `executeUpdate`, `terminateSession`; basic CRUD path |
-| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants |
+| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants, including result-producing DML where supported |
 | **L3** | Streaming query/result protocol (`executeQuery` stream + `fetchNextRows`) + cursor resource lifecycle |
 | **L4** | Non-XA transaction RPCs and savepoint semantics |
 | **L5** | LOB protocol (`createLob`, `readLob`) and stream round-trips |

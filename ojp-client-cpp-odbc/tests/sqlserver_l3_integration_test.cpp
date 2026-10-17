@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -126,6 +127,30 @@ void verify_text_rows(SQLHSTMT statement, SQLINTEGER expected_rows) {
            "fetching past the end of the streamed result set did not return SQL_NO_DATA");
 }
 
+void verify_output_rows(SQLHSTMT statement,
+                        const std::vector<std::pair<SQLINTEGER, std::string>>& expected_rows) {
+    SQLSMALLINT column_count = 0;
+    require_success(SQLNumResultCols(statement, &column_count), "SQLNumResultCols(OUTPUT)",
+                    SQL_HANDLE_STMT, statement);
+    expect(column_count == 2, "expected two columns in the SQL Server OUTPUT result set");
+    for (const auto& expected : expected_rows) {
+        require_success(SQLFetch(statement), "SQLFetch(OUTPUT row)", SQL_HANDLE_STMT, statement);
+        SQLINTEGER id = 0;
+        SQLLEN id_length = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &id, sizeof(id), &id_length),
+                        "SQLGetData(OUTPUT id)", SQL_HANDLE_STMT, statement);
+        SQLCHAR label[64] = {};
+        SQLLEN label_length = 0;
+        require_success(SQLGetData(statement, 2, SQL_C_CHAR, label, sizeof(label), &label_length),
+                        "SQLGetData(OUTPUT label)", SQL_HANDLE_STMT, statement);
+        expect(id == expected.first &&
+                   std::string(reinterpret_cast<const char*>(label)) == expected.second,
+               "SQL Server OUTPUT returned incorrect values");
+    }
+    expect(SQLFetch(statement) == SQL_NO_DATA,
+           "SQL Server OUTPUT returned unexpected additional rows");
+}
+
 void verify_binary_rows(SQLHSTMT statement) {
     const std::vector<std::vector<SQLCHAR>> expected_payloads = {
         {0x01, 0x02, 0x03, 0x04}, {0x10, 0x20, 0x30, 0x40}, {0xfe, 0xdc, 0xba, 0x98}};
@@ -221,6 +246,46 @@ int run_connection(const DatabaseConfig& config,
         execute_direct(statement, "SELECT id AS ID, label FROM " + text_table + " WHERE id < 0");
         verify_text_rows(statement, 0);
         close_statement(statement, "SQLFreeStmt(empty result)");
+
+        execute_direct(statement, "INSERT INTO " + text_table +
+                                      " (id, label) OUTPUT INSERTED.id, INSERTED.label "
+                                      "VALUES (10002, 'SQLSERVER_OUTPUT_DIRECT'), "
+                                      "(10003, 'SQLSERVER_OUTPUT_SECOND')");
+        verify_output_rows(statement, {
+            {10002, "SQLSERVER_OUTPUT_DIRECT"}, {10003, "SQLSERVER_OUTPUT_SECOND"}});
+        close_statement(statement, "SQLFreeStmt(OUTPUT result)");
+
+        execute_direct(statement, "UPDATE " + text_table +
+                                      " SET label = 'SQLSERVER_OUTPUT_UPDATED' "
+                                      "OUTPUT INSERTED.id, INSERTED.label WHERE id = 10002");
+        verify_output_rows(statement, {{10002, "SQLSERVER_OUTPUT_UPDATED"}});
+        close_statement(statement, "SQLFreeStmt(UPDATE OUTPUT result)");
+
+        execute_direct(statement, "DELETE FROM " + text_table +
+                                      " OUTPUT DELETED.id, DELETED.label WHERE id = 10003");
+        verify_output_rows(statement, {{10003, "SQLSERVER_OUTPUT_SECOND"}});
+        close_statement(statement, "SQLFreeStmt(DELETE OUTPUT result)");
+
+        SQLINTEGER output_id = 10004;
+        SQLLEN output_id_length = sizeof(output_id);
+        SQLCHAR output_label[] = "SQLSERVER_OUTPUT_PREPARED";
+        SQLLEN output_label_length = SQL_NTS;
+        const std::string prepared_output_sql =
+            "INSERT INTO " + text_table +
+            " (id, label) OUTPUT INSERTED.id, INSERTED.label VALUES (?, ?)";
+        require_success(SQLPrepare(statement, sql_text(prepared_output_sql), SQL_NTS),
+                        "SQLPrepare(OUTPUT)", SQL_HANDLE_STMT, statement);
+        require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                                         SQL_INTEGER, 0, 0, &output_id, sizeof(output_id),
+                                         &output_id_length),
+                        "SQLBindParameter(OUTPUT id)", SQL_HANDLE_STMT, statement);
+        require_success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                                         SQL_VARCHAR, sizeof(output_label), 0, output_label,
+                                         sizeof(output_label), &output_label_length),
+                        "SQLBindParameter(OUTPUT label)", SQL_HANDLE_STMT, statement);
+        require_success(SQLExecute(statement), "SQLExecute(OUTPUT)", SQL_HANDLE_STMT, statement);
+        verify_output_rows(statement, {{output_id, "SQLSERVER_OUTPUT_PREPARED"}});
+        close_statement(statement, "SQLFreeStmt(prepared OUTPUT result)");
 
         execute_direct(statement, "CREATE TABLE " + binary_table +
                                       " (id INT PRIMARY KEY, payload VARBINARY(4) NOT NULL)");

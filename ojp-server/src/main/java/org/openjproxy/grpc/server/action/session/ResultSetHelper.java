@@ -77,7 +77,7 @@ public class ResultSetHelper {
     public static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
             StreamObserver<OpResult> responseObserver)
             throws SQLException {
-        handleResultSet(context, session, resultSetUUID, responseObserver, Integer.MAX_VALUE);
+        handleResultSet(context, session, resultSetUUID, responseObserver, Integer.MAX_VALUE, false);
     }
 
     /**
@@ -94,6 +94,12 @@ public class ResultSetHelper {
     public static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
             StreamObserver<OpResult> responseObserver, int maxRowsPerCall)
             throws SQLException {
+        handleResultSet(context, session, resultSetUUID, responseObserver, maxRowsPerCall, true);
+    }
+
+    private static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
+            StreamObserver<OpResult> responseObserver, int maxRowsPerCall, boolean markLastBlock)
+            throws SQLException {
         var sessionManager = context.getSessionManager();
 
         ResultSet rs = sessionManager.getResultSet(session, resultSetUUID);
@@ -106,6 +112,7 @@ public class ResultSetHelper {
         List<ResultRow> results = new ArrayList<>();
         int row = 0;
         boolean justSent = false;
+        boolean resultSetExhausted = false;
         DbName dbName = DatabaseUtils.resolveDbName(rs.getStatement().getConnection().getMetaData().getURL());
         // Only used if result set contains LOBs in SQL Server and DB2 (if LOB's
         // present), so cursor is not read in advance,
@@ -113,7 +120,11 @@ public class ResultSetHelper {
         String resultSetMode = "";
         boolean resultSetMetadataCollected = false;
 
-        while (rs.next()) {
+        while (true) {
+            if (!rs.next()) {
+                resultSetExhausted = true;
+                break;
+            }
             if (DbName.DB2.equals(dbName) && !resultSetMetadataCollected) {
                 collectResultSetMetadata(context, session, resultSetUUID, rs);
             }
@@ -256,8 +267,14 @@ public class ResultSetHelper {
             // Send a block of remaining records
             SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
                     .enrichWithThrottle(session, context);
+            String resultSetFlag = resultSetMode;
+            if (markLastBlock && resultSetExhausted) {
+                resultSetFlag = resultSetMode.isEmpty()
+                        ? CommonConstants.RESULT_SET_LAST_BLOCK_FLAG
+                        : resultSetMode + "|" + CommonConstants.RESULT_SET_LAST_BLOCK_FLAG;
+            }
             responseObserver.onNext(
-                    ResultSetWrapper.wrapResults(enrichedSession, results, labels, resultSetUUID, resultSetMode));
+                    ResultSetWrapper.wrapResults(enrichedSession, results, labels, resultSetUUID, resultSetFlag));
         }
 
         responseObserver.onCompleted();

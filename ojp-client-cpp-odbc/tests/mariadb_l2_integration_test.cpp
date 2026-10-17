@@ -395,6 +395,7 @@ int run_connection(const DatabaseConfig& config,
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
     const std::string table = "ojp_cpp_mariadb_l2_" + random_suffix();
+    const std::string returning_table = table + "_returning";
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -418,7 +419,45 @@ int run_connection(const DatabaseConfig& config,
                                        reinterpret_cast<SQLHANDLE*>(&statement)),
                         "SQLAllocHandle(statement)", SQL_HANDLE_DBC, connection);
 
+        if (config.url.rfind("jdbc:mariadb:", 0) == 0) {
+            execute_direct(statement, "CREATE TABLE " + returning_table +
+                                      " (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL)");
+            close_and_reset(statement);
+            execute_direct(statement, "INSERT INTO " + returning_table +
+                                      " (id, label) VALUES (1, 'MARIADB_RETURNING') "
+                                      "RETURNING id, label");
+            fetch(statement);
+            if (get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) != 1) {
+                throw std::runtime_error("MariaDB RETURNING returned the wrong inserted ID");
+            }
+            expect_text(statement, 2, "MARIADB_RETURNING");
+            expect_end(statement);
+            close_and_reset(statement);
+
+            const std::string returning_sql = "INSERT INTO " + returning_table +
+                " (id, label) VALUES (?, ?) RETURNING id, label";
+            prepare(statement, returning_sql);
+            SQLINTEGER returning_id = 2;
+            SQLLEN returning_id_length = sizeof(returning_id);
+            bind(statement, 1, SQL_C_SLONG, SQL_INTEGER, 0, 0, &returning_id,
+                 sizeof(returning_id), &returning_id_length);
+            SQLCHAR returning_label[] = "MARIADB_RETURNING_PREPARED";
+            SQLLEN returning_label_length = SQL_NTS;
+            bind(statement, 2, SQL_C_CHAR, SQL_VARCHAR, sizeof(returning_label), 0,
+                 returning_label, sizeof(returning_label), &returning_label_length);
+            execute_prepared(statement, "RETURNING");
+            fetch(statement);
+            if (get_value<SQLINTEGER>(statement, 1, SQL_C_SLONG) != returning_id) {
+                throw std::runtime_error("prepared MariaDB RETURNING returned the wrong inserted ID");
+            }
+            expect_text(statement, 2, "MARIADB_RETURNING_PREPARED");
+            expect_end(statement);
+            close_and_reset(statement);
+        }
+
         verify_typed_parameters_and_statements(statement, table);
+        execute_direct(statement, "DROP TABLE IF EXISTS " + returning_table);
+        close_and_reset(statement);
         execute_direct(statement, "DROP TABLE IF EXISTS " + table);
         close_and_reset(statement);
         require_success(SQLFreeHandle(SQL_HANDLE_STMT, statement),
@@ -437,6 +476,10 @@ int run_connection(const DatabaseConfig& config,
             const std::string drop = "DROP TABLE IF EXISTS " + table;
             if (!SQL_SUCCEEDED(SQLExecDirect(statement, sql_text(drop), SQL_NTS))) {
                 std::cerr << "Cleanup failed for " << table << '\n';
+            }
+            const std::string returning_drop = "DROP TABLE IF EXISTS " + returning_table;
+            if (!SQL_SUCCEEDED(SQLExecDirect(statement, sql_text(returning_drop), SQL_NTS))) {
+                std::cerr << "Cleanup failed for " << returning_table << '\n';
             }
             SQLFreeHandle(SQL_HANDLE_STMT, statement);
         }

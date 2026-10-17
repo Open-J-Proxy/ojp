@@ -103,6 +103,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
         Statement stmt = null;
         String psUUID = "";
         String generatedKeysUuid = "";
+        String resultSetUuid = "";
 
         var sessionManager = actionContext.getSessionManager();
 
@@ -111,10 +112,12 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             // etc.)
             boolean requiresSessionAffinity = SqlSessionAffinityDetector.requiresSessionAffinity(request.getSql());
             boolean requiresGeneratedKeys = StatementRequestValidator.requiresGeneratedKeysTracking(request);
+            boolean returnResultSet = StatementRequestValidator.requestsUpdateResultSet(request);
 
             dto = sessionConnection(actionContext, request.getSession(),
                     StatementRequestValidator.isAddBatchOperation(request)
                             || requiresGeneratedKeys
+                            || returnResultSet
                             || requiresSessionAffinity);
 
             List<Parameter> params = ProtoConverter.fromProtoList(request.getParametersList());
@@ -123,7 +126,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
                     : null;
 
-            if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys) {
+            if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys || returnResultSet) {
                 if (!request.getStatementUUID().isEmpty() && ps != null) {
                     bindLobsAndParameters(sessionManager, dto, ps, params);
                 } else {
@@ -133,16 +136,28 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                 }
                 if (StatementRequestValidator.isAddBatchOperation(request)) {
                     psUUID = addBatchAndGetStatementUUID(sessionManager, dto, ps, request);
+                } else if (returnResultSet) {
+                    UpdateExecutionOutcome outcome = executeForResultSet(ps, null, true, sessionManager, dto);
+                    updated = outcome.updateCount();
+                    resultSetUuid = outcome.resultSetUuid();
                 } else {
                     updated = ps.executeUpdate();
                 }
                 stmt = ps;
             } else {
                 stmt = StatementFactory.createStatement(sessionManager, dto.getConnection(), request);
-                updated = stmt.executeUpdate(request.getSql());
+                if (returnResultSet) {
+                    UpdateExecutionOutcome outcome = executeForResultSet(stmt, request.getSql(), false,
+                            sessionManager, dto);
+                    updated = outcome.updateCount();
+                    resultSetUuid = outcome.resultSetUuid();
+                } else {
+                    updated = stmt.executeUpdate(request.getSql());
+                }
             }
 
-            OpResult result = buildOpResult(request, dto.getSession(), psUUID, updated, generatedKeysUuid, actionContext);
+            OpResult result = buildOpResult(request, dto.getSession(), psUUID, updated,
+                    generatedKeysUuid, resultSetUuid, actionContext);
 
             // Phase 9: Cache Invalidation (after successful update)
             org.openjproxy.grpc.server.cache.QueryCacheHelper.invalidateCacheIfEnabled(actionContext, dto.getSession(), request.getSql());
@@ -154,6 +169,27 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             return result;
         } finally {
             closeStatementAndConnectionIfNoSession(dto, stmt);
+        }
+    }
+
+    private UpdateExecutionOutcome executeForResultSet(Statement statement, String sql, boolean prepared,
+                                                       SessionManager sessionManager,
+                                                       ConnectionSessionDTO dto) throws SQLException {
+        boolean hasResultSet = prepared
+                ? ((PreparedStatement) statement).execute()
+                : statement.execute(sql);
+        int updateCount = -1;
+        while (true) {
+            if (hasResultSet) {
+                String resultSetUuid = sessionManager.registerResultSet(dto.getSession(), statement.getResultSet());
+                return new UpdateExecutionOutcome(-1, resultSetUuid);
+            }
+            int currentUpdateCount = statement.getUpdateCount();
+            if (currentUpdateCount == -1) {
+                return new UpdateExecutionOutcome(updateCount, "");
+            }
+            updateCount = currentUpdateCount;
+            hasResultSet = statement.getMoreResults();
         }
     }
 
@@ -239,21 +275,27 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
      * @param updated           the row count (for regular updates)
      * @param generatedKeysUuid the registered prepared statement UUID for
      *                          generated-key tracking, or empty string if not used
+     * @param resultSetUuid     the registered result-set UUID, or empty string if not used
      * @return the built {@link OpResult}
      */
     private OpResult buildOpResult(StatementRequest request, SessionInfo sessionInfo,
-                                   String psUUID, int updated, String generatedKeysUuid,
+                                   String psUUID, int updated, String generatedKeysUuid, String resultSetUuid,
                                    ActionContext context) {
         SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
                 .enrichWithThrottle(sessionInfo, context);
         OpResult.Builder builder = OpResult.newBuilder().setSession(enrichedSession);
-        if (!generatedKeysUuid.isEmpty()) {
+        if (!resultSetUuid.isEmpty()) {
+            builder.setUuid(resultSetUuid).setFlag(CommonConstants.UPDATE_RESULT_SET_FLAG);
+        } else if (!generatedKeysUuid.isEmpty()) {
             builder.setUuid(generatedKeysUuid);
         }
         if (StatementRequestValidator.isAddBatchOperation(request)) {
             return builder.setType(ResultType.UUID_STRING).setUuidValue(psUUID).build();
         }
         return builder.setType(ResultType.INTEGER).setIntValue(updated).build();
+    }
+
+    private record UpdateExecutionOutcome(int updateCount, String resultSetUuid) {
     }
 
     /**

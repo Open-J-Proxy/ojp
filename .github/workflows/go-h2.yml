@@ -112,7 +112,7 @@ jobs:
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
-        run: go test -count=1 -json ./client -run '^TestH2DatabaseShouldSupportL3Capabilities$' | tee /tmp/go-h2-l3-test.json
+        run: go test -count=1 -json ./client -run '^TestH2DatabaseShouldSupportL3' | tee /tmp/go-h2-l3-test.json
         working-directory: ojp-client-go-database-sql
 
       - name: Run Go H2 L1 CRUD CLI smoke test

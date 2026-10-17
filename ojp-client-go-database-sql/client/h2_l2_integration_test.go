@@ -55,7 +55,7 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	// Give this run a unique table so repeated or parallel runs do not collide.
 	table := fmt.Sprintf("ojp_go_l2_%d", time.Now().UnixNano())
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
-		"CREATE TABLE %s (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, active BOOLEAN, score DOUBLE, data VARBINARY, created TIMESTAMP)",
+		"CREATE TABLE %s (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, active BOOLEAN, score DOUBLE, data VARBINARY, created TIMESTAMP, counter BIGINT, nullable_value VARCHAR(20))",
 		table,
 	)); err != nil {
 		t.Fatalf("create isolated table: %v", err)
@@ -71,9 +71,9 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	})
 
 	insertResult, err := db.ExecContext(ctx, fmt.Sprintf(
-		"INSERT INTO %s (name, active, score, data, created) VALUES (?, ?, ?, ?, ?)",
+		"INSERT INTO %s (name, active, score, data, created, counter, nullable_value) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		table,
-	), "l2-test", true, 99.5, []byte("binary-data"), time.Date(2026, 10, 12, 12, 0, 0, 0, time.FixedZone("UTC", 0)))
+	), "l2-test", true, 99.5, []byte("binary-data"), time.Date(2026, 10, 12, 12, 0, 0, 0, time.FixedZone("UTC", 0)), int64(9223372036854775806), nil)
 	if err != nil {
 		t.Fatalf("insert with broad types: %v", err)
 	}
@@ -87,13 +87,18 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	var score float64
 	var data []byte
 	var created time.Time
+	var counter int64
+	var nullableValue sql.NullString
 	if err := db.QueryRowContext(ctx, fmt.Sprintf(
-		"SELECT name, active, score, data, created FROM %s WHERE name=?", table,
-	), "l2-test").Scan(&name, &active, &score, &data, &created); err != nil {
+		"SELECT name, active, score, data, created, counter, nullable_value FROM %s WHERE name=?", table,
+	), "l2-test").Scan(&name, &active, &score, &data, &created, &counter, &nullableValue); err != nil {
 		t.Fatalf("select broad types: %v", err)
 	}
-	if name != "l2-test" || !active || score != 99.5 || string(data) != "binary-data" {
-		t.Fatalf("unexpected broad-type row: name=%q active=%v score=%v data=%q", name, active, score, data)
+	expectedCreated := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	if name != "l2-test" || !active || score != 99.5 || string(data) != "binary-data" ||
+		!created.UTC().Equal(expectedCreated) || counter != 9223372036854775806 || nullableValue.Valid {
+		t.Fatalf("unexpected broad-type row: name=%q active=%v score=%v data=%q created=%v counter=%d nullable=%+v",
+			name, active, score, data, created, counter, nullableValue)
 	}
 
 	stmt, err := db.Prepare(fmt.Sprintf(
@@ -103,8 +108,6 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare statement: %v", err)
 	}
-	defer stmt.Close()
-
 	psResult, err := stmt.Exec("ps-row", false, 42.0)
 	if err != nil {
 		t.Fatalf("prepared exec: %v", err)
@@ -112,6 +115,24 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	psCount, err := psResult.RowsAffected()
 	if err != nil || psCount != 1 {
 		t.Fatalf("expected prepared exec count 1, got %d (error %v)", psCount, err)
+	}
+	if _, err := stmt.Exec("rebound-row", true, 43.0); err != nil {
+		t.Fatalf("prepared statement re-execution: %v", err)
+	}
+	preparedKeyResult, err := stmt.Exec("prepared-key", false, 44.0)
+	if err != nil {
+		t.Fatalf("prepared insert for generated keys: %v", err)
+	}
+	preparedLastID, err := preparedKeyResult.LastInsertId()
+	if err != nil || preparedLastID == 0 {
+		t.Fatalf("expected prepared generated key, got %d (error %v)", preparedLastID, err)
+	}
+	var preparedKeyName string
+	if err := db.QueryRowContext(ctx, fmt.Sprintf("SELECT name FROM %s WHERE id=?", table), preparedLastID).Scan(&preparedKeyName); err != nil {
+		t.Fatalf("verify prepared generated key: %v", err)
+	}
+	if preparedKeyName != "prepared-key" {
+		t.Fatalf("prepared generated key %d identified unexpected row %q", preparedLastID, preparedKeyName)
 	}
 
 	var psName string
@@ -124,6 +145,23 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	if psName != "ps-row" || psActive || psScore != 42.0 {
 		t.Fatalf("unexpected prepared row: name=%q active=%v score=%v", psName, psActive, psScore)
+	}
+	preparedQuery, err := db.PrepareContext(ctx, fmt.Sprintf("SELECT name FROM %s WHERE name=?", table))
+	if err != nil {
+		t.Fatalf("prepare query statement: %v", err)
+	}
+	var queriedName string
+	if err := preparedQuery.QueryRowContext(ctx, "ps-row").Scan(&queriedName); err != nil {
+		t.Fatalf("execute prepared query: %v", err)
+	}
+	if queriedName != "ps-row" {
+		t.Fatalf("prepared query returned %q", queriedName)
+	}
+	if err := preparedQuery.Close(); err != nil {
+		t.Fatalf("close prepared query: %v", err)
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("close prepared statement: %v", err)
 	}
 
 	genResult, err := db.ExecContext(ctx, fmt.Sprintf(
@@ -140,6 +178,13 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	if lastID == 0 {
 		t.Fatal("expected non-zero generated key")
 	}
+	var generatedName string
+	if err := db.QueryRowContext(ctx, fmt.Sprintf("SELECT name FROM %s WHERE id=?", table), lastID).Scan(&generatedName); err != nil {
+		t.Fatalf("verify generated key row: %v", err)
+	}
+	if generatedName != "gen-keys" {
+		t.Fatalf("generated key %d identified unexpected row %q", lastID, generatedName)
+	}
 
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(
 		"SELECT id, name, active, score FROM %s WHERE name=?", table,
@@ -155,6 +200,16 @@ func TestH2DatabaseShouldSupportL2Capabilities(t *testing.T) {
 	}
 	if len(cols) != 4 {
 		t.Fatalf("expected 4 columns, got %d: %v", len(cols), cols)
+	}
+	columnTypes, err := rows.ColumnTypes()
+	if err != nil {
+		t.Fatalf("column types: %v", err)
+	}
+	if len(columnTypes) != 4 || columnTypes[0].DatabaseTypeName() == "" {
+		t.Fatalf("expected server-provided result metadata, got %+v", columnTypes)
+	}
+	if nullable, ok := columnTypes[0].Nullable(); !ok || nullable {
+		t.Fatalf("expected primary-key metadata to report non-null, got nullable=%v known=%v", nullable, ok)
 	}
 	if !rows.Next() {
 		t.Fatal("expected at least one row for metadata check")

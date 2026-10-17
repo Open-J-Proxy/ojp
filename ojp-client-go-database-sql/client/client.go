@@ -23,6 +23,7 @@ import (
 var (
 	errClientClosed     = errors.New("OJP client is closed")
 	errConnectionClosed = errors.New("OJP connection is closed")
+	errStatementClosed  = errors.New("OJP prepared statement is closed")
 	errNoMoreRows       = errors.New("no more rows")
 )
 
@@ -136,14 +137,19 @@ func (c *rpcClient) close() error {
 	return nil
 }
 
+// propAutoGenKeys maps to java.sql.Statement.RETURN_GENERATED_KEYS.
+const propAutoGenKeys = "STATEMENT_AUTO_GENERATED_KEYS_KEY"
+
 func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, string, error) {
 	return c.executeUpdateWithStatement(ctx, sql, parameters, "")
 }
 
-// propAutoGenKeys maps to java.sql.Statement.RETURN_GENERATED_KEYS.
-const propAutoGenKeys = "STATEMENT_AUTO_GENERATED_KEYS_KEY"
-
-func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (int64, string, error) {
+func (c *rpcConnection) executeUpdateWithStatement(
+	ctx context.Context,
+	sql string,
+	parameters []*pb.ParameterProto,
+	statementUUID string,
+) (int64, string, error) {
 	var generatedKeysUUID string
 	var updateCount int64
 	err := withConnectionLockError(c, func() error {
@@ -174,6 +180,38 @@ func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql stri
 	return updateCount, generatedKeysUUID, err
 }
 
+func (c *rpcConnection) callResource(
+	ctx context.Context,
+	resourceType pb.ResourceType,
+	resourceUUID string,
+	target *pb.TargetCall,
+) error {
+	_, err := withConnectionLock(c, func() (any, error) {
+		var trailer metadata.MD
+		response, rpcErr := c.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
+			Session:      cloneSession(c.session),
+			ResourceType: resourceType,
+			ResourceUUID: resourceUUID,
+			Target:       target,
+		}, grpc.Trailer(&trailer))
+		if rpcErr != nil {
+			return nil, grpcError(ctx, rpcErr, trailer)
+		}
+		if response == nil {
+			return nil, errors.New("OJP server returned an empty resource response")
+		}
+		c.applySession(response.GetSession())
+		return nil, nil
+	})
+	return err
+}
+
+func (c *rpcConnection) closePreparedStatement(ctx context.Context, statementUUID string) error {
+	return c.callResource(ctx, pb.ResourceType_RES_PREPARED_STATEMENT, statementUUID, &pb.TargetCall{
+		CallType: pb.CallType_CALL_CLOSE,
+	})
+}
+
 func withConnectionLockError(c *rpcConnection, fn func() error) error {
 	_, err := withConnectionLock(c, func() (any, error) {
 		return nil, fn()
@@ -182,17 +220,12 @@ func withConnectionLockError(c *rpcConnection, fn func() error) error {
 }
 
 func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
-	return c.queryWithStatement(ctx, sql, parameters, "")
-}
-
-func (c *rpcConnection) queryWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (*queryResult, error) {
 	return withConnectionLock(c, func() (*queryResult, error) {
 		var trailer metadata.MD
 		stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
-			Session:       cloneSession(c.session),
-			Sql:           sql,
-			Parameters:    parameters,
-			StatementUUID: statementUUID,
+			Session:    cloneSession(c.session),
+			Sql:        sql,
+			Parameters: parameters,
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			return nil, grpcError(ctx, err, trailer)
@@ -298,42 +331,48 @@ func (c *rpcConnection) fetchGeneratedKeys(ctx context.Context, psUUID string) (
 		}
 		return uuid, nil
 	})
-	if err != nil || rsUUID == "" {
+	if err != nil {
 		return 0, err
+	}
+	if rsUUID == "" {
+		return 0, nil
 	}
 	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
-	if err != nil || len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
+	resultSetCloseErr := c.closeResultSet(ctx, rsUUID)
+	if err != nil {
 		return 0, err
 	}
-	if v, ok := rows.Rows[0][0].(int64); ok {
-		return v, nil
+	if resultSetCloseErr != nil {
+		return 0, resultSetCloseErr
+	}
+	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
+		return 0, nil
+	}
+	switch value := rows.Rows[0][0].(type) {
+	case int32:
+		return int64(value), nil
+	case int64:
+		return value, nil
 	}
 	return 0, nil
 }
 
-func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
-	request := &pb.CallResourceRequest{
-		Session:      cloneSession(c.session),
-		ResourceType: pb.ResourceType_RES_RESULT_SET,
-		ResourceUUID: resultSetUUID,
-		Target: &pb.TargetCall{
-			CallType:     pb.CallType_CALL_CLOSE,
-			ResourceName: "close",
-		},
+func (c *rpcConnection) fetchGeneratedKeysAndClose(ctx context.Context, psUUID string) (int64, error) {
+	lastID, fetchErr := c.fetchGeneratedKeys(ctx, psUUID)
+	closeErr := c.closePreparedStatement(ctx, psUUID)
+	if fetchErr != nil {
+		return 0, fetchErr
 	}
-	_, err := withConnectionLock(c, func() (any, error) {
-		var trailer metadata.MD
-		resp, rpcErr := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
-		if rpcErr != nil {
-			return nil, grpcError(ctx, rpcErr, trailer)
-		}
-		if resp == nil {
-			return nil, errors.New("OJP server returned an empty close response")
-		}
-		c.applySession(resp.GetSession())
-		return nil, nil
+	if closeErr != nil {
+		return 0, closeErr
+	}
+	return lastID, nil
+}
+
+func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
+	return c.callResource(ctx, pb.ResourceType_RES_RESULT_SET, resultSetUUID, &pb.TargetCall{
+		CallType: pb.CallType_CALL_CLOSE,
 	})
-	return err
 }
 
 func (c *rpcConnection) close(ctx context.Context) error {

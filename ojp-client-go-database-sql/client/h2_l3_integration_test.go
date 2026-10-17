@@ -69,13 +69,11 @@ func TestH2DatabaseShouldSupportL3Capabilities(t *testing.T) {
 		}
 	})
 
-	for i := 1; i <= 10; i++ {
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			"INSERT INTO %s (name) VALUES (?)",
-			table,
-		), fmt.Sprintf("row-%d", i)); err != nil {
-			t.Fatalf("insert row %d: %v", i, err)
-		}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"INSERT INTO %s (id, name) SELECT X, CONCAT('row-', X) FROM SYSTEM_RANGE(1, 250)",
+		table,
+	)); err != nil {
+		t.Fatalf("insert pagination rows: %v", err)
 	}
 
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(
@@ -110,15 +108,15 @@ func TestH2DatabaseShouldSupportL3Capabilities(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows error: %v", err)
 	}
-	if count != 10 {
-		t.Fatalf("expected 10 rows, got %d", count)
+	if count != 250 {
+		t.Fatalf("expected 250 rows spanning multiple server result blocks, got %d", count)
 	}
 	if err := rows.Close(); err != nil {
 		t.Fatalf("close rows: %v", err)
 	}
 
 	empty, err := db.QueryContext(ctx, fmt.Sprintf(
-		"SELECT id, name FROM %s WHERE id > 100",
+		"SELECT id, name FROM %s WHERE id > 1000",
 		table,
 	))
 	if err != nil {
@@ -138,7 +136,24 @@ func TestH2DatabaseShouldSupportL3Capabilities(t *testing.T) {
 		t.Fatalf("close empty rows: %v", err)
 	}
 
-	// Cleanup
+	partial, err := db.QueryContext(ctx, fmt.Sprintf("SELECT id FROM %s ORDER BY id", table))
+	if err != nil {
+		t.Fatalf("partial query: %v", err)
+	}
+	if !partial.Next() {
+		t.Fatal("expected a row before early result close")
+	}
+	if err := partial.Close(); err != nil {
+		t.Fatalf("close partial result: %v", err)
+	}
+	var remaining int64
+	if err := db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&remaining); err != nil {
+		t.Fatalf("query after early result close: %v", err)
+	}
+	if remaining != 250 {
+		t.Fatalf("expected 250 rows after closing the partial result, got %d", remaining)
+	}
+
 	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 		t.Fatalf("drop isolated table: %v", err)
 	}

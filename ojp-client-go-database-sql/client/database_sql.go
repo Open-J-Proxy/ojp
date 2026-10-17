@@ -474,7 +474,7 @@ func (s *sqlPreparedStatement) QueryContext(ctx context.Context, args []driver.N
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.connection.queryWithStatement(ctx, s.query, parameters, s.statementUUID)
+	result, err := s.connection.query(ctx, s.query, parameters)
 	if err != nil {
 		return nil, err
 	}

@@ -180,6 +180,14 @@ func (c *rpcConnection) prepareStatement(ctx context.Context, sql string) (strin
 		response, err := c.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
 			Session:      cloneSession(c.session),
 			ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+			Target: &pb.TargetCall{
+				CallType:     pb.CallType_CALL_GET,
+				ResourceName: "ParameterMetaData",
+				NextCall: &pb.TargetCall{
+					CallType:     pb.CallType_CALL_GET,
+					ResourceName: "ParameterCount",
+				},
+			},
 			Properties: []*pb.PropertyEntry{{
 				Key:   "PREPARED_STATEMENT_SQL_KEY",
 				Value: &pb.PropertyEntry_StringValue{StringValue: sql},
@@ -353,16 +361,24 @@ func (c *rpcConnection) fetchGeneratedKeys(ctx context.Context, psUUID string) (
 		}
 		return uuid, nil
 	})
-	if err != nil || rsUUID == "" {
+	if err != nil {
+		_ = c.closePreparedStatement(ctx, psUUID)
 		return 0, err
 	}
+	if rsUUID == "" {
+		return 0, c.closePreparedStatement(ctx, psUUID)
+	}
 	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
-	closeErr := c.closeResultSet(ctx, rsUUID)
+	resultSetCloseErr := c.closeResultSet(ctx, rsUUID)
+	statementCloseErr := c.closePreparedStatement(ctx, psUUID)
 	if err != nil {
 		return 0, err
 	}
-	if closeErr != nil {
-		return 0, closeErr
+	if resultSetCloseErr != nil {
+		return 0, resultSetCloseErr
+	}
+	if statementCloseErr != nil {
+		return 0, statementCloseErr
 	}
 	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
 		return 0, nil

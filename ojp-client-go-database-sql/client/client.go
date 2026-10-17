@@ -207,7 +207,6 @@ func (c *rpcConnection) prepareStatement(ctx context.Context, sql string) (strin
 func (c *rpcConnection) closePreparedStatement(ctx context.Context, statementUUID string) error {
 	return c.callResource(ctx, pb.ResourceType_RES_PREPARED_STATEMENT, statementUUID, &pb.TargetCall{
 		CallType: pb.CallType_CALL_CLOSE,
-		ResourceName: "close",
 	})
 }
 
@@ -391,8 +390,7 @@ func (c *rpcConnection) fetchGeneratedKeys(ctx context.Context, psUUID string) (
 
 func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
 	return c.callResource(ctx, pb.ResourceType_RES_RESULT_SET, resultSetUUID, &pb.TargetCall{
-		CallType:     pb.CallType_CALL_CLOSE,
-		ResourceName: "close",
+		CallType: pb.CallType_CALL_CLOSE,
 	})
 }
 

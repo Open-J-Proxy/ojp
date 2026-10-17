@@ -218,11 +218,11 @@ func (c *sqlConn) checkOpen() error {
 }
 
 type sqlRows struct {
-	columns       []string
-	rows          [][]any
-	index         int
-	resultSetUUID string
-	connection    *rpcConnection
+	columns        []string
+	rows           [][]any
+	index          int
+	resultSetUUID  string
+	connection     *rpcConnection
 	columnMetadata []ColumnMetadata
 	closed         bool
 }
@@ -582,12 +582,12 @@ type MetadataRequest struct {
 }
 
 type ColumnMetadata struct {
-	Name     string
-	SQLType  int32
-	TypeName string
-	Nullable bool
+	Name          string
+	SQLType       int32
+	TypeName      string
+	Nullable      bool
 	NullableKnown bool
-	ReadOnly bool
+	ReadOnly      bool
 }
 
 func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]ColumnMetadata, error) {
@@ -595,7 +595,7 @@ func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]C
 	if err != nil {
 		return nil, err
 	}
-	count, ok := countValue.(int64)
+	count, ok := metadataInteger(countValue)
 	if !ok || count < 0 {
 		return nil, fmt.Errorf("OJP server returned an invalid metadata column count: %v", countValue)
 	}
@@ -621,14 +621,14 @@ func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]C
 		if err != nil {
 			return nil, err
 		}
-		if value, ok := sqlType.(int64); ok {
-			column.SQLType = int32(value)
+		if value, ok := metadataInteger(sqlType); ok {
+			column.SQLType = value
 		}
 		nullable, err := c.resultSetMetadataValue(ctx, req.ResultSetUUID, "Nullable", pb.CallType_CALL_IS, index)
 		if err != nil {
 			return nil, err
 		}
-		if value, ok := nullable.(int64); ok {
+		if value, ok := metadataInteger(nullable); ok {
 			column.Nullable = value == 1
 			column.NullableKnown = value != 2
 		}
@@ -642,6 +642,17 @@ func (c *rpcConnection) Metadata(ctx context.Context, req *MetadataRequest) ([]C
 	return columns, nil
 }
 
+func metadataInteger(value any) (int32, bool) {
+	switch typed := value.(type) {
+	case int32:
+		return typed, true
+	case int64:
+		return int32(typed), true
+	default:
+		return 0, false
+	}
+}
+
 func (c *rpcConnection) resultSetMetadataValue(
 	ctx context.Context,
 	resultSetUUID string,
@@ -651,7 +662,7 @@ func (c *rpcConnection) resultSetMetadataValue(
 ) (any, error) {
 	nextCall := &pb.TargetCall{CallType: callType, ResourceName: name}
 	if index > 0 {
-		nextCall.Params = []*pb.ParameterValue{{Value: &pb.ParameterValue_IntValue{IntValue: int64(index)}}}
+		nextCall.Params = []*pb.ParameterValue{{Value: &pb.ParameterValue_IntValue{IntValue: int32(index)}}}
 	}
 	var value any
 	err := withConnectionLockError(c, func() error {
@@ -680,26 +691,26 @@ func (c *rpcConnection) resultSetMetadataValue(
 }
 
 var (
-	_ driver.Driver             = sqlDriver{}
-	_ driver.DriverContext      = sqlDriver{}
-	_ driver.Connector          = (*sqlConnector)(nil)
-	_ driver.Conn               = (*sqlConn)(nil)
-	_ driver.ConnPrepareContext = (*sqlConn)(nil)
-	_ driver.ConnBeginTx        = (*sqlConn)(nil)
-	_ driver.ExecerContext      = (*sqlConn)(nil)
-	_ driver.QueryerContext     = (*sqlConn)(nil)
-	_ driver.Pinger             = (*sqlConn)(nil)
-	_ driver.Validator          = (*sqlConn)(nil)
-	_ driver.SessionResetter    = (*sqlConn)(nil)
-	_ driver.Stmt               = (*sqlPreparedStatement)(nil)
-	_ driver.StmtExecContext    = (*sqlPreparedStatement)(nil)
-	_ driver.StmtQueryContext   = (*sqlPreparedStatement)(nil)
-	_ driver.Stmt               = (*sqlCallableStatement)(nil)
-	_ driver.StmtExecContext    = (*sqlCallableStatement)(nil)
-	_ driver.StmtQueryContext   = (*sqlCallableStatement)(nil)
-	_ driver.Rows               = (*sqlRows)(nil)
+	_ driver.Driver                         = sqlDriver{}
+	_ driver.DriverContext                  = sqlDriver{}
+	_ driver.Connector                      = (*sqlConnector)(nil)
+	_ driver.Conn                           = (*sqlConn)(nil)
+	_ driver.ConnPrepareContext             = (*sqlConn)(nil)
+	_ driver.ConnBeginTx                    = (*sqlConn)(nil)
+	_ driver.ExecerContext                  = (*sqlConn)(nil)
+	_ driver.QueryerContext                 = (*sqlConn)(nil)
+	_ driver.Pinger                         = (*sqlConn)(nil)
+	_ driver.Validator                      = (*sqlConn)(nil)
+	_ driver.SessionResetter                = (*sqlConn)(nil)
+	_ driver.Stmt                           = (*sqlPreparedStatement)(nil)
+	_ driver.StmtExecContext                = (*sqlPreparedStatement)(nil)
+	_ driver.StmtQueryContext               = (*sqlPreparedStatement)(nil)
+	_ driver.Stmt                           = (*sqlCallableStatement)(nil)
+	_ driver.StmtExecContext                = (*sqlCallableStatement)(nil)
+	_ driver.StmtQueryContext               = (*sqlCallableStatement)(nil)
+	_ driver.Rows                           = (*sqlRows)(nil)
 	_ driver.RowsColumnTypeDatabaseTypeName = (*sqlRows)(nil)
-	_ driver.RowsColumnTypeNullable = (*sqlRows)(nil)
-	_ driver.Result             = sqlResult{}
-	_ driver.Tx                 = (*sqlTx)(nil)
+	_ driver.RowsColumnTypeNullable         = (*sqlRows)(nil)
+	_ driver.Result                         = sqlResult{}
+	_ driver.Tx                             = (*sqlTx)(nil)
 )

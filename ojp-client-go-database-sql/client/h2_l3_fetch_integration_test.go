@@ -86,8 +86,12 @@ func TestH2DatabaseShouldSupportL3FetchNextRowsAndClose(t *testing.T) {
 		}
 		pages++
 		for _, row := range page.Rows {
-			expectedID := int64(rowsRead + 1)
-			if len(row) != 2 || row[0] != expectedID || row[1] != fmt.Sprintf("row-%d", expectedID) {
+			if len(row) != 2 {
+				t.Fatalf("unexpected row width in page %d: %v", pages, row)
+			}
+			expectedID := int32(rowsRead + 1)
+			actualID, ok := metadataInteger(row[0])
+			if !ok || actualID != expectedID || row[1] != fmt.Sprintf("row-%d", expectedID) {
 				t.Fatalf("unexpected row %d in page %d: %v", rowsRead, pages, row)
 			}
 			rowsRead++
@@ -144,12 +148,25 @@ func executePreparedQueryForTest(
 		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
 		ResourceUUID: statementUUID,
 		Target: &pb.TargetCall{
-			CallType:     pb.CallType_CALL_EXECUTE,
-			ResourceName: "executeQuery",
+			CallType: pb.CallType_CALL_EXECUTE,
 		},
 	}, grpc.Trailer(&trailer))
 	if err != nil {
-		t.Fatalf("execute prepared query: %v", grpcError(ctx, err, trailer))
+		t.Fatalf("execute prepared statement: %v", grpcError(ctx, err, trailer))
+	}
+	connection.applySession(response.GetSession())
+	var trailerForResult metadata.MD
+	response, err = connection.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
+		Session:      cloneSession(connection.session),
+		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+		ResourceUUID: statementUUID,
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_GET,
+			ResourceName: "ResultSet",
+		},
+	}, grpc.Trailer(&trailerForResult))
+	if err != nil {
+		t.Fatalf("get prepared result set: %v", grpcError(ctx, err, trailerForResult))
 	}
 	if response == nil || len(response.GetValues()) != 1 {
 		t.Fatal("OJP server returned an invalid result-set identifier")

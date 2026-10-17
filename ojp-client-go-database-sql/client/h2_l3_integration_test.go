@@ -116,7 +116,7 @@ func TestH2DatabaseShouldSupportL3Capabilities(t *testing.T) {
 	}
 
 	empty, err := db.QueryContext(ctx, fmt.Sprintf(
-		"SELECT id, name FROM %s WHERE id > 100",
+		"SELECT id, name FROM %s WHERE id > 1000",
 		table,
 	))
 	if err != nil {

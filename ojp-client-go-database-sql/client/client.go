@@ -23,6 +23,7 @@ import (
 var (
 	errClientClosed     = errors.New("OJP client is closed")
 	errConnectionClosed = errors.New("OJP connection is closed")
+	errNoMoreRows       = errors.New("no more rows")
 )
 
 type connectionConfig struct {
@@ -47,8 +48,10 @@ type rpcConnection struct {
 }
 
 type queryResult struct {
-	Columns []string
-	Rows    [][]any
+	Columns       []string
+	Rows          [][]any
+	cursor        int
+	resultSetUUID string
 }
 
 var processUUIDOnce sync.Once
@@ -133,116 +136,225 @@ func (c *rpcClient) close() error {
 	return nil
 }
 
-func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return 0, errConnectionClosed
-	}
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return 0, errClientClosed
-	}
+func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, string, error) {
+	return c.executeUpdateWithStatement(ctx, sql, parameters, "")
+}
 
-	var trailer metadata.MD
-	result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
-		Session:    cloneSession(c.session),
-		Sql:        sql,
-		Parameters: parameters,
-	}, grpc.Trailer(&trailer))
-	if err != nil {
-		return 0, grpcError(ctx, err, trailer)
-	}
-	if result == nil {
-		return 0, errors.New("OJP server returned an empty update result")
-	}
-	c.applySession(result.GetSession())
-	if result.GetType() != pb.ResultType_INTEGER {
-		return 0, fmt.Errorf("unexpected update result type %s", result.GetType())
-	}
-	updateCount, ok := result.GetResult().(*pb.OpResult_IntValue)
-	if !ok {
-		return 0, errors.New("OJP server returned an update result without an affected-row count")
-	}
-	return int64(updateCount.IntValue), nil
+// propAutoGenKeys maps to java.sql.Statement.RETURN_GENERATED_KEYS.
+const propAutoGenKeys = "STATEMENT_AUTO_GENERATED_KEYS_KEY"
+
+func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (int64, string, error) {
+	var generatedKeysUUID string
+	var updateCount int64
+	err := withConnectionLockError(c, func() error {
+		var trailer metadata.MD
+		result, err := c.client.rpc.ExecuteUpdate(ctx, &pb.StatementRequest{
+			Session:       cloneSession(c.session),
+			Sql:           sql,
+			Parameters:    parameters,
+			StatementUUID: statementUUID,
+			Properties: []*pb.PropertyEntry{{
+				Key:   propAutoGenKeys,
+				Value: &pb.PropertyEntry_IntValue{IntValue: 1},
+			}},
+		}, grpc.Trailer(&trailer))
+		if err != nil {
+			return grpcError(ctx, err, trailer)
+		}
+		if result == nil {
+			return errors.New("OJP server returned an empty update result")
+		}
+		c.applySession(result.GetSession())
+		generatedKeysUUID = result.GetUuid()
+		if v, ok := result.GetResult().(*pb.OpResult_IntValue); ok {
+			updateCount = int64(v.IntValue)
+		}
+		return nil
+	})
+	return updateCount, generatedKeysUUID, err
+}
+
+func withConnectionLockError(c *rpcConnection, fn func() error) error {
+	_, err := withConnectionLock(c, func() (any, error) {
+		return nil, fn()
+	})
+	return err
 }
 
 func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return nil, errConnectionClosed
-	}
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return nil, errClientClosed
-	}
+	return c.queryWithStatement(ctx, sql, parameters, "")
+}
 
-	stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
-		Session:    cloneSession(c.session),
-		Sql:        sql,
-		Parameters: parameters,
+func (c *rpcConnection) queryWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (*queryResult, error) {
+	return withConnectionLock(c, func() (*queryResult, error) {
+		var trailer metadata.MD
+		stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
+			Session:       cloneSession(c.session),
+			Sql:           sql,
+			Parameters:    parameters,
+			StatementUUID: statementUUID,
+		}, grpc.Trailer(&trailer))
+		if err != nil {
+			return nil, grpcError(ctx, err, trailer)
+		}
+
+		result := &queryResult{}
+		for {
+			message, recvErr := stream.Recv()
+			if errors.Is(recvErr, io.EOF) {
+				return result, nil
+			}
+			if recvErr != nil {
+				return nil, grpcError(ctx, recvErr, stream.Trailer())
+			}
+			c.applySession(message.GetSession())
+			queryResult := message.GetQueryResult()
+			if queryResult == nil {
+				continue
+			}
+			if result.resultSetUUID == "" {
+				result.resultSetUUID = queryResult.GetResultSetUUID()
+			}
+			if len(result.Columns) == 0 {
+				result.Columns = append(result.Columns, queryResult.GetLabels()...)
+			}
+			for _, row := range queryResult.GetRows() {
+				columns := make([]any, len(row.GetColumns()))
+				for index, value := range row.GetColumns() {
+					columns[index], err = decodeValue(value)
+					if err != nil {
+						return nil, fmt.Errorf("decode query result column %d: %w", index, err)
+					}
+				}
+				result.Rows = append(result.Rows, columns)
+			}
+		}
 	})
-	if err != nil {
-		return nil, grpcError(ctx, err, nil)
-	}
+}
 
-	result := &queryResult{}
-	for {
-		message, recvErr := stream.Recv()
-		if errors.Is(recvErr, io.EOF) {
-			return result, nil
+func (c *rpcConnection) fetchNextRows(ctx context.Context, resultSetUUID string, size int32) (*queryResult, error) {
+	return withConnectionLock(c, func() (*queryResult, error) {
+		var trailer metadata.MD
+		result, err := c.client.rpc.FetchNextRows(ctx, &pb.ResultSetFetchRequest{
+			Session:       cloneSession(c.session),
+			ResultSetUUID: resultSetUUID,
+			Size:          size,
+		}, grpc.Trailer(&trailer))
+		if err != nil {
+			return nil, grpcError(ctx, err, trailer)
 		}
-		if recvErr != nil {
-			return nil, grpcError(ctx, recvErr, stream.Trailer())
+		if result == nil {
+			return nil, errors.New("OJP server returned an empty fetch result")
 		}
-		c.applySession(message.GetSession())
-		queryResult := message.GetQueryResult()
+		c.applySession(result.GetSession())
+		qr := &queryResult{resultSetUUID: resultSetUUID}
+		queryResult := result.GetQueryResult()
 		if queryResult == nil {
-			continue
+			return qr, nil
 		}
-		if len(result.Columns) == 0 {
-			result.Columns = append(result.Columns, queryResult.GetLabels()...)
+		if len(qr.Columns) == 0 {
+			qr.Columns = append(qr.Columns, queryResult.GetLabels()...)
 		}
 		for _, row := range queryResult.GetRows() {
 			columns := make([]any, len(row.GetColumns()))
 			for index, value := range row.GetColumns() {
 				columns[index], err = decodeValue(value)
 				if err != nil {
-					return nil, fmt.Errorf("decode query result column %d: %w", index, err)
+					return nil, fmt.Errorf("decode fetch result column %d: %w", index, err)
 				}
 			}
-			result.Rows = append(result.Rows, columns)
+			qr.Rows = append(qr.Rows, columns)
 		}
+		return qr, nil
+	})
+}
+
+// fetchGeneratedKeys resolves one generated key via the PS UUID.
+func (c *rpcConnection) fetchGeneratedKeys(ctx context.Context, psUUID string) (int64, error) {
+	rsUUID, err := withConnectionLock(c, func() (string, error) {
+		var trailer metadata.MD
+		resp, err := c.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
+			Session:      cloneSession(c.session),
+			ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+			ResourceUUID: psUUID,
+			Target: &pb.TargetCall{
+				CallType:     pb.CallType_CALL_GET,
+				ResourceName: "GeneratedKeys",
+			},
+		}, grpc.Trailer(&trailer))
+		if err != nil {
+			return "", grpcError(ctx, err, trailer)
+		}
+		if resp == nil {
+			return "", errors.New("OJP server returned an empty generated-keys response")
+		}
+		c.applySession(resp.GetSession())
+		if len(resp.GetValues()) == 0 {
+			return "", nil
+		}
+		uuid, err := decodeValueTo[string](resp.GetValues()[0])
+		if err != nil {
+			return "", err
+		}
+		return uuid, nil
+	})
+	if err != nil || rsUUID == "" {
+		return 0, err
 	}
+	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
+	if err != nil || len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
+		return 0, err
+	}
+	if v, ok := rows.Rows[0][0].(int64); ok {
+		return v, nil
+	}
+	return 0, nil
+}
+
+func (c *rpcConnection) closeResultSet(ctx context.Context, resultSetUUID string) error {
+	request := &pb.CallResourceRequest{
+		Session:      cloneSession(c.session),
+		ResourceType: pb.ResourceType_RES_RESULT_SET,
+		ResourceUUID: resultSetUUID,
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_CLOSE,
+			ResourceName: "close",
+		},
+	}
+	_, err := withConnectionLock(c, func() (any, error) {
+		var trailer metadata.MD
+		resp, rpcErr := c.client.rpc.CallResource(ctx, request, grpc.Trailer(&trailer))
+		if rpcErr != nil {
+			return nil, grpcError(ctx, rpcErr, trailer)
+		}
+		if resp == nil {
+			return nil, errors.New("OJP server returned an empty close response")
+		}
+		c.applySession(resp.GetSession())
+		return nil, nil
+	})
+	return err
 }
 
 func (c *rpcConnection) close(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return nil
-	}
-	c.client.mu.RLock()
-	defer c.client.mu.RUnlock()
-	if c.client.closed {
-		return errClientClosed
-	}
-
-	var trailer metadata.MD
-	response, err := c.client.rpc.TerminateSession(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
-	if err != nil {
-		return grpcError(ctx, err, trailer)
-	}
-	if response == nil || !response.GetTerminated() {
-		return errors.New("OJP server did not terminate the session")
-	}
-	c.closed = true
-	c.session = cloneSession(c.session)
-	c.session.SessionStatus = pb.SessionStatus_SESSION_TERMINATED
-	return nil
+	_, err := withConnectionLock(c, func() (any, error) {
+		if c.closed {
+			return nil, nil
+		}
+		var trailer metadata.MD
+		response, rpcErr := c.client.rpc.TerminateSession(ctx, cloneSession(c.session), grpc.Trailer(&trailer))
+		if rpcErr != nil {
+			return nil, grpcError(ctx, rpcErr, trailer)
+		}
+		if response == nil || !response.GetTerminated() {
+			return nil, errors.New("OJP server did not terminate the session")
+		}
+		c.closed = true
+		c.session = cloneSession(c.session)
+		c.session.SessionStatus = pb.SessionStatus_SESSION_TERMINATED
+		return nil, nil
+	})
+	return err
 }
 
 func (c *rpcConnection) isClosed() bool {

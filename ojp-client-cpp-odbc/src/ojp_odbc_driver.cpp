@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
@@ -1420,8 +1421,19 @@ bool contains_sql_keyword(const std::string& sql, const std::string& keyword) {
             const auto end = sql.find_first_of("\r\n", index + 2);
             index = end == std::string::npos ? sql.size() : end + 1;
         } else if (character == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
-            const auto end = sql.find("*/", index + 2);
-            index = end == std::string::npos ? sql.size() : end + 2;
+            index += 2;
+            std::size_t depth = 1;
+            while (index < sql.size() && depth != 0) {
+                if (index + 1 < sql.size() && sql[index] == '/' && sql[index + 1] == '*') {
+                    ++depth;
+                    index += 2;
+                } else if (index + 1 < sql.size() && sql[index] == '*' && sql[index + 1] == '/') {
+                    --depth;
+                    index += 2;
+                } else {
+                    ++index;
+                }
+            }
         } else if (character == '\'' || character == '"' || character == '`' || character == '[') {
             const char closing = character == '[' ? ']' : character;
             ++index;
@@ -2580,7 +2592,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
     }
     request.mutable_session()->CopyFrom(connection->session);
-    const bool sql_server = connection->url.find("jdbc:sqlserver:") != std::string::npos;
+    const bool sql_server = uppercase_ascii(connection->url).find("JDBC:SQLSERVER:") != std::string::npos;
     if (sql_server && !is_query_sql(statement->sql) &&
         contains_sql_keyword(statement->sql, "OUTPUT")) {
         auto* property = request.add_properties();

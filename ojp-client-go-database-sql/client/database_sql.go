@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/open-j-proxy/ojp-client-go-database-sql/internal/gen/go/com/openjproxy/grpc"
@@ -427,14 +428,24 @@ func buildParameter[T pb.ParameterTypeProto](index int, paramType T, value *pb.P
 	}
 }
 
-// sqlPreparedStatement carries a StatementUUID for server-side plan reuse.
 type sqlPreparedStatement struct {
+	mu            sync.Mutex
 	connection    *rpcConnection
 	query         string
 	statementUUID string
+	closed        bool
 }
 
 func (s *sqlPreparedStatement) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.statementUUID == "" {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return s.connection.closePreparedStatement(ctx, s.statementUUID)
@@ -451,6 +462,11 @@ func (s *sqlPreparedStatement) Query(args []driver.Value) (driver.Rows, error) {
 }
 
 func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, errStatementClosed
+	}
 	parameters, err := toProtoParameters(args)
 	if err != nil {
 		return nil, err
@@ -458,6 +474,11 @@ func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.Na
 	count, generatedKeysUUID, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
+	}
+	if generatedKeysUUID == "" {
+		generatedKeysUUID = s.statementUUID
+	} else {
+		s.statementUUID = generatedKeysUUID
 	}
 	var lastID int64
 	if generatedKeysUUID != "" {
@@ -470,6 +491,11 @@ func (s *sqlPreparedStatement) ExecContext(ctx context.Context, args []driver.Na
 }
 
 func (s *sqlPreparedStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, errStatementClosed
+	}
 	parameters, err := toProtoParameters(args)
 	if err != nil {
 		return nil, err
@@ -499,6 +525,11 @@ func (s *sqlCallableStatement) Query(args []driver.Value) (driver.Rows, error) {
 }
 
 func (s *sqlCallableStatement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, errStatementClosed
+	}
 	parameters, err := toProtoParameters(args)
 	if err != nil {
 		return nil, err
@@ -506,6 +537,11 @@ func (s *sqlCallableStatement) ExecContext(ctx context.Context, args []driver.Na
 	count, generatedKeysUUID, err := s.connection.executeUpdateWithStatement(ctx, s.query, parameters, s.statementUUID)
 	if err != nil {
 		return nil, err
+	}
+	if generatedKeysUUID == "" {
+		generatedKeysUUID = s.statementUUID
+	} else {
+		s.statementUUID = generatedKeysUUID
 	}
 	var lastID int64
 	if generatedKeysUUID != "" {
@@ -518,68 +554,30 @@ func (s *sqlCallableStatement) ExecContext(ctx context.Context, args []driver.Na
 }
 
 func (s *sqlCallableStatement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, errStatementClosed
+	}
 	parameters, err := toProtoParameters(args)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.connection.queryWithStatement(ctx, s.query, parameters, s.statementUUID)
+	result, err := s.connection.query(ctx, s.query, parameters)
 	if err != nil {
 		return nil, err
 	}
 	return newSQLRows(ctx, s.connection, result)
 }
 
-func (c *sqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+func (c *sqlConn) PrepareContext(_ context.Context, query string) (driver.Stmt, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, errors.New("SQL query must not be empty")
 	}
-	stmtUUID, err := c.connection.prepareStatement(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	stmt := &sqlPreparedStatement{connection: c.connection, query: query, statementUUID: stmtUUID}
-	return stmt, nil
-}
-
-type GeneratedKeysRequest struct {
-	StatementUUID string
-	ColumnNames   []string
-	ColumnIndexes []int32
-}
-
-// GeneratedKeys returns key rows for a prepared-statement UUID.
-func (c *rpcConnection) GeneratedKeys(ctx context.Context, req *GeneratedKeysRequest) ([][]any, error) {
-	rsUUID, err := withConnectionLock(c, func() (string, error) {
-		var trailer metadata.MD
-		resp, err := c.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
-			Session:      cloneSession(c.session),
-			ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
-			ResourceUUID: req.StatementUUID,
-			Target: &pb.TargetCall{
-				CallType:     pb.CallType_CALL_GET,
-				ResourceName: "GeneratedKeys",
-			},
-		}, grpc.Trailer(&trailer))
-		if err != nil {
-			return "", grpcError(ctx, err, trailer)
-		}
-		if resp == nil {
-			return "", errors.New("OJP server returned an empty generated-keys response")
-		}
-		c.applySession(resp.GetSession())
-		if len(resp.GetValues()) == 0 {
-			return "", nil
-		}
-		return decodeValueTo[string](resp.GetValues()[0])
+	return withConnectionLock(c.connection, func() (driver.Stmt, error) {
+		stmt := &sqlPreparedStatement{connection: c.connection, query: query}
+		return stmt, nil
 	})
-	if err != nil || rsUUID == "" {
-		return nil, err
-	}
-	rows, err := c.fetchNextRows(ctx, rsUUID, 100)
-	if err != nil {
-		return nil, err
-	}
-	return rows.Rows, nil
 }
 
 type MetadataRequest struct {

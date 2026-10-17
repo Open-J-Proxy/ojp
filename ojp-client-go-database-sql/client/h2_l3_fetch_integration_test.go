@@ -63,7 +63,7 @@ func TestH2DatabaseShouldSupportL3FetchNextRowsAndClose(t *testing.T) {
 		t.Fatalf("insert pagination rows: %v", err)
 	}
 
-	statementUUID, err := connection.prepareStatement(ctx, fmt.Sprintf("SELECT id, name FROM %s ORDER BY id", table))
+	statementUUID, err := prepareStatementForTest(ctx, connection, fmt.Sprintf("SELECT id, name FROM %s ORDER BY id", table))
 	if err != nil {
 		t.Fatalf("prepare paginated query: %v", err)
 	}
@@ -76,16 +76,11 @@ func TestH2DatabaseShouldSupportL3FetchNextRowsAndClose(t *testing.T) {
 	resultSetUUID := executePreparedQueryForTest(t, ctx, connection, statementUUID)
 	rowsRead := 0
 	pages := 0
-	for {
-		page, err := connection.fetchNextRows(ctx, resultSetUUID, 100)
-		if err != nil {
-			t.Fatalf("fetch result page %d: %v", pages+1, err)
+	readRows := func(pageRows [][]any) {
+		if len(pageRows) > 0 {
+			pages++
 		}
-		if len(page.Rows) == 0 {
-			break
-		}
-		pages++
-		for _, row := range page.Rows {
+		for _, row := range pageRows {
 			if len(row) != 2 {
 				t.Fatalf("unexpected row width in page %d: %v", pages, row)
 			}
@@ -96,6 +91,16 @@ func TestH2DatabaseShouldSupportL3FetchNextRowsAndClose(t *testing.T) {
 			}
 			rowsRead++
 		}
+	}
+	for {
+		page, err := connection.fetchNextRows(ctx, resultSetUUID, 100)
+		if err != nil {
+			t.Fatalf("fetch result page %d: %v", pages+1, err)
+		}
+		if len(page.Rows) == 0 {
+			break
+		}
+		readRows(page.Rows)
 	}
 	if pages < 2 || rowsRead != 250 {
 		t.Fatalf("expected multiple fetched pages containing 250 ordered rows, got %d pages and %d rows", pages, rowsRead)
@@ -124,15 +129,32 @@ func TestH2DatabaseShouldSupportL3FetchNextRowsAndClose(t *testing.T) {
 	}
 }
 
-func executeUpdateAndCloseKeys(ctx context.Context, connection *rpcConnection, sql string) error {
-	_, generatedKeysUUID, err := connection.executeUpdate(ctx, sql, nil)
+func prepareStatementForTest(ctx context.Context, connection *rpcConnection, sql string) (string, error) {
+	var trailer metadata.MD
+	response, err := connection.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
+		Session:      cloneSession(connection.session),
+		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
+		Target: &pb.TargetCall{
+			CallType:     pb.CallType_CALL_GET,
+			ResourceName: "ParameterMetaData",
+			NextCall: &pb.TargetCall{
+				CallType:     pb.CallType_CALL_GET,
+				ResourceName: "ParameterCount",
+			},
+		},
+		Properties: []*pb.PropertyEntry{{
+			Key:   "PREPARED_STATEMENT_SQL_KEY",
+			Value: &pb.PropertyEntry_StringValue{StringValue: sql},
+		}},
+	}, grpc.Trailer(&trailer))
 	if err != nil {
-		return err
+		return "", grpcError(ctx, err, trailer)
 	}
-	if generatedKeysUUID != "" {
-		_, err = connection.fetchGeneratedKeysAndClose(ctx, generatedKeysUUID)
+	if response == nil || response.GetResourceUUID() == "" {
+		return "", fmt.Errorf("OJP server returned an empty prepared-statement identifier")
 	}
-	return err
+	connection.applySession(response.GetSession())
+	return response.GetResourceUUID(), nil
 }
 
 func executePreparedQueryForTest(
@@ -147,15 +169,12 @@ func executePreparedQueryForTest(
 		Session:      cloneSession(connection.session),
 		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
 		ResourceUUID: statementUUID,
-		Target: &pb.TargetCall{
-			CallType: pb.CallType_CALL_EXECUTE,
-		},
+		Target:       &pb.TargetCall{CallType: pb.CallType_CALL_EXECUTE},
 	}, grpc.Trailer(&trailer))
 	if err != nil {
 		t.Fatalf("execute prepared statement: %v", grpcError(ctx, err, trailer))
 	}
 	connection.applySession(response.GetSession())
-	var trailerForResult metadata.MD
 	response, err = connection.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
 		Session:      cloneSession(connection.session),
 		ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
@@ -164,9 +183,9 @@ func executePreparedQueryForTest(
 			CallType:     pb.CallType_CALL_GET,
 			ResourceName: "ResultSet",
 		},
-	}, grpc.Trailer(&trailerForResult))
+	}, grpc.Trailer(&trailer))
 	if err != nil {
-		t.Fatalf("get prepared result set: %v", grpcError(ctx, err, trailerForResult))
+		t.Fatalf("get prepared result set: %v", grpcError(ctx, err, trailer))
 	}
 	if response == nil || len(response.GetValues()) != 1 {
 		t.Fatal("OJP server returned an invalid result-set identifier")
@@ -180,6 +199,17 @@ func executePreparedQueryForTest(
 		t.Fatal("OJP server returned an empty result-set identifier")
 	}
 	return resultSetUUID
+}
+
+func executeUpdateAndCloseKeys(ctx context.Context, connection *rpcConnection, sql string) error {
+	_, generatedKeysUUID, err := connection.executeUpdate(ctx, sql, nil)
+	if err != nil {
+		return err
+	}
+	if generatedKeysUUID != "" {
+		_, err = connection.fetchGeneratedKeysAndClose(ctx, generatedKeysUUID)
+	}
+	return err
 }
 
 func readL3H2ConnectionConfig() (string, string, string, error) {

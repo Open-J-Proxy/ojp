@@ -23,6 +23,7 @@ import (
 var (
 	errClientClosed     = errors.New("OJP client is closed")
 	errConnectionClosed = errors.New("OJP connection is closed")
+	errStatementClosed  = errors.New("OJP prepared statement is closed")
 	errNoMoreRows       = errors.New("no more rows")
 )
 
@@ -136,14 +137,19 @@ func (c *rpcClient) close() error {
 	return nil
 }
 
+// propAutoGenKeys maps to java.sql.Statement.RETURN_GENERATED_KEYS.
+const propAutoGenKeys = "STATEMENT_AUTO_GENERATED_KEYS_KEY"
+
 func (c *rpcConnection) executeUpdate(ctx context.Context, sql string, parameters []*pb.ParameterProto) (int64, string, error) {
 	return c.executeUpdateWithStatement(ctx, sql, parameters, "")
 }
 
-// propAutoGenKeys maps to java.sql.Statement.RETURN_GENERATED_KEYS.
-const propAutoGenKeys = "STATEMENT_AUTO_GENERATED_KEYS_KEY"
-
-func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (int64, string, error) {
+func (c *rpcConnection) executeUpdateWithStatement(
+	ctx context.Context,
+	sql string,
+	parameters []*pb.ParameterProto,
+	statementUUID string,
+) (int64, string, error) {
 	var generatedKeysUUID string
 	var updateCount int64
 	err := withConnectionLockError(c, func() error {
@@ -156,8 +162,7 @@ func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql stri
 			Properties: []*pb.PropertyEntry{{
 				Key:   propAutoGenKeys,
 				Value: &pb.PropertyEntry_IntValue{IntValue: 1},
-			},
-			},
+			}},
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			return grpcError(ctx, err, trailer)
@@ -173,48 +178,6 @@ func (c *rpcConnection) executeUpdateWithStatement(ctx context.Context, sql stri
 		return nil
 	})
 	return updateCount, generatedKeysUUID, err
-}
-
-func (c *rpcConnection) prepareStatement(ctx context.Context, sql string) (string, error) {
-	return withConnectionLock(c, func() (string, error) {
-		var trailer metadata.MD
-		response, err := c.client.rpc.CallResource(ctx, &pb.CallResourceRequest{
-			Session:      cloneSession(c.session),
-			ResourceType: pb.ResourceType_RES_PREPARED_STATEMENT,
-			Target: &pb.TargetCall{
-				CallType:     pb.CallType_CALL_GET,
-				ResourceName: "ParameterMetaData",
-				NextCall: &pb.TargetCall{
-					CallType:     pb.CallType_CALL_GET,
-					ResourceName: "ParameterCount",
-				},
-			},
-			Properties: []*pb.PropertyEntry{
-				{
-					Key:   "PREPARED_STATEMENT_SQL_KEY",
-					Value: &pb.PropertyEntry_StringValue{StringValue: sql},
-				},
-				{
-					Key:   propAutoGenKeys,
-					Value: &pb.PropertyEntry_IntValue{IntValue: 1},
-				},
-			},
-		}, grpc.Trailer(&trailer))
-		if err != nil {
-			return "", grpcError(ctx, err, trailer)
-		}
-		if response == nil || response.GetResourceUUID() == "" {
-			return "", errors.New("OJP server returned an empty prepared-statement identifier")
-		}
-		c.applySession(response.GetSession())
-		return response.GetResourceUUID(), nil
-	})
-}
-
-func (c *rpcConnection) closePreparedStatement(ctx context.Context, statementUUID string) error {
-	return c.callResource(ctx, pb.ResourceType_RES_PREPARED_STATEMENT, statementUUID, &pb.TargetCall{
-		CallType: pb.CallType_CALL_CLOSE,
-	})
 }
 
 func (c *rpcConnection) callResource(
@@ -243,6 +206,12 @@ func (c *rpcConnection) callResource(
 	return err
 }
 
+func (c *rpcConnection) closePreparedStatement(ctx context.Context, statementUUID string) error {
+	return c.callResource(ctx, pb.ResourceType_RES_PREPARED_STATEMENT, statementUUID, &pb.TargetCall{
+		CallType: pb.CallType_CALL_CLOSE,
+	})
+}
+
 func withConnectionLockError(c *rpcConnection, fn func() error) error {
 	_, err := withConnectionLock(c, func() (any, error) {
 		return nil, fn()
@@ -251,17 +220,12 @@ func withConnectionLockError(c *rpcConnection, fn func() error) error {
 }
 
 func (c *rpcConnection) query(ctx context.Context, sql string, parameters []*pb.ParameterProto) (*queryResult, error) {
-	return c.queryWithStatement(ctx, sql, parameters, "")
-}
-
-func (c *rpcConnection) queryWithStatement(ctx context.Context, sql string, parameters []*pb.ParameterProto, statementUUID string) (*queryResult, error) {
 	return withConnectionLock(c, func() (*queryResult, error) {
 		var trailer metadata.MD
 		stream, err := c.client.rpc.ExecuteQuery(ctx, &pb.StatementRequest{
-			Session:       cloneSession(c.session),
-			Sql:           sql,
-			Parameters:    parameters,
-			StatementUUID: statementUUID,
+			Session:    cloneSession(c.session),
+			Sql:        sql,
+			Parameters: parameters,
 		}, grpc.Trailer(&trailer))
 		if err != nil {
 			return nil, grpcError(ctx, err, trailer)

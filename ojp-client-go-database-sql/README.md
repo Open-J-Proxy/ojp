@@ -28,7 +28,7 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 | Level  | Capability                                                          | Status          | Evidence                                                            |
 |--------|---------------------------------------------------------------------|-----------------|---------------------------------------------------------------------|
 | **L2** | Typed parameter handling (supported `ParameterTypeProto` values)     | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities` (CI validation pending) |
-| **L2** | Prepared statements with a server-registered `StatementUUID`         | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities`                         |
+| **L2** | Prepared updates reuse the server `StatementUUID` returned by `ExecuteUpdate` | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities`                         |
 | **L2** | Generated keys through `CALL_GET` + `GeneratedKeys` + `fetchNextRows`| **In progress** | `TestH2DatabaseShouldSupportL2Capabilities` (`LastInsertId`)        |
 | **L2** | Result-set metadata through chained `getMetaData` calls              | **In progress** | `TestH2DatabaseShouldSupportL2Capabilities` (`ColumnTypes`)         |
 | **L3** | Server-streaming query result handling                               | **In progress** | `TestH2DatabaseShouldSupportL3Capabilities`                         |
@@ -308,6 +308,6 @@ When `OJP_TEST_H2` is enabled, missing connection configuration or an unavailabl
 
 The L1 test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv` and exercises the standard `database/sql` API. It uses a unique table per run, performs a protocol/database readiness check, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and database close behavior. Run the test repeatedly with `-count=2` to check for conflicts.
 
-The L2 suite exercises typed parameters (including NULL and a boundary-sized int64), prepared statement reuse, generated keys, and JDBC result-set metadata through the server's metadata calls.
+`PrepareContext` keeps the SQL and bindings client-side and uses the standard `ExecuteQuery`/`ExecuteUpdate` RPCs rather than registering a statement through `callResource`. A prepared update receives its server `StatementUUID` from the first `ExecuteUpdate` response and reuses it on subsequent updates; the L2 suite exercises that flow, typed parameters (including NULL and a boundary-sized int64), generated keys, and JDBC result-set metadata through the server's metadata calls.
 
 The L3 suites exercise multi-block server-streaming, explicit `fetchNextRows` pagination, ordered results, exhausted and early-closed result sets, and resource cleanup. L2/L3 remain in progress until their real-server H2 CI suites pass.

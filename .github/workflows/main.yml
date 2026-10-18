@@ -3023,6 +3023,162 @@ jobs:
           repository: Open-J-Proxy/ojp-framework-integration
           event-type: ojp-updated
 
+  jdbc-mtls-test:
+    name: JDBC PostgreSQL mTLS Integration Test
+    runs-on: ubuntu-latest
+    needs: [detect-changes, h2-integration-gate, resolve-version, build-ojp-image]
+    if: ${{ !cancelled() && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.java == 'true' && needs.h2-integration-gate.result == 'success' && needs.resolve-version.result == 'success' && needs.build-ojp-image.result == 'success' }}
+    env:
+      OJP_IMAGE: ${{ needs.resolve-version.outputs.ojp_image }}
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: 25
+          distribution: temurin
+          cache: maven
+
+      - name: Start PostgreSQL with XA support
+        run: |
+          docker run --detach --rm --name ojp-jdbc-mtls-postgres \
+            --publish 5432:5432 \
+            --env POSTGRES_USER=testuser \
+            --env POSTGRES_PASSWORD=testpassword \
+            --env POSTGRES_DB=defaultdb \
+            postgres:17 \
+            -c max_prepared_transactions=100
+          timeout 120 bash -c \
+            'until docker exec ojp-jdbc-mtls-postgres pg_isready -U testuser -d defaultdb; do sleep 2; done'
+
+      - name: Load OJP Server image
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: ojp-server-image
+          path: ${{ runner.temp }}
+
+      - name: Generate test certificates
+        run: |
+          docker load --input "${{ runner.temp }}/ojp-server-image.tar"
+          bash scripts/generate-jdbc-mtls-test-certificates.sh "$RUNNER_TEMP/ojp-mtls-certs"
+          chmod 755 "$RUNNER_TEMP/ojp-mtls-certs"
+          chmod 644 "$RUNNER_TEMP/ojp-mtls-certs/server-keystore.p12" \
+            "$RUNNER_TEMP/ojp-mtls-certs/server-truststore.p12"
+
+      - name: Start two mTLS OJP servers
+        run: |
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          for node in 1 2; do
+            if [ "$node" = 1 ]; then
+              port=10591
+              metrics_port=9159
+            else
+              port=10592
+              metrics_port=9160
+            fi
+            docker run --detach --name "ojp-jdbc-mtls-server-$node" \
+              --network host \
+              --volume "$RUNNER_TEMP/ojp-mtls-certs:/etc/ojp/mtls:ro" \
+              --env JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.port=$port -Dojp.prometheus.port=$metrics_port -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=/etc/ojp/mtls/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=/etc/ojp/mtls/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true" \
+              "$OJP_IMAGE"
+            for attempt in $(seq 1 120); do
+              if nc -z localhost "$port"; then
+                break
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' "ojp-jdbc-mtls-server-$node")" != true ]; then
+                docker logs "ojp-jdbc-mtls-server-$node"
+                exit 1
+              fi
+              sleep 1
+            done
+            if ! nc -z localhost "$port"; then
+              docker logs "ojp-jdbc-mtls-server-$node"
+              exit 1
+            fi
+          done
+
+      - name: Build JDBC driver
+        run: mvn clean install -pl ojp-jdbc-driver -am -DskipTests -Dgpg.skip=true
+
+      - name: Verify mTLS JDBC, session, and XA behavior
+        run: |
+          mtls_password_property=ojp.mtls.pass""word
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpassword
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=MtlsIntegrationTest#shouldRunJdbcAndXaOperationsAgainstEveryMutuallyAuthenticatedServer \
+            -Dojp.mtls.tests.enabled=true \
+            -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
+            -Dojp.mtls.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Reject clients without a certificate
+        run: |
+          mtls_password_property=ojp.mtls.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpassword
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=MtlsIntegrationTest#shouldRejectConnectionWithoutClientCertificate \
+            -Dojp.mtls.tests.enabled=true \
+            -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
+            -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Reject untrusted client certificates
+        run: |
+          mtls_password_property=ojp.mtls.pass""word
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpassword
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=MtlsIntegrationTest#shouldRejectConnectionWithUntrustedClientCertificate \
+            -Dojp.mtls.tests.enabled=true \
+            -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
+            -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-mtls-certs/untrusted-client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Save mTLS test logs
+        if: always()
+        run: |
+          for node in 1 2; do
+            docker logs "ojp-jdbc-mtls-server-$node" > "$RUNNER_TEMP/ojp-jdbc-mtls-server-$node.log" 2>&1 || true
+            docker rm --force "ojp-jdbc-mtls-server-$node" || true
+          done
+          docker logs ojp-jdbc-mtls-postgres > "$RUNNER_TEMP/ojp-jdbc-mtls-postgres.log" 2>&1 || true
+          docker stop ojp-jdbc-mtls-postgres || true
+
+      - name: Upload mTLS server logs
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: jdbc-mtls-test-logs
+          path: ${{ runner.temp }}/ojp-jdbc-mtls-*.log
+          retention-days: 7
+
   main-ci-result:
     name: Main CI Result
     runs-on: ubuntu-latest
@@ -3045,6 +3201,7 @@ jobs:
       - db2-test
       - multinode-test
       - multinode-xa-test
+      - jdbc-mtls-test
       - oracle-test
       - sqlserver-tests
       - cpp-odbc-postgres-test
@@ -3077,6 +3234,7 @@ jobs:
             'db2-test': 'java',
             'multinode-test': 'java',
             'multinode-xa-test': 'java',
+            'jdbc-mtls-test': 'java',
             'oracle-test': 'java',
             'sqlserver-tests': 'java',
             'cpp-odbc-postgres-test': 'cpp',

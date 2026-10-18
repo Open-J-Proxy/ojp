@@ -1,5 +1,6 @@
-// Verifies PostgreSQL XA affinity together with multinode failover and recovery.
+// Verifies PostgreSQL mTLS, XA affinity, multinode failover, and recovery.
 #include "connection_suite.h"
+#include "l10_mtls_suite.h"
 
 #include <sql.h>
 #include <sqlext.h>
@@ -172,7 +173,7 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         ";PWD=" + brace_value(config.password) +
         ";OJP.LOADAWARE.SELECTION.ENABLED=false;" +
         "OJP.MULTINODE.RETRY.ATTEMPTS=3;OJP.MULTINODE.RETRY.DELAY=25;" +
-        (xa ? "OJP.XA=TRUE;" : "");
+        (xa ? "OJP.XA=TRUE;" : "") + ojp::test::l10_mtls_config().trusted_options();
     const SQLRETURN result =
         SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,
                          nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
@@ -504,7 +505,8 @@ int run_connection(const DatabaseConfig& config,
                         SQL_HANDLE_STMT, surviving_statement);
 
         ojp::test::wait_for_restart(pid_file, stopped_process_id,
-            "DRIVER={OJP};SERVER=" + brace_value(endpoints[0]) +
+            "DRIVER={OJP};" + ojp::test::l10_mtls_config().trusted_options() +
+            "SERVER=" + brace_value(endpoints[0]) +
             ";DATABASE=" + brace_value(config.url) + ";UID=" + brace_value(config.user) +
             ";PWD=" + brace_value(config.password) + ";");
         recovered_connection = open_connection(environment, config, endpoints[0]);
@@ -572,7 +574,7 @@ int run_connection(const DatabaseConfig& config,
         }
         throw;
     }
-    std::cout << "C++ ODBC PostgreSQL L10 multinode and XA integration test passed\n";
+    std::cout << "C++ ODBC PostgreSQL L10 mTLS, multinode and XA integration test passed\n";
     return 0;
 }
 
@@ -591,6 +593,7 @@ int run_integration_test(int argc, char** argv) {
                   << "=true to run the PostgreSQL L10 suite\n";
         return 77;
     }
+    ojp::test::l10_mtls_config();
     const std::vector<std::string> endpoints =
         split_endpoints(environment_value(argv[3]));
     const std::string pid_file = environment_value(argv[4]);
@@ -599,6 +602,7 @@ int run_integration_test(int argc, char** argv) {
                                  enable_variable + "=true");
     }
     return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        ojp::test::verify_l10_mtls(config, endpoints);
         return run_connection(config, endpoints, pid_file, argv);
     });
 }

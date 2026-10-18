@@ -10,10 +10,10 @@ communicates with the server over gRPC.
 | Database | Highest supported level |
 |---|---:|
 | H2 | **L9** |
-| PostgreSQL | **L9** |
-| SQL Server | **L9** |
-| MySQL | **L9** |
-| MariaDB | **L9** |
+| PostgreSQL | **L10** |
+| SQL Server | **L10** |
+| MySQL | **L10** |
+| MariaDB | **L10** |
 | Oracle | Not established |
 | DB2 | Not established |
 | CockroachDB | Not established |
@@ -224,6 +224,38 @@ Start an OJP server with Java 25 and `-Duser.timezone=UTC`, provide its backend
 JDBC driver JAR, and ensure it can reach the database. `SERVER` is the **OJP
 endpoint**, not the database address; `DATABASE` is a backend JDBC URL, not
 `jdbc:ojp[...]`. See the [server quick start](../README.md#quick-start).
+
+### TLS and mutual TLS
+
+Plaintext is the default for compatibility. Enable TLS for connections outside
+a trusted/private network, and configure the OJP server to require client
+certificates for mutual TLS.
+
+| Connection option | Environment fallback | Value |
+|---|---|---|
+| `OJP.CLIENT.TLS.ENABLED` | `OJP_CLIENT_TLS_ENABLED` | Enable verified TLS |
+| `OJP.CLIENT.TLS.ROOTCERT` | `OJP_CLIENT_TLS_ROOTCERT` | PEM file containing trusted server certificates / CA roots; omitted uses gRPC's default roots |
+| `OJP.CLIENT.TLS.CERT` | `OJP_CLIENT_TLS_CERT` | PEM client certificate chain |
+| `OJP.CLIENT.TLS.KEY` | `OJP_CLIENT_TLS_KEY` | PEM unencrypted client private key |
+
+Connection options override environment values, including explicitly empty
+values. Supply both client certificate and private key, or neither for
+server-authenticated TLS. TLS credential options require TLS to be enabled.
+Unreadable/empty credential files and invalid configuration fail with
+`HY024`; connection/handshake failures return `08001`. Server certificate
+trust and endpoint hostname verification remain enabled; there is no insecure
+certificate-verification bypass or plaintext fallback. The same credentials
+apply to every endpoint, including health probes and recovered nodes.
+
+```text
+DRIVER={OJP};SERVER={localhost:1059,localhost:1060};DATABASE={jdbc:postgresql://localhost:5432/defaultdb};OJP.CLIENT.TLS.ENABLED=true;OJP.CLIENT.TLS.ROOTCERT={/secure/server-ca.pem};OJP.CLIENT.TLS.CERT={/secure/client-chain.pem};OJP.CLIENT.TLS.KEY={/secure/client-key.pem};
+```
+
+Add backend credentials through your application's secret configuration.
+Restrict private-key file permissions to the client account. TLS options are
+local driver configuration, not backend JDBC properties. This secures the
+application-to-OJP hop; configure database TLS separately for the OJP-to-database
+hop.
 
 ODBC applications link against the **Driver Manager**, not directly against
 gRPC or `ojp_odbc`. Use ANSI APIs and UTF-8 text; do not compile this example
@@ -448,7 +480,7 @@ Treat these as integration paths to evaluate while the corresponding native
 clients mature, **not production-certified substitutes**. Validate
 connect/query/parameters/transactions/UTF-8/cleanup with your exact wrapper,
 Driver Manager, OS, architecture, and database. Disable all application-side
-pooling. The current driver uses plaintext gRPC: use a trusted/private network
+pooling. Enable [TLS/mTLS](#tls-and-mutual-tls) or use a trusted/private network
 or an externally secured deployment boundary. Never log credential-bearing
 connection strings. See the [ebook integration chapter](../documents/ebook/part2-chapter7-framework-integration.md).
 
@@ -481,7 +513,7 @@ The existing `OJP_TEST_MARIADB*` flags enable both records. CTest registers only
 separate MySQL registrations or flags. Main CI starts MariaDB 10.11 and MySQL 8.4
 simultaneously and runs these suites once.
 The MySQL row uses port 3306; the MariaDB row uses port 3307. Both require
-`defaultdb` and a disposable `testuser` account. The MySQL row disables TLS
+`defaultdb` and a disposable `testuser` account. The MySQL row disables database TLS
 and allows public-key retrieval for local tests only; do not use these settings
 for production connections. Supply each backend's JDBC driver to OJP.
 For MySQL L9/L10 recovery scans, grant the disposable test account
@@ -517,7 +549,45 @@ records cannot hide it.
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
 database-owner permissions, as in the JDBC integration-test container setup.
-Then build and run the tests:
+For L10, both OJP servers must require trusted client certificates, including
+after supervisor restarts. Generate disposable credentials with the same
+fixture used by the [JDBC mTLS test](../ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/MtlsIntegrationTest.java).
+The generator requires Java 25's `keytool` and the OpenSSL command-line tool.
+
+```sh
+bash scripts/generate-jdbc-mtls-test-certificates.sh /tmp/ojp-odbc-mtls-certs
+export OJP_CLIENT_TLS_ENABLED=true
+export OJP_CLIENT_TLS_ROOTCERT=/tmp/ojp-odbc-mtls-certs/server-cert.pem
+export OJP_CLIENT_TLS_CERT=/tmp/ojp-odbc-mtls-certs/client-cert.pem
+export OJP_CLIENT_TLS_KEY=/tmp/ojp-odbc-mtls-certs/client-key.pem
+export OJP_TEST_TLS_UNTRUSTED_CERT=/tmp/ojp-odbc-mtls-certs/untrusted-client-cert.pem
+export OJP_TEST_TLS_UNTRUSTED_KEY=/tmp/ojp-odbc-mtls-certs/untrusted-client-key.pem
+```
+
+Start each Java 25 server with UTC and these additional JVM properties
+(test-store password: `ojp-test-only`; never reuse these credentials outside tests):
+
+```text
+-Dojp.server.tls.enabled=true
+-Dojp.server.tls.keystore.path=/tmp/ojp-odbc-mtls-certs/server-keystore.p12
+-Dojp.server.tls.keystore.******
+-Dojp.server.tls.keystore.type=PKCS12
+-Dojp.server.tls.truststore.path=/tmp/ojp-odbc-mtls-certs/server-truststore.p12
+-Dojp.server.tls.truststore.******
+-Dojp.server.tls.truststore.type=PKCS12
+-Dojp.server.tls.clientAuthRequired=true
+```
+
+The generated server certificate covers `localhost` and `127.0.0.1`.
+The L10 suites authenticate and query every endpoint, reject missing and
+untrusted client certificates, then run the combined failover, recovery,
+sticky-session, SQL-error and XA scenarios with the trusted identity.
+The shared MariaDB suite runs both MySQL and MariaDB CSV rows. Main CI enables
+mTLS for all PostgreSQL, MariaDB/MySQL and SQL Server suites, not just L10.
+Enabled L10 suites fail if TLS settings or negative-test credentials are missing.
+
+Then build and run the tests (omit L10 flags and TLS exports when deliberately
+running lower-level suites against plaintext servers):
 
 ```sh
 cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \

@@ -59,3 +59,16 @@ keytool -importcert -noprompt \
     -storetype PKCS12 \
     -keystore "$output_dir/client-truststore.p12" \
     -storepass "$store_password"
+
+# gRPC C++ consumes PEM credentials rather than Java PKCS12 stores.
+for identity in client untrusted-client; do
+    openssl pkcs12 \
+        -in "$output_dir/$identity-keystore.p12" \
+        -passin "pass:$store_password" -nocerts -nodes \
+        | openssl pkey -out "$output_dir/$identity-key.pem"
+done
+keytool -exportcert -rfc \
+    -alias ojp-untrusted-client \
+    -keystore "$output_dir/untrusted-client-keystore.p12" \
+    -storepass "$store_password" \
+    -file "$output_dir/untrusted-client-cert.pem"

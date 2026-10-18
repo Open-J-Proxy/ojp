@@ -155,12 +155,13 @@ Before the first Main CI image build:
    **Manage Actions access** with the read role. Private packages are supported;
    Main CI logs in using its read-only `GITHUB_TOKEN`, including on fork PRs.
 
-Main CI reads these mirrors using its read-only registry credentials and never
-falls back to ECR or Docker Hub for Alpine or Temurin. This prevents a cache miss
-from silently reintroducing upstream rate limits. If a mirror is missing or
-inaccessible, complete the setup above. If the upstream tags change in
+Main CI reads available mirrors using its read-only registry credentials. If
+either mirror tag is missing or inaccessible, Main CI falls back to Docker Hub
+so the first run can bootstrap before the refresh workflow has populated GHCR.
+Once the mirrors are available, builds use GHCR and avoid repeatedly pulling
+Alpine and Temurin from Docker Hub. If the upstream tags change in
 `ojp-server/Dockerfile`, update the mirror workflow to match and refresh the
-mirrors before testing.
+mirrors.
 Standalone Docker publishing and tests that use other database images are not
 changed by this cache.
 

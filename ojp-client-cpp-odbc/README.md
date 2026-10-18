@@ -10,10 +10,10 @@ communicates with the server over gRPC.
 | Database | Highest supported level |
 |---|---:|
 | H2 | **L9** |
-| PostgreSQL | **L10** |
-| SQL Server | **L10** |
-| MySQL | **L10** |
-| MariaDB | **L10** |
+| PostgreSQL | **L9** |
+| SQL Server | **L9** |
+| MySQL | **L9** |
+| MariaDB | **L9** |
 | Oracle | Not established |
 | DB2 | Not established |
 | CockroachDB | Not established |

@@ -40,7 +40,7 @@ The Go client now has a public single-endpoint L1 API and an opt-in H2 real-serv
 | L7: Multiple servers | Basic selection, health settings, channels, and health-string generation. | Tested balancing, health propagation, pool-key caching, and reconnect behavior. |
 | L8: Recovery | Backoff and redistribution helpers. | Complete failover/recovery flow and overload tests. Redistribution currently changes only local metrics. |
 | L9: XA transactions | Nine XA wrappers. | Session fields in requests, stable routing, `xaIsSameRM`, and XA integration tests. |
-| L10: Full operations | No combined Go suite found. | Combined data, routing, failure, and XA recovery tests. |
+| L10: Full operations + mTLS | No combined Go suite found. | Combined data, routing, failure, and XA recovery tests over mTLS, including valid, missing, and untrusted client-certificate cases. |
 
 Other important gaps:
 
@@ -248,17 +248,18 @@ Apply the matching checklist below to **each family increment** in the queue. �
 
 **Done:** That database passes L1–L9 with recovery evidence. Paired databases without XA evidence remain at their earlier level.
 
-### L10 — Full operations
+### L10 — Full operations + mTLS
 
 **Build**
 
 - [ ] Combine L1–L9 in a three-server setup: statements, pages, LOBs, local transactions, and XA.
 - [ ] Complete configuration, multiple-datasource, admission, and compatibility checks.
+- [ ] Add TLS channel configuration and verify mTLS authentication and rejection of missing or untrusted client certificates.
 - [ ] Publish repeatable test results and remaining limits.
 
 **Unit tests:** Protocol changes, missing optional fields, unsupported enums, concurrent cleanup, and public API behavior.
 
-**Integration tests:** Successive node failures/restarts during mixed work, prepared-XA recovery, health updates, and cleanup after partial streams. Run bounded concurrent load, deadlines/cancellation, overload, and slow/fast queries together. Check channel/goroutine/session leaks. Compare stored data with expected committed work; never count an unknown result as success. Test documented throttle modes and datasource overrides. Check older servers only where a supported compatibility policy and test setup exist.
+**Integration tests:** Successive node failures/restarts during mixed work, prepared-XA recovery, health updates, and cleanup after partial streams. Require client certificates on all tested OJP servers and verify valid authentication plus failure for missing or untrusted certificates. Run bounded concurrent load, deadlines/cancellation, overload, and slow/fast queries together. Check channel/goroutine/session leaks. Compare stored data with expected committed work; never count an unknown result as success. Test documented throttle modes and datasource overrides. Check older servers only where a supported compatibility policy and test setup exist.
 
 **Done:** That database passes L1–L10; earlier supported families still pass regression tests. Missing required cases block the claim.
 

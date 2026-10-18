@@ -3063,6 +3063,9 @@ jobs:
         run: |
           docker load --input "${{ runner.temp }}/ojp-server-image.tar"
           bash scripts/generate-jdbc-mtls-test-certificates.sh "$RUNNER_TEMP/ojp-mtls-certs"
+          chmod 755 "$RUNNER_TEMP/ojp-mtls-certs"
+          chmod 644 "$RUNNER_TEMP/ojp-mtls-certs/server-keystore.p12" \
+            "$RUNNER_TEMP/ojp-mtls-certs/server-truststore.p12"
 
       - name: Start two mTLS OJP servers
         run: |
@@ -3077,14 +3080,25 @@ jobs:
               port=10592
               metrics_port=9160
             fi
-            docker run --detach --rm --name "ojp-jdbc-mtls-server-$node" \
+            docker run --detach --name "ojp-jdbc-mtls-server-$node" \
               --network host \
               --volume "$RUNNER_TEMP/ojp-mtls-certs:/etc/ojp/mtls:ro" \
               --env JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.port=$port -Dojp.prometheus.port=$metrics_port -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=/etc/ojp/mtls/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=/etc/ojp/mtls/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true" \
               "$OJP_IMAGE"
-          done
-          for port in 10591 10592; do
-            timeout 120 bash -c "until nc -z localhost $port; do sleep 1; done"
+            for attempt in $(seq 1 120); do
+              if nc -z localhost "$port"; then
+                break
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' "ojp-jdbc-mtls-server-$node")" != true ]; then
+                docker logs "ojp-jdbc-mtls-server-$node"
+                exit 1
+              fi
+              sleep 1
+            done
+            if ! nc -z localhost "$port"; then
+              docker logs "ojp-jdbc-mtls-server-$node"
+              exit 1
+            fi
           done
 
       - name: Build JDBC driver
@@ -3152,7 +3166,7 @@ jobs:
         run: |
           for node in 1 2; do
             docker logs "ojp-jdbc-mtls-server-$node" > "$RUNNER_TEMP/ojp-jdbc-mtls-server-$node.log" 2>&1 || true
-            docker stop "ojp-jdbc-mtls-server-$node" || true
+            docker rm --force "ojp-jdbc-mtls-server-$node" || true
           done
           docker logs ojp-jdbc-mtls-postgres > "$RUNNER_TEMP/ojp-jdbc-mtls-postgres.log" 2>&1 || true
           docker stop ojp-jdbc-mtls-postgres || true

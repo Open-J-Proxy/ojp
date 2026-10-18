@@ -13,6 +13,7 @@ Thank you for your interest in contributing to OJP! We welcome contributions of 
 - [Linking Issues to Pull Requests](#linking-issues-to-pull-requests)
 - [Code Style and Conventions](#code-style-and-conventions)
 - [Testing Requirements](#testing-requirements)
+- [CI Container Images](#ci-container-images)
 - [Pull Request Process](#pull-request-process)
 - [Code Review Process](#code-review-process)
 - [Contributor Recognition](#contributor-recognition)
@@ -120,6 +121,49 @@ mvn clean install -DskipTests
 For detailed setup instructions, see [Source Code Developer Setup and Local Testing](https://github.com/Open-J-Proxy/ojp/blob/main/documents/code-contributions/setup_and_testing_ojp_source.md).
 
 ---
+
+## CI Container Images
+
+Main CI builds the OJP server container once per workflow run with Java 25 and
+shares it with Docker-based integration jobs using an `ojp-server-image` workflow
+artifact. Each consumer loads the same image with `docker load`; it does not
+rebuild the image or pull its base images. The artifact expires after one day.
+If it has expired, start a new workflow run instead of rerunning only failed jobs.
+Jobs that run the server directly as a JAR are unchanged.
+
+The image build uses the GitHub Actions BuildKit cache (`ojp-server-ci` scope)
+across runs. Cache misses still build from the current checkout. GitHub's normal
+branch and pull-request cache isolation applies; caches are an optimization, not
+a replacement for the per-run image artifact.
+
+### Base-image mirror setup (maintainers)
+
+The **Refresh CI base-image mirrors** workflow copies the upstream Alpine 3.21
+and Eclipse Temurin 25 JDK Alpine images, including their platform manifests,
+to `ghcr.io/<lowercase-owner>/<lowercase-repository>/ci-base/alpine:3.21` and
+`ghcr.io/<lowercase-owner>/<lowercase-repository>/ci-base/eclipse-temurin:25-jdk-alpine`.
+It runs weekly, on relevant changes on `main`, or manually on the default branch.
+Only this default-branch workflow receives `packages: write`; it does not check
+out or execute pull-request code.
+
+Before the first Main CI image build:
+
+1. Allow this repository's Actions token to publish GHCR packages, and run
+   **Refresh CI base-image mirrors** on the default branch.
+2. In each package's settings, grant this repository's Actions token read access.
+   If the package is not linked to this repository, add the repository under
+   **Manage Actions access** with the read role. Private packages are supported;
+   Main CI logs in using its read-only `GITHUB_TOKEN`, including on fork PRs.
+
+Main CI reads available mirrors using its read-only registry credentials. If
+either mirror tag is missing or inaccessible, Main CI falls back to Docker Hub
+so the first run can bootstrap before the refresh workflow has populated GHCR.
+Once the mirrors are available, builds use GHCR and avoid repeatedly pulling
+Alpine and Temurin from Docker Hub. If the upstream tags change in
+`ojp-server/Dockerfile`, update the mirror workflow to match and refresh the
+mirrors.
+Standalone Docker publishing and tests that use other database images are not
+changed by this cache.
 
 ## Development Workflow
 

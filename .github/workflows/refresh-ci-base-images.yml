@@ -1,0 +1,46 @@
+name: Refresh CI base-image mirrors
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-ci-base-images.yml'
+      - 'ojp-server/Dockerfile'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-ci-base-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror Alpine and Temurin to GHCR
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy upstream images and all platform manifests
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          MIRROR="ghcr.io/${REPOSITORY,,}/ci-base"
+          docker buildx imagetools create \
+            --tag "$MIRROR/alpine:3.21" \
+            docker.io/library/alpine:3.21
+          docker buildx imagetools create \
+            --tag "$MIRROR/eclipse-temurin:25-jdk-alpine" \
+            docker.io/library/eclipse-temurin:25-jdk-alpine

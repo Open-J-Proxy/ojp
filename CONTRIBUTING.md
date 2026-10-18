@@ -150,17 +150,17 @@ Before the first Main CI image build:
 
 1. Allow this repository's Actions token to publish GHCR packages, and run
    **Refresh CI base-image mirrors** on the default branch.
-2. In the organization's package settings, make both new container packages
-   **public**. New GHCR packages are private by default; public visibility is
-   required for anonymous pulls, including fork pull requests.
-3. If the packages already exist, grant this repository Actions write access to
-   them. Confirm anonymous pulls work before rerunning Main CI.
+2. In each package's settings, grant this repository's Actions token read access.
+   If the package is not linked to this repository, add the repository under
+   **Manage Actions access** with the read role. Private packages are supported;
+   Main CI logs in using its read-only `GITHUB_TOKEN`, including on fork PRs.
 
-Main CI reads these mirrors without registry credentials and never falls back to
-ECR or Docker Hub for Alpine or Temurin. This prevents a cache miss from silently
-reintroducing upstream rate limits. If a mirror is missing or inaccessible,
-complete the setup above. If the upstream tags change in `ojp-server/Dockerfile`,
-update the mirror workflow to match and refresh the mirrors before testing.
+Main CI reads these mirrors using its read-only registry credentials and never
+falls back to ECR or Docker Hub for Alpine or Temurin. This prevents a cache miss
+from silently reintroducing upstream rate limits. If a mirror is missing or
+inaccessible, complete the setup above. If the upstream tags change in
+`ojp-server/Dockerfile`, update the mirror workflow to match and refresh the
+mirrors before testing.
 Standalone Docker publishing and tests that use other database images are not
 changed by this cache.
 

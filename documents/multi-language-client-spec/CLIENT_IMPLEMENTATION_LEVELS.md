@@ -22,7 +22,7 @@ Each level includes all lower levels.
 | **L7** | Multinode Operations | Load balancing (least-connections and round-robin), health checks, cluster health propagation, `connHash` cache + reconnect behavior. |
 | **L8** | Resilience + Recovery Operations | Stateless failover retry, unhealthy/healthy transitions, recovered-node reuse and redistribution, pool-exhaustion safety. |
 | **L9** | XA Transactions | XA RPC lifecycle (`xaStart`...`xaIsSameRM` as implemented), XA stickiness/error behavior, XA data source integration. |
-| **L10** | Full Operational Conformance | Combines data-path, operational-path, and distributed-transaction behavior under multinode scenarios, including recovery paths. |
+| **L10** | Full Operational + mTLS Conformance | Combines L1–L9 behavior under multinode scenarios, including recovery paths, and validates mutual TLS authentication between client and server. |
 
 ---
 
@@ -39,7 +39,7 @@ Each level includes all lower levels.
 | **L7** | Endpoint selection, `clusterHealth` propagation, health-probe behavior, `NOT_FOUND` reconnect path |
 | **L8** | Failover/recovery flow, redistribution behavior, admission/pool exhaustion safeguards |
 | **L9** | `xaStart`, `xaEnd`, `xaPrepare`, `xaCommit`, `xaRollback`, `xaRecover`, `xaForget`, `xaSetTransactionTimeout`, `xaGetTransactionTimeout`, `xaIsSameRM` |
-| **L10** | Combined validation of L1–L9 in multinode operational runs |
+| **L10** | Combined L1–L9 multinode validation plus mutual TLS (mTLS) |
 
 ---
 
@@ -50,13 +50,15 @@ This table describes what is currently demonstrated by tests in `ojp-jdbc-driver
 | Database | Highest achieved level (current tests) | Evidence highlights |
 |---|---:|---|
 | **H2** | **L8** | CRUD, type coverage, transaction/savepoint, session affinity, and non-XA operational behavior (`H2*` integration suites + multinode client tests). |
-| **PostgreSQL** | **L10** | Full non-XA + XA coverage (`PostgresXAIntegrationTest`), session affinity, slow-query/operational tests, plus multinode/XA operational suites. |
+| **PostgreSQL** | **L9** | Full non-XA + XA coverage (`PostgresXAIntegrationTest`), session affinity, slow-query/operational tests, and multinode/XA suites. mTLS is configured in the Java client but has no JDBC integration test, so L10 is not test-proven. |
 | **MySQL** | **L8** | CRUD/types/session-affinity and operational multinode behavior are covered; no dedicated MySQL XA suite found. |
 | **MariaDB** | **L6** | Covered mainly through shared MySQL/MariaDB suites and generic CRUD paths; dedicated MariaDB operational/XA depth is limited. |
 | **Oracle** | **L9** | Strong CRUD/types/LOB/transaction coverage plus Oracle XA (`OracleXAIntegrationTest`); full multinode-XA conformance not database-dedicated. |
 | **SQL Server** | **L9** | Broad SQL Server suites including metadata/result-set/LOB/session-affinity and XA (`SQLServerXAIntegrationTest`). |
 | **DB2** | **L8** | Strong CRUD/types/LOB/transaction/session-affinity coverage; no dedicated DB2 XA integration suite found. |
 | **CockroachDB** | **L8** | CRUD/types/LOB/transaction and large result-set coverage; no dedicated XA coverage found. |
+
+The Java JDBC client has mTLS channel configuration, but no integration test under `ojp-jdbc-driver/src/test/java` currently validates a client-certificate handshake. L10 therefore remains unproven for every Java database until its required mTLS integration coverage passes.
 
 The H2 Java reference client now has an XA lifecycle integration suite in
 `ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/h2/H2XAIntegrationTest.java`.
@@ -69,9 +71,9 @@ These entries describe the levels targeted by the language client modules; they 
 | Client | Database | Target level | Evidence |
 |---|---|---:|---|
 | C++ ODBC (`ojp-client-cpp-odbc`) | H2 | **L9** | H2 L1-L9 integration suites passed, including XA lifecycle and resource-manager integration. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server L1-L10 integration suites passed; `sqlserver_l10_integration_test.cpp` combines XA lifecycle/affinity with multinode failover and recovered-node reuse. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L10** | `postgresql_l10_integration_test.cpp` combines PostgreSQL XA behavior with multinode failover, XA affinity failure, SQL-error classification, and recovered-node reuse; L1-L9 suites cover the individual capabilities. |
-| C++ ODBC (`ojp-client-cpp-odbc`) | MariaDB | **L10** | MariaDB L1-L9 suites cover database operations, multinode behavior, and XA lifecycle/recovery; `mariadb_l10_integration_test.cpp` combines XA affinity with multinode failover, SQL-error classification, and recovered-node reuse. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L9** | SQL Server suites cover XA lifecycle/affinity and multinode failover/recovery. The client currently uses plaintext gRPC, so it does not meet the new L10 mTLS requirement. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L9** | Existing L1-L9 suites cover the individual capabilities; the combined L10 suite is registered in CI, but the client currently uses plaintext gRPC and does not meet the mTLS requirement. |
+| C++ ODBC (`ojp-client-cpp-odbc`) | MariaDB | **L9** | MariaDB suites cover database operations, multinode behavior, and XA lifecycle/recovery. The client currently uses plaintext gRPC, so it does not meet the new L10 mTLS requirement. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L3** | L1-L3 are covered by `client/h2_l1_integration_test.go`, `client/h2_l2_integration_test.go`, `client/h2_l3_integration_test.go`, and `client/h2_l3_fetch_integration_test.go`. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |
@@ -92,9 +94,9 @@ These levels are based on each language client's own integration tests and are i
 | Client | Database | Highest achieved level | Evidence |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
-| **C++ ODBC** | SQL Server | **L10** | L1-L10 real-server integration suites passed, including XA lifecycle/recovery and combined multinode/XA coverage in `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`. |
+| **C++ ODBC** | SQL Server | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle/recovery. The combined L10 suite does not validate mTLS. |
 | **C++ ODBC** | PostgreSQL | **L8** | L1-L8 real-server suites have existing coverage. PostgreSQL L9 and L10 integration tests are registered in CI. |
-| **C++ ODBC** | MariaDB | **L10** | MariaDB L1-L9 suites cover database operations, multinode behavior, and XA lifecycle/recovery; `ojp-client-cpp-odbc/tests/mariadb_l10_integration_test.cpp` combines XA affinity with multinode failover, SQL-error classification, and recovered-node reuse. |
+| **C++ ODBC** | MariaDB | **L9** | L1-L9 suites cover database operations, multinode behavior, and XA lifecycle/recovery. The combined L10 suite does not validate mTLS. |
 | **Go** | H2 | **L3** | L1-L3 real-server integration coverage: `ojp-client-go-database-sql/client/h2_l1_integration_test.go`, `h2_l2_integration_test.go`, `h2_l3_integration_test.go`, and `h2_l3_fetch_integration_test.go`. |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
@@ -123,7 +125,7 @@ The Ruby client targets L1 basic connectivity and CRUD. It does not yet provide 
 1. Start by targeting **L1 → L4** for first production viability.
 2. Add **L5/L6** before claiming broad compatibility.
 3. Add **L7/L8** before claiming multinode production readiness.
-4. Add **L9/L10** when distributed transactions and full operational resilience are required.
+4. Add **L9** for distributed transactions; add **L10** for mTLS plus full operational resilience.
 
 When publishing a new language client, report:
 - target level,
@@ -138,9 +140,9 @@ The following table records the implemented target level and its real-server int
 | Client | Database | Implemented target level | Integration suite |
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp` covers XA lifecycle and recovery; all H2 L1-L9 integration suites passed. |
-| **C++ ODBC** | SQL Server | **L10** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp` combines XA commit/rollback/recovery, non-XA multinode failover, SQL-error classification, XA affinity failure, and recovered-node reuse with the SQL Server L1-L9 suites. |
-| **C++ ODBC** | PostgreSQL | **L10** | `ojp-client-cpp-odbc/tests/postgresql_l10_integration_test.cpp` combines XA lifecycle/recovery and affinity behavior with non-XA failover, SQL-error classification, and recovered-node reuse. A passing real-server CI run is required before reporting L10 as achieved. |
-| **C++ ODBC** | MariaDB | **L10** | L7-L8 cover multinode balancing, failover, recovery, redistribution, SQL-error classification, and pool-exhaustion safety; L9 covers XA lifecycle/recovery; `ojp-client-cpp-odbc/tests/mariadb_l10_integration_test.cpp` combines XA affinity with non-XA failover and recovered-node reuse. |
+| **C++ ODBC** | SQL Server | **L9** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp` covers combined operational/XA behavior, but the client currently lacks mTLS and therefore does not implement L10. |
+| **C++ ODBC** | PostgreSQL | **L9** | `ojp-client-cpp-odbc/tests/postgresql_l10_integration_test.cpp` covers combined operational/XA behavior, but the client currently lacks mTLS and therefore does not implement L10. |
+| **C++ ODBC** | MariaDB | **L9** | `ojp-client-cpp-odbc/tests/mariadb_l10_integration_test.cpp` covers combined operational/XA behavior, but the client currently lacks mTLS and therefore does not implement L10. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET (ADO.NET)** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |
@@ -179,12 +181,12 @@ Use this checklist to certify the **tested-achieved** level of a client. A level
 | **L7 — Multinode operations** | With two or more servers, verify configured endpoint selection/balancing and that new sessions can use healthy nodes. Verify health probing detects down/up nodes, cluster-health information is propagated, and cached pool identity is reused; simulate a stale/missing pool (`NOT_FOUND`) and verify reconnect plus one safe retry only when no sticky session exists. | JDBC `LoadAwareServerSelectionTest`, `MultinodeConnectionManagerClusterHealthTest`, `ConnectRpcSkipOptimisationTest`; ODBC `tests/h2_l7_integration_test.cpp` and database-specific `*_l7_integration_test.cpp` |
 | **L8 — Resilience + recovery** | Stop one node and verify eligible stateless operations retry on a healthy node within configured limits; restart it and verify health recovery, successful reuse, and redistribution. Confirm sticky-session loss is surfaced, SQL/database errors do not trigger failover, pool exhaustion is surfaced without retry, and failures do not corrupt subsequent healthy operations. | JDBC `MultinodeFailoverTest`, `MultinodeRecoveryTest`, `MultinodeConnectionManagerErrorHandlingTest`; ODBC `tests/h2_l8_integration_test.cpp` and database-specific `*_l8_integration_test.cpp` |
 | **L9 — XA** | Exercise XA start/end, one- and two-phase commit, rollback, prepare/recovery scan, forget where supported, transaction timeout behavior, and resource-manager identity (`isSameRM` or equivalent). Verify XA session affinity, XA-specific errors, and that operations are not retried unsafely; include XA data-source/host API integration. | JDBC `H2XAIntegrationTest`, `*XAIntegrationTest`; ODBC `tests/h2_l9_integration_test.cpp` and database-specific `*_l9_integration_test.cpp` |
-| **L10 — Combined multinode conformance** | Run a combined multi-server scenario that exercises the claimed L1–L9 behavior together, not just separate feature tests: non-XA failover and recovered-node reuse; sticky-session and XA affinity/failure behavior; SQL-error versus transport-error classification; and correct XA commit/rollback/recovery without unsafe rerouting or retries. Verify data outcomes after each recovery/failure transition. | JDBC component evidence (separate suites): `org/openjproxy/grpc/client/MultinodeIntegrationTest` (concurrent SQL during server kill/restart) and `MultinodeXAIntegrationTest` (XA multinode run during server kill/restart), plus database-specific XA lifecycle coverage such as `org/openjproxy/jdbc/postgres/PostgresXAIntegrationTest`; ODBC combined suites: `tests/postgresql_l10_integration_test.cpp`, `tests/sqlserver_l10_integration_test.cpp`, `tests/mariadb_l10_integration_test.cpp` |
+| **L10 — Combined multinode + mTLS conformance** | Run a combined multi-server scenario that exercises L1–L9 behavior: non-XA failover and recovered-node reuse; sticky-session and XA affinity/failure behavior; SQL-error versus transport-error classification; and correct XA commit/rollback/recovery without unsafe rerouting or retries. All tested endpoints must require trusted client certificates. Verify successful client-certificate authentication through the public client API, and that connections fail when the client certificate is absent or untrusted; verify data outcomes after each recovery/failure transition. | Existing JDBC evidence covers multinode and XA separately (`org/openjproxy/grpc/client/MultinodeIntegrationTest`, `MultinodeXAIntegrationTest`, and database XA suites) but no JDBC mTLS integration test exists. ODBC combined suites cover operational/XA behavior but currently use plaintext gRPC. |
 
 Oracle PL/SQL `RETURNING ... INTO` binds output parameters and is not a result-set form; it is outside this L2 capability and requires callable-statement output-parameter support.
 
-These are minimum certification scenarios, not a replacement for database-specific compatibility tests. Add cases for any advertised client API, protocol feature, or database-specific behavior not exercised by this checklist. In particular, L10 is an operational combination claim and requires a passing real multi-server run for each database reported at L10.
+These are minimum certification scenarios, not a replacement for database-specific compatibility tests. Add cases for any advertised client API, protocol feature, or database-specific behavior not exercised by this checklist. L10 requires a passing real multi-server run with mTLS for each database reported at L10.
 
 ### Interpreting reference-client evidence
 
-The JDBC and C++ ODBC paths use the same level boundaries but organize tests differently. JDBC has broad database-specific API suites and separate `org/openjproxy/grpc/client` operational tests; `MultinodeIntegrationTest` and `MultinodeXAIntegrationTest` provide JDBC examples for the non-XA and XA portions of L10, respectively, rather than one combined L10 test. ODBC provides a useful model of explicitly numbered, database-specific L2–L10 integration suites, including combined L10 tests. Use these as examples of evidence, not as a claim that the candidate client has passed them. Only a passing run of the candidate client’s own required scenarios counts toward its certification.
+The JDBC and C++ ODBC paths organize tests differently. JDBC has broad database-specific API suites and separate `org/openjproxy/grpc/client` operational tests; `MultinodeIntegrationTest` and `MultinodeXAIntegrationTest` provide examples of the non-XA and XA portions, but neither validates mTLS. ODBC's numbered suites cover database-specific L2–L10 operational behavior, but its channels currently use plaintext. Use these as examples of partial evidence, not as a claim that either client has achieved L10. Only a passing run of the candidate client’s own required scenarios counts toward its certification.

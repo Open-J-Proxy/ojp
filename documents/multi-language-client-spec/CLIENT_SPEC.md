@@ -1232,8 +1232,13 @@ analytics.ojp.health.check.interval=10000
 | `ojp.multinode.retry.attempts` | `3` | Max failover retry attempts |
 | `ojp.multinode.retry.delay` | `100` (ms) | Delay between retry attempts |
 | `ojp.datasource.name` | `"default"` | Active datasource name (sent to the server) |
-| `ojp.grpc.tls.enabled` | `false` | Enable TLS on gRPC channels |
-| `ojp.grpc.tls.cert.path` | — | Path to client certificate for mTLS |
+| `ojp.client.tls.enabled` | `false` | Enable TLS on gRPC channels in the Java reference client |
+| `ojp.client.tls.keystore.path` | — | Client certificate and private-key keystore; enables mTLS when TLS is enabled |
+| `ojp.client.tls.keystore.password` | — | Client keystore password |
+| `ojp.client.tls.keystore.type` | `JKS` | Client keystore type |
+| `ojp.client.tls.truststore.path` | JVM default | Truststore used to verify the server certificate |
+| `ojp.client.tls.truststore.password` | — | Truststore password |
+| `ojp.client.tls.truststore.type` | `JKS` | Truststore type |
 | `ojp.jdbc.clientThrottle.mode` | `reactive` | Client throttle mode: `off`, `proactive`, `reactive`, or `combined` (see §7.14) |
 
 **Duration format** — values support: no suffix = milliseconds; `ms` = milliseconds; `s` = seconds; `m` = minutes.
@@ -1282,14 +1287,14 @@ ojp.cache.queries.2.invalidateOn=users
 
 **Plaintext (default):** Create a plaintext gRPC channel targeting `dns:///host:port`. Suitable for internal networks or local development.
 
-**TLS:** When `ojp.grpc.tls.enabled = true`, create a TLS-secured channel. Use the platform's default trust store or a custom CA certificate. Support mutual TLS (mTLS) when `ojp.grpc.tls.cert.path` is set. Certificate paths and key material must be loaded from configurable filesystem paths; do not hard-code them.
+**TLS:** The Java reference client enables TLS with `ojp.client.tls.enabled=true`. It verifies the server using the JVM default truststore or the configured `ojp.client.tls.truststore.*` properties. For mTLS, also configure `ojp.client.tls.keystore.path` and its password/type with a keystore containing the client certificate and private key. The server must enable TLS and require trusted client certificates. Other clients may expose equivalent settings through their idiomatic configuration API.
 
 **Credential handling:** Passwords must never be logged or included in exception messages. Connection keys used for cache lookups (§4.1) may include the password as a cache key only — they must not be serialised or persisted.
 
 > **Reference implementation:**
 > - `ojp-grpc-commons` — [`GrpcChannelFactory.createChannel(host, port)`](../../ojp-grpc-commons/src/main/java/org/openjproxy/grpc/GrpcChannelFactory.java): creates a plaintext `ManagedChannel`; `createSecureChannel(host, port, size, tlsConfig)` builds the TLS-secured variant.
 > - `ojp-grpc-commons` — [`GrpcClientConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/GrpcClientConfig.java): loaded from `ojp.properties`; exposes `getTlsConfig()` and `getMaxInboundMessageSize()`.
-> - `ojp-grpc-commons` — [`TlsConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/TlsConfig.java): holds `enabled`, `certPath`, `keyPath`, `caPath`, and `clientAuth` flags.
+> - `ojp-grpc-commons` — [`TlsConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/TlsConfig.java): holds the TLS enabled flag and client keystore/truststore paths, passwords, and types.
 
 ---
 
@@ -1644,7 +1649,7 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | L7 | Multinode load balancing + health + cluster sync |
 | L8 | Failover/recovery/redistribution operational resilience |
 | L9 | XA transaction support |
-| L10 | Full operational conformance in multinode scenarios |
+| L10 | Full operational and mTLS conformance, including multinode scenarios |
 
 ### Current reference-client status
 

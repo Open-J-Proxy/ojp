@@ -570,14 +570,14 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | **L7** | Multinode balancing, health checking, cluster health propagation, `connHash` cache/reconnect |
 | **L8** | Failover/recovery/redistribution operational behavior |
 | **L9** | XA RPC lifecycle and XA routing/error semantics |
-| **L10** | Full conformance of L1–L9 under multinode operational scenarios |
+| **L10** | Full L1–L9 multinode conformance plus client/server mutual TLS (mTLS) |
 
 ### 12.2 Current reference-client achieved level by database
 
 | Database | Achieved level |
 |---|---:|
 | H2 | L8 |
-| PostgreSQL | L10 |
+| PostgreSQL | L9 |
 | MySQL | L8 |
 | MariaDB | L6 |
 | Oracle | L9 |
@@ -595,4 +595,4 @@ The H2 Java reference client now has an XA lifecycle integration suite in
 3. Missing capabilities MUST be declared as explicit level gaps (for example: `L9 missing`).
 4. Operational level claims (L7+) SHOULD cite multinode protocol tests and database-specific evidence separately.
 5. An achieved level MUST be supported by passing candidate-client integration tests for every required scenario at that level and all lower levels, against each database reported at that level. The required scenarios and minimum coverage are defined in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level).
-6. A skipped/disabled suite, unit test alone, or another client’s passing suite MUST NOT count as candidate-client certification. L7–L10 evidence MUST include a multi-server integration run; L10 MUST exercise combined operational and XA behavior.
+6. A skipped/disabled suite, unit test alone, or another client’s passing suite MUST NOT count as candidate-client certification. L7–L10 evidence MUST include a multi-server integration run; L10 MUST exercise combined operational and XA behavior over mTLS, including successful authentication and rejection of missing or untrusted client certificates.

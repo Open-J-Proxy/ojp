@@ -14,6 +14,9 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -86,10 +89,25 @@ struct EnvironmentHandle final : HandleBase {
     EnvironmentHandle() : HandleBase(SQL_HANDLE_ENV) {}
 };
 
+struct TlsConfig {
+    bool enabled = false;
+    std::string root_cert;
+    std::string cert;
+    std::string key;
+    std::string identity;
+    std::shared_ptr<grpc::ChannelCredentials> credentials;
+};
+
+struct StoredConnectionDetails {
+    ConnectionDetails details;
+    std::shared_ptr<TlsConfig> tls;
+};
+
 struct ConnectionHandle final : HandleBase {
     ConnectionHandle() : HandleBase(SQL_HANDLE_DBC) {}
 
     std::string endpoint;
+    std::shared_ptr<TlsConfig> tls;
     std::vector<std::string> endpoints;
     std::string url;
     std::string user;
@@ -121,6 +139,7 @@ struct EndpointRuntime {
     explicit EndpointRuntime(std::string address_value) : address(std::move(address_value)) {}
 
     std::string address;
+    std::shared_ptr<TlsConfig> tls;
     std::shared_ptr<grpc::Channel> channel;
     std::shared_ptr<StatementStub> stub;
     std::atomic<bool> healthy{true};
@@ -132,8 +151,9 @@ struct ClientRuntime {
     std::mutex mutex;
     std::map<std::string, std::shared_ptr<EndpointRuntime>> endpoints;
     std::map<std::string, std::string> conn_hash_by_key;
-    std::map<std::string, ConnectionDetails> details_by_conn_hash;
-    std::map<std::string, ConnectionDetails> xa_details_by_conn_hash;
+    std::map<std::string, StoredConnectionDetails> details_by_conn_hash;
+    std::map<std::string, StoredConnectionDetails> xa_details_by_conn_hash;
+    std::map<std::string, std::shared_ptr<TlsConfig>> tls_configs;
     std::map<std::string, std::string> cluster_health_by_endpoints;
     std::atomic<std::uint64_t> round_robin_counter{0};
     std::atomic<bool> stop_health_checks{false};
@@ -376,17 +396,20 @@ ClientRuntime& client_runtime() {
     return runtime;
 }
 
-std::shared_ptr<EndpointRuntime> endpoint_runtime(const std::string& address) {
+std::shared_ptr<EndpointRuntime> endpoint_runtime(
+        const std::string& address, const std::shared_ptr<TlsConfig>& tls) {
     ClientRuntime& runtime = client_runtime();
     std::lock_guard<std::mutex> lock(runtime.mutex);
-    auto endpoint = runtime.endpoints.find(address);
+    const std::string cache_key = tls->identity + "|" + address;
+    auto endpoint = runtime.endpoints.find(cache_key);
     if (endpoint != runtime.endpoints.end()) {
         return endpoint->second;
     }
     auto state = std::make_shared<EndpointRuntime>(address);
-    state->channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+    state->tls = tls;
+    state->channel = grpc::CreateChannel(address, tls->credentials);
     state->stub = std::shared_ptr<StatementStub>(StatementService::NewStub(state->channel).release());
-    runtime.endpoints.emplace(address, state);
+    runtime.endpoints.emplace(cache_key, state);
     return state;
 }
 
@@ -424,7 +447,7 @@ bool parse_endpoint_list(std::string value, std::vector<std::string>* endpoints)
 }
 
 template <typename Endpoints>
-std::string cluster_health(const Endpoints& endpoints) {
+std::string cluster_health(const Endpoints& endpoints, const std::shared_ptr<TlsConfig>& tls) {
     std::ostringstream health;
     bool first = true;
     for (const auto& address : endpoints) {
@@ -432,14 +455,114 @@ std::string cluster_health(const Endpoints& endpoints) {
             health << ';';
         }
         first = false;
-        health << address << (endpoint_runtime(address)->healthy.load() ? "(UP)" : "(DOWN)");
+        health << address << (endpoint_runtime(address, tls)->healthy.load() ? "(UP)" : "(DOWN)");
     }
     return health.str();
 }
 
 std::string connection_cache_key(const ConnectionHandle* connection) {
-    return connection->url + "|" + connection->user + "|" + connection->password + "|" +
-           connection->datasource_name;
+    std::string key = connection->tls->identity + "|";
+    for (const auto& value : {connection->url, connection->user, connection->password,
+                              connection->datasource_name}) {
+        key += std::to_string(value.size()) + ":" + value;
+    }
+    for (const auto& address : connection->endpoints) {
+        key += std::to_string(address.size()) + ":" + address;
+    }
+    return key;
+}
+
+std::string session_cache_key(const ConnectionHandle* connection, const std::string& hash) {
+    return connection->tls->identity + "|" + hash;
+}
+
+bool configure_tls(const ParsedConnectionString& parsed, std::shared_ptr<TlsConfig>* result) {
+    auto option = [&parsed](const char* suffix, std::string* value) {
+        const auto entry = parsed.values.find(std::string("OJP.CLIENT.TLS.") + suffix);
+        if (entry != parsed.values.end()) {
+            *value = entry->second;
+            return true;
+        }
+        const auto* environment = std::getenv((std::string("OJP_CLIENT_TLS_") + suffix).c_str());
+        if (environment != nullptr) {
+            *value = environment;
+            return true;
+        }
+        return false;
+    };
+    auto config = std::make_shared<TlsConfig>();
+    std::string enabled;
+    const bool explicit_enabled = option("ENABLED", &enabled);
+    if (explicit_enabled) {
+        std::transform(enabled.begin(), enabled.end(), enabled.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        enabled = trim(enabled);
+        if (enabled != "true" && enabled != "false") {
+            return false;
+        }
+        config->enabled = enabled == "true";
+    }
+    std::string root_path, cert_path, key_path;
+    const bool root_set = option("ROOTCERT", &root_path);
+    const bool cert_set = option("CERT", &cert_path);
+    const bool key_set = option("KEY", &key_path);
+    // Credentials never implicitly enable TLS or cause a plaintext fallback.
+    if ((!config->enabled && (root_set || cert_set || key_set)) ||
+        cert_path.empty() != key_path.empty()) {
+        return false;
+    }
+    auto read = [](bool supplied, const std::string& path, std::string* material) {
+        if (!supplied) {
+            return true;
+        }
+        std::error_code error;
+        if (path.empty() || !std::filesystem::is_regular_file(path, error)) {
+            return false;
+        }
+        std::ifstream file(path, std::ios::binary);
+        std::ostringstream contents;
+        contents << file.rdbuf();
+        if (!file || !contents ||
+            contents.str().find_first_not_of(" \t\r\n") == std::string::npos) {
+            return false;
+        }
+        *material = contents.str();
+        return true;
+    };
+    if (!read(!root_path.empty(), root_path, &config->root_cert) ||
+        !read(!cert_path.empty(), cert_path, &config->cert) ||
+        !read(!key_path.empty(), key_path, &config->key)) {
+        return false;
+    }
+    std::string material_key = config->enabled ? "tls" : "plaintext";
+    for (const auto& value : {root_path, cert_path, key_path,
+                              config->root_cert, config->cert, config->key}) {
+        material_key += std::to_string(value.size()) + ":" + value;
+    }
+    auto& runtime = client_runtime();
+    std::lock_guard<std::mutex> lock(runtime.mutex);
+    const auto existing = runtime.tls_configs.find(material_key);
+    if (existing != runtime.tls_configs.end()) {
+        *result = existing->second;
+        return true;
+    }
+    config->identity = std::to_string(runtime.tls_configs.size());
+    if (config->enabled) {
+        grpc::SslCredentialsOptions ssl;
+        ssl.pem_root_certs = config->root_cert;
+        ssl.pem_cert_chain = config->cert;
+        ssl.pem_private_key = config->key;
+        config->credentials = grpc::SslCredentials(ssl);
+    } else {
+        config->credentials = grpc::InsecureChannelCredentials();
+    }
+    if (!config->credentials) {
+        return false;
+    }
+    runtime.tls_configs.emplace(std::move(material_key), config);
+    *result = std::move(config);
+    return true;
 }
 
 bool environment_boolean(const char* name, bool fallback) {
@@ -505,13 +628,14 @@ int health_check_interval_ms() {
 }
 
 std::string choose_endpoint(const std::vector<std::string>& endpoints, bool load_aware,
+                            const std::shared_ptr<TlsConfig>& tls,
                             const std::set<std::string>& excluded = {}) {
     std::vector<std::shared_ptr<EndpointRuntime>> healthy;
     for (const auto& address : endpoints) {
         if (excluded.find(address) != excluded.end()) {
             continue;
         }
-        auto state = endpoint_runtime(address);
+        auto state = endpoint_runtime(address, tls);
         if (state->healthy.load()) {
             healthy.push_back(std::move(state));
         }
@@ -538,8 +662,8 @@ std::string choose_endpoint(const std::vector<std::string>& endpoints, bool load
     return least_loaded[static_cast<std::size_t>(index)]->address;
 }
 
-void mark_endpoint_unhealthy(const std::string& address) {
-    auto state = endpoint_runtime(address);
+void mark_endpoint_unhealthy(const std::string& address, const std::shared_ptr<TlsConfig>& tls) {
+    auto state = endpoint_runtime(address, tls);
     state->healthy.store(false);
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -603,7 +727,7 @@ void ensure_health_checker() {
                     break;
                 }
                 std::vector<std::shared_ptr<EndpointRuntime>> endpoints;
-                std::vector<ConnectionDetails> details;
+                std::vector<StoredConnectionDetails> details;
                 {
                     std::lock_guard<std::mutex> lock(runtime.mutex);
                     for (const auto& entry : runtime.endpoints) {
@@ -624,7 +748,7 @@ void ensure_health_checker() {
                 for (const auto& endpoint : endpoints) {
                     if (endpoint->healthy.load()) {
                         if (!probe_endpoint(endpoint)) {
-                            mark_endpoint_unhealthy(endpoint->address);
+                            mark_endpoint_unhealthy(endpoint->address, endpoint->tls);
                         }
                         continue;
                     }
@@ -636,13 +760,15 @@ void ensure_health_checker() {
                         continue;
                     }
                     bool pools_ready = true;
-                    for (const auto& stored_details : details) {
-                        if (!details_include_endpoint(stored_details, endpoint->address)) {
+                    for (const auto& stored : details) {
+                        const auto& stored_details = stored.details;
+                        if (stored.tls != endpoint->tls ||
+                            !details_include_endpoint(stored_details, endpoint->address)) {
                             continue;
                         }
                         ConnectionDetails recovery_details(stored_details);
                         recovery_details.set_clusterhealth(
-                            cluster_health(stored_details.serverendpoints()));
+                            cluster_health(stored_details.serverendpoints(), stored.tls));
                         grpc::ClientContext recovery_context;
                         recovery_context.set_deadline(
                             std::chrono::system_clock::now() + std::chrono::seconds(30));
@@ -660,9 +786,12 @@ void ensure_health_checker() {
                         endpoint->last_failure_ms.store(now);
                     }
                 }
-                for (const auto& stored_details : details) {
-                    const std::string health = cluster_health(stored_details.serverendpoints());
+                for (const auto& stored : details) {
+                    const auto& stored_details = stored.details;
+                    const std::string health = cluster_health(
+                        stored_details.serverendpoints(), stored.tls);
                     const std::string endpoints_key =
+                        stored.tls->identity + "|" +
                         endpoint_set_key(stored_details.serverendpoints());
                     const auto previous = runtime.cluster_health_by_endpoints.find(endpoints_key);
                     const bool health_changed =
@@ -675,7 +804,7 @@ void ensure_health_checker() {
                     ConnectionDetails updated(stored_details);
                     updated.set_clusterhealth(health);
                     for (const auto& endpoint : endpoints) {
-                        if (!endpoint->healthy.load() ||
+                        if (stored.tls != endpoint->tls || !endpoint->healthy.load() ||
                             !details_include_endpoint(stored_details, endpoint->address)) {
                             continue;
                         }
@@ -909,7 +1038,7 @@ StatementService::Stub* route_session_rpc(ConnectionHandle* connection) {
     }
     auto stub = connection->affinity_stubs.find(target);
     if (stub == connection->affinity_stubs.end()) {
-        auto endpoint = endpoint_runtime(target);
+        auto endpoint = endpoint_runtime(target, connection->tls);
         connection->affinity_channels.emplace(target, endpoint->channel);
         stub = connection->affinity_stubs.emplace(target, endpoint->stub).first;
     }
@@ -920,7 +1049,8 @@ void note_transport_failure(ConnectionHandle* connection, const grpc::Status& st
                             const grpc::ClientContext& context) {
     if (is_transport_failure(status, context)) {
         mark_endpoint_unhealthy(connection->last_rpc_endpoint.empty()
-                                    ? connection->endpoint : connection->last_rpc_endpoint);
+                                    ? connection->endpoint : connection->last_rpc_endpoint,
+                                connection->tls);
     }
 }
 
@@ -930,19 +1060,20 @@ bool failover_stateless_connection(ConnectionHandle* connection,
         return false;
     }
     const std::string endpoint =
-        choose_endpoint(connection->endpoints, connection->load_aware, attempted_endpoints);
+        choose_endpoint(connection->endpoints, connection->load_aware, connection->tls,
+                        attempted_endpoints);
     if (endpoint.empty()) {
         return false;
     }
     if (connection->endpoint != endpoint) {
-        endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
-        endpoint_runtime(endpoint)->active_connections.fetch_add(1);
+        endpoint_runtime(connection->endpoint, connection->tls)->active_connections.fetch_sub(1);
+        endpoint_runtime(endpoint, connection->tls)->active_connections.fetch_add(1);
     }
     connection->endpoint = endpoint;
-    const auto selected_endpoint = endpoint_runtime(endpoint);
+    const auto selected_endpoint = endpoint_runtime(endpoint, connection->tls);
     connection->channel = selected_endpoint->channel;
     connection->stub = selected_endpoint->stub;
-    const std::string health = cluster_health(connection->endpoints);
+    const std::string health = cluster_health(connection->endpoints, connection->tls);
     connection->session.set_targetserver(endpoint);
     connection->session.set_clusterhealth(health);
     connection->connection_details.set_clusterhealth(health);
@@ -958,14 +1089,15 @@ bool recover_not_found(ConnectionHandle* connection) {
     ConnectionDetails details;
     {
         std::lock_guard<std::mutex> lock(runtime.mutex);
-        const auto stored = runtime.details_by_conn_hash.find(old_conn_hash);
+        const auto stored = runtime.details_by_conn_hash.find(
+            session_cache_key(connection, old_conn_hash));
         if (stored == runtime.details_by_conn_hash.end()) {
             return false;
         }
-        details.CopyFrom(stored->second);
+        details.CopyFrom(stored->second.details);
         runtime.conn_hash_by_key.erase(connection_cache_key(connection));
     }
-    details.set_clusterhealth(cluster_health(connection->endpoints));
+    details.set_clusterhealth(cluster_health(connection->endpoints, connection->tls));
     std::vector<std::string> candidates{connection->endpoint};
     for (const auto& address : connection->endpoints) {
         if (address != connection->endpoint) {
@@ -973,7 +1105,7 @@ bool recover_not_found(ConnectionHandle* connection) {
         }
     }
     for (const auto& address : candidates) {
-        auto endpoint = endpoint_runtime(address);
+        auto endpoint = endpoint_runtime(address, connection->tls);
         if (!endpoint->healthy.load()) {
             continue;
         }
@@ -983,12 +1115,12 @@ bool recover_not_found(ConnectionHandle* connection) {
         const auto status = endpoint->stub->connect(&context, details, &response);
         if (!status.ok()) {
             if (is_transport_failure(status, context)) {
-                mark_endpoint_unhealthy(address);
+                mark_endpoint_unhealthy(address, connection->tls);
             }
             continue;
         }
         if (connection->endpoint != address) {
-            endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
+            endpoint_runtime(connection->endpoint, connection->tls)->active_connections.fetch_sub(1);
             endpoint->active_connections.fetch_add(1);
         }
         connection->endpoint = address;
@@ -1001,9 +1133,10 @@ bool recover_not_found(ConnectionHandle* connection) {
             std::lock_guard<std::mutex> lock(runtime.mutex);
             if (!response.connhash().empty()) {
                 runtime.conn_hash_by_key[connection_cache_key(connection)] = response.connhash();
-                runtime.details_by_conn_hash[response.connhash()] = details;
+                runtime.details_by_conn_hash[session_cache_key(connection, response.connhash())] =
+                    {details, connection->tls};
                 if (response.connhash() != old_conn_hash) {
-                    runtime.details_by_conn_hash.erase(old_conn_hash);
+                    runtime.details_by_conn_hash.erase(session_cache_key(connection, old_conn_hash));
                 }
             }
         }
@@ -3309,6 +3442,16 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         return fail(connection, parsed.error, "IM012");
     }
     std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
+    if (connection->connected) {
+        return fail(connection, "ODBC connection is already open", "08002");
+    }
+    if (!configure_tls(parsed, &connection->tls)) {
+        return fail(connection, "Invalid TLS configuration: use true/false, readable nonempty "
+                    "PEM files and paired client certificate/key with TLS enabled", "HY024");
+    }
+    connection->endpoints.clear();
+    connection->affinity_channels.clear();
+    connection->affinity_stubs.clear();
     auto find = [&parsed](const std::string& key) -> std::string {
         const auto entry = parsed.values.find(key);
         return entry == parsed.values.end() ? std::string{} : entry->second;
@@ -3368,12 +3511,13 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
                     "IM012");
     }
     connection->client_uuid = make_client_uuid();
-    connection->endpoint = choose_endpoint(connection->endpoints, load_aware);
+    connection->endpoint = choose_endpoint(connection->endpoints, load_aware, connection->tls);
     if (connection->endpoint.empty()) {
-        return fail(connection, "No healthy OJP servers are available", "08S01");
+        return fail(connection, "No healthy OJP servers are available",
+                    connection->tls->enabled ? "08001" : "08S01");
     }
 
-    auto selected_endpoint = endpoint_runtime(connection->endpoint);
+    auto selected_endpoint = endpoint_runtime(connection->endpoint, connection->tls);
     connection->channel = selected_endpoint->channel;
     connection->stub = selected_endpoint->stub;
 
@@ -3386,7 +3530,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
     for (const auto& address : connection->endpoints) {
         details.add_serverendpoints(address);
     }
-    details.set_clusterhealth(cluster_health(connection->endpoints));
+    details.set_clusterhealth(cluster_health(connection->endpoints, connection->tls));
     auto* datasource_property = details.add_properties();
     datasource_property->set_key("ojp.datasource.name");
     datasource_property->set_string_value(connection->datasource_name);
@@ -3420,23 +3564,24 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         bool connected_to_any = false;
         std::string failure_message;
         for (const auto& address : ordered_endpoints) {
-            auto endpoint = endpoint_runtime(address);
+            auto endpoint = endpoint_runtime(address, connection->tls);
             if (!endpoint->healthy.load() &&
                 std::find(connection->endpoints.begin(), connection->endpoints.end(), address) !=
                     connection->endpoints.end()) {
                 continue;
             }
             ConnectionDetails endpoint_details(details);
-            endpoint_details.set_clusterhealth(cluster_health(connection->endpoints));
+            endpoint_details.set_clusterhealth(cluster_health(connection->endpoints, connection->tls));
             grpc::ClientContext context;
             context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
             SessionInfo response;
             const auto status = endpoint->stub->connect(&context, endpoint_details, &response);
             if (!status.ok()) {
                 if (is_transport_failure(status, context)) {
-                    mark_endpoint_unhealthy(address);
+                    mark_endpoint_unhealthy(address, connection->tls);
                 }
-                failure_message = status.error_message();
+                failure_message = connection->tls->enabled
+                    ? "TLS connection or authentication failed" : status.error_message();
                 continue;
             }
             endpoint->healthy.store(true);
@@ -3453,7 +3598,8 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             connection->stub.reset();
             connection->channel.reset();
             return fail(connection, "Failed to connect to any configured OJP server: " +
-                                        failure_message, "08S01");
+                                        failure_message,
+                        connection->tls->enabled ? "08001" : "08S01");
         }
         if (connection->xa_mode && !session.isxa()) {
             return fail(connection, "OJP server did not establish an XA connection", "HY000",
@@ -3463,9 +3609,11 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             std::lock_guard<std::mutex> lock(runtime.mutex);
             if (!connection->xa_mode) {
                 runtime.conn_hash_by_key[connection_cache_key(connection)] = session.connhash();
-                runtime.details_by_conn_hash[session.connhash()] = details;
+                runtime.details_by_conn_hash[session_cache_key(connection, session.connhash())] =
+                    {details, connection->tls};
             } else {
-                runtime.xa_details_by_conn_hash[session.connhash()] = details;
+                runtime.xa_details_by_conn_hash[session_cache_key(connection, session.connhash())] =
+                    {details, connection->tls};
             }
         }
     }
@@ -3475,7 +3623,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
         std::lock_guard<std::mutex> routing_lock(connection->routing_mutex);
         connection->session_to_server[session.sessionuuid()] = connection->endpoint;
     }
-    selected_endpoint = endpoint_runtime(connection->endpoint);
+    selected_endpoint = endpoint_runtime(connection->endpoint, connection->tls);
     selected_endpoint->active_connections.fetch_add(1);
     connection->connected = true;
     ensure_health_checker();
@@ -3505,6 +3653,22 @@ std::string brace_connection_value(const std::string& value) {
         }
     }
     return "{" + escaped + "}";
+}
+
+std::string public_connection_string(const std::string& input) {
+    const auto parsed = parse_connection_string(input);
+    if (std::none_of(parsed.values.begin(), parsed.values.end(), [](const auto& entry) {
+            return entry.first.compare(0, 15, "OJP.CLIENT.TLS.") == 0;
+        })) {
+        return input;
+    }
+    std::string output;
+    for (const auto& entry : parsed.values) {
+        if (entry.first.compare(0, 15, "OJP.CLIENT.TLS.") != 0) {
+            output += entry.first + "=" + brace_connection_value(entry.second) + ";";
+        }
+    }
+    return output;
 }
 
 SQLRETURN connect_with_options(ConnectionHandle* connection, const std::string& source,
@@ -3541,7 +3705,7 @@ SQLRETURN disconnect(ConnectionHandle* connection) {
     const auto status = stub->terminateSession(&context, request_session, &response);
     // terminateSession is sent exactly once; the connection is unusable even if it fails.
     connection->connected = false;
-    endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
+    endpoint_runtime(connection->endpoint, connection->tls)->active_connections.fetch_sub(1);
     connection->stub.reset();
     connection->channel.reset();
     connection->savepoints.clear();
@@ -3623,7 +3787,7 @@ SQLRETURN perform_xa_rpc(ConnectionHandle* connection, HandleBase* handle,
         return fail(handle, "No OJP XA endpoint is available", "08S01", OJP_XA_XAER_RMFAIL);
     }
     const std::string target = connection->last_rpc_endpoint;
-    if (!endpoint_runtime(target)->healthy.load()) {
+    if (!endpoint_runtime(target, connection->tls)->healthy.load()) {
         return fail(handle, "XA resource manager is unavailable; XA requests are not rerouted",
                     "08S01", OJP_XA_XAER_RMFAIL);
     }
@@ -3654,20 +3818,20 @@ bool reconnect_xa_for_start(ConnectionHandle* connection, HandleBase* handle,
                             const std::string& failed_endpoint) {
     const std::set<std::string> excluded{failed_endpoint};
     const std::string next_endpoint =
-        choose_endpoint(connection->endpoints, connection->load_aware, excluded);
+        choose_endpoint(connection->endpoints, connection->load_aware, connection->tls, excluded);
     if (next_endpoint.empty()) {
         return false;
     }
-    auto endpoint = endpoint_runtime(next_endpoint);
+    auto endpoint = endpoint_runtime(next_endpoint, connection->tls);
     ConnectionDetails details(connection->connection_details);
-    details.set_clusterhealth(cluster_health(connection->endpoints));
+    details.set_clusterhealth(cluster_health(connection->endpoints, connection->tls));
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
     SessionInfo response;
     const grpc::Status status = endpoint->stub->connect(&context, details, &response);
     if (!status.ok()) {
         if (is_transport_failure(status, context)) {
-            mark_endpoint_unhealthy(next_endpoint);
+            mark_endpoint_unhealthy(next_endpoint, connection->tls);
         }
         fail_grpc(handle, status, context);
         if (!handle->diagnostics.empty()) {
@@ -3680,7 +3844,7 @@ bool reconnect_xa_for_start(ConnectionHandle* connection, HandleBase* handle,
              OJP_XA_XAER_RMERR);
         return false;
     }
-    endpoint_runtime(connection->endpoint)->active_connections.fetch_sub(1);
+    endpoint_runtime(connection->endpoint, connection->tls)->active_connections.fetch_sub(1);
     endpoint->active_connections.fetch_add(1);
     connection->endpoint = next_endpoint;
     connection->channel = endpoint->channel;
@@ -4132,17 +4296,18 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connection, SQLHWND, SQLCHAR* input_s
     if (!SQL_SUCCEEDED(status)) {
         return status;
     }
+    const auto output = public_connection_string(std::string(input, length));
     if (output_length != nullptr) {
-        *output_length = static_cast<SQLSMALLINT>(length);
+        *output_length = static_cast<SQLSMALLINT>(output.size());
     }
     if (output_string == nullptr || output_buffer_length <= 0) {
         return SQL_SUCCESS;
     }
     const auto copy_count = std::min<std::size_t>(
-        length, static_cast<std::size_t>(output_buffer_length - 1));
-    std::memcpy(output_string, input, copy_count);
+        output.size(), static_cast<std::size_t>(output_buffer_length - 1));
+    std::memcpy(output_string, output.data(), copy_count);
     output_string[copy_count] = '\0';
-    if (copy_count < length) {
+    if (copy_count < output.size()) {
         static_cast<HandleBase*>(connection)->diagnostics.push_back(
             {"01004", 0, "Connection string output was truncated"});
         return SQL_SUCCESS_WITH_INFO;
@@ -4173,7 +4338,8 @@ SQLRETURN SQL_API SQLDriverConnectW(SQLHDBC connection, SQLHWND, SQLWCHAR* input
     if (!SQL_SUCCEEDED(status)) {
         return status;
     }
-    return write_wide_string(target, input, output_string, output_buffer_length, output_length);
+    return write_wide_string(target, public_connection_string(input),
+                             output_string, output_buffer_length, output_length);
 }
 
 SQLRETURN SQL_API SQLConnect(SQLHDBC connection, SQLCHAR* server_name,

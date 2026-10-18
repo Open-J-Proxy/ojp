@@ -88,6 +88,16 @@ if(BUILD_TESTING)
         ojp_odbc gRPC::grpc++ protobuf::libprotobuf)
     add_test(NAME OjpOdbcParameters COMMAND ojp_odbc_parameter_test)
 
+    find_program(OJP_TEST_OPENSSL openssl)
+    if(OJP_TEST_OPENSSL)
+        add_executable(ojp_odbc_tls_test tests/tls_test.cpp)
+        target_include_directories(ojp_odbc_tls_test PRIVATE "${GENERATED_DIR}" ${ODBC_INCLUDE_DIRS})
+        target_link_libraries(ojp_odbc_tls_test PRIVATE
+            ojp_odbc gRPC::grpc++ protobuf::libprotobuf)
+        add_test(NAME OjpOdbcTls COMMAND ojp_odbc_tls_test "${OJP_TEST_OPENSSL}")
+        set_tests_properties(OjpOdbcTls PROPERTIES TIMEOUT 120)
+    endif()
+
     add_executable(ojp_odbc_l1_integration_test
         tests/l1_integration_test.cpp)
     target_link_libraries(ojp_odbc_l1_integration_test PRIVATE ODBC::ODBC)

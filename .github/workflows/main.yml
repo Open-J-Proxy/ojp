@@ -2376,7 +2376,7 @@ jobs:
           OJP_TEST_H2_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcH2L[1-9]Integration$' --output-on-failure \
+            -R '^OjpOdbc(Parameters|Tls|H2L[1-9]Integration)$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-l9-test.log
 
       - name: Show ojp-server.log
@@ -2468,6 +2468,23 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Configure required mTLS for OJP servers and C++ ODBC tests
+        run: |
+          cert_dir="$RUNNER_TEMP/ojp-odbc-mtls-certs"
+          bash scripts/generate-jdbc-mtls-test-certificates.sh "$cert_dir"
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          {
+            echo "OJP_TEST_SERVER_TLS_OPTIONS=-Duser.timezone=UTC -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=$cert_dir/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=$cert_dir/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true"
+            echo "OJP_CLIENT_TLS_ENABLED=true"
+            echo "OJP_CLIENT_TLS_ROOTCERT=$cert_dir/server-cert.pem"
+            echo "OJP_CLIENT_TLS_CERT=$cert_dir/client-cert.pem"
+            echo "OJP_CLIENT_TLS_KEY=$cert_dir/client-key.pem"
+            echo "OJP_TEST_TLS_UNTRUSTED_CERT=$cert_dir/untrusted-client-cert.pem"
+            echo "OJP_TEST_TLS_UNTRUSTED_KEY=$cert_dir/untrusted-client-key.pem"
+          } >> "$GITHUB_ENV"
+
       - name: Build and Install (ojp-grpc-commons)
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
@@ -2489,6 +2506,8 @@ jobs:
             unixodbc-dev
 
       - name: Start OJP server (background)
+        env:
+          JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
@@ -2508,6 +2527,8 @@ jobs:
           exit 1
 
       - name: Start second OJP server (background)
+        env:
+          JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           nohup bash -c '
@@ -2662,6 +2683,23 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Configure required mTLS for OJP servers and C++ ODBC tests
+        run: |
+          cert_dir="$RUNNER_TEMP/ojp-odbc-mtls-certs"
+          bash scripts/generate-jdbc-mtls-test-certificates.sh "$cert_dir"
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          {
+            echo "OJP_TEST_SERVER_TLS_OPTIONS=-Duser.timezone=UTC -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=$cert_dir/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=$cert_dir/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true"
+            echo "OJP_CLIENT_TLS_ENABLED=true"
+            echo "OJP_CLIENT_TLS_ROOTCERT=$cert_dir/server-cert.pem"
+            echo "OJP_CLIENT_TLS_CERT=$cert_dir/client-cert.pem"
+            echo "OJP_CLIENT_TLS_KEY=$cert_dir/client-key.pem"
+            echo "OJP_TEST_TLS_UNTRUSTED_CERT=$cert_dir/untrusted-client-cert.pem"
+            echo "OJP_TEST_TLS_UNTRUSTED_KEY=$cert_dir/untrusted-client-key.pem"
+          } >> "$GITHUB_ENV"
+
       - name: Build and Install (ojp-grpc-commons)
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
@@ -2683,6 +2721,8 @@ jobs:
             unixodbc-dev
 
       - name: Start OJP server
+        env:
+          JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
@@ -2710,6 +2750,8 @@ jobs:
             -e "GRANT XA_RECOVER_ADMIN ON *.* TO 'testuser'@'%';"
 
       - name: Start restartable second OJP server for L8-L10
+        env:
+          JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           echo 1 > /tmp/ojp-server-2-concurrency
@@ -2832,6 +2874,23 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Configure required mTLS for OJP servers and C++ ODBC tests
+        run: |
+          cert_dir="$RUNNER_TEMP/ojp-odbc-mtls-certs"
+          bash scripts/generate-jdbc-mtls-test-certificates.sh "$cert_dir"
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          {
+            echo "OJP_TEST_SERVER_TLS_OPTIONS=-Duser.timezone=UTC -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=$cert_dir/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=$cert_dir/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true"
+            echo "OJP_CLIENT_TLS_ENABLED=true"
+            echo "OJP_CLIENT_TLS_ROOTCERT=$cert_dir/server-cert.pem"
+            echo "OJP_CLIENT_TLS_CERT=$cert_dir/client-cert.pem"
+            echo "OJP_CLIENT_TLS_KEY=$cert_dir/client-key.pem"
+            echo "OJP_TEST_TLS_UNTRUSTED_CERT=$cert_dir/untrusted-client-cert.pem"
+            echo "OJP_TEST_TLS_UNTRUSTED_KEY=$cert_dir/untrusted-client-key.pem"
+          } >> "$GITHUB_ENV"
+
       - name: Build and Install (ojp-grpc-commons)
         run: mvn clean install -pl ojp-grpc-commons -am -DskipTests -Dgpg.skip=true
 
@@ -2901,6 +2960,8 @@ jobs:
             "IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'testuser') CREATE USER testuser FOR LOGIN testuser; GRANT EXECUTE ON xp_sqljdbc_xa_init TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_start TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_end TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_prepare TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_commit TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_rollback TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_recover TO testuser; GRANT EXECUTE ON xp_sqljdbc_xa_forget TO testuser; IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = 'SqlJDBCXAUser' AND type = 'R') CREATE ROLE [SqlJDBCXAUser]; ALTER ROLE [SqlJDBCXAUser] ADD MEMBER testuser;"
 
       - name: Start OJP server (background)
+        env:
+          JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
@@ -2920,6 +2981,8 @@ jobs:
           exit 1
 
       - name: Start second OJP server for SQL Server multinode tests
+        env:
+          JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
           jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
           nohup bash -c '

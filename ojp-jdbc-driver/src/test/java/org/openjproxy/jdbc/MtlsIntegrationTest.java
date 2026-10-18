@@ -80,34 +80,38 @@ class MtlsIntegrationTest {
             }
 
             OjpXADataSource dataSource = new OjpXADataSource(jdbcUrl, user, password);
-            try (XAConnection xaConnection = dataSource.getXAConnection();
-                 Connection connection = xaConnection.getConnection()) {
-                XAResource xaResource = xaConnection.getXAResource();
-                Xid committedXid = new TestXid(1, "mtls-commit".getBytes(), "branch-1".getBytes());
-                xaResource.start(committedXid, XAResource.TMNOFLAGS);
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT INTO " + tableName + " (id, label) VALUES (?, ?)")) {
-                    insert.setInt(1, 3);
-                    insert.setString(2, "xa-commit");
-                    assertEquals(1, insert.executeUpdate());
-                }
-                xaResource.end(committedXid, XAResource.TMSUCCESS);
-                assertEquals(XAResource.XA_OK, xaResource.prepare(committedXid));
-                assertTrue(Arrays.stream(xaResource.recover(XAResource.TMSTARTRSCAN))
-                        .anyMatch(xid -> sameXid(xid, committedXid)));
-                xaResource.recover(XAResource.TMENDRSCAN);
-                xaResource.commit(committedXid, false);
+            XAConnection xaConnection = dataSource.getXAConnection();
+            try {
+                try (Connection connection = xaConnection.getConnection()) {
+                    XAResource xaResource = xaConnection.getXAResource();
+                    Xid committedXid = new TestXid(1, "mtls-commit".getBytes(), "branch-1".getBytes());
+                    xaResource.start(committedXid, XAResource.TMNOFLAGS);
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "INSERT INTO " + tableName + " (id, label) VALUES (?, ?)")) {
+                        insert.setInt(1, 3);
+                        insert.setString(2, "xa-commit");
+                        assertEquals(1, insert.executeUpdate());
+                    }
+                    xaResource.end(committedXid, XAResource.TMSUCCESS);
+                    assertEquals(XAResource.XA_OK, xaResource.prepare(committedXid));
+                    assertTrue(Arrays.stream(xaResource.recover(XAResource.TMSTARTRSCAN))
+                            .anyMatch(xid -> sameXid(xid, committedXid)));
+                    xaResource.recover(XAResource.TMENDRSCAN);
+                    xaResource.commit(committedXid, false);
 
-                Xid rollbackXid = new TestXid(2, "mtls-rollback".getBytes(), "branch-2".getBytes());
-                xaResource.start(rollbackXid, XAResource.TMNOFLAGS);
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT INTO " + tableName + " (id, label) VALUES (?, ?)")) {
-                    insert.setInt(1, 4);
-                    insert.setString(2, "xa-rollback");
-                    assertEquals(1, insert.executeUpdate());
+                    Xid rollbackXid = new TestXid(2, "mtls-rollback".getBytes(), "branch-2".getBytes());
+                    xaResource.start(rollbackXid, XAResource.TMNOFLAGS);
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "INSERT INTO " + tableName + " (id, label) VALUES (?, ?)")) {
+                        insert.setInt(1, 4);
+                        insert.setString(2, "xa-rollback");
+                        assertEquals(1, insert.executeUpdate());
+                    }
+                    xaResource.end(rollbackXid, XAResource.TMSUCCESS);
+                    xaResource.rollback(rollbackXid);
                 }
-                xaResource.end(rollbackXid, XAResource.TMSUCCESS);
-                xaResource.rollback(rollbackXid);
+            } finally {
+                xaConnection.close();
             }
 
             try (Connection connection = DriverManager.getConnection(jdbcUrl, user, password);

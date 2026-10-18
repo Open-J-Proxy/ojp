@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <output-directory>" >&2
@@ -9,6 +10,7 @@ fi
 output_dir=$1
 store_password=ojp-test-only
 mkdir -p "$output_dir"
+chmod 700 "$output_dir"
 
 keytool -genkeypair \
     -alias ojp-server \

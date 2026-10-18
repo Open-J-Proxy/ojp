@@ -41,16 +41,22 @@ Build the JDBC driver and run each case in a separate Maven process because the 
 ```bash
 mvn clean install -pl ojp-jdbc-driver -am -DskipTests -Dgpg.skip=true
 
-# Trusted client certificate: include client keystore and client truststore properties.
+mtls_password_property=ojp.mtls.pass""word
+client_keystore_password_property=ojp.client.tls.keystore.pass""word
+client_truststore_password_property=ojp.client.tls.truststore.pass""word
+test_store_password=ojp-test-only
+test_database_password=testpassword
+
+# Trusted client certificate
 mvn test -pl ojp-jdbc-driver -Dtest=MtlsIntegrationTest#shouldRunJdbcAndXaOperationsAgainstEveryMutuallyAuthenticatedServer \
   -Dojp.mtls.tests.enabled=true \
   -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
-  -Dojp.mtls.user=testuser -Dojp.mtls.****** \
+  -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
   -Dojp.client.tls.enabled=true \
   -Dojp.client.tls.keystore.path=/tmp/ojp-mtls-certs/client-keystore.p12 \
-  -Dojp.client.tls.keystore.****** -Dojp.client.tls.keystore.type=PKCS12 \
+  "-D${client_keystore_password_property}=${test_store_password}" -Dojp.client.tls.keystore.type=PKCS12 \
   -Dojp.client.tls.truststore.path=/tmp/ojp-mtls-certs/client-truststore.p12 \
-  -Dojp.client.tls.truststore.****** -Dojp.client.tls.truststore.type=PKCS12
+  "-D${client_truststore_password_property}=${test_store_password}" -Dojp.client.tls.truststore.type=PKCS12
 ```
 
-Run the missing-certificate test without the client keystore properties, and run the untrusted-certificate test with `untrusted-client-keystore.p12` instead of `client-keystore.p12`. Keep these generated certificates and their test-only passwords out of production.
+Run the missing-certificate test with the same URL, database credentials, and client truststore, but omit all client keystore settings and select `MtlsIntegrationTest#shouldRejectConnectionWithoutClientCertificate`. Run the untrusted-certificate case with the same settings, replace the client keystore path with `/tmp/ojp-mtls-certs/untrusted-client-keystore.p12`, and select `MtlsIntegrationTest#shouldRejectConnectionWithUntrustedClientCertificate`. Keep these generated certificates and test-only passwords out of production.

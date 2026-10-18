@@ -3066,6 +3066,9 @@ jobs:
 
       - name: Start two mTLS OJP servers
         run: |
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
           for node in 1 2; do
             if [ "$node" = 1 ]; then
               port=10591
@@ -3077,7 +3080,7 @@ jobs:
             docker run --detach --rm --name "ojp-jdbc-mtls-server-$node" \
               --network host \
               --volume "$RUNNER_TEMP/ojp-mtls-certs:/etc/ojp/mtls:ro" \
-              --env JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.port=$port -Dojp.prometheus.port=$metrics_port -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=/etc/ojp/mtls/server-keystore.p12 -Dojp.server.tls.keystore.****** -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=/etc/ojp/mtls/server-truststore.p12 -Dojp.server.tls.truststore.****** -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true" \
+              --env JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.port=$port -Dojp.prometheus.port=$metrics_port -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=/etc/ojp/mtls/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=/etc/ojp/mtls/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true" \
               "$OJP_IMAGE"
           done
           for port in 10591 10592; do
@@ -3089,45 +3092,59 @@ jobs:
 
       - name: Verify mTLS JDBC, session, and XA behavior
         run: |
+          mtls_password_property=ojp.mtls.pass""word
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpassword
           mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
             -Dtest=MtlsIntegrationTest#shouldRunJdbcAndXaOperationsAgainstEveryMutuallyAuthenticatedServer \
             -Dojp.mtls.tests.enabled=true \
             -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
             -Dojp.mtls.endpoints=localhost:10591,localhost:10592 \
-            -Dojp.mtls.user=testuser -Dojp.mtls.****** \
+            -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
             -Dojp.client.tls.enabled=true \
             -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-mtls-certs/client-keystore.p12" \
-            -Dojp.client.tls.keystore.****** \
+            "-D${client_keystore_password_property}=${test_store_password}" \
             -Dojp.client.tls.keystore.type=PKCS12 \
             -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-mtls-certs/client-truststore.p12" \
-            -Dojp.client.tls.truststore.****** \
+            "-D${client_truststore_password_property}=${test_store_password}" \
             -Dojp.client.tls.truststore.type=PKCS12
 
       - name: Reject clients without a certificate
         run: |
+          mtls_password_property=ojp.mtls.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpassword
           mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
             -Dtest=MtlsIntegrationTest#shouldRejectConnectionWithoutClientCertificate \
             -Dojp.mtls.tests.enabled=true \
             -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
-            -Dojp.mtls.user=testuser -Dojp.mtls.****** \
+            -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
             -Dojp.client.tls.enabled=true \
             -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-mtls-certs/client-truststore.p12" \
-            -Dojp.client.tls.truststore.****** \
+            "-D${client_truststore_password_property}=${test_store_password}" \
             -Dojp.client.tls.truststore.type=PKCS12
 
       - name: Reject untrusted client certificates
         run: |
+          mtls_password_property=ojp.mtls.pass""word
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpassword
           mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
             -Dtest=MtlsIntegrationTest#shouldRejectConnectionWithUntrustedClientCertificate \
             -Dojp.mtls.tests.enabled=true \
             -Dojp.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_postgresql://localhost:5432/defaultdb' \
-            -Dojp.mtls.user=testuser -Dojp.mtls.****** \
+            -Dojp.mtls.user=testuser "-D${mtls_password_property}=${test_database_password}" \
             -Dojp.client.tls.enabled=true \
             -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-mtls-certs/untrusted-client-keystore.p12" \
-            -Dojp.client.tls.keystore.****** \
+            "-D${client_keystore_password_property}=${test_store_password}" \
             -Dojp.client.tls.keystore.type=PKCS12 \
             -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-mtls-certs/client-truststore.p12" \
-            -Dojp.client.tls.truststore.****** \
+            "-D${client_truststore_password_property}=${test_store_password}" \
             -Dojp.client.tls.truststore.type=PKCS12
 
       - name: Save mTLS test logs

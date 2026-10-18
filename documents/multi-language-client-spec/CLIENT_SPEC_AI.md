@@ -487,7 +487,7 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 - Savepoints via `callResource` (`RES_CONNECTION` `CALL_SET`/`CALL_ROLLBACK`/`CALL_RELEASE`; `RES_SAVEPOINT` is used for savepoint attributes)
 - `callResource` protocol (all 7 `ResourceType` values, all 47 `CallType` codes)
 - Configuration loading: system/env properties > `ojp.properties` file > built-in defaults; per-datasource prefix `<name>.ojp.*`
-- TLS transport support (plaintext default; TLS when `ojp.grpc.tls.enabled=true`)
+- TLS transport support (plaintext default; Java reference-client TLS when `ojp.client.tls.enabled=true`, with keystore credentials for mTLS)
 - `clientUUID` generation (one UUID v4 per process lifetime)
 - `reinitializePoolOnRecoveredServer()` called **before** `endpoint.markHealthy()` on recovery
 - Read `clientCount`, `maxAdmission`, `observedPeak` from every `SessionInfo` response and pass to `ClientThrottleManager.updateFromSessionInfo()` (§8)

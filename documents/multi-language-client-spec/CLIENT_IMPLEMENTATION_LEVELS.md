@@ -95,7 +95,7 @@ These levels are based on each language client's own integration tests and are i
 |---|---|---:|---|
 | **C++ ODBC** | H2 | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle and recovery in `ojp-client-cpp-odbc/tests/h2_l9_integration_test.cpp`. |
 | **C++ ODBC** | SQL Server | **L9** | L1-L9 real-server integration suites passed, including XA lifecycle/recovery. The combined L10 suite does not validate mTLS. |
-| **C++ ODBC** | PostgreSQL | **L8** | L1-L8 real-server suites have existing coverage. PostgreSQL L9 and L10 integration tests are registered in CI. |
+| **C++ ODBC** | PostgreSQL | **L8** | L1-L8 real-server suites have existing coverage. PostgreSQL L9 and L10 operational/XA suites are registered in CI, but do not test mTLS. |
 | **C++ ODBC** | MariaDB | **L9** | L1-L9 suites cover database operations, multinode behavior, and XA lifecycle/recovery. The combined L10 suite does not validate mTLS. |
 | **Go** | H2 | **L3** | L1-L3 real-server integration coverage: `ojp-client-go-database-sql/client/h2_l1_integration_test.go`, `h2_l2_integration_test.go`, `h2_l3_integration_test.go`, and `h2_l3_fetch_integration_test.go`. |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |

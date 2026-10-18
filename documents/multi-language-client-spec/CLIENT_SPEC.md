@@ -1467,7 +1467,7 @@ A conformant client implementation must ship a test suite that exercises all the
 
 ### Certification by implementation level
 
-The scenarios above are a general test inventory. To claim an achieved level, a client must pass the cumulative per-level checklist in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level) for each database reported at that level. A disabled, skipped, or unit-only test does not establish achieved coverage. L7 and above additionally require integration coverage with at least two OJP servers; L10 requires a combined multinode run.
+The scenarios above are a general test inventory. To claim an achieved level, a client must pass the cumulative per-level checklist in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level) for each database reported at that level. A disabled, skipped, or unit-only test does not establish achieved coverage. L7 and above additionally require integration coverage with at least two OJP servers; L10 requires a combined multinode run with mTLS.
 
 ### Required Test Scenarios
 

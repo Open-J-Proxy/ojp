@@ -116,6 +116,12 @@ Keep required gRPC/Protobuf dependency DLLs and the matching Visual C++ runtime
 available to the application's loader (for example alongside the application).
 Installation does not bundle third-party runtime libraries.
 
+On Windows the build also produces the DSN setup DLL `install/bin/ojp_odbc_setup.dll`
+(see [Register the installed driver](#register-the-installed-driver)). Disable it with
+`-DOJP_ODBC_BUILD_SETUP=OFF`; it is never built on other platforms. Both DLLs link
+`odbccp32.lib` together with `legacy_stdio_definitions.lib`, which the modern
+Universal CRT requires for that import library.
+
 **Platform status:** Linux has integration suites in this repository. The
 macOS and Windows instructions describe the platform build/registration path,
 not a claim that those platforms or language wrappers have passed integration
@@ -171,11 +177,13 @@ configuration location). For an isolated, user-owned configuration, put the
 entry in `/absolute/path/to/odbc-config/odbcinst.ini` and set
 `ODBCSYSINI=/absolute/path/to/odbc-config` **before starting the application**.
 Confirm registration with `odbcinst -q -d -n OJP`. This is driver registration,
-not a DSN; the driver currently requires a DSN-less connection string.
+not a DSN; see [Data sources (DSN)](#data-sources-dsn) to define one in `odbc.ini`.
+The DSN support needs the unixODBC/iODBC `odbcinst` library at build time; CMake
+warns and builds a DSN-less driver when it is missing.
 
 On Windows, register `OJP` in the matching architecture's ODBC driver registry.
-There is no installer or setup-dialog DLL yet. An administrator can import this
-`.reg` template for a **64-bit** driver after replacing the path:
+There is no installer yet. An administrator can import this `.reg` template for a
+**64-bit** driver after replacing the paths; `Setup` enables the DSN dialog:
 
 ```text
 Windows Registry Editor Version 5.00
@@ -185,13 +193,16 @@ Windows Registry Editor Version 5.00
 
 [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\OJP]
 "Driver"="C:\\OJP\\install\\bin\\ojp_odbc.dll"
+"Setup"="C:\\OJP\\install\\bin\\ojp_odbc_setup.dll"
 ```
 
 For a 32-bit driver on 64-bit Windows, the corresponding entries are under
 `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\ODBC\ODBCINST.INI`.
 The 64-bit ODBC Administrator is `%windir%\System32\odbcad32.exe`; the 32-bit
-one is `%windir%\SysWOW64\odbcad32.exe`. Their Drivers tabs show registration;
-do not expect the DSN configuration wizard to work without a setup DLL.
+one is `%windir%\SysWOW64\odbcad32.exe`. With `Setup` registered, **Add** and
+**Configure** on the User DSN / System DSN tabs open the OJP dialog, which edits
+the DSN fields, TLS options and offers **Test Connection**. The password typed for
+the test is never saved.
 
 Check runtime dependencies with `ldd` on Linux, `otool -L` on macOS, or
 `dumpbin /DEPENDENTS` in a Windows developer terminal. A registered driver that
@@ -217,8 +228,32 @@ DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:example;DB_CLOSE_DELA
 ```
 
 The ODBC connection-string braces protect semicolons in the H2 URL; a literal
-closing brace in a value is escaped by doubling it. `SQLConnect` with a DSN is
-not implemented yet.
+closing brace in a value is escaped by doubling it.
+
+### Data sources (DSN)
+
+A DSN stores every connection field except `PWD`, which is never read from or
+written to `ODBC.INI`. Connect with `DSN=name;UID=...;PWD=...` through
+`SQLDriverConnect`, or with `SQLConnect(dbc, "name", ..., uid, ..., pwd, ...)`.
+Fields given explicitly in the connection string override the DSN. An unknown
+DSN fails with SQLSTATE `IM002`.
+
+On Windows create the DSN with the ODBC Administrator (see above). With unixODBC,
+add it to `odbc.ini` (`odbcinst -j` shows the location):
+
+```ini
+[OjpExample]
+Driver=OJP
+Description=Example OJP data source
+SERVER=localhost:1059
+DATABASE=jdbc:h2:mem:example;DB_CLOSE_DELAY=-1
+UID=sa
+```
+
+Stored keys: `Description`, `SERVER`, `DATABASE`, `UID`,
+`OJP.DATASOURCE.NAME`, `OJP.XA`, `OJP.LOADAWARE.SELECTION.ENABLED`,
+`OJP.MULTINODE.RETRY.ATTEMPTS`, `OJP.MULTINODE.RETRY.DELAY` and the
+`OJP.CLIENT.TLS.*` keys described below.
 
 Start an OJP server with Java 25 and `-Duser.timezone=UTC`, provide its backend
 JDBC driver JAR, and ensure it can reach the database. `SERVER` is the **OJP
@@ -432,12 +467,11 @@ while (SQLFetch(statement) == SQL_SUCCESS) {
 SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
 ```
 
-Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections. The
-driver does not currently resolve conventional DSNs, so `SQLConnect` and
-`SQLConnectW` are not supported through a Driver Manager. In particular, do not
-pass a `SERVER=...;DATABASE=...` options string as the server name: the Driver
-Manager interprets that argument as a DSN name and may reject it before calling
-the driver.
+Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections, and
+`SQLConnect`/`SQLConnectW` with a DSN name (see [Data sources (DSN)](#data-sources-dsn)).
+Do not pass a `SERVER=...;DATABASE=...` options string as the `SQLConnect` server
+name: the Driver Manager interprets that argument as a DSN name and may reject it
+before calling the driver.
 
 #### Metadata and known limitations
 

@@ -11,6 +11,7 @@
 #include <sqlext.h>
 
 #include "StatementService.grpc.pb.h"
+#include "ojp_odbc_dsn.h"
 #include "ojp_odbc_xa.h"
 
 #include <algorithm>
@@ -3446,9 +3447,18 @@ SQLRETURN get_sql_info_number(ConnectionHandle* connection, HandleBase* handle,
 
 SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_string) {
     clear_diagnostics(connection);
-    const auto parsed = parse_connection_string(connection_string);
+    auto parsed = parse_connection_string(connection_string);
     if (!parsed.error.empty()) {
         return fail(connection, parsed.error, "IM012");
+    }
+    const auto dsn_entry = parsed.values.find(ojp::odbc::dsn::KEY_DSN);
+    if (dsn_entry != parsed.values.end() && !dsn_entry->second.empty()) {
+        ojp::odbc::dsn::Attributes stored;
+        std::string dsn_error;
+        if (!ojp::odbc::dsn::read_stored_dsn(dsn_entry->second, &stored, &dsn_error)) {
+            return fail(connection, dsn_error, "IM002");
+        }
+        parsed.values = ojp::odbc::dsn::merge(stored, parsed.values);
     }
     std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
     if (connection->connected) {
@@ -3682,15 +3692,27 @@ std::string public_connection_string(const std::string& input) {
 
 SQLRETURN connect_with_options(ConnectionHandle* connection, const std::string& source,
                                const std::string& user, const std::string& password) {
+    // Standard SQLConnect form: the server name is a DSN name, not a connection string.
+    if (source.find('=') == std::string::npos) {
+        std::string dsn_connection = "DSN=" + brace_connection_value(source);
+        if (!user.empty()) {
+            dsn_connection += ";UID=" + brace_connection_value(user);
+        }
+        if (!password.empty()) {
+            dsn_connection += ";PWD=" + brace_connection_value(password);
+        }
+        return connect(connection, dsn_connection);
+    }
     const auto parsed = parse_connection_string(source);
     if (!parsed.error.empty()) {
         return fail(connection, parsed.error, "IM012");
     }
-    if (parsed.values.find("SERVER") == parsed.values.end() ||
-        parsed.values.find("DATABASE") == parsed.values.end()) {
+    if (parsed.values.find(ojp::odbc::dsn::KEY_DSN) == parsed.values.end() &&
+        (parsed.values.find("SERVER") == parsed.values.end() ||
+         parsed.values.find("DATABASE") == parsed.values.end())) {
         return fail(connection,
-                    "SQLConnect requires SERVER and DATABASE options in its server name; "
-                    "use SQLDriverConnect for standard DSN-less connections",
+                    "SQLConnect requires a DSN name or SERVER and DATABASE options in its "
+                    "server name; use SQLDriverConnect for standard DSN-less connections",
                     "IM002");
     }
     return connect(connection, source + ";UID=" + brace_connection_value(user) +

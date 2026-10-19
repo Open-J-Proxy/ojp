@@ -1,3 +1,12 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 
@@ -3045,7 +3054,7 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
                     "HY000");
     }
     if (method == "Tables") {
-        constexpr std::size_t ODBC_TABLES_COLUMN_COUNT = 5;
+        static constexpr std::size_t ODBC_TABLES_COLUMN_COUNT = 5;
         if (statement->columns.size() < ODBC_TABLES_COLUMN_COUNT ||
             std::any_of(statement->rows.begin(), statement->rows.end(),
                         [](const std::vector<Cell>& row) {
@@ -3059,7 +3068,7 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
             row.resize(ODBC_TABLES_COLUMN_COUNT);
         }
     } else if (method == "Columns") {
-        constexpr std::size_t ODBC_COLUMNS_COLUMN_COUNT = 24;
+        static constexpr std::size_t ODBC_COLUMNS_COLUMN_COUNT = 24;
         if (statement->columns.size() < ODBC_COLUMNS_COLUMN_COUNT ||
             std::any_of(statement->rows.begin(), statement->rows.end(),
                         [](const std::vector<Cell>& row) {

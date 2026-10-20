@@ -5244,10 +5244,17 @@ SQLRETURN SQL_API SQLDescribeColW(SQLHSTMT statement, SQLUSMALLINT column_number
     return name_result;
 }
 
+#if defined(_WIN32) && !defined(_WIN64)
+using NumericAttributeArg = SQLPOINTER;
+#else
+using NumericAttributeArg = SQLLEN*;
+#endif
+
 SQLRETURN SQL_API SQLColAttribute(SQLHSTMT statement, SQLUSMALLINT column_number,
                                   SQLUSMALLINT field_identifier, SQLPOINTER character_attribute,
                                   SQLSMALLINT buffer_length, SQLSMALLINT* string_length,
-                                  SQLLEN* numeric_attribute) {
+                                  NumericAttributeArg numeric_attribute_arg) {
+     auto* numeric_attribute = static_cast<SQLLEN*>(numeric_attribute_arg);
     if (statement == SQL_NULL_HSTMT ||
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
         return SQL_INVALID_HANDLE;
@@ -5332,7 +5339,9 @@ SQLRETURN SQL_API SQLColAttribute(SQLHSTMT statement, SQLUSMALLINT column_number
 SQLRETURN SQL_API SQLColAttributeW(SQLHSTMT statement, SQLUSMALLINT column_number,
                                    SQLUSMALLINT field_identifier,
                                    SQLPOINTER character_attribute, SQLSMALLINT buffer_length,
-                                   SQLSMALLINT* string_length, SQLLEN* numeric_attribute) {
+                                   SQLSMALLINT* string_length,
+                                   NumericAttributeArg numeric_attribute_arg) {
+     auto* numeric_attribute = static_cast<SQLLEN*>(numeric_attribute_arg);
     if (statement == SQL_NULL_HSTMT ||
         static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
         return SQL_INVALID_HANDLE;

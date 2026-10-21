@@ -493,6 +493,13 @@ table-column metadata. Catalog functions not listed above (including
 language wrapper may require one of these functions; verify its exact calls
 with the target Driver Manager and database.
 
+Bindings with `SQL_PARAM_OUTPUT` or `SQL_PARAM_INPUT_OUTPUT` (including the
+return value of `{? = CALL proc(?)}`) execute through the backend JDBC
+`CallableStatement`; output values are written to the bound buffers after
+`SQLExecute`/`SQLExecDirect`. Streamed output parameters, LOB or
+data-at-execution inputs in the same call, and output parameters combined with
+`SQL_ATTR_PARAMSET_SIZE` > 1 return `HYC00`.
+
 The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
 paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,
 and SQL Server fixtures. Tests require a running OJP Server and database;

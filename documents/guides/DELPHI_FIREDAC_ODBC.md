@@ -60,6 +60,10 @@ Use FireDAC's **generic ODBC** driver, not its MSSQL or another database-specifi
 | `Pooled` | `False` |
 | `LoginPrompt` | `False` on `TFDConnection` |
 
+FireDAC chooses its SQL dialect from the prefix of `SQL_DRIVER_NAME`. The OJP library name is not recognized, so FireDAC falls back to its generic dialect: it upper-cases object names and does not understand SQL Server procedure names such as `proc;1` or `@param` argument names, which leaves `TFDStoredProc` without parameters. When the backend is SQL Server, add `RDBMS=MSSQL` to the FireDAC connection parameters (not to `ODBCAdvanced`). The setting changes only FireDAC's dialect; the connection still uses the generic ODBC driver and OJP.
+
+Stored procedures with `OUTPUT`, `INPUT_OUTPUT`, and return-value parameters run through the server's JDBC `CallableStatement`. Output parameters cannot be combined with array DML (`SQL_ATTR_PARAMSET_SIZE` > 1), streamed output parameters, or LOB/data-at-execution input values in the same call; those cases return `HYC00`. `SQL_USER_NAME` returns the login name (for example `sa`), not the default schema, so qualify schema-specific metadata requests explicitly. `GetTableNames` with the default `[osMy]` scope can return no tables; use `[osMy, osOther]` to list other schemas.
+
 Do not set `DataSource`/`DSN` as a substitute for the explicit OJP fields. `DATABASE` must retain all JDBC options; wrap each ODBC value in braces, including the complete backend URL, and escape an embedded closing brace by doubling it. Do not use FireDAC's SQL Server-specific URL conventions for an OJP connection.
 
 The public FireDAC documentation establishes the generic ODBC driver, driver name, advanced parameters, and connection-definition pooling controls. It does not certify OJP compatibility. The example below keeps the OJP-specific fields together in `ODBCAdvanced` so that the URL's semicolons are not mistaken for separate connection attributes.

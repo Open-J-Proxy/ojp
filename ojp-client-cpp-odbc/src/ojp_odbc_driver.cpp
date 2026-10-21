@@ -2302,6 +2302,18 @@ bool is_query_sql(const std::string& sql) {
            keyword == "TABLE" || keyword == "SHOW" || keyword == "EXPLAIN";
 }
 
+// Procedure calls (EXEC/EXECUTE/CALL or the ODBC {call ...} escape) may return a result set,
+// so they use the update path that returns the first JDBC result set when there is one.
+bool is_procedure_call_sql(const std::string& sql) {
+    const std::string keyword = first_sql_keyword(sql);
+    if (keyword == "EXEC" || keyword == "EXECUTE" || keyword == "CALL") {
+        return true;
+    }
+    const auto brace = sql.find_first_not_of(" \t\r\n");
+    return brace != std::string::npos && sql[brace] == '{' &&
+        first_sql_keyword(sql.substr(brace + 1)) == "CALL";
+}
+
 std::vector<std::string> sql_keywords(const std::string& sql) {
     std::vector<std::string> keywords;
     for (std::size_t index = 0; index < sql.size();) {
@@ -4025,7 +4037,8 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
     }
     request.mutable_session()->CopyFrom(connection->session);
-    const bool dml_result_set = is_dml_result_set_sql(statement->sql);
+    const bool dml_result_set =
+        is_dml_result_set_sql(statement->sql) || is_procedure_call_sql(statement->sql);
     if (dml_result_set) {
         auto* property = request.add_properties();
         property->set_key(kUpdateResultSetRequestKey);

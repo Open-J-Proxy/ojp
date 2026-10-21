@@ -86,6 +86,11 @@ void check_procedure_columns(SQLHSTMT statement) {
             column_name(statement, 10) == "DECIMAL_DIGITS" &&
             column_name(statement, 19) == "IS_NULLABLE",
             "SQLProcedureColumns must use the ODBC column names");
+    // FireDAC queries SQL_DESC_ROWVER for every column and logs an error when it fails.
+    SQLLEN row_version = -1;
+    success(SQLColAttribute(statement, 1, SQL_DESC_ROWVER, nullptr, 0, nullptr, &row_version),
+            "SQLColAttribute SQL_DESC_ROWVER");
+    require(row_version == SQL_FALSE, "SQL_DESC_ROWVER must be SQL_FALSE");
     const struct {
         const char* name;
         SQLSMALLINT type;
@@ -115,6 +120,20 @@ void run(const std::string& connection_string) {
     SQLUSMALLINT supported = SQL_FALSE;
     success(SQLGetFunctions(connection, SQL_API_SQLPROCEDURECOLUMNS, &supported), "SQLGetFunctions");
     require(supported == SQL_TRUE, "SQLProcedureColumns must be reported as supported");
+    // FireDAC discards catalog rows whose TABLE_CAT/PROCEDURE_CAT differ from SQL_DATABASE_NAME.
+    SQLCHAR database_name[64] = {};
+    SQLSMALLINT name_length = 0;
+    success(SQLGetInfo(connection, SQL_DATABASE_NAME, database_name, sizeof(database_name),
+                       &name_length), "SQLGetInfo SQL_DATABASE_NAME");
+    require(std::string(reinterpret_cast<const char*>(database_name)) == "AdventureWorks",
+            "SQL_DATABASE_NAME must return the catalog of the JDBC URL");
+    SQLCHAR current_catalog[64] = {};
+    SQLINTEGER catalog_length = 0;
+    success(SQLGetConnectAttr(connection, SQL_ATTR_CURRENT_CATALOG, current_catalog,
+                              sizeof(current_catalog), &catalog_length),
+            "SQLGetConnectAttr SQL_ATTR_CURRENT_CATALOG");
+    require(std::string(reinterpret_cast<const char*>(current_catalog)) == "AdventureWorks",
+            "SQL_ATTR_CURRENT_CATALOG must agree with SQL_DATABASE_NAME");
     success(SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement), "Allocate statement");
     check_procedures(statement);
     check_procedure_columns(statement);
@@ -130,7 +149,8 @@ int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: ojp_odbc_procedure_metadata_test <fake server executable>");
         FakeServerProcess server(argv[1]);
-        run(server.connection_string("jdbc:h2:mem:procedure_metadata"));
+        run(server.connection_string(
+            "{jdbc:sqlserver://fake:1433;databaseName=AdventureWorks;encrypt=false}"));
         const auto calls = server.finish();
         // An empty catalog is sent as NULL (the current catalog).
         require(contains_line(calls, "metadata Procedures <null>|dbo|add_values"),

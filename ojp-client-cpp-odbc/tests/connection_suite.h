@@ -1,6 +1,12 @@
 #ifndef OJP_TEST_CONNECTION_SUITE_H
 #define OJP_TEST_CONNECTION_SUITE_H
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 

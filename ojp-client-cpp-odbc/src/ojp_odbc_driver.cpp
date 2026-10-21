@@ -4019,39 +4019,12 @@ void load_column_metadata(ConnectionHandle* connection, StatementHandle* stateme
     }
 }
 
-SQLRETURN execute_statement(StatementHandle* statement) {
+// Adds the bound parameters that have a matching '?' marker to the request, shifting their
+// indexes by index_offset.
+SQLRETURN add_request_parameters(StatementHandle* statement, StatementRequest* request,
+                                 std::size_t marker_count, std::int32_t index_offset) {
     auto* connection = statement->connection;
-    clear_diagnostics(statement);
-    statement->columns.clear();
-    statement->column_meta.clear();
-    statement->rows.clear();
-    statement->get_data_offsets.clear();
-    statement->row_index = 0;
-    statement->row_count = -1;
-    statement->has_result_set = false;
-    if (connection == nullptr) {
-        return fail(statement, "ODBC connection is not open", "08003");
-    }
-    std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
-    if (!connection->connected || !connection->stub) {
-        return fail(statement, "ODBC connection is not open", "08003");
-    }
-
-    std::string savepoint_name;
-    const SavepointAction savepoint_action =
-        parse_savepoint_statement(statement->sql, &savepoint_name);
-    if (savepoint_action != SavepointAction::NONE) {
-        return execute_savepoint_statement(statement, savepoint_action, savepoint_name);
-    }
-
-    StatementRequest request;
-    request.set_sql(statement->sql);
     const bool postgres = connection->url.find("jdbc:postgresql:") != std::string::npos;
-    // Bindings persist across statements; only those with a matching '?' marker are sent.
-    const auto marker_count = count_parameter_markers(statement->sql);
-    log_message(LogLevel::debug, "executing SQL with " + std::to_string(marker_count) +
-                " parameter marker(s) and " + std::to_string(statement->parameters.size()) +
-                " bound parameter(s)");
     for (const auto& entry : statement->parameters) {
         if (entry.first > marker_count) {
             continue;
@@ -4060,8 +4033,8 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         if (bound.direction != SQL_PARAM_INPUT) {
             return fail(statement, "Only input parameters are supported", "HYC00");
         }
-        auto* parameter = request.add_parameters();
-        parameter->set_index(static_cast<std::int32_t>(entry.first));
+        auto* parameter = request->add_parameters();
+        parameter->set_index(static_cast<std::int32_t>(entry.first) + index_offset);
         auto* value = parameter->add_values();
         const bool is_null = bound.value == nullptr ||
             (bound.indicator != nullptr && *bound.indicator == SQL_NULL_DATA);
@@ -4125,6 +4098,45 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         if (postgres && is_null && bound.parameter_type == SQL_LONGVARBINARY) {
             value->set_int_value(SQL_VARBINARY);
         }
+    }
+    return SQL_SUCCESS;
+}
+
+SQLRETURN execute_statement(StatementHandle* statement) {
+    auto* connection = statement->connection;
+    clear_diagnostics(statement);
+    statement->columns.clear();
+    statement->column_meta.clear();
+    statement->rows.clear();
+    statement->get_data_offsets.clear();
+    statement->row_index = 0;
+    statement->row_count = -1;
+    statement->has_result_set = false;
+    if (connection == nullptr) {
+        return fail(statement, "ODBC connection is not open", "08003");
+    }
+    std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
+    if (!connection->connected || !connection->stub) {
+        return fail(statement, "ODBC connection is not open", "08003");
+    }
+
+    std::string savepoint_name;
+    const SavepointAction savepoint_action =
+        parse_savepoint_statement(statement->sql, &savepoint_name);
+    if (savepoint_action != SavepointAction::NONE) {
+        return execute_savepoint_statement(statement, savepoint_action, savepoint_name);
+    }
+
+    StatementRequest request;
+    request.set_sql(statement->sql);
+    // Bindings persist across statements; only those with a matching '?' marker are sent.
+    const auto marker_count = count_parameter_markers(statement->sql);
+    log_message(LogLevel::debug, "executing SQL with " + std::to_string(marker_count) +
+                " parameter marker(s) and " + std::to_string(statement->parameters.size()) +
+                " bound parameter(s)");
+    const SQLRETURN parameters_result = add_request_parameters(statement, &request, marker_count, 0);
+    if (!SQL_SUCCEEDED(parameters_result)) {
+        return parameters_result;
     }
     request.mutable_session()->CopyFrom(connection->session);
     const bool dml_result_set =
@@ -6372,6 +6384,30 @@ static void report_parameter_row(StatementHandle* target, SQLULEN row, SQLRETURN
     }
 }
 
+static void shift_parameter_row(StatementHandle* target,
+                                const std::map<SQLUSMALLINT, BoundParameter>& original, SQLULEN row) {
+    target->parameters = original;
+    for (auto& entry : target->parameters) {
+        auto& bound = entry.second;
+        if (bound.value != nullptr) {
+            bound.value = static_cast<std::uint8_t*>(bound.value) +
+                static_cast<std::size_t>(row) * static_cast<std::size_t>(parameter_element_size(bound));
+        }
+        if (bound.indicator != nullptr) {
+            bound.indicator += row;
+        }
+    }
+}
+
+static void prefix_parameter_row(std::vector<Diagnostic>* diagnostics, SQLULEN row,
+                                 std::vector<Diagnostic>* errors) {
+    for (auto diagnostic : *diagnostics) {
+        diagnostic.message = "[parameter row " + std::to_string(row + 1) + "] " + diagnostic.message;
+        errors->push_back(std::move(diagnostic));
+    }
+    diagnostics->clear();
+}
+
 // Parameter bindings persist across SQLPrepare/SQLExecDirect (only SQL_RESET_PARAMS clears them).
 // Also handles SQL_ATTR_PARAMSET_SIZE > 1 by executing once per array row and fills
 // SQL_ATTR_PARAMS_PROCESSED_PTR / SQL_ATTR_PARAM_STATUS_PTR.
@@ -6424,27 +6460,13 @@ static SQLRETURN execute_and_report(StatementHandle* target) {
             target->diagnostics = std::move(errors);
             return fail(target, "Operation canceled", "HY008");
         }
-        target->parameters = original;
-        for (auto& entry : target->parameters) {
-            auto& bound = entry.second;
-            if (bound.value != nullptr) {
-                bound.value = static_cast<std::uint8_t*>(bound.value) +
-                    static_cast<std::size_t>(row) * static_cast<std::size_t>(parameter_element_size(bound));
-            }
-            if (bound.indicator != nullptr) {
-                bound.indicator += row;
-            }
-        }
+        shift_parameter_row(target, original, row);
         const SQLRETURN result = execute_statement(target);
         ++processed;
         report_parameter_row(target, row, result);
         if (!SQL_SUCCEEDED(result)) {
             ++failed;
-            for (auto diagnostic : target->diagnostics) {
-                diagnostic.message = "[parameter row " + std::to_string(row + 1) + "] " +
-                    diagnostic.message;
-                errors.push_back(std::move(diagnostic));
-            }
+            prefix_parameter_row(&target->diagnostics, row, &errors);
             continue;
         }
         any_info = any_info || result == SQL_SUCCESS_WITH_INFO;

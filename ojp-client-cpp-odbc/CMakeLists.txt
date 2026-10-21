@@ -500,6 +500,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
             "OJP_TEST_SQLSERVER"
             "OJP_TEST_SQLSERVER_ADDR")
+    add_executable(ojp_odbc_sqlserver_data_types_integration_test
+        tests/sqlserver_data_types_integration_test.cpp)
+    target_link_libraries(ojp_odbc_sqlserver_data_types_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_sqlserver_data_types_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcSqlServerDataTypesIntegration
+        COMMAND ojp_odbc_sqlserver_data_types_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
+            "OJP_TEST_SQLSERVER"
+            "OJP_TEST_SQLSERVER_ADDR")
     add_executable(ojp_odbc_sqlserver_l3_integration_test
         tests/sqlserver_l3_integration_test.cpp)
     target_link_libraries(ojp_odbc_sqlserver_l3_integration_test PRIVATE ODBC::ODBC)

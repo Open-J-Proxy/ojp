@@ -211,6 +211,14 @@ struct UuidCell {
 using Cell = std::variant<std::monostate, bool, std::int32_t, std::int64_t, double, std::string,
                           std::vector<std::uint8_t>, UuidCell>;
 
+// Actual column metadata (java.sql.ResultSetMetaData) retrieved from the OJP server.
+struct ColumnMetadata {
+    int jdbc_type = 0;
+    int precision = 0;
+    int scale = 0;
+    int nullable = SQL_NULLABLE_UNKNOWN;
+};
+
 struct StatementHandle final : HandleBase {
     explicit StatementHandle(ConnectionHandle* parent)
         : HandleBase(SQL_HANDLE_STMT), connection(parent) {}
@@ -225,6 +233,8 @@ struct StatementHandle final : HandleBase {
     std::map<SQLUSMALLINT, BoundParameter> parameters;
     std::map<SQLUSMALLINT, BoundColumn> bound_columns;
     std::vector<std::string> columns;
+    // Empty when the server provided no metadata; the type is then inferred from the values.
+    std::vector<ColumnMetadata> column_meta;
     std::vector<std::vector<Cell>> rows;
     std::map<SQLUSMALLINT, std::size_t> get_data_offsets;
     SQLLEN row_count = -1;
@@ -1629,7 +1639,10 @@ std::string cell_as_string(const Cell& cell) {
         return std::to_string(*value);
     }
     if (const auto* value = std::get_if<double>(&cell)) {
-        return std::to_string(*value);
+        // Shortest representation that preserves the value (std::to_string always uses 6 decimals).
+        char buffer[64];
+        const auto result = std::to_chars(buffer, buffer + sizeof(buffer), *value);
+        return std::string(buffer, result.ptr);
     }
     if (const auto* value = std::get_if<bool>(&cell)) {
         return *value ? "1" : "0";
@@ -1651,6 +1664,218 @@ void write_numeric(SQLPOINTER output, SQLLEN* indicator, const T& value) {
     if (output != nullptr) {
         std::memcpy(output, &value, sizeof(T));
     }
+}
+
+std::string trim_copy(const std::string& text) {
+    const auto first = text.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    return text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+}
+
+bool cell_as_double(const Cell& cell, double* output) {
+    if (const auto* value = std::get_if<double>(&cell)) {
+        *output = *value;
+    } else if (const auto* value = std::get_if<std::int64_t>(&cell)) {
+        *output = static_cast<double>(*value);
+    } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
+        *output = static_cast<double>(*value);
+    } else if (const auto* value = std::get_if<bool>(&cell)) {
+        *output = *value ? 1.0 : 0.0;
+    } else if (const auto* value = std::get_if<std::string>(&cell)) {
+        const std::string text = trim_copy(*value);
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), *output);
+        return result.ec == std::errc{} && result.ptr == text.data() + text.size() && !text.empty();
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// Integer from the cell; decimal texts (e.g. DECIMAL "12.50") are truncated.
+bool cell_as_int64(const Cell& cell, std::int64_t* output, bool* fraction_lost) {
+    *fraction_lost = false;
+    if (const auto* value = std::get_if<std::int64_t>(&cell)) {
+        *output = *value;
+    } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
+        *output = *value;
+    } else if (const auto* value = std::get_if<bool>(&cell)) {
+        *output = *value ? 1 : 0;
+    } else if (const auto* value = std::get_if<double>(&cell)) {
+        if (!(*value >= -9.2233720368547758e18 && *value < 9.2233720368547758e18)) {
+            return false;
+        }
+        *output = static_cast<std::int64_t>(*value);
+        *fraction_lost = static_cast<double>(*output) != *value;
+    } else if (const auto* value = std::get_if<std::string>(&cell)) {
+        const std::string text = trim_copy(*value);
+        const char* begin = text.data();
+        const char* end = begin + text.size();
+        if (begin != end && *begin == '+') {
+            ++begin;
+        }
+        const auto result = std::from_chars(begin, end, *output);
+        if (result.ec != std::errc{} || result.ptr == begin) {
+            return false;
+        }
+        if (result.ptr != end) {
+            if (*result.ptr != '.' ||
+                std::any_of(result.ptr + 1, end, [](char c) { return !std::isdigit(static_cast<unsigned char>(c)); })) {
+                return false;
+            }
+            *fraction_lost = std::any_of(result.ptr + 1, end, [](char c) { return c != '0'; });
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// Parses "YYYY-MM-DD", "HH:MM:SS[.f]" or "YYYY-MM-DD HH:MM:SS[.f]" (format produced by decode_value).
+bool parse_date_time(const std::string& raw, SQL_TIMESTAMP_STRUCT* output, bool* has_date,
+                     bool* has_time) {
+    const std::string text = trim_copy(raw);
+    *output = SQL_TIMESTAMP_STRUCT{};
+    *has_date = false;
+    *has_time = false;
+    std::size_t position = 0;
+    auto read_number = [&](std::size_t digits, int* value) -> bool {
+        if (position + digits > text.size()) {
+            return false;
+        }
+        const auto result = std::from_chars(text.data() + position, text.data() + position + digits, *value);
+        if (result.ec != std::errc{} || result.ptr != text.data() + position + digits) {
+            return false;
+        }
+        position += digits;
+        return true;
+    };
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    if (text.size() >= 10 && text[4] == '-' && text[7] == '-') {
+        if (!read_number(4, &year) || text[position++] != '-' || !read_number(2, &month) ||
+            text[position++] != '-' || !read_number(2, &day)) {
+            return false;
+        }
+        *has_date = true;
+        if (position < text.size() && (text[position] == ' ' || text[position] == 'T')) {
+            ++position;
+        }
+    }
+    if (position < text.size()) {
+        if (!read_number(2, &hour) || position >= text.size() || text[position++] != ':' ||
+            !read_number(2, &minute)) {
+            return false;
+        }
+        if (position < text.size() && text[position] == ':') {
+            ++position;
+            if (!read_number(2, &second)) {
+                return false;
+            }
+        }
+        SQLUINTEGER fraction = 0;
+        if (position < text.size() && text[position] == '.') {
+            ++position;
+            int digits = 0;
+            while (position < text.size() && std::isdigit(static_cast<unsigned char>(text[position]))) {
+                if (digits < 9) {
+                    fraction = fraction * 10 + static_cast<SQLUINTEGER>(text[position] - '0');
+                    ++digits;
+                }
+                ++position;
+            }
+            while (digits++ < 9) {
+                fraction *= 10;
+            }
+        }
+        output->fraction = fraction;
+        *has_time = true;
+    }
+    if (!*has_date && !*has_time) {
+        return false;
+    }
+    output->year = static_cast<SQLSMALLINT>(year);
+    output->month = static_cast<SQLUSMALLINT>(month);
+    output->day = static_cast<SQLUSMALLINT>(day);
+    output->hour = static_cast<SQLUSMALLINT>(hour);
+    output->minute = static_cast<SQLUSMALLINT>(minute);
+    output->second = static_cast<SQLUSMALLINT>(second);
+    return true;
+}
+
+// Converts decimal text ("-123.4500") into SQL_NUMERIC_STRUCT, keeping the value's own scale.
+bool parse_numeric(const std::string& raw, SQL_NUMERIC_STRUCT* output) {
+    const std::string text = trim_copy(raw);
+    *output = SQL_NUMERIC_STRUCT{};
+    std::size_t position = 0;
+    output->sign = 1;
+    if (position < text.size() && (text[position] == '-' || text[position] == '+')) {
+        output->sign = text[position] == '-' ? 0 : 1;
+        ++position;
+    }
+    std::uint8_t digits_seen = 0;
+    std::uint8_t scale = 0;
+    bool after_point = false;
+    bool any_digit = false;
+    for (; position < text.size(); ++position) {
+        const char character = text[position];
+        if (character == '.' && !after_point) {
+            after_point = true;
+            continue;
+        }
+        if (!std::isdigit(static_cast<unsigned char>(character))) {
+            return false;
+        }
+        any_digit = true;
+        // val = val * 10 + digit, in 128-bit little-endian.
+        unsigned carry = static_cast<unsigned>(character - '0');
+        for (auto& byte : output->val) {
+            const unsigned product = static_cast<unsigned>(byte) * 10 + carry;
+            byte = static_cast<SQLCHAR>(product & 0xFF);
+            carry = product >> 8;
+        }
+        if (carry != 0) {
+            return false;
+        }
+        if (digits_seen > 0 || character != '0') {
+            ++digits_seen;
+        }
+        if (after_point) {
+            ++scale;
+        }
+    }
+    if (!any_digit) {
+        return false;
+    }
+    output->precision = static_cast<SQLCHAR>(std::max<std::uint8_t>(digits_seen, 1));
+    output->scale = static_cast<SQLSCHAR>(scale);
+    return true;
+}
+
+bool parse_guid(const std::string& raw, SQLGUID* output) {
+    std::string hex;
+    for (const char character : raw) {
+        if (std::isxdigit(static_cast<unsigned char>(character))) {
+            hex.push_back(character);
+        } else if (character != '-' && character != '{' && character != '}' && character != ' ') {
+            return false;
+        }
+    }
+    if (hex.size() != 32) {
+        return false;
+    }
+    auto read = [&](std::size_t offset, std::size_t digits, auto* value) {
+        unsigned long long parsed = 0;
+        std::from_chars(hex.data() + offset, hex.data() + offset + digits, parsed, 16);
+        *value = static_cast<std::remove_pointer_t<decltype(value)>>(parsed);
+    };
+    read(0, 8, &output->Data1);
+    read(8, 4, &output->Data2);
+    read(12, 4, &output->Data3);
+    for (std::size_t index = 0; index < 8; ++index) {
+        read(16 + index * 2, 2, &output->Data4[index]);
+    }
+    return true;
 }
 
 SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_type,
@@ -1737,42 +1962,67 @@ SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_ty
         }
         return SQL_SUCCESS;
     }
-    if (target_type == SQL_C_LONG || target_type == SQL_C_SLONG) {
-        SQLINTEGER converted = 0;
-        if (const auto* value = std::get_if<std::int64_t>(&cell)) {
-            converted = static_cast<SQLINTEGER>(*value);
-        } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
-            converted = static_cast<SQLINTEGER>(*value);
-        } else if (const auto* value = std::get_if<bool>(&cell)) {
-            converted = *value ? 1 : 0;
-        } else {
-            return fail(handle, "Result value cannot be converted to SQL_C_LONG", "07006");
+    if (target_type == SQL_C_LONG || target_type == SQL_C_SLONG || target_type == SQL_C_ULONG ||
+        target_type == SQL_C_SHORT || target_type == SQL_C_SSHORT || target_type == SQL_C_USHORT ||
+        target_type == SQL_C_TINYINT || target_type == SQL_C_STINYINT || target_type == SQL_C_UTINYINT ||
+        target_type == SQL_C_SBIGINT || target_type == SQL_C_UBIGINT) {
+        std::int64_t number = 0;
+        bool fraction_lost = false;
+        if (!cell_as_int64(cell, &number, &fraction_lost)) {
+            return fail(handle, "Result value '" + cell_as_string(cell) +
+                        "' cannot be converted to integer C type " + std::to_string(target_type), "22018");
         }
-        write_numeric(target_value, indicator, converted);
-        return SQL_SUCCESS;
-    }
-    if (target_type == SQL_C_SBIGINT) {
-        SQLBIGINT converted = 0;
-        if (const auto* value = std::get_if<std::int64_t>(&cell)) {
-            converted = static_cast<SQLBIGINT>(*value);
-        } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
-            converted = static_cast<SQLBIGINT>(*value);
-        } else {
-            return fail(handle, "Result value cannot be converted to SQL_C_SBIGINT", "07006");
+        auto store = [&](auto typed_min, auto typed_max) -> bool {
+            using Target = decltype(typed_min);
+            if (number < static_cast<std::int64_t>(typed_min) ||
+                (number > 0 && static_cast<std::uint64_t>(number) > static_cast<std::uint64_t>(typed_max))) {
+                return false;
+            }
+            write_numeric(target_value, indicator, static_cast<Target>(number));
+            return true;
+        };
+        bool stored = false;
+        switch (target_type) {
+            case SQL_C_LONG: case SQL_C_SLONG:
+                stored = store(std::numeric_limits<SQLINTEGER>::min(), std::numeric_limits<SQLINTEGER>::max());
+                break;
+            case SQL_C_ULONG:
+                stored = store(SQLUINTEGER{0}, std::numeric_limits<SQLUINTEGER>::max());
+                break;
+            case SQL_C_SHORT: case SQL_C_SSHORT:
+                stored = store(std::numeric_limits<SQLSMALLINT>::min(), std::numeric_limits<SQLSMALLINT>::max());
+                break;
+            case SQL_C_USHORT:
+                stored = store(SQLUSMALLINT{0}, std::numeric_limits<SQLUSMALLINT>::max());
+                break;
+            case SQL_C_TINYINT: case SQL_C_STINYINT:
+                stored = store(std::numeric_limits<SQLSCHAR>::min(), std::numeric_limits<SQLSCHAR>::max());
+                break;
+            case SQL_C_UTINYINT:
+                stored = store(SQLCHAR{0}, std::numeric_limits<SQLCHAR>::max());
+                break;
+            case SQL_C_UBIGINT:
+                stored = store(SQLUBIGINT{0}, std::numeric_limits<SQLUBIGINT>::max());
+                break;
+            default:
+                stored = store(std::numeric_limits<SQLBIGINT>::min(), std::numeric_limits<SQLBIGINT>::max());
+                break;
         }
-        write_numeric(target_value, indicator, converted);
+        if (!stored) {
+            return fail(handle, "Result value " + std::to_string(number) +
+                        " is out of range for integer C type " + std::to_string(target_type), "22003");
+        }
+        if (fraction_lost) {
+            handle->diagnostics.push_back({"01S07", 0, "Fractional part of a numeric result was truncated"});
+            return SQL_SUCCESS_WITH_INFO;
+        }
         return SQL_SUCCESS;
     }
     if (target_type == SQL_C_DOUBLE || target_type == SQL_C_FLOAT) {
         double number = 0;
-        if (const auto* value = std::get_if<double>(&cell)) {
-            number = *value;
-        } else if (const auto* value = std::get_if<std::int64_t>(&cell)) {
-            number = static_cast<double>(*value);
-        } else if (const auto* value = std::get_if<std::int32_t>(&cell)) {
-            number = static_cast<double>(*value);
-        } else {
-            return fail(handle, "Result value cannot be converted to a floating-point type", "07006");
+        if (!cell_as_double(cell, &number)) {
+            return fail(handle, "Result value '" + cell_as_string(cell) +
+                        "' cannot be converted to a floating-point type", "22018");
         }
         if (target_type == SQL_C_FLOAT) {
             const float converted = static_cast<float>(number);
@@ -1783,17 +2033,91 @@ SQLRETURN write_cell(HandleBase* handle, const Cell& cell, SQLSMALLINT target_ty
         return SQL_SUCCESS;
     }
     if (target_type == SQL_C_BIT) {
-        const auto* boolean = std::get_if<bool>(&cell);
-        const auto* integer = std::get_if<std::int64_t>(&cell);
-        const auto* small_integer = std::get_if<std::int32_t>(&cell);
-        const SQLCHAR converted = boolean != nullptr
-            ? static_cast<SQLCHAR>(*boolean)
-            : static_cast<SQLCHAR>((integer != nullptr && *integer != 0) ||
-                                   (small_integer != nullptr && *small_integer != 0));
+        double number = 0;
+        if (!cell_as_double(cell, &number)) {
+            std::string text = trim_copy(cell_as_string(cell));
+            std::transform(text.begin(), text.end(), text.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (text == "true") {
+                number = 1;
+            } else if (text == "false") {
+                number = 0;
+            } else {
+                return fail(handle, "Result value '" + text + "' cannot be converted to SQL_C_BIT", "22018");
+            }
+        }
+        const SQLCHAR converted = number != 0 ? 1 : 0;
         write_numeric(target_value, indicator, converted);
         return SQL_SUCCESS;
     }
-    return fail(handle, "ODBC C target type is not supported by the OJP client", "07006");
+    if (target_type == SQL_C_NUMERIC) {
+        SQL_NUMERIC_STRUCT numeric{};
+        if (!parse_numeric(cell_as_string(cell), &numeric)) {
+            return fail(handle, "Result value '" + cell_as_string(cell) +
+                        "' cannot be converted to SQL_C_NUMERIC", "22018");
+        }
+        write_numeric(target_value, indicator, numeric);
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_TYPE_DATE || target_type == SQL_C_DATE ||
+        target_type == SQL_C_TYPE_TIME || target_type == SQL_C_TIME ||
+        target_type == SQL_C_TYPE_TIMESTAMP || target_type == SQL_C_TIMESTAMP) {
+        SQL_TIMESTAMP_STRUCT timestamp{};
+        bool has_date = false;
+        bool has_time = false;
+        if (!parse_date_time(cell_as_string(cell), &timestamp, &has_date, &has_time)) {
+            return fail(handle, "Result value '" + cell_as_string(cell) +
+                        "' cannot be converted to date/time C type " + std::to_string(target_type), "22018");
+        }
+        if (target_type == SQL_C_TYPE_DATE || target_type == SQL_C_DATE) {
+            if (!has_date) {
+                return fail(handle, "Time value '" + cell_as_string(cell) +
+                            "' cannot be converted to a date", "07006");
+            }
+            const SQL_DATE_STRUCT date{timestamp.year, timestamp.month, timestamp.day};
+            write_numeric(target_value, indicator, date);
+            if (has_time && (timestamp.hour || timestamp.minute || timestamp.second || timestamp.fraction)) {
+                handle->diagnostics.push_back({"01S07", 0, "Time part of a timestamp was truncated"});
+                return SQL_SUCCESS_WITH_INFO;
+            }
+            return SQL_SUCCESS;
+        }
+        if (target_type == SQL_C_TYPE_TIME || target_type == SQL_C_TIME) {
+            const SQL_TIME_STRUCT time{timestamp.hour, timestamp.minute, timestamp.second};
+            write_numeric(target_value, indicator, time);
+            if (timestamp.fraction != 0) {
+                handle->diagnostics.push_back({"01S07", 0, "Fractional seconds were truncated"});
+                return SQL_SUCCESS_WITH_INFO;
+            }
+            return SQL_SUCCESS;
+        }
+        if (!has_date) {
+            // TIME converted to TIMESTAMP gets the current date, as defined by ODBC.
+            const std::time_t now = std::time(nullptr);
+            std::tm local{};
+#if defined(_WIN32)
+            localtime_s(&local, &now);
+#else
+            localtime_r(&now, &local);
+#endif
+            timestamp.year = static_cast<SQLSMALLINT>(local.tm_year + 1900);
+            timestamp.month = static_cast<SQLUSMALLINT>(local.tm_mon + 1);
+            timestamp.day = static_cast<SQLUSMALLINT>(local.tm_mday);
+        }
+        write_numeric(target_value, indicator, timestamp);
+        return SQL_SUCCESS;
+    }
+    if (target_type == SQL_C_GUID) {
+        SQLGUID guid{};
+        if (!parse_guid(cell_as_string(cell), &guid)) {
+            return fail(handle, "Result value '" + cell_as_string(cell) +
+                        "' cannot be converted to SQL_C_GUID", "22018");
+        }
+        write_numeric(target_value, indicator, guid);
+        return SQL_SUCCESS;
+    }
+    return fail(handle, "ODBC C target type " + std::to_string(target_type) +
+                " is not supported by the OJP client", "07006");
 }
 
 std::string first_sql_keyword(const std::string& sql) {
@@ -2986,10 +3310,134 @@ void reset_data_at_execution(StatementHandle* statement) {
     }
 }
 
+// Reads getColumnType/getPrecision/getScale/isNullable for each column while the ResultSet is still
+// open on the server. Failure is not fatal: the driver falls back to inferring the type from the values.
+void load_column_metadata(ConnectionHandle* connection, StatementHandle* statement,
+                          const std::string& result_set_uuid) {
+    using com::openjproxy::grpc::CallResourceRequest;
+    using com::openjproxy::grpc::CallResourceResponse;
+    using com::openjproxy::grpc::CallType;
+    const auto started = std::chrono::steady_clock::now();
+    struct Attribute {
+        CallType call_type;
+        const char* name;
+        int ColumnMetadata::*field;
+    };
+    static const Attribute kAttributes[] = {
+        {com::openjproxy::grpc::CALL_GET, "ColumnType", &ColumnMetadata::jdbc_type},
+        {com::openjproxy::grpc::CALL_GET, "Precision", &ColumnMetadata::precision},
+        {com::openjproxy::grpc::CALL_GET, "Scale", &ColumnMetadata::scale},
+        {com::openjproxy::grpc::CALL_IS, "Nullable", &ColumnMetadata::nullable},
+    };
+    constexpr std::size_t kAttributeCount = sizeof(kAttributes) / sizeof(kAttributes[0]);
+    // Each attribute is a callResource call; they are issued in parallel (async gRPC)
+    // in batches, so the cost does not grow linearly with the number of columns.
+    constexpr std::size_t kMaxInFlight = 64;
+    struct Pending {
+        grpc::ClientContext context;
+        CallResourceResponse response;
+        grpc::Status status;
+        std::unique_ptr<grpc::ClientAsyncResponseReader<CallResourceResponse>> reader;
+    };
+    std::vector<ColumnMetadata> metadata(statement->columns.size());
+    const std::size_t total = metadata.size() * kAttributeCount;
+    std::string failure;
+    for (std::size_t batch_start = 0; batch_start < total && failure.empty(); batch_start += kMaxInFlight) {
+        const std::size_t batch_end = std::min(total, batch_start + kMaxInFlight);
+        StatementService::Stub* stub = route_session_rpc(connection);
+        grpc::CompletionQueue queue;
+        std::vector<std::unique_ptr<Pending>> pending;
+        pending.reserve(batch_end - batch_start);
+        for (std::size_t call = batch_start; call < batch_end; ++call) {
+            const Attribute& attribute = kAttributes[call % kAttributeCount];
+            CallResourceRequest request;
+            request.mutable_session()->CopyFrom(connection->session);
+            request.set_resourcetype(com::openjproxy::grpc::RES_RESULT_SET);
+            request.set_resourceuuid(result_set_uuid);
+            auto* target = request.mutable_target();
+            target->set_calltype(com::openjproxy::grpc::CALL_GET);
+            target->set_resourcename("MetaData");
+            auto* next = target->mutable_nextcall();
+            next->set_calltype(attribute.call_type);
+            next->set_resourcename(attribute.name);
+            next->add_params()->set_int_value(static_cast<int>(call / kAttributeCount + 1));
+            auto item = std::make_unique<Pending>();
+            item->context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            item->reader = stub->AsynccallResource(&item->context, request, &queue);
+            item->reader->Finish(&item->response, &item->status, item.get());
+            pending.push_back(std::move(item));
+        }
+        for (std::size_t received = 0; received < pending.size(); ++received) {
+            void* tag = nullptr;
+            bool ok = false;
+            if (!queue.Next(&tag, &ok)) {
+                failure = "gRPC completion queue was shut down";
+                break;
+            }
+            auto* item = static_cast<Pending*>(tag);
+            const std::size_t call = batch_start + static_cast<std::size_t>(
+                std::find_if(pending.begin(), pending.end(),
+                             [item](const auto& entry) { return entry.get() == item; }) - pending.begin());
+            const Attribute& attribute = kAttributes[call % kAttributeCount];
+            const std::size_t column = call / kAttributeCount;
+            if (!ok || !item->status.ok()) {
+                if (failure.empty()) {
+                    failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
+                              " (" + statement->columns[column] + "): " +
+                              (ok ? item->status.error_message() : "RPC was not completed");
+                }
+                continue;
+            }
+            if (item->response.values_size() == 0) {
+                if (failure.empty()) {
+                    failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
+                              " returned no value";
+                }
+                continue;
+            }
+            const auto& value = item->response.values(0);
+            if (value.value_case() == ParameterValue::kIntValue) {
+                metadata[column].*attribute.field = value.int_value();
+            } else if (value.value_case() == ParameterValue::kLongValue) {
+                metadata[column].*attribute.field = static_cast<int>(std::clamp<std::int64_t>(
+                    value.long_value(), 0, std::numeric_limits<int>::max()));
+            } else if (failure.empty()) {
+                failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
+                          " returned an unexpected value type " + std::to_string(value.value_case());
+            }
+        }
+        queue.Shutdown();
+        void* tag = nullptr;
+        bool ok = false;
+        while (queue.Next(&tag, &ok)) {
+        }
+    }
+    if (!failure.empty()) {
+        log_message(LogLevel::warn, "result-set metadata unavailable (" + failure +
+                    "); column types will be inferred from the data");
+        return;
+    }
+    statement->column_meta = std::move(metadata);
+    if (log_enabled(LogLevel::debug)) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        std::ostringstream text;
+        text << "result-set metadata loaded in " << elapsed << " ms (" << total << " calls):";
+        for (std::size_t index = 0; index < statement->column_meta.size(); ++index) {
+            const auto& item = statement->column_meta[index];
+            text << " [" << statement->columns[index] << " jdbcType=" << item.jdbc_type
+                 << " precision=" << item.precision << " scale=" << item.scale
+                 << " nullable=" << item.nullable << "]";
+        }
+        log_message(LogLevel::debug, text.str());
+    }
+}
+
 SQLRETURN execute_statement(StatementHandle* statement) {
     auto* connection = statement->connection;
     clear_diagnostics(statement);
     statement->columns.clear();
+    statement->column_meta.clear();
     statement->rows.clear();
     statement->get_data_offsets.clear();
     statement->row_index = 0;
@@ -3153,6 +3601,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             request.mutable_session()->CopyFrom(request_session);
             statement->rows.clear();
             statement->columns.clear();
+            statement->column_meta.clear();
             result_set_uuid.clear();
             row_by_row = false;
             decoded_all = true;
@@ -3181,6 +3630,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             }
         }
         if (!result_set_uuid.empty()) {
+            load_column_metadata(connection, statement, result_set_uuid);
             const auto close_result = close_result_set(connection, result_set_uuid, statement);
             if (!SQL_SUCCEEDED(close_result)) {
                 return close_result;
@@ -3236,6 +3686,7 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
                                     const std::vector<ParameterValue>& parameters) {
     clear_diagnostics(statement);
     statement->columns.clear();
+    statement->column_meta.clear();
     statement->rows.clear();
     statement->get_data_offsets.clear();
     statement->row_index = 0;
@@ -3514,18 +3965,190 @@ struct ColumnDescription {
     SQLULEN size = 255;
     SQLSMALLINT decimal_digits = 0;
     SQLSMALLINT nullable = SQL_NULLABLE;
+    SQLLEN display_size = 255;
+    SQLLEN octet_length = 255;
+    bool is_unsigned = false;
 };
+
+// Size above which text/binary is treated as a LOB (e.g. nvarchar(max) = 1073741823).
+constexpr int kMaxInlineLength = 8000;
+
+// Maps java.sql.Types to the equivalent ODBC SQL type; false for unknown types.
+bool map_jdbc_type(const ColumnMetadata& meta, ColumnDescription* description) {
+    const bool unbounded = meta.precision <= 0 || meta.precision > kMaxInlineLength;
+    const SQLULEN precision = static_cast<SQLULEN>(std::max(meta.precision, 0));
+    auto set = [&](SQLSMALLINT type, const char* name, SQLULEN size) {
+        description->type = type;
+        description->type_name = name;
+        description->size = size;
+    };
+    switch (meta.jdbc_type) {
+        case -7:   // BIT
+        case 16:   // BOOLEAN
+            set(SQL_BIT, "BIT", 1);
+            break;
+        case -6:   // TINYINT
+            set(SQL_TINYINT, "TINYINT", 3);
+            break;
+        case 5:    // SMALLINT
+            set(SQL_SMALLINT, "SMALLINT", 5);
+            break;
+        case 4:    // INTEGER
+            set(SQL_INTEGER, "INTEGER", 10);
+            break;
+        case -5:   // BIGINT
+            set(SQL_BIGINT, "BIGINT", 19);
+            break;
+        case 7:    // REAL
+            set(SQL_REAL, "REAL", 7);
+            break;
+        case 6:    // FLOAT
+        case 8:    // DOUBLE
+            set(SQL_DOUBLE, "DOUBLE", 15);
+            break;
+        case 2:    // NUMERIC
+        case 3:    // DECIMAL
+            set(meta.jdbc_type == 2 ? SQL_NUMERIC : SQL_DECIMAL,
+                meta.jdbc_type == 2 ? "NUMERIC" : "DECIMAL", precision > 0 ? precision : 38);
+            description->decimal_digits = static_cast<SQLSMALLINT>(std::max(meta.scale, 0));
+            break;
+        case 1:    // CHAR
+            unbounded ? set(SQL_LONGVARCHAR, "LONGVARCHAR", precision) : set(SQL_CHAR, "CHAR", precision);
+            break;
+        case 12:   // VARCHAR
+            unbounded ? set(SQL_LONGVARCHAR, "LONGVARCHAR", precision) : set(SQL_VARCHAR, "VARCHAR", precision);
+            break;
+        case -1:   // LONGVARCHAR
+        case 2005: // CLOB
+            set(SQL_LONGVARCHAR, "LONGVARCHAR", precision);
+            break;
+        case -15:  // NCHAR
+            unbounded ? set(SQL_WLONGVARCHAR, "WLONGVARCHAR", precision) : set(SQL_WCHAR, "WCHAR", precision);
+            break;
+        case -9:   // NVARCHAR
+            unbounded ? set(SQL_WLONGVARCHAR, "WLONGVARCHAR", precision) : set(SQL_WVARCHAR, "WVARCHAR", precision);
+            break;
+        case -16:  // LONGNVARCHAR
+        case 2011: // NCLOB
+        case 2009: // SQLXML
+            set(SQL_WLONGVARCHAR, "WLONGVARCHAR", precision);
+            break;
+        case -2:   // BINARY
+            unbounded ? set(SQL_LONGVARBINARY, "LONGVARBINARY", precision) : set(SQL_BINARY, "BINARY", precision);
+            break;
+        case -3:   // VARBINARY
+            unbounded ? set(SQL_LONGVARBINARY, "LONGVARBINARY", precision) : set(SQL_VARBINARY, "VARBINARY", precision);
+            break;
+        case -4:   // LONGVARBINARY
+        case 2004: // BLOB
+            set(SQL_LONGVARBINARY, "LONGVARBINARY", precision);
+            break;
+        case 91:   // DATE
+            set(SQL_TYPE_DATE, "DATE", 10);
+            break;
+        case 92:   // TIME
+        case 2013: // TIME_WITH_TIMEZONE
+            description->decimal_digits = static_cast<SQLSMALLINT>(std::clamp(meta.scale, 0, 9));
+            set(SQL_TYPE_TIME, "TIME", 8 + (description->decimal_digits > 0 ? description->decimal_digits + 1 : 0));
+            break;
+        case 93:   // TIMESTAMP
+        case 2014: // TIMESTAMP_WITH_TIMEZONE
+            description->decimal_digits = static_cast<SQLSMALLINT>(std::clamp(meta.scale, 0, 9));
+            set(SQL_TYPE_TIMESTAMP, "TIMESTAMP",
+                19 + (description->decimal_digits > 0 ? description->decimal_digits + 1 : 0));
+            break;
+        case -155: { // microsoft.sql.Types.DATETIMEOFFSET: text "YYYY-MM-DD HH:MM:SS[.f] +HH:MM"
+            const int scale = std::clamp(meta.scale, 0, 7);
+            set(SQL_WVARCHAR, "datetimeoffset", 26 + (scale > 0 ? scale + 1 : 0));
+            break;
+        }
+        default:
+            return false;
+    }
+    return true;
+}
+
+// Fills DISPLAY_SIZE and OCTET_LENGTH according to the ODBC size table.
+void finish_column_description(ColumnDescription* description) {
+    const auto size = static_cast<SQLLEN>(std::min<SQLULEN>(
+        description->size, static_cast<SQLULEN>(std::numeric_limits<SQLINTEGER>::max())));
+    switch (description->type) {
+        case SQL_WCHAR: case SQL_WVARCHAR: case SQL_WLONGVARCHAR:
+            description->display_size = size;
+            description->octet_length = size > std::numeric_limits<SQLINTEGER>::max() / 2
+                ? std::numeric_limits<SQLINTEGER>::max() : size * 2;
+            break;
+        case SQL_BINARY: case SQL_VARBINARY: case SQL_LONGVARBINARY:
+            description->display_size = size > std::numeric_limits<SQLINTEGER>::max() / 2
+                ? std::numeric_limits<SQLINTEGER>::max() : size * 2;
+            description->octet_length = size;
+            break;
+        case SQL_DECIMAL: case SQL_NUMERIC:
+            description->display_size = size + 2;
+            description->octet_length = size + 2;
+            break;
+        case SQL_BIT: description->display_size = 1; description->octet_length = 1; break;
+        case SQL_TINYINT: description->display_size = 4; description->octet_length = 1; break;
+        case SQL_SMALLINT: description->display_size = 6; description->octet_length = 2; break;
+        case SQL_INTEGER: description->display_size = 11; description->octet_length = 4; break;
+        case SQL_BIGINT: description->display_size = 20; description->octet_length = 8; break;
+        case SQL_REAL: description->display_size = 14; description->octet_length = 4; break;
+        case SQL_FLOAT: case SQL_DOUBLE:
+            description->display_size = 24; description->octet_length = 8; break;
+        case SQL_TYPE_DATE:
+            description->display_size = 10; description->octet_length = sizeof(SQL_DATE_STRUCT); break;
+        case SQL_TYPE_TIME:
+            description->display_size = size; description->octet_length = sizeof(SQL_TIME_STRUCT); break;
+        case SQL_TYPE_TIMESTAMP:
+            description->display_size = size; description->octet_length = sizeof(SQL_TIMESTAMP_STRUCT); break;
+        case SQL_GUID:
+            description->display_size = 36; description->octet_length = 16; break;
+        default:
+            description->display_size = size;
+            description->octet_length = size;
+            break;
+    }
+}
 
 bool describe_column(const StatementHandle* statement, SQLUSMALLINT column_number,
                      ColumnDescription* description) {
     if (column_number == 0 || column_number > statement->columns.size()) {
         return false;
     }
-    description->name = statement->columns[column_number - 1];
-    if (statement->rows.empty() || column_number > statement->rows.front().size()) {
+    const std::size_t index = column_number - 1;
+    description->name = statement->columns[index];
+    if (index < statement->column_meta.size()) {
+        const ColumnMetadata& meta = statement->column_meta[index];
+        description->nullable = static_cast<SQLSMALLINT>(
+            meta.nullable == 0 ? SQL_NO_NULLS : meta.nullable == 1 ? SQL_NULLABLE : SQL_NULLABLE_UNKNOWN);
+        if (map_jdbc_type(meta, description)) {
+            description->is_unsigned = description->type == SQL_TINYINT;
+            finish_column_description(description);
+            return true;
+        }
+    }
+    // No metadata (or unknown JDBC type): infer from the first non-null value and use the
+    // longest length across all rows, so values of later rows are not truncated.
+    const Cell* sample = nullptr;
+    std::size_t longest = 0;
+    for (const auto& row : statement->rows) {
+        if (index >= row.size() || std::holds_alternative<std::monostate>(row[index])) {
+            continue;
+        }
+        if (sample == nullptr) {
+            sample = &row[index];
+        }
+        if (const auto* text = std::get_if<std::string>(&row[index])) {
+            longest = std::max(longest, text->size());
+        } else if (const auto* bytes = std::get_if<std::vector<std::uint8_t>>(&row[index])) {
+            longest = std::max(longest, bytes->size());
+        }
+    }
+    if (sample == nullptr) {
+        finish_column_description(description);
         return true;
     }
-    const Cell& cell = statement->rows.front()[column_number - 1];
+    const Cell& cell = *sample;
     if (std::holds_alternative<std::int64_t>(cell)) {
         description->type = SQL_BIGINT;
         description->type_name = "BIGINT";
@@ -3545,19 +4168,19 @@ bool describe_column(const StatementHandle* statement, SQLUSMALLINT column_numbe
     } else if (std::holds_alternative<std::vector<std::uint8_t>>(cell)) {
         description->type = SQL_VARBINARY;
         description->type_name = "VARBINARY";
-        description->size = static_cast<SQLULEN>(
-            std::get<std::vector<std::uint8_t>>(cell).size());
+        description->size = std::max<SQLULEN>(1, static_cast<SQLULEN>(longest));
     } else if (std::holds_alternative<UuidCell>(cell)) {
         description->type = SQL_GUID;
         description->type_name = "GUID";
         description->size = 36;
     } else if (const auto* text = std::get_if<std::string>(&cell)) {
-        description->size = static_cast<SQLULEN>(text->size());
+        description->size = std::max<SQLULEN>({255, static_cast<SQLULEN>(longest)});
         if (text->compare(0, 16, "OJP_CLOB_PREFIX:") == 0) {
             description->type = SQL_LONGVARCHAR;
             description->type_name = "LONGVARCHAR";
         }
     }
+    finish_column_description(description);
     return true;
 }
 
@@ -6014,75 +6637,149 @@ using NumericAttributeArg = SQLPOINTER;
 using NumericAttributeArg = SQLLEN*;
 #endif
 
+// Resolves an SQLColAttribute(W) field: returns text (is_text) or a numeric value.
+static SQLRETURN column_attribute(StatementHandle* target, SQLUSMALLINT column_number,
+                                 SQLUSMALLINT field_identifier, std::string* text,
+                                 SQLLEN* number, bool* is_text) {
+    *is_text = false;
+    if (field_identifier == SQL_DESC_COUNT || field_identifier == SQL_COLUMN_COUNT) {
+        *number = static_cast<SQLLEN>(target->columns.size());
+        return SQL_SUCCESS;
+    }
+    ColumnDescription description;
+    if (!describe_column(target, column_number, &description)) {
+        return fail(target, "Invalid column number " + std::to_string(column_number) +
+                    " (result set has " + std::to_string(target->columns.size()) + " column(s))",
+                    "07009");
+    }
+    switch (field_identifier) {
+        case SQL_DESC_NAME:
+        case SQL_DESC_LABEL:
+        case SQL_COLUMN_NAME:
+        case SQL_DESC_BASE_COLUMN_NAME:
+            *is_text = true;
+            *text = description.name;
+            return SQL_SUCCESS;
+        case SQL_DESC_TYPE_NAME:
+        case SQL_DESC_LOCAL_TYPE_NAME:
+            *is_text = true;
+            *text = description.type_name;
+            return SQL_SUCCESS;
+        // OJP does not expose the column origin or per-type literals: empty text means "unknown".
+        case SQL_DESC_BASE_TABLE_NAME:
+        case SQL_DESC_TABLE_NAME:
+        case SQL_DESC_SCHEMA_NAME:
+        case SQL_DESC_CATALOG_NAME:
+        case SQL_DESC_LITERAL_PREFIX:
+        case SQL_DESC_LITERAL_SUFFIX:
+            *is_text = true;
+            text->clear();
+            return SQL_SUCCESS;
+        case SQL_DESC_TYPE:
+        case SQL_DESC_CONCISE_TYPE:
+            *number = description.type;
+            return SQL_SUCCESS;
+        case SQL_DESC_LENGTH:
+        case SQL_COLUMN_PRECISION:
+            *number = static_cast<SQLLEN>(std::min<SQLULEN>(
+                description.size, static_cast<SQLULEN>(std::numeric_limits<SQLINTEGER>::max())));
+            return SQL_SUCCESS;
+        case SQL_DESC_PRECISION:
+            // For date/time, ODBC defines PRECISION as the number of fractional-second digits.
+            *number = description.type == SQL_TYPE_TIME || description.type == SQL_TYPE_TIMESTAMP
+                ? description.decimal_digits
+                : static_cast<SQLLEN>(std::min<SQLULEN>(
+                      description.size, static_cast<SQLULEN>(std::numeric_limits<SQLINTEGER>::max())));
+            return SQL_SUCCESS;
+        case SQL_DESC_DISPLAY_SIZE:
+            *number = description.display_size;
+            return SQL_SUCCESS;
+        case SQL_DESC_OCTET_LENGTH:
+        case SQL_COLUMN_LENGTH:
+            *number = description.octet_length;
+            return SQL_SUCCESS;
+        case SQL_DESC_SCALE:
+        case SQL_COLUMN_SCALE:
+            *number = description.decimal_digits;
+            return SQL_SUCCESS;
+        case SQL_DESC_NULLABLE:
+        case SQL_COLUMN_NULLABLE:
+            *number = description.nullable;
+            return SQL_SUCCESS;
+        case SQL_DESC_UNSIGNED:
+            switch (description.type) {
+                case SQL_SMALLINT: case SQL_INTEGER: case SQL_BIGINT: case SQL_DECIMAL:
+                case SQL_NUMERIC: case SQL_REAL: case SQL_FLOAT: case SQL_DOUBLE:
+                    *number = SQL_FALSE;
+                    break;
+                default:
+                    // Per the specification, non-numeric types (and SQL Server TINYINT) are "unsigned".
+                    *number = SQL_TRUE;
+                    break;
+            }
+            return SQL_SUCCESS;
+        case SQL_DESC_AUTO_UNIQUE_VALUE:
+        case SQL_DESC_CASE_SENSITIVE:
+        case SQL_DESC_FIXED_PREC_SCALE:
+            *number = SQL_FALSE;
+            return SQL_SUCCESS;
+        case SQL_DESC_UPDATABLE:
+            *number = SQL_ATTR_READWRITE_UNKNOWN;
+            return SQL_SUCCESS;
+        case SQL_DESC_SEARCHABLE:
+            *number = SQL_PRED_SEARCHABLE;
+            return SQL_SUCCESS;
+        case SQL_DESC_UNNAMED:
+            *number = description.name.empty() ? SQL_UNNAMED : SQL_NAMED;
+            return SQL_SUCCESS;
+        case SQL_DESC_NUM_PREC_RADIX:
+            switch (description.type) {
+                case SQL_TINYINT: case SQL_SMALLINT: case SQL_INTEGER: case SQL_BIGINT:
+                case SQL_DECIMAL: case SQL_NUMERIC:
+                    *number = 10;
+                    break;
+                case SQL_REAL: case SQL_FLOAT: case SQL_DOUBLE:
+                    *number = 2;
+                    break;
+                default:
+                    *number = 0;
+                    break;
+            }
+            return SQL_SUCCESS;
+        default:
+            return fail(target, "SQLColAttribute field " + std::to_string(field_identifier) +
+                        " (column " + std::to_string(column_number) +
+                        ") is not supported by the OJP ODBC driver", "HYC00");
+    }
+}
+
 SQLRETURN SQL_API SQLColAttribute(SQLHSTMT statement, SQLUSMALLINT column_number,
                                   SQLUSMALLINT field_identifier, SQLPOINTER character_attribute,
                                   SQLSMALLINT buffer_length, SQLSMALLINT* string_length,
                                   NumericAttributeArg numeric_attribute_arg) {
     return guarded(statement, "SQLColAttribute", [&]() -> SQLRETURN {
-         auto* numeric_attribute = static_cast<SQLLEN*>(numeric_attribute_arg);
+        auto* numeric_attribute = static_cast<SQLLEN*>(numeric_attribute_arg);
         if (statement == SQL_NULL_HSTMT ||
             static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
             return SQL_INVALID_HANDLE;
         }
         auto* target = static_cast<StatementHandle*>(statement);
-        ColumnDescription description;
-        if (!describe_column(target, column_number, &description)) {
-            return fail(target, "Invalid column number", "07009");
-        }
+        clear_diagnostics(target);
         std::string text;
-        switch (field_identifier) {
-            case SQL_DESC_NAME:
-            case SQL_DESC_LABEL:
-            case SQL_COLUMN_NAME:
-                text = description.name;
-                break;
-            case SQL_DESC_TYPE_NAME:
-                text = description.type_name;
-                break;
-            case SQL_DESC_TYPE:
-            case SQL_DESC_CONCISE_TYPE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = description.type;
-                return SQL_SUCCESS;
-            case SQL_DESC_LENGTH:
-            case SQL_DESC_PRECISION:
-            case SQL_DESC_DISPLAY_SIZE:
-            case SQL_COLUMN_LENGTH:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = static_cast<SQLLEN>(description.size);
-                return SQL_SUCCESS;
-            case SQL_DESC_OCTET_LENGTH:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = static_cast<SQLLEN>(description.size);
-                return SQL_SUCCESS;
-            case SQL_DESC_SCALE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = description.decimal_digits;
-                return SQL_SUCCESS;
-            case SQL_DESC_NULLABLE:
-            case SQL_COLUMN_NULLABLE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = description.nullable;
-                return SQL_SUCCESS;
-            case SQL_DESC_UNSIGNED:
-            case SQL_DESC_AUTO_UNIQUE_VALUE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = SQL_FALSE;
-                return SQL_SUCCESS;
-            default:
-                return fail(target, "Requested column attribute is not supported", "HYC00");
+        SQLLEN number = 0;
+        bool is_text = false;
+        const auto result = column_attribute(target, column_number, field_identifier,
+                                             &text, &number, &is_text);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        if (!is_text) {
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required (field " +
+                            std::to_string(field_identifier) + ")", "HY009");
+            }
+            *numeric_attribute = number;
+            return SQL_SUCCESS;
         }
         if (buffer_length < 0) {
             return fail(target, "Invalid column attribute buffer length", "HY090");
@@ -6108,68 +6805,37 @@ SQLRETURN SQL_API SQLColAttributeW(SQLHSTMT statement, SQLUSMALLINT column_numbe
                                    SQLSMALLINT* string_length,
                                    NumericAttributeArg numeric_attribute_arg) {
     return guarded(statement, "SQLColAttributeW", [&]() -> SQLRETURN {
-         auto* numeric_attribute = static_cast<SQLLEN*>(numeric_attribute_arg);
+        auto* numeric_attribute = static_cast<SQLLEN*>(numeric_attribute_arg);
         if (statement == SQL_NULL_HSTMT ||
             static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
             return SQL_INVALID_HANDLE;
         }
         auto* target = static_cast<StatementHandle*>(statement);
-        ColumnDescription description;
-        if (!describe_column(target, column_number, &description)) {
-            return fail(target, "Invalid column number", "07009");
-        }
+        clear_diagnostics(target);
         std::string text;
-        switch (field_identifier) {
-            case SQL_DESC_NAME:
-            case SQL_DESC_LABEL:
-            case SQL_COLUMN_NAME:
-                text = description.name;
-                break;
-            case SQL_DESC_TYPE_NAME:
-                text = description.type_name;
-                break;
-            case SQL_DESC_TYPE:
-            case SQL_DESC_CONCISE_TYPE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = description.type;
-                return SQL_SUCCESS;
-            case SQL_DESC_LENGTH:
-            case SQL_DESC_PRECISION:
-            case SQL_DESC_DISPLAY_SIZE:
-            case SQL_COLUMN_LENGTH:
-            case SQL_DESC_OCTET_LENGTH:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = static_cast<SQLLEN>(description.size);
-                return SQL_SUCCESS;
-            case SQL_DESC_SCALE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = description.decimal_digits;
-                return SQL_SUCCESS;
-            case SQL_DESC_NULLABLE:
-            case SQL_COLUMN_NULLABLE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = description.nullable;
-                return SQL_SUCCESS;
-            case SQL_DESC_UNSIGNED:
-            case SQL_DESC_AUTO_UNIQUE_VALUE:
-                if (numeric_attribute == nullptr) {
-                    return fail(target, "Numeric column attribute output is required", "HY009");
-                }
-                *numeric_attribute = SQL_FALSE;
-                return SQL_SUCCESS;
-            default:
-                return fail(target, "Requested column attribute is not supported", "HYC00");
+        SQLLEN number = 0;
+        bool is_text = false;
+        const auto result = column_attribute(target, column_number, field_identifier,
+                                             &text, &number, &is_text);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
         }
-        return write_wide_string(target, text, static_cast<SQLWCHAR*>(character_attribute),
-                                 buffer_length, string_length);
+        if (!is_text) {
+            if (numeric_attribute == nullptr) {
+                return fail(target, "Numeric column attribute output is required (field " +
+                            std::to_string(field_identifier) + ")", "HY009");
+            }
+            *numeric_attribute = number;
+            return SQL_SUCCESS;
+        }
+        SQLINTEGER bytes = 0;
+        const auto write_result = write_wide_string_bytes(target, text, character_attribute,
+                                                          buffer_length, &bytes);
+        if (string_length != nullptr) {
+            *string_length = static_cast<SQLSMALLINT>(std::min<SQLINTEGER>(
+                bytes, std::numeric_limits<SQLSMALLINT>::max()));
+        }
+        return write_result;
     });
 }
 
@@ -6200,6 +6866,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
             if (option == SQL_CLOSE) {
                 reset_data_at_execution(target);
                 target->columns.clear();
+                target->column_meta.clear();
                 target->rows.clear();
                 target->get_data_offsets.clear();
                 target->row_count = -1;

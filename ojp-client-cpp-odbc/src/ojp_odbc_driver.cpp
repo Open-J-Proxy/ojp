@@ -22,6 +22,7 @@
 #include <charconv>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -1540,6 +1541,58 @@ bool decode_big_decimal_wire(const std::string& bytes, std::string* decimal) {
     return true;
 }
 
+// Parses fixed-offset zones: "UTC", "GMT", "Z", "+HH:MM", "-HHMM", "+HH", "UTC-03:00".
+bool parse_zone_offset(const std::string& raw, int* offset_seconds) {
+    *offset_seconds = 0;
+    std::string zone = raw;
+    for (const char* prefix : {"UTC", "GMT", "UT"}) {
+        if (zone.rfind(prefix, 0) == 0) {
+            zone.erase(0, std::strlen(prefix));
+            break;
+        }
+    }
+    if (zone.rfind("Etc/", 0) == 0) {
+        // POSIX convention: "Etc/GMT+3" means UTC-03:00.
+        if (!parse_zone_offset(zone.substr(4), offset_seconds)) {
+            return false;
+        }
+        *offset_seconds = -*offset_seconds;
+        return true;
+    }
+    if (zone.empty() || zone == "Z") {
+        return true;
+    }
+    if (zone[0] != '+' && zone[0] != '-') {
+        return false;
+    }
+    const int sign = zone[0] == '-' ? -1 : 1;
+    std::string digits;
+    for (std::size_t index = 1; index < zone.size(); ++index) {
+        if (std::isdigit(static_cast<unsigned char>(zone[index]))) {
+            digits.push_back(zone[index]);
+        } else if (zone[index] != ':') {
+            return false;
+        }
+    }
+    int hours = 0;
+    int minutes = 0;
+    int seconds = 0;
+    if (digits.size() == 1 || digits.size() == 2) {
+        hours = std::stoi(digits);
+    } else if (digits.size() == 4 || digits.size() == 6) {
+        hours = std::stoi(digits.substr(0, 2));
+        minutes = std::stoi(digits.substr(2, 2));
+        seconds = digits.size() == 6 ? std::stoi(digits.substr(4, 2)) : 0;
+    } else {
+        return false;
+    }
+    if (hours > 18 || minutes > 59 || seconds > 59) {
+        return false;
+    }
+    *offset_seconds = sign * (hours * 3600 + minutes * 60 + seconds);
+    return true;
+}
+
 bool decode_value(const ParameterValue& value, Cell* output) {
     switch (value.value_case()) {
         case ParameterValue::VALUE_NOT_SET:
@@ -1607,8 +1660,14 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             return true;
         }
         case ParameterValue::kTimestampValue: {
-            const auto& instant = value.timestamp_value().instant();
-            const std::time_t timestamp = static_cast<std::time_t>(instant.seconds());
+            const auto& timestamp_value = value.timestamp_value();
+            const auto& instant = timestamp_value.instant();
+            // Applies the zone sent by the server ("UTC", "Z", "-03:00", "GMT+2"...). Named zones
+            // (e.g. "America/Sao_Paulo") are not resolved here and stay in UTC.
+            int offset_seconds = 0;
+            const bool has_offset = parse_zone_offset(timestamp_value.timezone(), &offset_seconds);
+            const std::time_t timestamp =
+                static_cast<std::time_t>(instant.seconds() + (has_offset ? offset_seconds : 0));
             std::tm utc_time{};
             // Windows uses gmtime_s; POSIX uses gmtime_r for thread-safe UTC conversion.
 #if defined(_WIN32)
@@ -1620,6 +1679,13 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             }
             std::ostringstream text;
             text << std::put_time(&utc_time, "%Y-%m-%d %H:%M:%S") << format_fraction(instant.nanos());
+            if (timestamp_value.original_type() ==
+                com::openjproxy::grpc::TEMPORAL_TYPE_OFFSET_DATE_TIME) {
+                // SQL Server format for datetimeoffset: "YYYY-MM-DD HH:MM:SS[.f] +HH:MM".
+                const int absolute = std::abs(offset_seconds);
+                text << ' ' << (offset_seconds < 0 ? '-' : '+') << std::setfill('0')
+                     << std::setw(2) << absolute / 3600 << ':' << std::setw(2) << absolute / 60 % 60;
+            }
             *output = text.str();
             return true;
         }
@@ -2268,6 +2334,77 @@ bool is_dml_result_set_sql(const std::string& sql) {
     return false;
 }
 
+// Long text up to this size (UTF-8) is sent inline in the request; above it a LOB is used (the
+// server's default gRPC message limit is 4 MiB).
+constexpr std::size_t kInlineTextLobLimit = 2 * 1024 * 1024;
+
+// Encodes decimal text ("-123.45") as BigDecimalWire: 0x01, int32 length, digits, int32 scale.
+bool encode_decimal_wire(const std::string& raw, std::string* wire) {
+    const std::string decimal_text = trim_copy(raw);
+    std::string digits;
+    int scale = 0;
+    bool after_decimal = false;
+    bool negative = false;
+    std::size_t index = 0;
+    if (!decimal_text.empty() && (decimal_text[0] == '-' || decimal_text[0] == '+')) {
+        negative = decimal_text[0] == '-';
+        index = 1;
+    }
+    for (; index < decimal_text.size(); ++index) {
+        const char character = decimal_text[index];
+        if (character == '.' && !after_decimal) {
+            after_decimal = true;
+        } else if (character >= '0' && character <= '9') {
+            digits.push_back(character);
+            if (after_decimal) {
+                ++scale;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (digits.empty()) {
+        return false;
+    }
+    const auto first_significant = digits.find_first_not_of('0');
+    digits = first_significant == std::string::npos ? "0" : digits.substr(first_significant);
+    const std::string unscaled = negative && digits != "0" ? "-" + digits : digits;
+    wire->clear();
+    wire->push_back('\1');
+    const auto length = static_cast<std::uint32_t>(unscaled.size());
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        wire->push_back(static_cast<char>((length >> shift) & 0xff));
+    }
+    wire->append(unscaled);
+    const auto wire_scale = static_cast<std::uint32_t>(scale);
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        wire->push_back(static_cast<char>((wire_scale >> shift) & 0xff));
+    }
+    return true;
+}
+
+// Wall-clock date/time sent as a UTC instant (same contract used by SQL_C_TYPE_TIMESTAMP).
+void set_timestamp_value(ParameterValue* value, const SQL_TIMESTAMP_STRUCT& timestamp) {
+    auto* timestamp_value = value->mutable_timestamp_value();
+    const std::int64_t year = timestamp.year - (timestamp.month <= 2 ? 1 : 0);
+    const std::int64_t era = (year >= 0 ? year : year - 399) / 400;
+    const auto year_of_era = static_cast<std::uint32_t>(year - era * 400);
+    const auto adjusted_month = static_cast<std::int32_t>(timestamp.month) +
+        (timestamp.month > 2 ? -3 : 9);
+    const auto day_of_year = (153 * adjusted_month + 2) / 5 +
+        static_cast<std::int32_t>(timestamp.day) - 1;
+    const auto day_of_era = year_of_era * 365 + year_of_era / 4 -
+        year_of_era / 100 + static_cast<std::uint32_t>(day_of_year);
+    const std::int64_t days = era * 146097 + day_of_era - 719468;
+    const std::int64_t seconds = days * 86400 +
+        timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second;
+    auto* instant = timestamp_value->mutable_instant();
+    instant->set_seconds(seconds);
+    instant->set_nanos(static_cast<std::int32_t>(timestamp.fraction));
+    timestamp_value->set_timezone("UTC");
+    timestamp_value->set_original_type(com::openjproxy::grpc::TEMPORAL_TYPE_TIMESTAMP);
+}
+
 // OJP binds NULL parameters with PreparedStatement.setNull, which needs a java.sql.Types code.
 std::int32_t jdbc_null_type(SQLSMALLINT sql_type) {
     switch (sql_type) {
@@ -2328,51 +2465,22 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
             default: c_type = SQL_C_CHAR; break;
         }
     }
+    // ODBC 2.x aliases used by older applications/driver managers.
+    if (c_type == SQL_C_DATE) {
+        c_type = SQL_C_TYPE_DATE;
+    } else if (c_type == SQL_C_TIME) {
+        c_type = SQL_C_TYPE_TIME;
+    } else if (c_type == SQL_C_TIMESTAMP) {
+        c_type = SQL_C_TYPE_TIMESTAMP;
+    }
     auto set_decimal = [&](const std::string& decimal_text) {
-        std::string digits;
-        int scale = 0;
-        bool after_decimal = false;
-        bool negative = false;
-        std::size_t index = 0;
-        if (!decimal_text.empty() && (decimal_text[0] == '-' || decimal_text[0] == '+')) {
-            negative = decimal_text[0] == '-';
-            index = 1;
-        }
-        for (; index < decimal_text.size(); ++index) {
-            const char character = decimal_text[index];
-            if (character == '.' && !after_decimal) {
-                after_decimal = true;
-            } else if (character >= '0' && character <= '9') {
-                digits.push_back(character);
-                if (after_decimal) {
-                    ++scale;
-                }
-            } else {
-                error->state = "22018";
-                error->message = "Invalid decimal parameter";
-                error->native_error = static_cast<SQLINTEGER>(parameter_index);
-                return false;
-            }
-        }
-        if (digits.empty()) {
+        std::string wire;
+        if (!encode_decimal_wire(decimal_text, &wire)) {
             error->state = "22018";
-            error->message = "Invalid decimal parameter";
+            error->message = "Parameter " + std::to_string(parameter_index) +
+                ": value '" + decimal_text.substr(0, 64) + "' is not a valid decimal number";
             error->native_error = static_cast<SQLINTEGER>(parameter_index);
             return false;
-        }
-        const auto first_significant = digits.find_first_not_of('0');
-        digits = first_significant == std::string::npos ? "0" : digits.substr(first_significant);
-        std::string unscaled = negative && digits != "0" ? "-" + digits : digits;
-        std::string wire;
-        wire.push_back('\1');
-        const auto length = static_cast<std::uint32_t>(unscaled.size());
-        for (int shift = 24; shift >= 0; shift -= 8) {
-            wire.push_back(static_cast<char>((length >> shift) & 0xff));
-        }
-        wire.append(unscaled);
-        const auto wire_scale = static_cast<std::uint32_t>(scale);
-        for (int shift = 24; shift >= 0; shift -= 8) {
-            wire.push_back(static_cast<char>((wire_scale >> shift) & 0xff));
         }
         value->set_bytes_value(wire);
         return true;
@@ -2396,24 +2504,7 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         }
         if (temporal_type == SQL_C_TYPE_TIMESTAMP) {
             const auto* timestamp = reinterpret_cast<const SQL_TIMESTAMP_STRUCT*>(data);
-            auto* timestamp_value = value->mutable_timestamp_value();
-            const std::int64_t year = timestamp->year - (timestamp->month <= 2 ? 1 : 0);
-            const std::int64_t era = (year >= 0 ? year : year - 399) / 400;
-            const auto year_of_era = static_cast<std::uint32_t>(year - era * 400);
-            const auto adjusted_month = static_cast<std::int32_t>(timestamp->month) +
-                (timestamp->month > 2 ? -3 : 9);
-            const auto day_of_year = (153 * adjusted_month + 2) / 5 +
-                static_cast<std::int32_t>(timestamp->day) - 1;
-            const auto day_of_era = year_of_era * 365 + year_of_era / 4 -
-                year_of_era / 100 + static_cast<std::uint32_t>(day_of_year);
-            const std::int64_t days = era * 146097 + day_of_era - 719468;
-            const std::int64_t seconds = days * 86400 +
-                timestamp->hour * 3600 + timestamp->minute * 60 + timestamp->second;
-            auto* instant = timestamp_value->mutable_instant();
-            instant->set_seconds(seconds);
-            instant->set_nanos(static_cast<std::int32_t>(timestamp->fraction));
-            timestamp_value->set_timezone("UTC");
-            timestamp_value->set_original_type(com::openjproxy::grpc::TEMPORAL_TYPE_TIMESTAMP);
+            set_timestamp_value(value, *timestamp);
             return true;
         }
         return false;
@@ -2510,6 +2601,39 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         case SQL_C_SBIGINT:
             value->set_long_value(*reinterpret_cast<const SQLBIGINT*>(data));
             return true;
+        case SQL_C_UTINYINT:
+            value->set_int_value(*reinterpret_cast<const SQLCHAR*>(data));
+            return true;
+        case SQL_C_USHORT:
+            value->set_int_value(*reinterpret_cast<const SQLUSMALLINT*>(data));
+            return true;
+        case SQL_C_ULONG:
+            value->set_long_value(*reinterpret_cast<const SQLUINTEGER*>(data));
+            return true;
+        case SQL_C_UBIGINT: {
+            const auto unsigned_value = *reinterpret_cast<const SQLUBIGINT*>(data);
+            if (unsigned_value > static_cast<SQLUBIGINT>(std::numeric_limits<std::int64_t>::max())) {
+                error->state = "22003";
+                error->message = "Parameter " + std::to_string(parameter_index) +
+                    ": unsigned BIGINT value " + std::to_string(unsigned_value) +
+                    " exceeds the signed 64-bit range supported by OJP";
+                error->native_error = static_cast<SQLINTEGER>(parameter_index);
+                return false;
+            }
+            value->set_long_value(static_cast<std::int64_t>(unsigned_value));
+            return true;
+        }
+        case SQL_C_GUID: {
+            const auto* guid = reinterpret_cast<const SQLGUID*>(data);
+            char text[37];
+            std::snprintf(text, sizeof(text),
+                          "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                          static_cast<unsigned long>(guid->Data1), guid->Data2, guid->Data3,
+                          guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
+                          guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7]);
+            value->set_string_value(text);
+            return true;
+        }
         case SQL_C_FLOAT:
             value->set_float_value(*reinterpret_cast<const float*>(data));
             return true;
@@ -2526,7 +2650,9 @@ bool set_parameter_value(ParameterValue* value, const BoundParameter& bound,
         }
         default:
             error->state = "07006";
-            error->message = "ODBC C data type is not supported by the OJP client";
+            error->message = "Parameter " + std::to_string(parameter_index) + ": ODBC C data type " +
+                std::to_string(c_type) + " (SQL type " + std::to_string(bound.parameter_type) +
+                ") is not supported by the OJP client";
             error->native_error = static_cast<SQLINTEGER>(parameter_index);
             return false;
     }
@@ -2560,6 +2686,273 @@ ParameterTypeProto parameter_type(const BoundParameter& bound) {
         case SQL_TYPE_TIME: return PT_TIME;
         case SQL_TYPE_TIMESTAMP: return PT_TIMESTAMP;
         default: return PT_STRING;
+    }
+}
+
+// The server strictly casts the value according to the ParameterType (e.g. FLOAT requires Float, LONG
+// requires Long). Since the value field comes from the C type and the ParameterType from the SQL type,
+// align both here (e.g. SQL_C_DOUBLE with SQL_REAL, SQL_C_SLONG with SQL_BIGINT, text with SQL_INTEGER).
+bool coerce_parameter_value(ParameterValue* value, ParameterTypeProto type,
+                            SQLUSMALLINT parameter_index, Diagnostic* error) {
+    using namespace com::openjproxy::grpc;
+    const auto value_case = value->value_case();
+    auto fail_with = [&](const char* state, const std::string& detail) {
+        error->state = state;
+        error->message = "Parameter " + std::to_string(parameter_index) + " (" +
+            ParameterTypeProto_Name(type) + "): " + detail;
+        error->native_error = static_cast<SQLINTEGER>(parameter_index);
+        return false;
+    };
+    auto value_text = [&]() -> std::string {
+        switch (value_case) {
+            case ParameterValue::kBoolValue: return value->bool_value() ? "1" : "0";
+            case ParameterValue::kIntValue: return std::to_string(value->int_value());
+            case ParameterValue::kLongValue: return std::to_string(value->long_value());
+            case ParameterValue::kFloatValue:
+            case ParameterValue::kDoubleValue: {
+                const double number = value_case == ParameterValue::kFloatValue
+                    ? static_cast<double>(value->float_value()) : value->double_value();
+                char buffer[64];
+                const auto result = std::to_chars(buffer, buffer + sizeof(buffer), number);
+                return std::string(buffer, result.ptr);
+            }
+            case ParameterValue::kStringValue: return value->string_value();
+            default: return {};
+        }
+    };
+    const bool numeric_or_text = value_case == ParameterValue::kBoolValue ||
+        value_case == ParameterValue::kIntValue || value_case == ParameterValue::kLongValue ||
+        value_case == ParameterValue::kFloatValue || value_case == ParameterValue::kDoubleValue ||
+        value_case == ParameterValue::kStringValue;
+    // Reads the current value as double (for FLOAT/DOUBLE) or integer (for INT/LONG).
+    auto as_double = [&](double* number) -> bool {
+        switch (value_case) {
+            case ParameterValue::kBoolValue: *number = value->bool_value() ? 1 : 0; return true;
+            case ParameterValue::kIntValue: *number = value->int_value(); return true;
+            case ParameterValue::kLongValue: *number = static_cast<double>(value->long_value()); return true;
+            case ParameterValue::kFloatValue: *number = value->float_value(); return true;
+            case ParameterValue::kDoubleValue: *number = value->double_value(); return true;
+            case ParameterValue::kStringValue: {
+                const std::string text = trim_copy(value->string_value());
+                const auto result = std::from_chars(text.data(), text.data() + text.size(), *number);
+                return !text.empty() && result.ec == std::errc{} && result.ptr == text.data() + text.size();
+            }
+            default: return false;
+        }
+    };
+    auto as_integer = [&](std::int64_t* number) -> bool {
+        switch (value_case) {
+            case ParameterValue::kBoolValue: *number = value->bool_value() ? 1 : 0; return true;
+            case ParameterValue::kIntValue: *number = value->int_value(); return true;
+            case ParameterValue::kLongValue: *number = value->long_value(); return true;
+            case ParameterValue::kStringValue: {
+                std::string text = trim_copy(value->string_value());
+                if (!text.empty() && text[0] == '+') {
+                    text.erase(0, 1);
+                }
+                const auto result = std::from_chars(text.data(), text.data() + text.size(), *number);
+                if (!text.empty() && result.ec == std::errc{} && result.ptr == text.data() + text.size()) {
+                    return true;
+                }
+                [[fallthrough]];
+            }
+            default: {
+                double real = 0;
+                if (!as_double(&real) || !std::isfinite(real) ||
+                    real < -9223372036854775808.0 || real >= 9223372036854775808.0) {
+                    return false;
+                }
+                // Truncation toward zero, as SQLBindParameter does for integer types.
+                *number = static_cast<std::int64_t>(real);
+                return true;
+            }
+        }
+    };
+    switch (type) {
+        case PT_INT:
+        case PT_SHORT:
+        case PT_BYTE: {
+            if (value_case == ParameterValue::kIntValue) {
+                return true;
+            }
+            std::int64_t number = 0;
+            if (!numeric_or_text || !as_integer(&number)) {
+                return fail_with("22018", "value '" + value_text().substr(0, 64) +
+                                 "' cannot be converted to an integer");
+            }
+            const std::int64_t minimum = type == PT_SHORT ? -32768 : std::numeric_limits<std::int32_t>::min();
+            const std::int64_t maximum = type == PT_SHORT ? 32767 : std::numeric_limits<std::int32_t>::max();
+            if (number < minimum || number > maximum) {
+                return fail_with("22003", "value " + std::to_string(number) + " is out of range");
+            }
+            value->set_int_value(static_cast<std::int32_t>(number));
+            return true;
+        }
+        case PT_LONG: {
+            if (value_case == ParameterValue::kLongValue) {
+                return true;
+            }
+            std::int64_t number = 0;
+            if (!numeric_or_text || !as_integer(&number)) {
+                return fail_with("22018", "value '" + value_text().substr(0, 64) +
+                                 "' cannot be converted to a BIGINT");
+            }
+            value->set_long_value(number);
+            return true;
+        }
+        case PT_FLOAT:
+        case PT_DOUBLE: {
+            const bool already = type == PT_FLOAT ? value_case == ParameterValue::kFloatValue
+                                                  : value_case == ParameterValue::kDoubleValue;
+            if (already) {
+                return true;
+            }
+            double number = 0;
+            if (!numeric_or_text || !as_double(&number)) {
+                return fail_with("22018", "value '" + value_text().substr(0, 64) +
+                                 "' cannot be converted to a floating-point number");
+            }
+            if (type == PT_FLOAT) {
+                if (std::isfinite(number) && std::fabs(number) > std::numeric_limits<float>::max()) {
+                    return fail_with("22003", "value " + value_text() + " is out of REAL range");
+                }
+                value->set_float_value(static_cast<float>(number));
+            } else {
+                value->set_double_value(number);
+            }
+            return true;
+        }
+        case PT_BOOLEAN: {
+            if (value_case == ParameterValue::kBoolValue) {
+                return true;
+            }
+            if (value_case == ParameterValue::kStringValue) {
+                std::string text = trim_copy(value->string_value());
+                std::transform(text.begin(), text.end(), text.begin(),
+                               [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+                if (text == "true" || text == "t" || text == "y" || text == "s") {
+                    value->set_bool_value(true);
+                    return true;
+                }
+                if (text == "false" || text == "f" || text == "n") {
+                    value->set_bool_value(false);
+                    return true;
+                }
+            }
+            double number = 0;
+            if (!numeric_or_text || !as_double(&number)) {
+                return fail_with("22018", "value '" + value_text().substr(0, 64) +
+                                 "' cannot be converted to BIT");
+            }
+            value->set_bool_value(number != 0);
+            return true;
+        }
+        case PT_STRING:
+        case PT_N_STRING:
+            if (value_case != ParameterValue::kStringValue && numeric_or_text) {
+                value->set_string_value(value_text());
+            }
+            return true;
+        case PT_BIG_DECIMAL: {
+            if (value_case == ParameterValue::kBytesValue || !numeric_or_text) {
+                return true;
+            }
+            std::string text = value_text();
+            if (value_case == ParameterValue::kFloatValue || value_case == ParameterValue::kDoubleValue) {
+                // to_chars may produce scientific notation; BigDecimalWire needs fixed digits.
+                const double number = value_case == ParameterValue::kFloatValue
+                    ? static_cast<double>(value->float_value()) : value->double_value();
+                char buffer[512];
+                const auto result = std::to_chars(buffer, buffer + sizeof(buffer), number,
+                                                  std::chars_format::fixed);
+                if (result.ec != std::errc{} || !std::isfinite(number)) {
+                    return fail_with("22003", "value " + text + " cannot be represented as DECIMAL");
+                }
+                text.assign(buffer, result.ptr);
+            } else if (value_case == ParameterValue::kBoolValue) {
+                text = value->bool_value() ? "1" : "0";
+            }
+            std::string wire;
+            if (!encode_decimal_wire(text, &wire)) {
+                return fail_with("22018", "value '" + text.substr(0, 64) + "' is not a valid decimal number");
+            }
+            value->set_bytes_value(wire);
+            return true;
+        }
+        case PT_DATE:
+        case PT_TIME:
+        case PT_TIMESTAMP: {
+            SQL_TIMESTAMP_STRUCT parsed{};
+            bool has_date = false;
+            bool has_time = false;
+            if (value_case == ParameterValue::kStringValue) {
+                if (!parse_date_time(value->string_value(), &parsed, &has_date, &has_time)) {
+                    return fail_with("22007", "value '" + value->string_value().substr(0, 64) +
+                                     "' is not a valid date/time");
+                }
+            } else if (value_case == ParameterValue::kTimestampValue && type != PT_TIMESTAMP) {
+                // E.g. the application sends SQL_C_TYPE_TIMESTAMP for a DATE/TIME column (keeps the fraction for TIME).
+                const auto& instant = value->timestamp_value().instant();
+                const std::int64_t days = instant.seconds() >= 0
+                    ? instant.seconds() / 86400 : -((-instant.seconds() + 86399) / 86400);
+                const std::int64_t second_of_day = instant.seconds() - days * 86400;
+                if (type == PT_TIME) {
+                    auto* time = value->mutable_time_value();
+                    const auto nanos = instant.nanos();
+                    time->set_hours(static_cast<std::int32_t>(second_of_day / 3600));
+                    time->set_minutes(static_cast<std::int32_t>(second_of_day / 60 % 60));
+                    time->set_seconds(static_cast<std::int32_t>(second_of_day % 60));
+                    time->set_nanos(nanos);
+                    return true;
+                }
+                // civil_from_days (Howard Hinnant).
+                const std::int64_t z = days + 719468;
+                const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+                const auto doe = static_cast<std::uint32_t>(z - era * 146097);
+                const std::uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+                const std::uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+                const std::uint32_t mp = (5 * doy + 2) / 153;
+                const auto day = static_cast<std::int32_t>(doy - (153 * mp + 2) / 5 + 1);
+                const auto month = static_cast<std::int32_t>(mp < 10 ? mp + 3 : mp - 9);
+                const auto year = static_cast<std::int32_t>(yoe + era * 400 + (month <= 2 ? 1 : 0));
+                auto* date = value->mutable_date_value();
+                date->set_year(year);
+                date->set_month(month);
+                date->set_day(day);
+                return true;
+            } else if (value_case == ParameterValue::kDateValue && type == PT_TIMESTAMP) {
+                const auto date = value->date_value();
+                parsed.year = static_cast<SQLSMALLINT>(date.year());
+                parsed.month = static_cast<SQLUSMALLINT>(date.month());
+                parsed.day = static_cast<SQLUSMALLINT>(date.day());
+                set_timestamp_value(value, parsed);
+                return true;
+            } else {
+                return true;
+            }
+            if (type == PT_DATE) {
+                auto* date = value->mutable_date_value();
+                date->set_year(parsed.year);
+                date->set_month(parsed.month);
+                date->set_day(parsed.day);
+            } else if (type == PT_TIME) {
+                auto* time = value->mutable_time_value();
+                time->set_hours(parsed.hour);
+                time->set_minutes(parsed.minute);
+                time->set_seconds(parsed.second);
+                time->set_nanos(static_cast<std::int32_t>(parsed.fraction));
+            } else {
+                if (!has_date) {
+                    parsed.year = 1900;
+                    parsed.month = 1;
+                    parsed.day = 1;
+                }
+                set_timestamp_value(value, parsed);
+            }
+            return true;
+        }
+        default:
+            return true;
     }
 }
 
@@ -3497,6 +3890,15 @@ SQLRETURN execute_statement(StatementHandle* statement) {
                 }
                 continue;
             }
+            if (bound.parameter_type != SQL_LONGVARBINARY &&
+                lob_data.size() <= kInlineTextLobLimit) {
+                // Long text goes inline (setString/setNString). OJP server 1.0.x does not handle
+                // PT_N_CLOB and would call setObject(uuid), storing the LOB UUID instead of the text.
+                parameter->set_type(bound.parameter_type == SQL_WLONGVARCHAR
+                    ? com::openjproxy::grpc::PT_N_STRING : com::openjproxy::grpc::PT_STRING);
+                value->set_string_value(lob_data);
+                continue;
+            }
             const LobType lob_type = bound.parameter_type == SQL_LONGVARBINARY
                 ? com::openjproxy::grpc::LT_BLOB : com::openjproxy::grpc::LT_CLOB;
             std::string lob_uuid;
@@ -3504,11 +3906,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             if (!SQL_SUCCEEDED(lob_result)) {
                 return lob_result;
             }
+            // PT_CLOB (setClob) also for Unicode text: it is the only text LOB type
+            // supported by every server version.
             parameter->set_type(bound.parameter_type == SQL_LONGVARBINARY
-                ? com::openjproxy::grpc::PT_BLOB
-                : (bound.parameter_type == SQL_WLONGVARCHAR
-                    ? com::openjproxy::grpc::PT_N_CLOB
-                    : com::openjproxy::grpc::PT_CLOB));
+                ? com::openjproxy::grpc::PT_BLOB : com::openjproxy::grpc::PT_CLOB);
+            log_message(LogLevel::debug, "parameter " + std::to_string(entry.first) + " sent as LOB " +
+                        lob_uuid + " (" + std::to_string(lob_data.size()) + " bytes)");
             value->set_string_value(lob_uuid);
             continue;
         }
@@ -3517,7 +3920,12 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         }
         parameter->set_type(parameter_type(bound));
         Diagnostic parameter_error;
-        if (!set_parameter_value(value, bound, entry.first, &parameter_error)) {
+        if (!set_parameter_value(value, bound, entry.first, &parameter_error) ||
+            (parameter->type() != com::openjproxy::grpc::PT_NULL &&
+             !coerce_parameter_value(value, parameter->type(), entry.first, &parameter_error))) {
+            log_message(LogLevel::warn, "parameter " + std::to_string(entry.first) +
+                        " rejected (C type " + std::to_string(bound.value_type) + ", SQL type " +
+                        std::to_string(bound.parameter_type) + "): " + parameter_error.message);
             return fail(statement, parameter_error.message, parameter_error.state,
                         parameter_error.native_error);
         }

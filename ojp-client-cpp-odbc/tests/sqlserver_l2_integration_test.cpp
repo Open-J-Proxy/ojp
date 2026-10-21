@@ -326,7 +326,7 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table, std::st
     expect(column_count == 19, "expected nineteen SQL Server L2 result columns");
     require_success(SQLFetch(statement), "SQLFetch(select types)", SQL_HANDLE_STMT, statement);
     expect_column(statement, 1, "id", SQL_INTEGER);
-    expect_column(statement, 3, "val_varchar", SQL_VARCHAR);
+    expect_column(statement, 3, "val_varchar", SQL_WVARCHAR);
     expect_column(statement, 4, "val_double_precision", SQL_DOUBLE);
     expect_column(statement, 5, "val_bigint", SQL_BIGINT);
     expect_column(statement, 8, "val_boolean", SQL_BIT);
@@ -357,9 +357,9 @@ void verify_multiple_types(SQLHSTMT statement, const std::string& table, std::st
     expect_text(statement, 14, "11:12:13");
     expect_text(statement, 15, "2025-03-30 21:22:23");
     expect_text(statement, 16, "2024-12-01 10:10:10");
-    expect_text(statement, 17, "2024-12-01 08:10:10");
+    expect_text(statement, 17, "2024-12-01 10:10:10 +02:00");
     expect_text(statement, 18, "2024-12-01 10:10:10.0000000 +02:00");
-    expect_text(statement, 19, "1900-01-01 21:20:30");
+    expect_text(statement, 19, "1900-01-01 16:20:30 -05:00");
     close_and_reset(statement);
 
     stage = "insert row containing NULL values";
@@ -505,9 +505,9 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     require_success(SQLFetch(statement), "SQLFetch(select specific types)",
                     SQL_HANDLE_STMT, statement);
     stage = "describe SQL Server NTEXT result";
-    expect_column(statement, 2, "ntext_col", SQL_VARCHAR);
+    expect_column(statement, 2, "ntext_col", SQL_WLONGVARCHAR);
     stage = "describe SQL Server VARBINARY(MAX) result";
-    expect_column(statement, 12, "varbinary_max", SQL_VARBINARY);
+    expect_column(statement, 12, "varbinary_max", SQL_LONGVARBINARY);
     stage = "read SQL Server-specific SELECT identity";
     expect(get_value<SQLBIGINT>(statement, 1, SQL_C_SBIGINT) == generated_id,
            "specific-types SELECT returned the wrong identity");
@@ -522,7 +522,7 @@ void verify_specific_and_large_types(SQLHSTMT statement, const std::string& tabl
     stage = "read SQL Server UNIQUEIDENTIFIER result";
     expect(get_text(statement, 6).size() == 36, "UNIQUEIDENTIFIER should use the GUID format");
     stage = "read SQL Server DATETIMEOFFSET result";
-    expect_text(statement, 7, "2024-12-01 10:10:10");
+    expect_text(statement, 7, "2024-12-01 10:10:10 +00:00");
     stage = "read SQL Server DATETIME2 result";
     expect_text(statement, 8, "2024-12-01 14:30:45.123");
     stage = "read SQL Server SMALLDATETIME result";

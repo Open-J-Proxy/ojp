@@ -109,6 +109,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
         var sessionManager = actionContext.getSessionManager();
         List<Parameter> params = null;
         boolean addBatch = false;
+        int[] batchUpdateCounts = null;
 
         try {
             // Check if SQL requires session affinity (temporary tables, session variables,
@@ -125,12 +126,20 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
 
             params = ProtoConverter.fromProtoList(request.getParametersList());
             addBatch = StatementRequestValidator.isAddBatchOperation(request);
+            int parameterSetSize = StatementRequestValidator.parameterSetSize(request);
             PreparedStatement ps = dto.getSession() != null && !dto.getSession().getSessionUUID().isBlank()
                     && !request.getStatementUUID().isBlank()
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
                     : null;
 
-            if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys || returnResultSet) {
+            if (parameterSetSize > 0) {
+                PreparedStatement batch = StatementFactory.createPreparedStatement(sessionManager, dto,
+                        request.getSql(), List.of(), request);
+                stmt = batch;
+                batchUpdateCounts = ParameterSetExecution.execute(sessionManager, dto.getSession(), batch, params,
+                        parameterSetSize);
+                updated = sumUpdateCounts(batchUpdateCounts);
+            } else if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys || returnResultSet) {
                 if (!request.getStatementUUID().isEmpty() && ps != null) {
                     bindLobsAndParameters(sessionManager, dto, ps, params);
                 } else {
@@ -165,7 +174,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             }
 
             OpResult result = buildOpResult(request, dto.getSession(), psUUID, updated,
-                    generatedKeysUuid, resultSetUuid, actionContext);
+                    generatedKeysUuid, resultSetUuid, batchUpdateCounts, actionContext);
 
             // Phase 9: Cache Invalidation (after successful update)
             org.openjproxy.grpc.server.cache.QueryCacheHelper.invalidateCacheIfEnabled(actionContext, dto.getSession(), request.getSql());
@@ -292,14 +301,20 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
      * @param generatedKeysUuid the registered prepared statement UUID for
      *                          generated-key tracking, or empty string if not used
      * @param resultSetUuid     the registered result-set UUID, or empty string if not used
+     * @param batchUpdateCounts the update count of each parameter set, or null for a single execution
      * @return the built {@link OpResult}
      */
     private OpResult buildOpResult(StatementRequest request, SessionInfo sessionInfo,
                                    String psUUID, int updated, String generatedKeysUuid, String resultSetUuid,
-                                   ActionContext context) {
+                                   int[] batchUpdateCounts, ActionContext context) {
         SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
                 .enrichWithThrottle(sessionInfo, context);
         OpResult.Builder builder = OpResult.newBuilder().setSession(enrichedSession);
+        if (batchUpdateCounts != null) {
+            for (int count : batchUpdateCounts) {
+                builder.addBatchUpdateCounts(count);
+            }
+        }
         if (!resultSetUuid.isEmpty()) {
             builder.setUuid(resultSetUuid).setFlag(CommonConstants.UPDATE_RESULT_SET_FLAG);
         } else if (!generatedKeysUuid.isEmpty()) {
@@ -312,6 +327,16 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
     }
 
     private record UpdateExecutionOutcome(int updateCount, String resultSetUuid) {
+    }
+
+    private static int sumUpdateCounts(int[] counts) {
+        int total = 0;
+        for (int count : counts) {
+            if (count > 0) {
+                total += count;
+            }
+        }
+        return total;
     }
 
     /**

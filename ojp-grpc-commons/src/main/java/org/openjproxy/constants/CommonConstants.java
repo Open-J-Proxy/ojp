@@ -21,6 +21,12 @@ public class CommonConstants {
     public static final String STATEMENT_COLUMN_INDEXES_KEY = "STATEMENT_COLUMN_INDEXES_KEY";
     public static final String STATEMENT_COLUMN_NAMES_KEY = "STATEMENT_COLUMN_NAMES_KEY";
     public static final String STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY = "STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY";
+    /**
+     * Number of parameters per set when executeUpdate carries several parameter sets in one request.
+     * Parameter indexes are flattened: set {@code s} (0-based) uses indexes {@code s * size + 1 .. (s + 1) * size}.
+     */
+    public static final String PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY = "PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY";
+    public static final String SERVER_CAPABILITY_PARAMETER_SETS = "PARAMETER_SETS";
     public static final String RESULT_SET_ROW_BY_ROW_MODE = "RESULT_SET_ROW_BY_ROW_MODE";
     public static final String RESULT_SET_LAST_BLOCK_FLAG = "RESULT_SET_LAST_BLOCK";
     public static final String UPDATE_RESULT_SET_FLAG = "UPDATE_RESULT_SET";

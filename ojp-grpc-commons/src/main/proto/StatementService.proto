@@ -197,6 +197,8 @@ message SessionInfo {
     int32 clientCount = 9;
     int32 maxAdmission = 10;
     int32 observedPeak = 11;
+    // Optional features supported by the server, announced in the connect response (e.g. "PARAMETER_SETS").
+    repeated string serverCapabilities = 12;
 }
 
 enum ResultType {
@@ -215,6 +217,8 @@ message OpResult {
     }
     string uuid = 6;
     string flag = 7;
+    // Per-set update counts of a parameter-set execution (java.sql.Statement#executeBatch semantics).
+    repeated int32 batchUpdateCounts = 8;
 }
 
 message StatementRequest {
@@ -236,6 +240,8 @@ message SqlErrorResponse {
     string sqlState = 2;
     int32 vendorCode = 3;
     SqlErrorType sqlErrorType = 4;
+    // Update counts reported by a java.sql.BatchUpdateException.
+    repeated int32 batchUpdateCounts = 5;
 }
 
 //LT stands for Lob Type

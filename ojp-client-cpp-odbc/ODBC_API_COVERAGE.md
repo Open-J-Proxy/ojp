@@ -53,7 +53,7 @@ Legend:
 | SQLGetFunctions | yes | n/a | Full | Reports exactly the exported functions. |
 | SQLGetInfo | yes | yes | Partial | Unmapped info types return `HYC00`. |
 | SQLGetStmtAttr | yes | yes | Partial | Unmapped attributes return `HYC00`. |
-| SQLGetTypeInfo | yes | n/a | Full | |
+| SQLGetTypeInfo | yes | yes | Full | |
 | SQLNumParams | yes | n/a | Full | |
 | SQLNumResultCols | yes | n/a | Full | |
 | SQLParamData / SQLPutData | yes | n/a | Partial | Data-at-execution only for LOB parameters. |

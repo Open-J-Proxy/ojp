@@ -13,6 +13,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -77,6 +78,13 @@ public:
             report("closeResultSet " + request->resourceuuid());
             return grpc::Status::OK;
         }
+        if (request->resourcetype() == proto::RES_CONNECTION &&
+            request->target().calltype() == proto::CALL_PREPARE) {
+            return prepare_call(*request, response);
+        }
+        if (request->resourcetype() == proto::RES_CALLABLE_STATEMENT) {
+            return call_callable(*request, response);
+        }
         if (request->target().resourcename() != "MetaData" || !request->target().has_nextcall()) {
             return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "unsupported resource call");
         }
@@ -125,7 +133,10 @@ public:
             parameter.set_int_value(value);
             return parameter;
         };
-        if (method == "Procedures") {
+        if (method == "CallableRows") {
+            result->add_labels("total");
+            add_row({number(12)});
+        } else if (method == "Procedures") {
             for (const char* label : {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME",
                                       "RESERVED1", "RESERVED2", "RESERVED3", "REMARKS",
                                       "PROCEDURE_TYPE", "SPECIFIC_NAME"}) {
@@ -213,6 +224,74 @@ public:
         return grpc::Status::OK;
     }
 
+    // Simulates "{? = CALL add_values(?, ?)}": the return value is 42 and the INPUT_OUTPUT
+    // parameter 3 becomes parameter 2 + parameter 3. SQL containing "rows" also returns a result set.
+    grpc::Status prepare_call(const proto::CallResourceRequest& request,
+                              proto::CallResourceResponse* response) {
+        if (request.target().resourcename() != "Call" || request.target().params_size() != 1) {
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unexpected prepareCall");
+        }
+        report("prepareCall " + request.target().params(0).string_value());
+        std::lock_guard<std::mutex> lock(mutex_);
+        callable_sql_ = request.target().params(0).string_value();
+        callable_values_.clear();
+        response->add_values()->set_string_value("cs-1");
+        return grpc::Status::OK;
+    }
+
+    grpc::Status call_callable(const proto::CallResourceRequest& request,
+                               proto::CallResourceResponse* response) {
+        const auto& target = request.target();
+        if (request.resourceuuid() != "cs-1") {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "unknown callable statement");
+        }
+        auto describe = [](const proto::ParameterValue& value) {
+            switch (value.value_case()) {
+                case proto::ParameterValue::kIntValue: return std::to_string(value.int_value());
+                case proto::ParameterValue::kLongValue: return std::to_string(value.long_value());
+                case proto::ParameterValue::kStringValue: return "'" + value.string_value() + "'";
+                default: return std::string("<other>");
+            }
+        };
+        std::string line = "callable " + target.resourcename();
+        for (const auto& parameter : target.params()) {
+            line += " " + describe(parameter);
+        }
+        report(target.calltype() == proto::CALL_CLOSE ? "closeCallable" : line);
+        std::lock_guard<std::mutex> lock(mutex_);
+        switch (target.calltype()) {
+            case proto::CALL_SET:
+                if (target.resourcename() == "Object") {
+                    callable_values_[target.params(0).int_value()] = target.params(1).int_value();
+                }
+                return grpc::Status::OK;
+            case proto::CALL_REGISTER:
+            case proto::CALL_CLOSE:
+                return grpc::Status::OK;
+            case proto::CALL_EXECUTE: {
+                const bool rows = callable_sql_.find("rows") != std::string::npos;
+                callable_values_[3] += callable_values_[2];
+                callable_values_[1] = 42;
+                if (rows) {
+                    pending_metadata_ = "CallableRows";
+                }
+                response->add_values()->set_bool_value(rows);
+                return grpc::Status::OK;
+            }
+            case proto::CALL_GET:
+                if (target.resourcename() == "ResultSet") {
+                    response->add_values()->set_string_value("rs-callable");
+                } else if (target.resourcename() == "UpdateCount") {
+                    response->add_values()->set_int_value(-1);
+                } else if (target.resourcename() == "Object") {
+                    response->add_values()->set_int_value(callable_values_[target.params(0).int_value()]);
+                }
+                return grpc::Status::OK;
+            default:
+                return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "unsupported callable call");
+        }
+    }
+
     void wait_for_termination() {
         std::unique_lock<std::mutex> lock(mutex_);
         terminated_cv_.wait_for(lock, kIdleLimit, [this]() { return terminated_; });
@@ -228,6 +307,8 @@ private:
     std::condition_variable terminated_cv_;
     bool terminated_ = false;
     std::string pending_metadata_;
+    std::string callable_sql_;
+    std::map<int, int> callable_values_;
 };
 
 }  // namespace

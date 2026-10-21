@@ -106,6 +106,46 @@ void check_procedure_columns(SQLHSTMT statement) {
     SQLFreeStmt(statement, SQL_CLOSE);
 }
 
+void check_output_parameters(SQLHSTMT statement) {
+    SQLINTEGER return_value = 0;
+    SQLINTEGER a = 5;
+    SQLINTEGER r = 7;
+    SQLLEN return_indicator = 0;
+    SQLLEN r_indicator = 0;
+    success(SQLBindParameter(statement, 1, SQL_PARAM_OUTPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                             &return_value, 0, &return_indicator), "SQLBindParameter return value");
+    success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0, &a, 0,
+                             nullptr), "SQLBindParameter input");
+    success(SQLBindParameter(statement, 3, SQL_PARAM_INPUT_OUTPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
+                             &r, 0, &r_indicator), "SQLBindParameter input/output");
+    success(SQLExecDirect(statement, text("{? = CALL dbo.add_values(?, ?)}"), SQL_NTS),
+            "SQLExecDirect with output parameters");
+    require(return_value == 42 && return_indicator == sizeof(SQLINTEGER),
+            "The return value must be written to the bound buffer");
+    require(r == 12 && r_indicator == sizeof(SQLINTEGER),
+            "The INPUT_OUTPUT parameter must be written back");
+    SQLSMALLINT columns = -1;
+    success(SQLNumResultCols(statement, &columns), "SQLNumResultCols");
+    require(columns == 0, "A call without a result set must not expose columns");
+
+    r = 7;
+    success(SQLExecDirect(statement, text("{? = CALL dbo.add_values_rows(?, ?)}"), SQL_NTS),
+            "SQLExecDirect with output parameters and a result set");
+    require(r == 12, "The INPUT_OUTPUT parameter must be written back after a result set");
+    success(SQLFetch(statement), "SQLFetch callable result set");
+    require(string_data(statement, 1) == "12", "Unexpected callable result-set value");
+    require(SQLFetch(statement) == SQL_NO_DATA, "The callable result set must have one row");
+    SQLFreeStmt(statement, SQL_CLOSE);
+
+    success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMSET_SIZE, reinterpret_cast<SQLPOINTER>(2), 0),
+            "SQL_ATTR_PARAMSET_SIZE");
+    require(SQLExecDirect(statement, text("{? = CALL dbo.add_values(?, ?)}"), SQL_NTS) == SQL_ERROR,
+            "Output parameters must be rejected with parameter arrays");
+    success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMSET_SIZE, reinterpret_cast<SQLPOINTER>(1), 0),
+            "SQL_ATTR_PARAMSET_SIZE");
+    SQLFreeStmt(statement, SQL_RESET_PARAMS);
+}
+
 void run(const std::string& connection_string) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
@@ -137,6 +177,7 @@ void run(const std::string& connection_string) {
     success(SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement), "Allocate statement");
     check_procedures(statement);
     check_procedure_columns(statement);
+    check_output_parameters(statement);
     SQLFreeHandle(SQL_HANDLE_STMT, statement);
     SQLDisconnect(connection);
     SQLFreeHandle(SQL_HANDLE_DBC, connection);
@@ -157,6 +198,15 @@ int main(int argc, char** argv) {
                 "SQLProcedures must call DatabaseMetaData.getProcedures");
         require(contains_line(calls, "metadata ProcedureColumns <null>|dbo|add_values|<null>"),
                 "SQLProcedureColumns must call DatabaseMetaData.getProcedureColumns");
+        for (const char* expected : {"prepareCall {? = CALL dbo.add_values(?, ?)}",
+                                     "callable Object 2 5", "callable Object 3 7",
+                                     "callable OutParameter 1 4", "callable OutParameter 3 4",
+                                     "callable ", "callable UpdateCount", "callable Object 1",
+                                     "callable Object 3", "callable ResultSet",
+                                     "closeResultSet rs-callable", "closeCallable"}) {
+            require(contains_line(calls, expected),
+                    std::string("Missing callable statement call: ") + expected);
+        }
         std::cout << "Procedure metadata tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -221,6 +221,19 @@ Controls how the server batches rows into gRPC streaming messages when returning
 - The default of 100 matches the historical behaviour and is a safe starting point for most workloads.
 - Values below 1 or above 10000 are rejected and the default is used instead.
 
+### LOB Retention Settings
+
+Controls how long LOBs created by clients (`Blob`/`Clob` parameters sent through `createLob`) are kept in the server heap.
+
+| Property                             | Environment Variable                 | Type    | Default | Description                                                                                          | Since          |
+|--------------------------------------|--------------------------------------|---------|---------|------------------------------------------------------------------------------------------------------|----------------|
+| `ojp.server.lob.keepUntilSessionEnd` | `OJP_SERVER_LOB_KEEPUNTILSESSIONEND` | boolean | true    | When `true`, LOBs stay registered in the session until it ends. When `false`, the LOBs bound to a statement are released (`free()`) as soon as that statement has been executed. | 1.1.0-SNAPSHOT |
+
+**Tuning guidance:**
+- With long-lived sessions (connection pools, desktop applications, ODBC clients) every LOB inserted with the default `true` stays in memory until the connection is closed. Set `false` to release them right after each `executeUpdate`/`executeQuery`.
+- With `false`, a client that re-executes a statement reusing the same `Blob`/`Clob` object fails with `LOB ... not found in session`; create a new LOB per execution.
+- LOBs bound to batched statements (`addBatch`) are still kept until the session ends, because they are needed until `executeBatch`.
+
 ### Connection Pool Settings
 
 | Property                                       | Environment Variable                           | Type | Default | Description                                       | Since |

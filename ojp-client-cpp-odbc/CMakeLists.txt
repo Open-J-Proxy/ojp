@@ -163,6 +163,23 @@ if(BUILD_TESTING)
         COMMAND ojp_odbc_procedure_metadata_test "$<TARGET_FILE:ojp_odbc_fake_server>")
     set_tests_properties(OjpOdbcProcedureMetadata PROPERTIES TIMEOUT 120)
 
+    add_executable(ojp_odbc_tables_metadata_test tests/tables_metadata_test.cpp)
+    target_include_directories(ojp_odbc_tables_metadata_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_tables_metadata_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcTablesMetadata
+        COMMAND ojp_odbc_tables_metadata_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcTablesMetadata PROPERTIES TIMEOUT 120)
+
+    add_executable(ojp_odbc_driver_api_test tests/driver_api_test.cpp)
+    target_include_directories(ojp_odbc_driver_api_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_driver_api_test PRIVATE ojp_odbc)
+    set(OJP_TEST_DRIVER_API_LOG "${CMAKE_CURRENT_BINARY_DIR}/ojp_odbc_driver_api_test.log")
+    add_test(NAME OjpOdbcDriverApi
+        COMMAND ojp_odbc_driver_api_test "$<TARGET_FILE:ojp_odbc_fake_server>"
+            "${OJP_TEST_DRIVER_API_LOG}")
+    set_tests_properties(OjpOdbcDriverApi PROPERTIES TIMEOUT 120
+        ENVIRONMENT "OJP_ODBC_LOG_FILE=${OJP_TEST_DRIVER_API_LOG};OJP_ODBC_LOG_LEVEL=debug")
+
     find_program(OJP_TEST_OPENSSL openssl)
     if(OJP_TEST_OPENSSL)
         add_executable(ojp_odbc_tls_test tests/tls_test.cpp)

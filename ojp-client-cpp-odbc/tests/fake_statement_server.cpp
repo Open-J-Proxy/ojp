@@ -243,8 +243,8 @@ public:
         return grpc::Status::OK;
     }
 
-    // A batch (SQL containing ';') yields, in order: update count 3, a result set with value 1,
-    // update count 5 and a result set with value 2.
+    // A batch (SQL containing ';' or a call to a "multi" procedure) yields, in order: update
+    // count 3, a result set with value 1, update count 5 and a result set with value 2.
     struct BatchResult {
         bool result_set;
         int value;
@@ -252,7 +252,10 @@ public:
     static constexpr BatchResult kBatchResults[] = {{false, 3}, {true, 1}, {false, 5}, {true, 2}};
     static constexpr std::size_t kBatchResultCount = sizeof(kBatchResults) / sizeof(BatchResult);
 
-    bool is_batch() const { return callable_sql_.find(';') != std::string::npos; }
+    bool is_batch() const {
+        return callable_sql_.find(';') != std::string::npos ||
+            callable_sql_.find("multi") != std::string::npos;
+    }
 
     bool batch_has_result_set() const {
         return batch_position_ < kBatchResultCount && kBatchResults[batch_position_].result_set;

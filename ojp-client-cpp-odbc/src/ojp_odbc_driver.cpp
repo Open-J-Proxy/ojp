@@ -2541,10 +2541,14 @@ bool uses_update_result_set(const std::string& sql) {
     return is_dml_result_set_sql(sql) || is_procedure_call_sql(sql) || is_result_set_batch_sql(sql);
 }
 
-// Batches whose later results must stay reachable through SQLMoreResults ("SELECT 1; SELECT 2").
-// They run through a server-side statement kept open until the results are consumed or the
-// cursor is closed. Batches without a top-level ';' keep the single-result update path.
+// Procedure calls and batches whose later results must stay reachable through SQLMoreResults
+// ("EXEC p", "SELECT 1; SELECT 2"). They run through a server-side statement kept open until the
+// results are consumed or the cursor is closed. Other batches without a top-level ';' keep the
+// single-result update path.
 bool may_return_multiple_results(const std::string& sql) {
+    if (is_procedure_call_sql(sql)) {
+        return true;
+    }
     if (!has_statement_separator(sql)) {
         return false;
     }

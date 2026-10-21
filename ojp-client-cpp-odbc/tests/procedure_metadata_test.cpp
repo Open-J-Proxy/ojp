@@ -188,6 +188,17 @@ void check_more_results(SQLHSTMT statement) {
     require(SQLMoreResults(statement) == SQL_NO_DATA, "A closed cursor has no more results");
     success(SQLExecDirect(statement, batch, SQL_NTS), "SQLExecDirect batch");
     success(SQLExecDirect(statement, batch, SQL_NTS), "SQLExecDirect batch over an open one");
+    SQLFreeStmt(statement, SQL_CLOSE);
+
+    // A procedure call without ';' also keeps its later result sets reachable.
+    success(SQLExecDirect(statement, text("EXEC dbo.multi_results"), SQL_NTS),
+            "SQLExecDirect procedure");
+    success(SQLFetch(statement), "SQLFetch procedure first result set");
+    require(string_data(statement, 1) == "1", "Unexpected procedure first result set");
+    success(SQLMoreResults(statement), "SQLMoreResults procedure second result set");
+    success(SQLFetch(statement), "SQLFetch procedure second result set");
+    require(string_data(statement, 1) == "2", "Unexpected procedure second result set");
+    require(SQLMoreResults(statement) == SQL_NO_DATA, "The procedure must end after two results");
 }
 
 void run(const std::string& connection_string) {
@@ -253,8 +264,11 @@ int main(int argc, char** argv) {
                     std::string("Missing callable statement call: ") + expected);
         }
         // Two procedure calls close their statement at once; the four batches are closed by
-        // SQLMoreResults, SQLCloseCursor, the next execution and SQLFreeHandle.
-        require(std::count(calls.begin(), calls.end(), "closeCallable") == 6,
+        // SQLMoreResults, SQLCloseCursor, the next execution and SQLFreeStmt, and the
+        // multi-result procedure by SQLMoreResults.
+        require(contains_line(calls, "prepareCall EXEC dbo.multi_results"),
+                "A procedure call must run through a callable statement");
+        require(std::count(calls.begin(), calls.end(), "closeCallable") == 7,
                 "Every callable statement must be closed exactly once");
         for (const char* expected : {"callable MoreResults", "closeResultSet rs-batch-1",
                                      "closeResultSet rs-batch-2"}) {

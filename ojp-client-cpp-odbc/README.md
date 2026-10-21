@@ -4,6 +4,8 @@ This module provides an ANSI and Unicode ODBC 3.x driver for applications that
 access OJP servers from C++.
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
+[ODBC_API_COVERAGE.md](ODBC_API_COVERAGE.md) lists the implemented ODBC 3.x
+functions and the remaining work.
 
 ## Supported levels by database
 

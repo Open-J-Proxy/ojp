@@ -149,6 +149,13 @@ if(BUILD_TESTING)
         COMMAND ojp_odbc_batch_test "$<TARGET_FILE:ojp_odbc_fake_server>")
     set_tests_properties(OjpOdbcBatch PROPERTIES TIMEOUT 120)
 
+    add_executable(ojp_odbc_parameter_sets_test tests/parameter_sets_test.cpp)
+    target_include_directories(ojp_odbc_parameter_sets_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_parameter_sets_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcParameterSets
+        COMMAND ojp_odbc_parameter_sets_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcParameterSets PROPERTIES TIMEOUT 120)
+
     add_executable(ojp_odbc_sql_routing_test tests/sql_routing_test.cpp)
     target_include_directories(ojp_odbc_sql_routing_test PRIVATE ${ODBC_INCLUDE_DIRS})
     target_link_libraries(ojp_odbc_sql_routing_test PRIVATE ojp_odbc)

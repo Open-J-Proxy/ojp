@@ -183,7 +183,8 @@ int main(int argc, char** argv) {
         require(argc == 2, "Usage: ojp_odbc_batch_test <fake server executable>");
         FakeServerProcess server(argv[1]);
         {
-            Session session(server.connection_string("jdbc:h2:mem:batch"));
+            // Without parameter-set support the server receives the array as a JDBC batch.
+            Session session(server.connection_string("jdbc:h2:mem:legacy_batch"));
             test_batch(session.statement);
             test_success_no_info(session.statement);
             test_batch_failure(session.statement);

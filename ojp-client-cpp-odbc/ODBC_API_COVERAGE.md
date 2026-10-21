@@ -109,10 +109,13 @@ The Driver Manager maps the ODBC 2.x functions to their ODBC 3.x equivalents.
 - Output and return-value parameters work only through procedure calls
   executed as callable statements.
 - Parameter arrays (`SQL_ATTR_PARAMSET_SIZE` > 1) of DML without output
-  parameters, LOB parameters, or multiple results run as one backend JDBC batch
-  (`addBatch` for each row, then a single `executeBatch`). When the batch fails,
-  the database reports no per-row result, so the rows get
-  `SQL_PARAM_DIAG_UNAVAILABLE`. Other parameter arrays execute row by row.
+  parameters run as backend JDBC batches. When the server announces
+  `PARAMETER_SETS`, the rows travel in requests of about 1 MiB, each one
+  executed as one batch, and the per-row status follows the update counts
+  reported on failure. Otherwise, for DML without LOB parameters or multiple
+  results, each row is added with `addBatch` and a single `executeBatch` runs
+  them; when that batch fails the rows get `SQL_PARAM_DIAG_UNAVAILABLE`. Other
+  parameter arrays execute row by row.
 
 ### SQLSetConnectAttr
 

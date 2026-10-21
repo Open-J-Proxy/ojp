@@ -4280,6 +4280,18 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
         for (auto& row : statement->rows) {
             row.resize(ODBC_TABLES_COLUMN_COUNT);
         }
+    } else if (method == "Catalogs" || method == "Schemas" || method == "TableTypes") {
+        // SQLTables enumerations (SQL_ALL_CATALOGS/SCHEMAS/TABLE_TYPES) keep the SQLTables
+        // five-column shape: only the enumerated column is filled, the others are NULL.
+        const std::size_t target = method == "Catalogs" ? 0 : (method == "Schemas" ? 1 : 3);
+        for (auto& row : statement->rows) {
+            std::vector<Cell> reshaped(5);
+            if (!row.empty()) {
+                reshaped[target] = std::move(row[0]);
+            }
+            row = std::move(reshaped);
+        }
+        statement->columns = {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS"};
     } else if (method == "Columns") {
         static constexpr std::size_t ODBC_COLUMNS_COLUMN_COUNT = 24;
         if (statement->columns.size() < ODBC_COLUMNS_COLUMN_COUNT ||
@@ -4308,6 +4320,11 @@ ParameterValue metadata_string(const std::string* value) {
         parameter.set_string_value(*value);
     }
     return parameter;
+}
+
+bool is_empty_string_parameter(const ParameterValue& parameter) {
+    return parameter.value_case() == ParameterValue::kStringValue &&
+        parameter.string_value().empty();
 }
 
 bool read_ansi_string(const SQLCHAR* input, SQLSMALLINT length, std::string* output) {
@@ -4361,6 +4378,10 @@ std::vector<std::string> parse_table_types(const std::string& table_types) {
         const auto separator = table_types.find(',', position);
         const auto end = separator == std::string::npos ? table_types.size() : separator;
         std::string type = trim(table_types.substr(position, end - position));
+        // ODBC allows quoted values ('TABLE','VIEW'); JDBC expects the bare type names.
+        if (type.size() >= 2 && type.front() == '\'' && type.back() == '\'') {
+            type = trim(type.substr(1, type.size() - 2));
+        }
         if (!type.empty()) {
             types.push_back(std::move(type));
         }
@@ -4428,7 +4449,53 @@ SQLRETURN execute_catalog_api(SQLHSTMT statement, const std::string& method,
     auto* target = static_cast<StatementHandle*>(statement);
     std::lock_guard<std::mutex> statement_lock(target->operation_mutex);
     std::lock_guard<std::mutex> connection_lock(target->connection->operation_mutex);
-    return execute_metadata_statement(target, method, parameters);
+    // An empty catalog has no meaning for JDBC drivers that switch databases by catalog
+    // (mssql-jdbc issues "USE []"), so it is sent as NULL, i.e. the current catalog.
+    std::vector<ParameterValue> normalized = parameters;
+    auto null_empty_catalog = [&normalized](std::size_t index) {
+        if (index < normalized.size() && is_empty_string_parameter(normalized[index])) {
+            normalized[index] = metadata_string(nullptr);
+        }
+    };
+    if (method == "Tables" || method == "Columns" || method == "PrimaryKeys" ||
+        method == "ImportedKeys" || method == "ExportedKeys" || method == "CrossReference") {
+        null_empty_catalog(0);
+    }
+    if (method == "CrossReference") {
+        null_empty_catalog(3);
+    }
+    return execute_metadata_statement(target, method, normalized);
+}
+
+bool is_string_parameter(const ParameterValue& parameter, const char* value) {
+    return parameter.value_case() == ParameterValue::kStringValue &&
+        parameter.string_value() == value;
+}
+
+bool is_all_table_types(const ParameterValue& parameter) {
+    return parameter.value_case() == ParameterValue::kStringArrayValue &&
+        parameter.string_array_value().values_size() == 1 &&
+        parameter.string_array_value().values(0) == "%";
+}
+
+// Parameters: catalog, schema, table, table types (as built by SQLTables/SQLTablesW).
+SQLRETURN execute_tables_api(SQLHSTMT statement, std::vector<ParameterValue> parameters) {
+    const bool empty_catalog = is_empty_string_parameter(parameters[0]);
+    const bool empty_schema = is_empty_string_parameter(parameters[1]);
+    const bool empty_table = is_empty_string_parameter(parameters[2]);
+    if (is_string_parameter(parameters[0], "%") && empty_schema && empty_table) {
+        return execute_catalog_api(statement, "Catalogs", {});
+    }
+    if (empty_catalog && is_string_parameter(parameters[1], "%") && empty_table) {
+        return execute_catalog_api(statement, "Schemas", {});
+    }
+    if (is_all_table_types(parameters[3])) {
+        if (empty_catalog && empty_schema && empty_table) {
+            return execute_catalog_api(statement, "TableTypes", {});
+        }
+        parameters[3] = metadata_string(nullptr);
+    }
+    return execute_catalog_api(statement, "Tables", parameters);
 }
 
 SQLRETURN get_database_metadata(ConnectionHandle* connection, HandleBase* handle,
@@ -6785,7 +6852,7 @@ SQLRETURN SQL_API SQLTables(SQLHSTMT statement, SQLCHAR* catalog, SQLSMALLINT ca
             result = append_table_types(handle, table_types, table_types_length, &parameters);
         }
         return SQL_SUCCEEDED(result)
-            ? execute_catalog_api(statement, "Tables", parameters) : result;
+            ? execute_tables_api(statement, std::move(parameters)) : result;
     });
 }
 
@@ -6811,7 +6878,7 @@ SQLRETURN SQL_API SQLTablesW(SQLHSTMT statement, SQLWCHAR* catalog, SQLSMALLINT 
             result = append_wide_table_types(handle, table_types, table_types_length, &parameters);
         }
         return SQL_SUCCEEDED(result)
-            ? execute_catalog_api(statement, "Tables", parameters) : result;
+            ? execute_tables_api(statement, std::move(parameters)) : result;
     });
 }
 

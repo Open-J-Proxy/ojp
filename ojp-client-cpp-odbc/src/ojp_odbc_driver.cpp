@@ -5199,6 +5199,26 @@ std::string unsupported_info_message(SQLUSMALLINT info_type) {
            "can be added";
 }
 
+// Current catalog extracted from the JDBC URL (databaseName=, database= or /db path).
+std::string current_catalog_from_url(const std::string& url) {
+    for (const char* key : {"databaseName=", "database="}) {
+        auto position = url.find(key);
+        if (position != std::string::npos) {
+            position += std::strlen(key);
+            return url.substr(position, url.find_first_of(";&?", position) - position);
+        }
+    }
+    const auto scheme = url.find("://");
+    if (scheme != std::string::npos) {
+        const auto slash = url.find('/', scheme + 3);
+        if (slash != std::string::npos) {
+            const auto stop = url.find_first_of(";?&", slash + 1);
+            return url.substr(slash + 1, stop == std::string::npos ? std::string::npos : stop - slash - 1);
+        }
+    }
+    return {};
+}
+
 SQLRETURN get_sql_info_text(ConnectionHandle* connection, HandleBase* handle,
                             SQLUSMALLINT info_type, std::string* text) {
     if (const auto* entry = find_static_info(info_type);
@@ -5217,8 +5237,12 @@ SQLRETURN get_sql_info_text(ConnectionHandle* connection, HandleBase* handle,
             *text = connection->endpoint;
             return SQL_SUCCESS;
         case SQL_DATA_SOURCE_NAME:
-        case SQL_DATABASE_NAME:
             text->clear();
+            return SQL_SUCCESS;
+        // FireDAC compares TABLE_CAT/PROCEDURE_CAT of catalog results with this value and
+        // discards rows that do not match, so it must agree with SQL_ATTR_CURRENT_CATALOG.
+        case SQL_DATABASE_NAME:
+            *text = current_catalog_from_url(connection->url);
             return SQL_SUCCESS;
         case SQL_DRIVER_NAME: *text = "libojp_odbc"; return SQL_SUCCESS;
         case SQL_DRIVER_VER: *text = "00.01.0000"; return SQL_SUCCESS;
@@ -7829,6 +7853,7 @@ static SQLRETURN column_attribute(StatementHandle* target, SQLUSMALLINT column_n
         case SQL_DESC_AUTO_UNIQUE_VALUE:
         case SQL_DESC_CASE_SENSITIVE:
         case SQL_DESC_FIXED_PREC_SCALE:
+        case SQL_DESC_ROWVER:
             *number = SQL_FALSE;
             return SQL_SUCCESS;
         case SQL_DESC_UPDATABLE:
@@ -7993,26 +8018,6 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
 }
 
 extern "C++" {
-// Current catalog extracted from the JDBC URL (databaseName=, database= or /db path).
-static std::string current_catalog_from_url(const std::string& url) {
-    for (const char* key : {"databaseName=", "database="}) {
-        auto position = url.find(key);
-        if (position != std::string::npos) {
-            position += std::strlen(key);
-            return url.substr(position, url.find_first_of(";&?", position) - position);
-        }
-    }
-    const auto scheme = url.find("://");
-    if (scheme != std::string::npos) {
-        const auto slash = url.find('/', scheme + 3);
-        if (slash != std::string::npos) {
-            const auto stop = url.find_first_of(";?&", slash + 1);
-            return url.substr(slash + 1, stop == std::string::npos ? std::string::npos : stop - slash - 1);
-        }
-    }
-    return {};
-}
-
 static std::string connection_attribute_name(SQLINTEGER attribute) {
     switch (attribute) {
         case SQL_ATTR_AUTOCOMMIT: return "SQL_ATTR_AUTOCOMMIT";

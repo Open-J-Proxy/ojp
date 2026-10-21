@@ -79,4 +79,19 @@ public class StatementRequestValidator {
         Boolean batchFlag = (Boolean) properties.get(CommonConstants.PREPARED_STATEMENT_ADD_BATCH_FLAG);
         return batchFlag != null && batchFlag;
     }
+
+    /**
+     * Returns the number of parameters per set when the request carries several parameter sets.
+     *
+     * @param request The statement request
+     * @return the parameter-set size, or 0 when the request carries a single parameter set
+     */
+    public int parameterSetSize(StatementRequest request) {
+        if (request.getPropertiesList().isEmpty()) {
+            return 0;
+        }
+        Map<String, Object> properties = ProtoConverter.propertiesFromProto(request.getPropertiesList());
+        Object size = properties.get(CommonConstants.PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY);
+        return size instanceof Number number ? number.intValue() : 0;
+    }
 }

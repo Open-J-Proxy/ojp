@@ -213,7 +213,7 @@ void verify_row(SQLHSTMT statement, const std::string& table, SQLINTEGER id,
 
 void verify_errors(SQLHSTMT statement, const std::string& table) {
     SQLPOINTER token = nullptr;
-    require_state(statement, SQLCancel(statement), SQL_ERROR, "HYC00");
+    require_success(SQLCancel(statement), "SQLCancel(idle)", SQL_HANDLE_STMT, statement);
     require_state(statement, SQLParamData(statement, &token), SQL_ERROR, "HY010");
     require_state(statement, SQLPutData(statement, nullptr, 0), SQL_ERROR, "HY010");
     const std::string insert = "INSERT INTO " + table + " (id, binary_payload) VALUES (99, ?)";
@@ -306,7 +306,8 @@ void verify_small_chunks(SQLHSTMT statement) {
     reset_statement(statement);
     execute_direct(statement, "SELECT CAST('abcdefghij' AS TEXT),"
                               " decode('00010203040506070809', 'hex')");
-    require_state(statement, SQLCancel(statement), SQL_ERROR, "HYC00");
+    // ODBC 3.x: SQLCancel without a running execution keeps the open cursor.
+    require_success(SQLCancel(statement), "SQLCancel(open cursor)", SQL_HANDLE_STMT, statement);
     require_success(SQLFetch(statement), "SQLFetch(small chunks)", SQL_HANDLE_STMT, statement);
     const std::vector<SQLLEN> expected_lengths = {10, 6, 2};
     char text_buffer[5] = {};

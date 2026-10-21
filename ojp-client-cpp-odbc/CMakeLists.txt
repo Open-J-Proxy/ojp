@@ -129,6 +129,19 @@ if(BUILD_TESTING)
         ojp_odbc gRPC::grpc++ protobuf::libprotobuf)
     add_test(NAME OjpOdbcParameters COMMAND ojp_odbc_parameter_test)
 
+    # The fake server runs in its own process: on Windows gRPC is static and two copies
+    # (test executable and ojp_odbc.dll) cannot share one process.
+    add_executable(ojp_odbc_fake_server tests/fake_statement_server.cpp ${PROTO_SRCS})
+    target_include_directories(ojp_odbc_fake_server PRIVATE "${GENERATED_DIR}")
+    target_link_libraries(ojp_odbc_fake_server PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+
+    add_executable(ojp_odbc_cancel_test tests/cancel_test.cpp)
+    target_include_directories(ojp_odbc_cancel_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_cancel_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcCancel
+        COMMAND ojp_odbc_cancel_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcCancel PROPERTIES TIMEOUT 120)
+
     find_program(OJP_TEST_OPENSSL openssl)
     if(OJP_TEST_OPENSSL)
         add_executable(ojp_odbc_tls_test tests/tls_test.cpp)

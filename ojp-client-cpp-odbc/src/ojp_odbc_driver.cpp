@@ -231,6 +231,12 @@ struct StatementHandle final : HandleBase {
 
     ConnectionHandle* connection;
     std::mutex operation_mutex;
+    // SQLCancel may arrive from another thread while an execution holds operation_mutex,
+    // so the cancellation state has its own lock.
+    std::mutex cancel_mutex;
+    bool executing = false;
+    bool cancel_requested = false;
+    grpc::ClientContext* active_context = nullptr;
     std::string sql;
     std::map<SQLUSMALLINT, BoundParameter> parameters;
     std::map<SQLUSMALLINT, BoundColumn> bound_columns;
@@ -713,8 +719,17 @@ void mark_endpoint_unhealthy(const std::string& address, const std::shared_ptr<T
     client_runtime().health_check_cv.notify_all();
 }
 
+// Contexts whose deadline comes from SQL_ATTR_QUERY_TIMEOUT: when it expires the statement
+// timed out, the server is not unreachable.
+thread_local std::vector<const grpc::ClientContext*> query_timeout_contexts;
+
 bool is_transport_failure(const grpc::Status& status, const grpc::ClientContext& context) {
     if (!status.error_details().empty()) {
+        return false;
+    }
+    if (status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED &&
+        std::find(query_timeout_contexts.begin(), query_timeout_contexts.end(), &context) !=
+            query_timeout_contexts.end()) {
         return false;
     }
     if (status.error_code() == grpc::StatusCode::UNAVAILABLE ||
@@ -1278,6 +1293,18 @@ bool extract_sql_error(const grpc::ClientContext& context, std::string* sql_stat
 
 SQLRETURN fail_grpc(HandleBase* handle, const grpc::Status& status,
                     const grpc::ClientContext& context) {
+    if (auto* statement = dynamic_cast<StatementHandle*>(handle)) {
+        if (status.error_code() == grpc::StatusCode::CANCELLED) {
+            std::lock_guard<std::mutex> lock(statement->cancel_mutex);
+            if (statement->cancel_requested) {
+                return fail(handle, "Operation canceled", "HY008");
+            }
+        } else if (status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED &&
+                   std::find(query_timeout_contexts.begin(), query_timeout_contexts.end(),
+                             &context) != query_timeout_contexts.end()) {
+            return fail(handle, "Query timeout expired", "HYT00");
+        }
+    }
     std::string sql_state;
     std::string message;
     SQLINTEGER native_error = 0;
@@ -3168,6 +3195,69 @@ void apply_query_timeout(grpc::ClientContext* context, const HandleBase* handle)
     }
 }
 
+// Applies SQL_ATTR_QUERY_TIMEOUT to a statement RPC and exposes its context to SQLCancel for
+// the lifetime of the call.
+class CancellableCall {
+public:
+    CancellableCall(grpc::ClientContext* context, HandleBase* handle)
+        : context_(context), statement_(dynamic_cast<StatementHandle*>(handle)) {
+        apply_query_timeout(context, handle);
+        query_timeout_contexts.push_back(context);
+        if (statement_ == nullptr) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(statement_->cancel_mutex);
+        statement_->active_context = context;
+        if (statement_->cancel_requested) {
+            context->TryCancel();
+        }
+    }
+
+    ~CancellableCall() {
+        query_timeout_contexts.erase(
+            std::remove(query_timeout_contexts.begin(), query_timeout_contexts.end(), context_),
+            query_timeout_contexts.end());
+        if (statement_ != nullptr) {
+            std::lock_guard<std::mutex> lock(statement_->cancel_mutex);
+            statement_->active_context = nullptr;
+        }
+    }
+
+    CancellableCall(const CancellableCall&) = delete;
+    CancellableCall& operator=(const CancellableCall&) = delete;
+
+private:
+    grpc::ClientContext* context_;
+    StatementHandle* statement_;
+};
+
+// Marks a statement as executing so that SQLCancel from another thread interrupts it.
+class ExecutionScope {
+public:
+    explicit ExecutionScope(StatementHandle* statement) : statement_(statement) {
+        std::lock_guard<std::mutex> lock(statement_->cancel_mutex);
+        statement_->executing = true;
+        statement_->cancel_requested = false;
+    }
+
+    ~ExecutionScope() {
+        std::lock_guard<std::mutex> lock(statement_->cancel_mutex);
+        statement_->executing = false;
+        statement_->cancel_requested = false;
+    }
+
+    ExecutionScope(const ExecutionScope&) = delete;
+    ExecutionScope& operator=(const ExecutionScope&) = delete;
+
+private:
+    StatementHandle* statement_;
+};
+
+bool cancel_requested(StatementHandle* statement) {
+    std::lock_guard<std::mutex> lock(statement->cancel_mutex);
+    return statement->cancel_requested;
+}
+
 // RESOURCE_EXHAUSTED during upload usually means a chunk larger than ojp.server.maxRequestSize.
 SQLRETURN fail_lob_upload(HandleBase* handle, const grpc::Status& status,
                           const grpc::ClientContext& context, std::size_t chunk_size) {
@@ -3193,7 +3283,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     StatementService::Stub* stub = route_session_rpc(connection);
     SessionInfo request_session = connection->session;
     grpc::ClientContext context;
-    apply_query_timeout(&context, handle);
+    CancellableCall cancellable_context(&context, handle);
     auto writer = stub->createLob(&context);
     std::size_t offset = 0;
     std::size_t character_position = 1;
@@ -3267,7 +3357,7 @@ SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle, const std::
     request.set_position(1);
     request.set_length(std::numeric_limits<std::int32_t>::max());
     grpc::ClientContext context;
-    apply_query_timeout(&context, handle);
+    CancellableCall cancellable_context(&context, handle);
     auto reader = stub->readLob(&context, request);
     LobDataBlock block;
     while (reader->Read(&block)) {
@@ -4091,7 +4181,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
             stub = route_session_rpc(connection);
             grpc::ClientContext context;
-            apply_query_timeout(&context, statement);
+            CancellableCall cancellable_context(&context, statement);
             auto reader = stub->executeQuery(&context, request);
             OpResult result;
             while (reader->Read(&result)) {
@@ -4127,7 +4217,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             fetch.set_resultsetuuid(result_set_uuid);
             fetch.set_size(1);
             grpc::ClientContext fetch_context;
-            apply_query_timeout(&fetch_context, statement);
+            CancellableCall cancellable_fetch_context(&fetch_context, statement);
             OpResult next;
             const auto fetch_status = fetch_stub->fetchNextRows(&fetch_context, fetch, &next);
             if (!fetch_status.ok()) {
@@ -4162,7 +4252,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         stub = route_session_rpc(connection);
         result.Clear();
         grpc::ClientContext context;
-        apply_query_timeout(&context, statement);
+        CancellableCall cancellable_context(&context, statement);
         status = stub->executeUpdate(&context, request, &result);
         if (status.ok()) {
             break;
@@ -6286,6 +6376,7 @@ static void report_parameter_row(StatementHandle* target, SQLULEN row, SQLRETURN
 // Also handles SQL_ATTR_PARAMSET_SIZE > 1 by executing once per array row and fills
 // SQL_ATTR_PARAMS_PROCESSED_PTR / SQL_ATTR_PARAM_STATUS_PTR.
 static SQLRETURN execute_and_report(StatementHandle* target) {
+    ExecutionScope execution(target);
     const auto paramset = target->stored_attributes.find(SQL_ATTR_PARAMSET_SIZE);
     const SQLULEN rows = paramset == target->stored_attributes.end() ? 1 : paramset->second;
     if (rows <= 1 || target->parameters.empty()) {
@@ -6320,6 +6411,19 @@ static SQLRETURN execute_and_report(StatementHandle* target) {
     std::vector<Diagnostic> errors;
     SQLULEN processed = 0;
     for (SQLULEN row = 0; row < rows; ++row) {
+        if (cancel_requested(target)) {
+            for (SQLULEN unused = row; unused < rows; ++unused) {
+                if (target->param_status_ptr != nullptr) {
+                    target->param_status_ptr[unused] = SQL_PARAM_UNUSED;
+                }
+            }
+            target->parameters = original;
+            if (target->params_processed_ptr != nullptr) {
+                *target->params_processed_ptr = processed;
+            }
+            target->diagnostics = std::move(errors);
+            return fail(target, "Operation canceled", "HY008");
+        }
         target->parameters = original;
         for (auto& entry : target->parameters) {
             auto& bound = entry.second;
@@ -6539,13 +6643,25 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT statement) {
             return SQL_INVALID_HANDLE;
         }
         auto* target = static_cast<StatementHandle*>(statement);
+        {
+            // Another thread is executing: abort its RPC without waiting for operation_mutex.
+            std::lock_guard<std::mutex> cancel_lock(target->cancel_mutex);
+            if (target->executing) {
+                target->cancel_requested = true;
+                if (target->active_context != nullptr) {
+                    target->active_context->TryCancel();
+                }
+                log_message(LogLevel::debug, "cancel requested for the running execution");
+                return SQL_SUCCESS;
+            }
+        }
         std::lock_guard<std::mutex> lock(target->operation_mutex);
         clear_diagnostics(target);
-        if (!target->waiting_for_data) {
-            return fail(target, "Only buffered data-at-execution cancellation is supported", "HYC00");
-        }
         // Data-at-execution is buffered locally; cancellation must discard it before any RPC.
-        reset_data_at_execution(target);
+        // Without pending work SQLCancel has no effect (ODBC 3.x).
+        if (target->waiting_for_data) {
+            reset_data_at_execution(target);
+        }
         return SQL_SUCCESS;
     });
 }

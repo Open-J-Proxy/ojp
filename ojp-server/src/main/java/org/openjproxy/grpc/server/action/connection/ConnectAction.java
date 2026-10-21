@@ -398,6 +398,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                 .setClientCount(clientCount)
                 .setMaxAdmission(maxAdmission)
                 .setObservedPeak(observedPeakValue)
+                .addServerCapabilities(CommonConstants.SERVER_CAPABILITY_PARAMETER_SETS)
                 .build();
 
         responseObserver.onNext(sessionInfo);

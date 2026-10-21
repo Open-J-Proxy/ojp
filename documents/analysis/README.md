@@ -137,6 +137,10 @@ the topology for every message type, consensus included.
 
 ## Other Analysis Documents
 
+### Request Lifecycle Extensibility
+
+- [REQUEST_LIFECYCLE_INTERCEPTOR_ANALYSIS.md](./REQUEST_LIFECYCLE_INTERCEPTOR_ANALYSIS.md) - Analysis of a Servlet Filter-inspired, ServiceLoader-based API for request lifecycle extensions, including alternatives, design considerations, risks, and open questions
+
 ### XA Pool Architecture
 
 - [xa-pool-spi/](./xa-pool-spi/) - XA Connection Pool SPI design

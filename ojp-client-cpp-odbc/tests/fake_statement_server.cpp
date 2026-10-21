@@ -9,6 +9,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -44,7 +45,14 @@ public:
                 return execute_parameter_sets(context, *request, property.int_value(), response);
             }
         }
-        report("executeUpdate " + request->sql());
+        // The update-result-set request returns the first result set or the update count; the
+        // fake server never has a result set, so it answers with the update count.
+        const bool update_result_set = std::any_of(
+            request->properties().begin(), request->properties().end(), [](const auto& property) {
+                return property.key() == "STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY" &&
+                       property.bool_value();
+            });
+        report((update_result_set ? "executeUpdateResultSet " : "executeUpdate ") + request->sql());
         if (request->sql().find("slow") != std::string::npos) {
             const auto limit = Clock::now() + std::chrono::seconds(10);
             while (!context->IsCancelled() && Clock::now() < limit) {

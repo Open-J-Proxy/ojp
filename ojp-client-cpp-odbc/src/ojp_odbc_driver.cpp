@@ -2483,6 +2483,28 @@ bool is_dml_result_set_sql(const std::string& sql) {
     return false;
 }
 
+// Batches that start with a declaration or a control-flow statement (T-SQL DECLARE, SET, IF,
+// BEGIN, WHILE) may produce a result set after some update counts, for example
+// "DECLARE @r INT; EXEC p @r = @r OUTPUT; SELECT @r". JDBC executeUpdate rejects such a batch.
+bool is_result_set_batch_sql(const std::string& sql) {
+    const std::string first_keyword = first_sql_keyword(sql);
+    if (first_keyword != "DECLARE" && first_keyword != "SET" && first_keyword != "IF" &&
+        first_keyword != "BEGIN" && first_keyword != "WHILE") {
+        return false;
+    }
+    const auto keywords = sql_keywords(sql);
+    return std::any_of(keywords.begin(), keywords.end(), [](const std::string& keyword) {
+        return keyword == "SELECT" || keyword == "EXEC" || keyword == "EXECUTE" ||
+               keyword == "OUTPUT" || keyword == "RETURNING";
+    });
+}
+
+// SQL that may return a result set through the update path, which returns the first JDBC
+// result set when there is one and the update count otherwise.
+bool uses_update_result_set(const std::string& sql) {
+    return is_dml_result_set_sql(sql) || is_procedure_call_sql(sql) || is_result_set_batch_sql(sql);
+}
+
 // Long text up to this size (UTF-8) is sent inline in the request; above it a LOB is used (the
 // server's default gRPC message limit is 4 MiB).
 constexpr std::size_t kInlineTextLobLimit = 2 * 1024 * 1024;
@@ -4175,8 +4197,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         return parameters_result;
     }
     request.mutable_session()->CopyFrom(connection->session);
-    const bool dml_result_set =
-        is_dml_result_set_sql(statement->sql) || is_procedure_call_sql(statement->sql);
+    const bool dml_result_set = uses_update_result_set(statement->sql);
     if (dml_result_set) {
         auto* property = request.add_properties();
         property->set_key(kUpdateResultSetRequestKey);
@@ -6454,7 +6475,7 @@ static SQLRETURN execute_parameter_sets(StatementHandle* target, SQLULEN rows, b
     const auto marker_count = count_parameter_markers(target->sql);
     std::string savepoint_name;
     if (connection == nullptr || marker_count == 0 || is_query_sql(target->sql) ||
-        is_dml_result_set_sql(target->sql) || is_procedure_call_sql(target->sql) ||
+        uses_update_result_set(target->sql) ||
         parse_savepoint_statement(target->sql, &savepoint_name) != SavepointAction::NONE) {
         return SQL_SUCCESS;
     }

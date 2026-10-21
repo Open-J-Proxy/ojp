@@ -1,5 +1,7 @@
 # Request Lifecycle Interceptor API Analysis
 
+This analysis was partially implemented in this PR https://github.com/Open-J-Proxy/ojp/pull/744, when implementing it start from the PR acknowledging that the PR code is outdated in relation to the main branch.
+
 ## Purpose
 
 Evaluate whether OJP should provide a plugin API, inspired by Servlet Filters, for modules to participate in server-side request processing. This document is an architectural analysis only; it does not implement or commit OJP to the proposed API.

@@ -3078,7 +3078,8 @@ bool is_lob_parameter_type(SQLSMALLINT sql_type) {
 }
 
 bool is_data_at_execution(const BoundParameter& bound) {
-    return bound.indicator != nullptr &&
+    // The indicator of an OUTPUT parameter is only written by the driver.
+    return bound.direction != SQL_PARAM_OUTPUT && bound.indicator != nullptr &&
         (*bound.indicator == SQL_DATA_AT_EXEC ||
          *bound.indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET);
 }
@@ -4124,6 +4125,155 @@ SQLRETURN add_request_parameters(StatementHandle* statement, StatementRequest* r
     return SQL_SUCCESS;
 }
 
+bool has_output_parameters(const StatementHandle* statement, std::size_t marker_count) {
+    return std::any_of(statement->parameters.begin(), statement->parameters.end(),
+        [marker_count](const auto& entry) {
+            return entry.first <= marker_count && entry.second.direction != SQL_PARAM_INPUT;
+        });
+}
+
+// java.sql.Types code for CallableStatement.registerOutParameter/setNull.
+std::int32_t jdbc_parameter_type(SQLSMALLINT sql_type) {
+    const auto type = jdbc_null_type(sql_type);
+    return type == 0 ? 12 : type;  // Types.VARCHAR when the SQL type has no JDBC equivalent.
+}
+
+// Statements with OUTPUT or INPUT_OUTPUT parameters (e.g. "{? = CALL proc(?, ?)}") run through a
+// server-side java.sql.CallableStatement driven by callResource, as the OJP JDBC driver does.
+SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t marker_count) {
+    using namespace com::openjproxy::grpc;
+    auto* connection = statement->connection;
+    ParameterValue sql_value;
+    sql_value.set_string_value(statement->sql);
+    CallResourceResponse prepared;
+    const SQLRETURN prepare_result = call_resource(connection, statement, RES_CONNECTION, "",
+        CALL_PREPARE, "Call", {sql_value}, &prepared);
+    if (!SQL_SUCCEEDED(prepare_result)) {
+        return prepare_result;
+    }
+    if (prepared.values_size() == 0 ||
+        prepared.values(0).value_case() != ParameterValue::kStringValue ||
+        prepared.values(0).string_value().empty()) {
+        return fail(statement, "OJP returned an invalid callable statement reference", "HY000");
+    }
+    const std::string callable_uuid = prepared.values(0).string_value();
+    log_message(LogLevel::debug, "executing with output parameters through callable statement " +
+                callable_uuid);
+    auto call = [&](CallType call_type, const char* name, const std::vector<ParameterValue>& values,
+                    CallResourceResponse* response) {
+        return call_resource(connection, statement, RES_CALLABLE_STATEMENT, callable_uuid,
+                             call_type, name, values, response);
+    };
+    auto int_value = [](std::int32_t number) {
+        ParameterValue value;
+        value.set_int_value(number);
+        return value;
+    };
+
+    const SQLRETURN executed = [&]() -> SQLRETURN {
+        for (const auto& entry : statement->parameters) {
+            if (entry.first > marker_count) {
+                continue;
+            }
+            const auto& bound = entry.second;
+            const auto index = int_value(entry.first);
+            if (bound.direction != SQL_PARAM_OUTPUT) {
+                if (is_lob_parameter_type(bound.parameter_type) || is_data_at_execution(bound)) {
+                    return fail(statement, "LOB parameters cannot be combined with output "
+                                "parameters", "HYC00");
+                }
+                const auto type = parameter_type(bound);
+                ParameterValue value;
+                Diagnostic error;
+                if (type != PT_NULL &&
+                    (!set_parameter_value(&value, bound, entry.first, &error) ||
+                     !coerce_parameter_value(&value, type, entry.first, &error))) {
+                    return fail(statement, error.message, error.state, error.native_error);
+                }
+                const SQLRETURN set_result = type == PT_NULL
+                    ? call(CALL_SET, "Null", {index, int_value(jdbc_parameter_type(bound.parameter_type))},
+                           nullptr)
+                    : call(CALL_SET, "Object", {index, value}, nullptr);
+                if (!SQL_SUCCEEDED(set_result)) {
+                    return set_result;
+                }
+            }
+            if (bound.direction != SQL_PARAM_INPUT) {
+                const SQLRETURN register_result = call(CALL_REGISTER, "OutParameter",
+                    {index, int_value(jdbc_parameter_type(bound.parameter_type))}, nullptr);
+                if (!SQL_SUCCEEDED(register_result)) {
+                    return register_result;
+                }
+            }
+        }
+        CallResourceResponse execute_response;
+        SQLRETURN result = call(CALL_EXECUTE, "", {}, &execute_response);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        const bool returns_result_set = execute_response.values_size() > 0 &&
+            execute_response.values(0).value_case() == ParameterValue::kBoolValue &&
+            execute_response.values(0).bool_value();
+        if (returns_result_set) {
+            CallResourceResponse result_set;
+            result = call(CALL_GET, "ResultSet", {}, &result_set);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+            if (result_set.values_size() == 0 ||
+                result_set.values(0).value_case() != ParameterValue::kStringValue) {
+                return fail(statement, "OJP returned an invalid result-set reference", "HY000");
+            }
+            result = fetch_update_result_set(connection, statement, result_set.values(0).string_value());
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+        } else {
+            CallResourceResponse update_count;
+            result = call(CALL_GET, "UpdateCount", {}, &update_count);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+            if (update_count.values_size() > 0 &&
+                update_count.values(0).value_case() == ParameterValue::kIntValue) {
+                statement->row_count = update_count.values(0).int_value();
+            }
+        }
+        SQLRETURN overall = SQL_SUCCESS;
+        for (const auto& entry : statement->parameters) {
+            const auto& bound = entry.second;
+            if (entry.first > marker_count || bound.direction == SQL_PARAM_INPUT) {
+                continue;
+            }
+            CallResourceResponse output;
+            result = call(CALL_GET, "Object", {int_value(entry.first)}, &output);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+            Cell cell;
+            if (output.values_size() > 0 && !decode_value(output.values(0), &cell)) {
+                return fail(statement, "OJP returned an output parameter type unsupported by the "
+                            "ODBC client", "HY000");
+            }
+            if (bound.value == nullptr && !std::holds_alternative<std::monostate>(cell)) {
+                continue;
+            }
+            const SQLRETURN written = write_cell(statement, cell, bound.value_type, bound.value,
+                                                 bound.buffer_length, bound.indicator);
+            if (!SQL_SUCCEEDED(written)) {
+                return written;
+            }
+            if (written == SQL_SUCCESS_WITH_INFO) {
+                overall = SQL_SUCCESS_WITH_INFO;
+            }
+        }
+        return overall;
+    }();
+    CallResourceResponse closed;
+    const SQLRETURN close_result = call(CALL_CLOSE, "", {}, &closed);
+    return SQL_SUCCEEDED(executed) && !SQL_SUCCEEDED(close_result) ? close_result : executed;
+}
+
 SQLRETURN execute_statement(StatementHandle* statement) {
     auto* connection = statement->connection;
     clear_diagnostics(statement);
@@ -4149,10 +4299,13 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         return execute_savepoint_statement(statement, savepoint_action, savepoint_name);
     }
 
-    StatementRequest request;
-    request.set_sql(statement->sql);
     // Bindings persist across statements; only those with a matching '?' marker are sent.
     const auto marker_count = count_parameter_markers(statement->sql);
+    if (has_output_parameters(statement, marker_count)) {
+        return execute_callable_statement(statement, marker_count);
+    }
+    StatementRequest request;
+    request.set_sql(statement->sql);
     log_message(LogLevel::debug, "executing SQL with " + std::to_string(marker_count) +
                 " parameter marker(s) and " + std::to_string(statement->parameters.size()) +
                 " bound parameter(s)");
@@ -6499,6 +6652,10 @@ static SQLRETURN execute_and_report(StatementHandle* target) {
     }
     const auto original = target->parameters;
     for (const auto& entry : original) {
+        if (entry.second.direction != SQL_PARAM_INPUT) {
+            return fail(target, "Output parameters cannot be combined with "
+                        "SQL_ATTR_PARAMSET_SIZE = " + std::to_string(rows), "HYC00");
+        }
         if (is_data_at_execution(entry.second)) {
             return fail(target, "Data-at-execution parameters cannot be combined with "
                         "SQL_ATTR_PARAMSET_SIZE = " + std::to_string(rows), "HYC00");
@@ -6667,8 +6824,9 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statement, SQLUSMALLINT parameter_nu
         if (parameter_number == 0) {
             return fail(target, "ODBC parameter numbers start at 1", "07009");
         }
-        if (input_output_type != SQL_PARAM_INPUT) {
-            return fail(target, "Only input parameters are supported", "HYC00");
+        if (input_output_type != SQL_PARAM_INPUT && input_output_type != SQL_PARAM_INPUT_OUTPUT &&
+            input_output_type != SQL_PARAM_OUTPUT) {
+            return fail(target, "Streamed output parameters are not supported", "HYC00");
         }
         target->parameters[parameter_number] = {
             input_output_type, value_type, parameter_type, value, buffer_length, indicator};

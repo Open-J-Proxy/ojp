@@ -213,6 +213,10 @@ struct StatementHandle final : HandleBase {
     explicit StatementHandle(ConnectionHandle* parent)
         : HandleBase(SQL_HANDLE_STMT), connection(parent) {}
 
+    // Implicit descriptors exposed to the Driver Manager through SQLGetStmtAttr.
+    HandleBase descriptors[4] = {HandleBase(SQL_HANDLE_DESC), HandleBase(SQL_HANDLE_DESC),
+                                 HandleBase(SQL_HANDLE_DESC), HandleBase(SQL_HANDLE_DESC)};
+
     ConnectionHandle* connection;
     std::mutex operation_mutex;
     std::string sql;
@@ -228,6 +232,12 @@ struct StatementHandle final : HandleBase {
     std::size_t data_at_execution_index = 0;
     SQLUSMALLINT current_data_at_execution_parameter = 0;
     bool waiting_for_data = false;
+    // Stored statement attributes; the pointers are filled on fetch/execute.
+    std::map<SQLINTEGER, SQLULEN> stored_attributes;
+    SQLULEN* rows_fetched_ptr = nullptr;
+    SQLUSMALLINT* row_status_ptr = nullptr;
+    SQLULEN* params_processed_ptr = nullptr;
+    SQLUSMALLINT* param_status_ptr = nullptr;
 };
 
 struct ParsedConnectionString {
@@ -6179,19 +6189,274 @@ SQLRETURN SQL_API SQLTransact(SQLHENV environment, SQLHDBC connection,
     });
 }
 
+extern "C++" {
+// Default values reported by SQLGetStmtAttr for attributes not changed yet.
+static SQLULEN default_statement_attribute(SQLINTEGER attribute) {
+    switch (attribute) {
+        case SQL_ATTR_CURSOR_TYPE: return SQL_CURSOR_FORWARD_ONLY;
+        case SQL_ATTR_CONCURRENCY: return SQL_CONCUR_READ_ONLY;
+        case SQL_ATTR_CURSOR_SCROLLABLE: return SQL_NONSCROLLABLE;
+        case SQL_ATTR_CURSOR_SENSITIVITY: return SQL_INSENSITIVE;
+        case SQL_ATTR_ROW_ARRAY_SIZE:
+        case SQL_ROWSET_SIZE:
+        case SQL_ATTR_PARAMSET_SIZE: return 1;
+        case SQL_ATTR_ROW_BIND_TYPE:
+        case SQL_ATTR_PARAM_BIND_TYPE: return SQL_BIND_BY_COLUMN;
+        case SQL_ATTR_NOSCAN: return SQL_NOSCAN_OFF;
+        case SQL_ATTR_RETRIEVE_DATA: return SQL_RD_ON;
+        case SQL_ATTR_USE_BOOKMARKS: return SQL_UB_OFF;
+        case SQL_ATTR_ASYNC_ENABLE: return SQL_ASYNC_ENABLE_OFF;
+        case SQL_ATTR_ENABLE_AUTO_IPD: return SQL_FALSE;
+        case SQL_ATTR_SIMULATE_CURSOR: return SQL_SC_UNIQUE;
+        default: return 0;
+    }
+}
+
+static std::string statement_attribute_name(SQLINTEGER attribute) {
+    switch (attribute) {
+        case SQL_ATTR_CURSOR_TYPE: return "SQL_ATTR_CURSOR_TYPE";
+        case SQL_ATTR_CONCURRENCY: return "SQL_ATTR_CONCURRENCY";
+        case SQL_ATTR_CURSOR_SCROLLABLE: return "SQL_ATTR_CURSOR_SCROLLABLE";
+        case SQL_ATTR_CURSOR_SENSITIVITY: return "SQL_ATTR_CURSOR_SENSITIVITY";
+        case SQL_ATTR_ROW_ARRAY_SIZE: return "SQL_ATTR_ROW_ARRAY_SIZE";
+        case SQL_ROWSET_SIZE: return "SQL_ROWSET_SIZE";
+        case SQL_ATTR_PARAMSET_SIZE: return "SQL_ATTR_PARAMSET_SIZE";
+        case SQL_ATTR_ROW_BIND_TYPE: return "SQL_ATTR_ROW_BIND_TYPE";
+        case SQL_ATTR_PARAM_BIND_TYPE: return "SQL_ATTR_PARAM_BIND_TYPE";
+        case SQL_ATTR_ROW_BIND_OFFSET_PTR: return "SQL_ATTR_ROW_BIND_OFFSET_PTR";
+        case SQL_ATTR_PARAM_BIND_OFFSET_PTR: return "SQL_ATTR_PARAM_BIND_OFFSET_PTR";
+        case SQL_ATTR_USE_BOOKMARKS: return "SQL_ATTR_USE_BOOKMARKS";
+        case SQL_ATTR_ASYNC_ENABLE: return "SQL_ATTR_ASYNC_ENABLE";
+        case SQL_ATTR_SIMULATE_CURSOR: return "SQL_ATTR_SIMULATE_CURSOR";
+        default: return "attribute " + std::to_string(attribute);
+    }
+}
+
+}  // extern "C++"
+
+static SQLRETURN set_statement_attribute(SQLHSTMT statement, SQLINTEGER attribute,
+                                         SQLPOINTER value) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
+    clear_diagnostics(target);
+    const auto option = static_cast<SQLULEN>(reinterpret_cast<std::uintptr_t>(value));
+    // Accepts only the supported value; any other value raises an explicit error with the attribute and value.
+    auto only = [&](SQLULEN supported, const char* supported_name, const char* state) -> SQLRETURN {
+        if (option == supported) {
+            target->stored_attributes[attribute] = option;
+            return SQL_SUCCESS;
+        }
+        return fail(target, statement_attribute_name(attribute) + " = " + std::to_string(option) +
+                    " is not supported by the OJP ODBC driver (only " + supported_name + ")", state);
+    };
+    switch (attribute) {
+        case SQL_ATTR_CURSOR_TYPE:
+            return only(SQL_CURSOR_FORWARD_ONLY, "SQL_CURSOR_FORWARD_ONLY", "HYC00");
+        case SQL_ATTR_CONCURRENCY:
+            return only(SQL_CONCUR_READ_ONLY, "SQL_CONCUR_READ_ONLY", "HYC00");
+        case SQL_ATTR_CURSOR_SCROLLABLE:
+            return only(SQL_NONSCROLLABLE, "SQL_NONSCROLLABLE", "HYC00");
+        case SQL_ATTR_CURSOR_SENSITIVITY:
+            if (option == SQL_UNSPECIFIED || option == SQL_INSENSITIVE) {
+                target->stored_attributes[attribute] = option;
+                return SQL_SUCCESS;
+            }
+            return fail(target, "SQL_ATTR_CURSOR_SENSITIVITY = " + std::to_string(option) +
+                        " is not supported by the OJP ODBC driver (only SQL_UNSPECIFIED or "
+                        "SQL_INSENSITIVE)", "HYC00");
+        case SQL_ATTR_ROW_ARRAY_SIZE:
+        case SQL_ROWSET_SIZE:
+            return only(1, "1: block cursors are not supported", "HYC00");
+        case SQL_ATTR_PARAMSET_SIZE:
+            if (option == 0) {
+                return fail(target, "SQL_ATTR_PARAMSET_SIZE must be at least 1", "HY024");
+            }
+            // Parameter arrays are executed row by row (see execute_and_report).
+            target->stored_attributes[attribute] = option;
+            return SQL_SUCCESS;
+        case SQL_ATTR_ROW_BIND_TYPE:
+        case SQL_ATTR_PARAM_BIND_TYPE:
+            return only(SQL_BIND_BY_COLUMN, "SQL_BIND_BY_COLUMN", "HYC00");
+        case SQL_ATTR_ROW_BIND_OFFSET_PTR:
+        case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+            if (value == nullptr || *static_cast<SQLULEN*>(value) == 0) {
+                return SQL_SUCCESS;
+            }
+            return fail(target, statement_attribute_name(attribute) +
+                        " with a non-zero offset is not supported by the OJP ODBC driver", "HYC00");
+        case SQL_ATTR_USE_BOOKMARKS:
+            return only(SQL_UB_OFF, "SQL_UB_OFF", "HYC00");
+        case SQL_ATTR_ASYNC_ENABLE:
+            return only(SQL_ASYNC_ENABLE_OFF, "SQL_ASYNC_ENABLE_OFF", "HYC00");
+        case SQL_ATTR_ROWS_FETCHED_PTR:
+            target->rows_fetched_ptr = static_cast<SQLULEN*>(value);
+            return SQL_SUCCESS;
+        case SQL_ATTR_ROW_STATUS_PTR:
+            target->row_status_ptr = static_cast<SQLUSMALLINT*>(value);
+            return SQL_SUCCESS;
+        case SQL_ATTR_PARAMS_PROCESSED_PTR:
+            target->params_processed_ptr = static_cast<SQLULEN*>(value);
+            return SQL_SUCCESS;
+        case SQL_ATTR_PARAM_STATUS_PTR:
+            target->param_status_ptr = static_cast<SQLUSMALLINT*>(value);
+            return SQL_SUCCESS;
+        case SQL_ATTR_QUERY_TIMEOUT:
+        case SQL_ATTR_MAX_ROWS:
+        case SQL_ATTR_MAX_LENGTH:
+        case SQL_ATTR_NOSCAN:
+        case SQL_ATTR_RETRIEVE_DATA:
+        case SQL_ATTR_SIMULATE_CURSOR:
+        case SQL_ATTR_ENABLE_AUTO_IPD:
+        case SQL_ATTR_KEYSET_SIZE:
+            // Stored for SQLGetStmtAttr; OJP applies its own limits/timeouts.
+            target->stored_attributes[attribute] = option;
+            log_message(LogLevel::debug, statement_attribute_name(attribute) + " stored as " +
+                        std::to_string(option) + " (informational only)");
+            return SQL_SUCCESS;
+        default:
+            return fail(target, "Statement attribute " + std::to_string(attribute) + " (value " +
+                        std::to_string(option) + ") is not supported by the OJP ODBC driver",
+                        "HYC00");
+    }
+}
+
 SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statement, SQLINTEGER attribute,
                                  SQLPOINTER value, SQLINTEGER) {
     return guarded(statement, "SQLSetStmtAttr", [&]() -> SQLRETURN {
+        return set_statement_attribute(statement, attribute, value);
+    });
+}
+
+// No supported statement attribute is a string, so the W variant is identical to the ANSI one.
+SQLRETURN SQL_API SQLSetStmtAttrW(SQLHSTMT statement, SQLINTEGER attribute,
+                                  SQLPOINTER value, SQLINTEGER) {
+    return guarded(statement, "SQLSetStmtAttrW", [&]() -> SQLRETURN {
+        return set_statement_attribute(statement, attribute, value);
+    });
+}
+
+static SQLRETURN get_statement_attribute(SQLHSTMT statement, SQLINTEGER attribute,
+                                         SQLPOINTER value, SQLINTEGER* string_length) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* stmt = static_cast<StatementHandle*>(statement);
+    clear_diagnostics(stmt);
+    auto write_pointer = [&](SQLPOINTER pointer) {
+        if (value != nullptr) {
+            *static_cast<SQLPOINTER*>(value) = pointer;
+        }
+        if (string_length != nullptr) {
+            *string_length = static_cast<SQLINTEGER>(sizeof(SQLPOINTER));
+        }
+        return SQL_SUCCESS;
+    };
+    if (attribute >= SQL_ATTR_APP_ROW_DESC && attribute <= SQL_ATTR_IMP_PARAM_DESC) {
+        return write_pointer(&stmt->descriptors[attribute - SQL_ATTR_APP_ROW_DESC]);
+    }
+    switch (attribute) {
+        case SQL_ATTR_ROWS_FETCHED_PTR: return write_pointer(stmt->rows_fetched_ptr);
+        case SQL_ATTR_ROW_STATUS_PTR: return write_pointer(stmt->row_status_ptr);
+        case SQL_ATTR_PARAMS_PROCESSED_PTR: return write_pointer(stmt->params_processed_ptr);
+        case SQL_ATTR_PARAM_STATUS_PTR: return write_pointer(stmt->param_status_ptr);
+        case SQL_ATTR_ROW_BIND_OFFSET_PTR:
+        case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+        case SQL_ATTR_PARAM_OPERATION_PTR:
+        case SQL_ATTR_ROW_OPERATION_PTR:
+        case SQL_ATTR_FETCH_BOOKMARK_PTR:
+            return write_pointer(nullptr);
+        case SQL_ATTR_ROW_NUMBER: {
+            if (value != nullptr) {
+                *static_cast<SQLULEN*>(value) = static_cast<SQLULEN>(stmt->row_index);
+            }
+            if (string_length != nullptr) {
+                *string_length = static_cast<SQLINTEGER>(sizeof(SQLULEN));
+            }
+            return SQL_SUCCESS;
+        }
+        case SQL_ATTR_CURSOR_TYPE:
+        case SQL_ATTR_CONCURRENCY:
+        case SQL_ATTR_CURSOR_SCROLLABLE:
+        case SQL_ATTR_CURSOR_SENSITIVITY:
+        case SQL_ATTR_ROW_ARRAY_SIZE:
+        case SQL_ROWSET_SIZE:
+        case SQL_ATTR_PARAMSET_SIZE:
+        case SQL_ATTR_ROW_BIND_TYPE:
+        case SQL_ATTR_PARAM_BIND_TYPE:
+        case SQL_ATTR_QUERY_TIMEOUT:
+        case SQL_ATTR_MAX_ROWS:
+        case SQL_ATTR_MAX_LENGTH:
+        case SQL_ATTR_NOSCAN:
+        case SQL_ATTR_RETRIEVE_DATA:
+        case SQL_ATTR_USE_BOOKMARKS:
+        case SQL_ATTR_ASYNC_ENABLE:
+        case SQL_ATTR_SIMULATE_CURSOR:
+        case SQL_ATTR_ENABLE_AUTO_IPD:
+        case SQL_ATTR_KEYSET_SIZE: {
+            const auto stored = stmt->stored_attributes.find(attribute);
+            if (value != nullptr) {
+                *static_cast<SQLULEN*>(value) = stored != stmt->stored_attributes.end()
+                    ? stored->second : default_statement_attribute(attribute);
+            }
+            if (string_length != nullptr) {
+                *string_length = static_cast<SQLINTEGER>(sizeof(SQLULEN));
+            }
+            return SQL_SUCCESS;
+        }
+        default:
+            return fail(stmt, "Statement attribute " + std::to_string(attribute) +
+                        " is not supported by the OJP ODBC driver for reading", "HYC00");
+    }
+}
+
+SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT statement, SQLINTEGER attribute, SQLPOINTER value,
+                                 SQLINTEGER, SQLINTEGER* string_length) {
+    return guarded(statement, "SQLGetStmtAttr", [&]() -> SQLRETURN {
+        return get_statement_attribute(statement, attribute, value, string_length);
+    });
+}
+
+SQLRETURN SQL_API SQLGetStmtAttrW(SQLHSTMT statement, SQLINTEGER attribute, SQLPOINTER value,
+                                  SQLINTEGER, SQLINTEGER* string_length) {
+    return guarded(statement, "SQLGetStmtAttrW", [&]() -> SQLRETURN {
+        return get_statement_attribute(statement, attribute, value, string_length);
+    });
+}
+
+SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT statement) {
+    return guarded(statement, "SQLCloseCursor", [&]() -> SQLRETURN {
+        return SQLFreeStmt(statement, SQL_CLOSE);
+    });
+}
+
+SQLRETURN SQL_API SQLFetchScroll(SQLHSTMT statement, SQLSMALLINT orientation, SQLLEN) {
+    return guarded(statement, "SQLFetchScroll", [&]() -> SQLRETURN {
+        if (orientation != SQL_FETCH_NEXT) {
+            if (statement == SQL_NULL_HSTMT ||
+                static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+                return SQL_INVALID_HANDLE;
+            }
+            return fail(static_cast<StatementHandle*>(statement),
+                        "SQLFetchScroll orientation " + std::to_string(orientation) +
+                        " is not supported: OJP cursors are forward-only (use SQL_FETCH_NEXT)",
+                        "HYC00");
+        }
+        return SQLFetch(statement);
+    });
+}
+
+SQLRETURN SQL_API SQLMoreResults(SQLHSTMT statement) {
+    return guarded(statement, "SQLMoreResults", [&]() -> SQLRETURN {
         if (statement == SQL_NULL_HSTMT ||
             static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
             return SQL_INVALID_HANDLE;
         }
-        auto* target = static_cast<StatementHandle*>(statement);
-        if (attribute == SQL_ATTR_ROW_ARRAY_SIZE &&
-            reinterpret_cast<std::uintptr_t>(value) == 1) {
-            return SQL_SUCCESS;
-        }
-        return fail(target, "Only a single-row fetch array is supported", "HYC00");
+        return SQL_NO_DATA;
     });
 }
 
@@ -6454,8 +6719,16 @@ SQLRETURN SQL_API SQLGetInfoW(SQLHDBC connection, SQLUSMALLINT info_type, SQLPOI
         if (!SQL_SUCCEEDED(result)) {
             return result;
         }
-        return write_wide_string(target, text, static_cast<SQLWCHAR*>(value),
-                                 buffer_length, output_length);
+        // In SQLGetInfoW, buffer_length and output_length are measured in bytes, not characters.
+        SQLSMALLINT wide_length = 0;
+        const auto wide_result = write_wide_string(
+            target, text, static_cast<SQLWCHAR*>(value),
+            static_cast<SQLSMALLINT>(buffer_length / static_cast<SQLSMALLINT>(sizeof(SQLWCHAR))),
+            &wide_length);
+        if (output_length != nullptr) {
+            *output_length = static_cast<SQLSMALLINT>(wide_length * sizeof(SQLWCHAR));
+        }
+        return wide_result;
     });
 }
 
@@ -6770,6 +7043,8 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
             SQL_API_SQLROWCOUNT, SQL_API_SQLFREESTMT,
             SQL_API_SQLTABLES, SQL_API_SQLCOLUMNS, SQL_API_SQLPRIMARYKEYS,
             SQL_API_SQLFOREIGNKEYS, SQL_API_SQLGETTYPEINFO, SQL_API_SQLCOLATTRIBUTE,
+            SQL_API_SQLSETSTMTATTR, SQL_API_SQLGETSTMTATTR, SQL_API_SQLCLOSECURSOR,
+            SQL_API_SQLFETCHSCROLL, SQL_API_SQLMORERESULTS,
             SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
             SQL_API_SQLGETFUNCTIONS};
         if (function_id == SQL_API_ALL_FUNCTIONS) {
@@ -6797,3 +7072,16 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
 }
 
 }  // extern "C"
+
+#ifdef _WIN32
+// Pins the driver in memory: gRPC/Abseil threads may outlive the FreeLibrary
+// issued by the Driver Manager and would run code from already unloaded DLLs.
+BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(module), &pinned);
+    }
+    return TRUE;
+}
+#endif

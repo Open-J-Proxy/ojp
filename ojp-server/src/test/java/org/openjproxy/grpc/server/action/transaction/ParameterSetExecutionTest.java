@@ -19,6 +19,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ParameterSetExecutionTest {
 
@@ -90,6 +91,46 @@ class ParameterSetExecutionTest {
     }
 
     @Test
+    void commitsAutoCommitBatchOnceAndRestoresAutoCommit() throws SQLException {
+        List<Parameter> params = flattened(new Object[][]{{1, "a"}, {2, "b"}});
+
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)")) {
+            ParameterSetExecution.execute(null, null, ps, params, 2);
+        }
+
+        assertTrue(connection.getAutoCommit());
+        assertEquals(List.of("1:a", "2:b"), rowsFromAnotherConnection());
+    }
+
+    @Test
+    void autoCommitBatchKeepsPerSetOutcomeWhenASetFails() throws SQLException {
+        List<Parameter> params = flattened(new Object[][]{{1, "a"}, {1, "duplicate"}, {3, "c"}});
+
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)")) {
+            BatchUpdateException error = assertThrows(BatchUpdateException.class,
+                    () -> ParameterSetExecution.execute(null, null, ps, params, 2));
+            assertArrayEquals(new int[]{1, Statement.EXECUTE_FAILED, 1}, error.getUpdateCounts());
+        }
+
+        assertTrue(connection.getAutoCommit());
+        assertEquals(List.of("1:a", "3:c"), rowsFromAnotherConnection());
+    }
+
+    @Test
+    void leavesCallerTransactionOpen() throws SQLException {
+        List<Parameter> params = flattened(new Object[][]{{1, "a"}, {2, "b"}});
+        connection.setAutoCommit(false);
+
+        try (PreparedStatement ps = connection.prepareStatement("INSERT INTO ITEMS (ID, NAME) VALUES (?, ?)")) {
+            ParameterSetExecution.execute(null, null, ps, params, 2);
+        }
+        connection.rollback();
+        connection.setAutoCommit(true);
+
+        assertEquals(List.of(), rows());
+    }
+
+    @Test
     void olderServerBindingFailsBeforeExecuting() throws SQLException {
         List<Parameter> params = flattened(new Object[][]{{1, "a"}, {2, "b"}});
 
@@ -116,8 +157,18 @@ class ParameterSetExecutionTest {
     }
 
     private List<String> rows() throws SQLException {
+        return rows(connection);
+    }
+
+    private static List<String> rowsFromAnotherConnection() throws SQLException {
+        try (Connection other = DriverManager.getConnection("jdbc:h2:mem:parameter_sets;DB_CLOSE_DELAY=-1")) {
+            return rows(other);
+        }
+    }
+
+    private static List<String> rows(Connection source) throws SQLException {
         List<String> rows = new ArrayList<>();
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = source.createStatement();
              ResultSet resultSet = statement.executeQuery("SELECT ID, NAME FROM ITEMS ORDER BY ID")) {
             while (resultSet.next()) {
                 rows.add(resultSet.getInt(1) + ":" + resultSet.getString(2));

@@ -230,13 +230,22 @@ struct ColumnMetadata {
     int nullable = SQL_NULLABLE_UNKNOWN;
 };
 
+struct DescriptorHandle final : HandleBase {
+    explicit DescriptorHandle(SQLINTEGER statement_attribute)
+        : HandleBase(SQL_HANDLE_DESC), attribute(statement_attribute) {}
+
+    // SQL_ATTR_APP_ROW_DESC, SQL_ATTR_APP_PARAM_DESC, SQL_ATTR_IMP_ROW_DESC or SQL_ATTR_IMP_PARAM_DESC.
+    SQLINTEGER attribute;
+};
+
 struct StatementHandle final : HandleBase {
     explicit StatementHandle(ConnectionHandle* parent)
         : HandleBase(SQL_HANDLE_STMT), connection(parent) {}
 
     // Implicit descriptors exposed to the Driver Manager through SQLGetStmtAttr.
-    HandleBase descriptors[4] = {HandleBase(SQL_HANDLE_DESC), HandleBase(SQL_HANDLE_DESC),
-                                 HandleBase(SQL_HANDLE_DESC), HandleBase(SQL_HANDLE_DESC)};
+    DescriptorHandle descriptors[4] = {
+        DescriptorHandle(SQL_ATTR_APP_ROW_DESC), DescriptorHandle(SQL_ATTR_APP_PARAM_DESC),
+        DescriptorHandle(SQL_ATTR_IMP_ROW_DESC), DescriptorHandle(SQL_ATTR_IMP_PARAM_DESC)};
 
     ConnectionHandle* connection;
     std::mutex operation_mutex;
@@ -8661,6 +8670,40 @@ SQLRETURN SQL_API SQLGetStmtAttrW(SQLHSTMT statement, SQLINTEGER attribute, SQLP
     });
 }
 
+// Parameters are always bound by position. Applications such as FireDAC name the parameters in
+// the IPD (SQL_DESC_NAME) before calling a procedure, so the name is accepted and ignored.
+static SQLRETURN set_descriptor_field(SQLHDESC descriptor, SQLSMALLINT record_number,
+                                      SQLSMALLINT field) {
+    if (descriptor == SQL_NULL_HDESC ||
+        static_cast<HandleBase*>(descriptor)->type != SQL_HANDLE_DESC) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* desc = static_cast<DescriptorHandle*>(descriptor);
+    clear_diagnostics(desc);
+    if (field == SQL_DESC_NAME && desc->attribute == SQL_ATTR_IMP_PARAM_DESC) {
+        if (record_number < 1) {
+            return fail(desc, "SQL_DESC_NAME requires a parameter record number", "07009");
+        }
+        return SQL_SUCCESS;
+    }
+    return fail(desc, "Descriptor field " + std::to_string(field) +
+                " is not supported by the OJP ODBC driver for writing", "HYC00");
+}
+
+SQLRETURN SQL_API SQLSetDescField(SQLHDESC descriptor, SQLSMALLINT record_number,
+                                  SQLSMALLINT field, SQLPOINTER, SQLINTEGER) {
+    return guarded(descriptor, "SQLSetDescField", [&]() -> SQLRETURN {
+        return set_descriptor_field(descriptor, record_number, field);
+    });
+}
+
+SQLRETURN SQL_API SQLSetDescFieldW(SQLHDESC descriptor, SQLSMALLINT record_number,
+                                   SQLSMALLINT field, SQLPOINTER, SQLINTEGER) {
+    return guarded(descriptor, "SQLSetDescFieldW", [&]() -> SQLRETURN {
+        return set_descriptor_field(descriptor, record_number, field);
+    });
+}
+
 SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT statement) {
     return guarded(statement, "SQLCloseCursor", [&]() -> SQLRETURN {
         return SQLFreeStmt(statement, SQL_CLOSE);
@@ -9277,7 +9320,8 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
             SQL_API_SQLTABLES, SQL_API_SQLCOLUMNS, SQL_API_SQLPRIMARYKEYS,
             SQL_API_SQLFOREIGNKEYS, SQL_API_SQLPROCEDURES, SQL_API_SQLPROCEDURECOLUMNS,
             SQL_API_SQLGETTYPEINFO, SQL_API_SQLCOLATTRIBUTE,
-            SQL_API_SQLSETSTMTATTR, SQL_API_SQLGETSTMTATTR, SQL_API_SQLCLOSECURSOR,
+            SQL_API_SQLSETSTMTATTR, SQL_API_SQLGETSTMTATTR, SQL_API_SQLSETDESCFIELD,
+            SQL_API_SQLCLOSECURSOR,
             SQL_API_SQLFETCHSCROLL, SQL_API_SQLMORERESULTS,
             SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,
             SQL_API_SQLGETFUNCTIONS};

@@ -118,6 +118,22 @@ void check_output_parameters(SQLHSTMT statement) {
                              nullptr), "SQLBindParameter input");
     success(SQLBindParameter(statement, 3, SQL_PARAM_INPUT_OUTPUT, SQL_C_SLONG, SQL_INTEGER, 0, 0,
                              &r, 0, &r_indicator), "SQLBindParameter input/output");
+    SQLHDESC ipd = SQL_NULL_HDESC;
+    success(SQLGetStmtAttr(statement, SQL_ATTR_IMP_PARAM_DESC, &ipd, 0, nullptr),
+            "SQLGetStmtAttr(SQL_ATTR_IMP_PARAM_DESC)");
+    success(SQLSetDescField(ipd, 1, SQL_DESC_NAME, text("@RETURN_VALUE"), SQL_NTS),
+            "SQLSetDescField(SQL_DESC_NAME) on the IPD");
+    SQLHDESC apd = SQL_NULL_HDESC;
+    success(SQLGetStmtAttr(statement, SQL_ATTR_APP_PARAM_DESC, &apd, 0, nullptr),
+            "SQLGetStmtAttr(SQL_ATTR_APP_PARAM_DESC)");
+    require(SQLSetDescField(apd, 1, SQL_DESC_NAME, text("@a"), SQL_NTS) == SQL_ERROR,
+            "SQL_DESC_NAME must only be accepted on the IPD");
+    SQLCHAR state[6] = {};
+    SQLINTEGER native = 0;
+    SQLSMALLINT length = 0;
+    require(SQLGetDiagRec(SQL_HANDLE_DESC, apd, 1, state, &native, nullptr, 0, &length) !=
+                SQL_ERROR && std::string(reinterpret_cast<char*>(state)) == "HYC00",
+            "An unsupported descriptor field must report HYC00");
     success(SQLExecDirect(statement, text("{? = CALL dbo.add_values(?, ?)}"), SQL_NTS),
             "SQLExecDirect with output parameters");
     require(return_value == 42 && return_indicator == sizeof(SQLINTEGER),

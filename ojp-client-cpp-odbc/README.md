@@ -498,7 +498,10 @@ return value of `{? = CALL proc(?)}`) execute through the backend JDBC
 `CallableStatement`; output values are written to the bound buffers after
 `SQLExecute`/`SQLExecDirect`. Streamed output parameters, LOB or
 data-at-execution inputs in the same call, and output parameters combined with
-`SQL_ATTR_PARAMSET_SIZE` > 1 return `HYC00`.
+`SQL_ATTR_PARAMSET_SIZE` > 1 return `HYC00`. `SQLSetDescField` accepts
+`SQL_DESC_NAME` on the implementation parameter descriptor and ignores it,
+because parameters are always bound by position; other descriptor fields return
+`HYC00`.
 
 The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
 paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,

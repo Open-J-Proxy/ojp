@@ -184,7 +184,9 @@ The DSN support needs the unixODBC/iODBC `odbcinst` library at build time; CMake
 warns and builds a DSN-less driver when it is missing.
 
 On Windows, register `OJP` in the matching architecture's ODBC driver registry.
-There is no installer yet. An administrator can import this `.reg` template for a
+The [Windows installer](installer/windows/README.md) builds an Inno Setup installer
+(or runs `install.ps1`) that copies the 32-bit and 64-bit drivers and writes these
+entries. To register by hand, an administrator can import this `.reg` template for a
 **64-bit** driver after replacing the paths; `Setup` enables the DSN dialog:
 
 ```text

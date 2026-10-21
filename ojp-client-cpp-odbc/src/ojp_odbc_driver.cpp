@@ -1598,6 +1598,75 @@ bool parse_zone_offset(const std::string& raw, int* offset_seconds) {
     return true;
 }
 
+struct CivilDate {
+    std::int64_t year;
+    std::uint32_t month;
+    std::uint32_t day;
+};
+
+std::int64_t floor_div(std::int64_t value, std::int64_t divisor) {
+    const std::int64_t quotient = value / divisor;
+    return (value % divisor != 0 && (value < 0) != (divisor < 0)) ? quotient - 1 : quotient;
+}
+
+// java.sql.Timestamp (used by the server) follows the hybrid Julian/Gregorian calendar: days
+// before the Gregorian cutover (1582-10-15) are Julian dates. Applying the same rule keeps old
+// dates unchanged across the round trip. Day numbers are counted from 1970-01-01.
+constexpr std::int64_t kGregorianCutoverDay = -141427;
+
+// days_from_civil / civil_from_days by Howard Hinnant (proleptic Gregorian calendar).
+std::int64_t gregorian_days_from_civil(std::int64_t year, std::uint32_t month, std::uint32_t day) {
+    year -= month <= 2 ? 1 : 0;
+    const std::int64_t era = floor_div(year, 400);
+    const auto year_of_era = static_cast<std::uint32_t>(year - era * 400);
+    const std::uint32_t day_of_year = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
+    const std::uint32_t day_of_era =
+        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    return era * 146097 + static_cast<std::int64_t>(day_of_era) - 719468;
+}
+
+CivilDate gregorian_civil_from_days(std::int64_t days) {
+    days += 719468;
+    const std::int64_t era = floor_div(days, 146097);
+    const auto day_of_era = static_cast<std::uint32_t>(days - era * 146097);
+    const std::uint32_t year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    const std::uint32_t day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    const std::uint32_t shifted_month = (5 * day_of_year + 2) / 153;
+    const std::uint32_t month = shifted_month < 10 ? shifted_month + 3 : shifted_month - 9;
+    return {static_cast<std::int64_t>(year_of_era) + era * 400 + (month <= 2 ? 1 : 0), month,
+            day_of_year - (153 * shifted_month + 2) / 5 + 1};
+}
+
+// Julian calendar through the Julian Day Number (2440588 is 1970-01-01).
+std::int64_t julian_days_from_civil(std::int64_t year, std::uint32_t month, std::uint32_t day) {
+    const std::int64_t shift = (14 - static_cast<std::int64_t>(month)) / 12;
+    const std::int64_t shifted_year = year + 4800 - shift;
+    const std::int64_t shifted_month = month + 12 * shift - 3;
+    const std::int64_t day_number = day + (153 * shifted_month + 2) / 5 + 365 * shifted_year +
+        floor_div(shifted_year, 4) - 32083;
+    return day_number - 2440588;
+}
+
+CivilDate julian_civil_from_days(std::int64_t days) {
+    const std::int64_t c = days + 2440588 + 32082;
+    const std::int64_t d = floor_div(4 * c + 3, 1461);
+    const std::int64_t e = c - floor_div(1461 * d, 4);
+    const std::int64_t m = (5 * e + 2) / 153;
+    return {d - 4800 + m / 10, static_cast<std::uint32_t>(m + 3 - 12 * (m / 10)),
+            static_cast<std::uint32_t>(e - (153 * m + 2) / 5 + 1)};
+}
+
+std::int64_t days_from_civil(std::int64_t year, std::uint32_t month, std::uint32_t day) {
+    const std::int64_t gregorian = gregorian_days_from_civil(year, month, day);
+    return gregorian >= kGregorianCutoverDay ? gregorian : julian_days_from_civil(year, month, day);
+}
+
+CivilDate civil_from_days(std::int64_t days) {
+    return days >= kGregorianCutoverDay ? gregorian_civil_from_days(days)
+                                        : julian_civil_from_days(days);
+}
+
 bool decode_value(const ParameterValue& value, Cell* output) {
     switch (value.value_case()) {
         case ParameterValue::VALUE_NOT_SET:
@@ -1671,19 +1740,19 @@ bool decode_value(const ParameterValue& value, Cell* output) {
             // (e.g. "America/Sao_Paulo") are not resolved here and stay in UTC.
             int offset_seconds = 0;
             const bool has_offset = parse_zone_offset(timestamp_value.timezone(), &offset_seconds);
-            const std::time_t timestamp =
-                static_cast<std::time_t>(instant.seconds() + (has_offset ? offset_seconds : 0));
-            std::tm utc_time{};
-            // Windows uses gmtime_s; POSIX uses gmtime_r for thread-safe UTC conversion.
-#if defined(_WIN32)
-            if (gmtime_s(&utc_time, &timestamp) != 0) {
-#else
-            if (gmtime_r(&timestamp, &utc_time) == nullptr) {
-#endif
+            // Computed by hand: gmtime_s on Windows rejects dates before 1970 and after 3000.
+            const std::int64_t seconds = instant.seconds() + (has_offset ? offset_seconds : 0);
+            const std::int64_t days = floor_div(seconds, 86400);
+            const std::int64_t second_of_day = seconds - days * 86400;
+            const CivilDate date = civil_from_days(days);
+            if (date.year < 0 || date.year > 9999) {
                 return false;
             }
             std::ostringstream text;
-            text << std::put_time(&utc_time, "%Y-%m-%d %H:%M:%S") << format_fraction(instant.nanos());
+            text << std::setfill('0') << std::setw(4) << date.year << '-' << std::setw(2)
+                 << date.month << '-' << std::setw(2) << date.day << ' ' << std::setw(2)
+                 << second_of_day / 3600 << ':' << std::setw(2) << second_of_day / 60 % 60 << ':'
+                 << std::setw(2) << second_of_day % 60 << format_fraction(instant.nanos());
             if (timestamp_value.original_type() ==
                 com::openjproxy::grpc::TEMPORAL_TYPE_OFFSET_DATE_TIME) {
                 // SQL Server format for datetimeoffset: "YYYY-MM-DD HH:MM:SS[.f] +HH:MM".
@@ -2391,16 +2460,7 @@ bool encode_decimal_wire(const std::string& raw, std::string* wire) {
 // Wall-clock date/time sent as a UTC instant (same contract used by SQL_C_TYPE_TIMESTAMP).
 void set_timestamp_value(ParameterValue* value, const SQL_TIMESTAMP_STRUCT& timestamp) {
     auto* timestamp_value = value->mutable_timestamp_value();
-    const std::int64_t year = timestamp.year - (timestamp.month <= 2 ? 1 : 0);
-    const std::int64_t era = (year >= 0 ? year : year - 399) / 400;
-    const auto year_of_era = static_cast<std::uint32_t>(year - era * 400);
-    const auto adjusted_month = static_cast<std::int32_t>(timestamp.month) +
-        (timestamp.month > 2 ? -3 : 9);
-    const auto day_of_year = (153 * adjusted_month + 2) / 5 +
-        static_cast<std::int32_t>(timestamp.day) - 1;
-    const auto day_of_era = year_of_era * 365 + year_of_era / 4 -
-        year_of_era / 100 + static_cast<std::uint32_t>(day_of_year);
-    const std::int64_t days = era * 146097 + day_of_era - 719468;
+    const std::int64_t days = days_from_civil(timestamp.year, timestamp.month, timestamp.day);
     const std::int64_t seconds = days * 86400 +
         timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second;
     auto* instant = timestamp_value->mutable_instant();
@@ -2898,8 +2958,7 @@ bool coerce_parameter_value(ParameterValue* value, ParameterTypeProto type,
             } else if (value_case == ParameterValue::kTimestampValue && type != PT_TIMESTAMP) {
                 // E.g. the application sends SQL_C_TYPE_TIMESTAMP for a DATE/TIME column (keeps the fraction for TIME).
                 const auto& instant = value->timestamp_value().instant();
-                const std::int64_t days = instant.seconds() >= 0
-                    ? instant.seconds() / 86400 : -((-instant.seconds() + 86399) / 86400);
+                const std::int64_t days = floor_div(instant.seconds(), 86400);
                 const std::int64_t second_of_day = instant.seconds() - days * 86400;
                 if (type == PT_TIME) {
                     auto* time = value->mutable_time_value();
@@ -2910,20 +2969,11 @@ bool coerce_parameter_value(ParameterValue* value, ParameterTypeProto type,
                     time->set_nanos(nanos);
                     return true;
                 }
-                // civil_from_days (Howard Hinnant).
-                const std::int64_t z = days + 719468;
-                const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-                const auto doe = static_cast<std::uint32_t>(z - era * 146097);
-                const std::uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-                const std::uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-                const std::uint32_t mp = (5 * doy + 2) / 153;
-                const auto day = static_cast<std::int32_t>(doy - (153 * mp + 2) / 5 + 1);
-                const auto month = static_cast<std::int32_t>(mp < 10 ? mp + 3 : mp - 9);
-                const auto year = static_cast<std::int32_t>(yoe + era * 400 + (month <= 2 ? 1 : 0));
+                const CivilDate civil = civil_from_days(days);
                 auto* date = value->mutable_date_value();
-                date->set_year(year);
-                date->set_month(month);
-                date->set_day(day);
+                date->set_year(static_cast<std::int32_t>(civil.year));
+                date->set_month(static_cast<std::int32_t>(civil.month));
+                date->set_day(static_cast<std::int32_t>(civil.day));
                 return true;
             } else if (value_case == ParameterValue::kDateValue && type == PT_TIMESTAMP) {
                 const auto date = value->date_value();

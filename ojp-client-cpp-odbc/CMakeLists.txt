@@ -142,6 +142,13 @@ if(BUILD_TESTING)
         COMMAND ojp_odbc_cancel_test "$<TARGET_FILE:ojp_odbc_fake_server>")
     set_tests_properties(OjpOdbcCancel PROPERTIES TIMEOUT 120)
 
+    add_executable(ojp_odbc_parameter_sets_test tests/parameter_sets_test.cpp)
+    target_include_directories(ojp_odbc_parameter_sets_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_parameter_sets_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcParameterSets
+        COMMAND ojp_odbc_parameter_sets_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcParameterSets PROPERTIES TIMEOUT 120)
+
     find_program(OJP_TEST_OPENSSL openssl)
     if(OJP_TEST_OPENSSL)
         add_executable(ojp_odbc_tls_test tests/tls_test.cpp)

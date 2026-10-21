@@ -29,12 +29,21 @@ public:
                          proto::SessionInfo* response) override {
         report("connect " + request->url());
         response->set_connhash("fake-server");
+        // A URL containing "legacy" simulates a server without parameter-set support.
+        if (request->url().find("legacy") == std::string::npos) {
+            response->add_servercapabilities("PARAMETER_SETS");
+        }
         return grpc::Status::OK;
     }
 
     // SQL containing "slow" blocks until the client cancels the call or its deadline expires.
     grpc::Status executeUpdate(grpc::ServerContext* context, const proto::StatementRequest* request,
                                proto::OpResult* response) override {
+        for (const auto& property : request->properties()) {
+            if (property.key() == "PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY") {
+                return execute_parameter_sets(context, *request, property.int_value(), response);
+            }
+        }
         report("executeUpdate " + request->sql());
         if (request->sql().find("slow") != std::string::npos) {
             const auto limit = Clock::now() + std::chrono::seconds(10);
@@ -60,6 +69,49 @@ public:
             terminated_ = true;
         }
         terminated_cv_.notify_all();
+        return grpc::Status::OK;
+    }
+
+    // Each set whose first parameter is 99 fails. SQL containing "partial" reports only the
+    // counts before the failure (PostgreSQL); "every" reports all sets with EXECUTE_FAILED
+    // (SQL Server).
+    grpc::Status execute_parameter_sets(grpc::ServerContext* context,
+                                        const proto::StatementRequest& request, int set_size,
+                                        proto::OpResult* response) {
+        const int sets = request.parameters_size() / set_size;
+        report("executeParameterSets " + request.sql() + " " + std::to_string(set_size) + " " +
+               std::to_string(sets));
+        const bool partial = request.sql().find("partial") != std::string::npos;
+        proto::SqlErrorResponse error;
+        bool failed = false;
+        int total = 0;
+        for (int set = 0; set < sets; ++set) {
+            const auto& first = request.parameters(set * set_size);
+            if (first.index() != set * set_size + 1) {
+                return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unexpected parameter index");
+            }
+            const bool set_fails = first.values_size() > 0 && first.values(0).int_value() == 99;
+            if (set_fails) {
+                failed = true;
+                if (partial) {
+                    break;
+                }
+                error.add_batchupdatecounts(-3);
+                continue;
+            }
+            error.add_batchupdatecounts(1);
+            response->add_batchupdatecounts(1);
+            ++total;
+        }
+        if (failed) {
+            error.set_sqlstate("23000");
+            error.set_reason("duplicate key");
+            error.set_vendorcode(2627);
+            context->AddTrailingMetadata("sqlerrorresponse-bin", error.SerializeAsString());
+            return grpc::Status(grpc::StatusCode::INTERNAL, "duplicate key");
+        }
+        response->set_type(proto::INTEGER);
+        response->set_int_value(total);
         return grpc::Status::OK;
     }
 

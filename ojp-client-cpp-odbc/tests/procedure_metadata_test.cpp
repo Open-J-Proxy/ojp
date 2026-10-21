@@ -162,6 +162,34 @@ void check_output_parameters(SQLHSTMT statement) {
     SQLFreeStmt(statement, SQL_RESET_PARAMS);
 }
 
+// The fake server answers a batch with: update count 3, rows {1}, update count 5, rows {2}.
+void check_more_results(SQLHSTMT statement) {
+    SQLCHAR* batch = text("UPDATE items SET name = 'x'; SELECT 1 AS value; UPDATE items SET "
+                          "name = 'y'; SELECT 2 AS value");
+    success(SQLExecDirect(statement, batch, SQL_NTS), "SQLExecDirect batch");
+    SQLLEN rows = 0;
+    success(SQLRowCount(statement, &rows), "SQLRowCount");
+    require(rows == 1, "The row count must describe the first result set");
+    success(SQLFetch(statement), "SQLFetch first result set");
+    require(string_data(statement, 1) == "1", "Unexpected first result set");
+    require(SQLFetch(statement) == SQL_NO_DATA, "The first result set must have one row");
+    success(SQLMoreResults(statement), "SQLMoreResults second result set");
+    SQLSMALLINT columns = 0;
+    success(SQLNumResultCols(statement, &columns), "SQLNumResultCols");
+    require(columns == 1 && column_name(statement, 1) == "value", "Unexpected second result set");
+    success(SQLFetch(statement), "SQLFetch second result set");
+    require(string_data(statement, 1) == "2", "Unexpected second result set value");
+    require(SQLMoreResults(statement) == SQL_NO_DATA, "SQLMoreResults must end after two results");
+    require(SQLMoreResults(statement) == SQL_NO_DATA, "SQLMoreResults must stay at SQL_NO_DATA");
+
+    // Closing the cursor, re-executing and freeing the handle close the open statement.
+    success(SQLExecDirect(statement, batch, SQL_NTS), "SQLExecDirect batch again");
+    success(SQLCloseCursor(statement), "SQLCloseCursor");
+    require(SQLMoreResults(statement) == SQL_NO_DATA, "A closed cursor has no more results");
+    success(SQLExecDirect(statement, batch, SQL_NTS), "SQLExecDirect batch");
+    success(SQLExecDirect(statement, batch, SQL_NTS), "SQLExecDirect batch over an open one");
+}
+
 void run(const std::string& connection_string) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
@@ -194,6 +222,7 @@ void run(const std::string& connection_string) {
     check_procedures(statement);
     check_procedure_columns(statement);
     check_output_parameters(statement);
+    check_more_results(statement);
     SQLFreeHandle(SQL_HANDLE_STMT, statement);
     SQLDisconnect(connection);
     SQLFreeHandle(SQL_HANDLE_DBC, connection);
@@ -222,6 +251,15 @@ int main(int argc, char** argv) {
                                      "closeResultSet rs-callable", "closeCallable"}) {
             require(contains_line(calls, expected),
                     std::string("Missing callable statement call: ") + expected);
+        }
+        // Two procedure calls close their statement at once; the four batches are closed by
+        // SQLMoreResults, SQLCloseCursor, the next execution and SQLFreeHandle.
+        require(std::count(calls.begin(), calls.end(), "closeCallable") == 6,
+                "Every callable statement must be closed exactly once");
+        for (const char* expected : {"callable MoreResults", "closeResultSet rs-batch-1",
+                                     "closeResultSet rs-batch-2"}) {
+            require(contains_line(calls, expected),
+                    std::string("Missing multi-result call: ") + expected);
         }
         std::cout << "Procedure metadata tests passed\n";
         return 0;

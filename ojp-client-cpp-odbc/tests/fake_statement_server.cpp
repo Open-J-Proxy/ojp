@@ -136,6 +136,9 @@ public:
         if (method == "CallableRows") {
             result->add_labels("total");
             add_row({number(12)});
+        } else if (method.rfind("BatchRows", 0) == 0) {
+            result->add_labels("value");
+            add_row({number(std::stoi(method.substr(9)))});
         } else if (method == "Procedures") {
             for (const char* label : {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME",
                                       "RESERVED1", "RESERVED2", "RESERVED3", "REMARKS",
@@ -235,8 +238,24 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         callable_sql_ = request.target().params(0).string_value();
         callable_values_.clear();
+        batch_position_ = 0;
         response->add_values()->set_string_value("cs-1");
         return grpc::Status::OK;
+    }
+
+    // A batch (SQL containing ';') yields, in order: update count 3, a result set with value 1,
+    // update count 5 and a result set with value 2.
+    struct BatchResult {
+        bool result_set;
+        int value;
+    };
+    static constexpr BatchResult kBatchResults[] = {{false, 3}, {true, 1}, {false, 5}, {true, 2}};
+    static constexpr std::size_t kBatchResultCount = sizeof(kBatchResults) / sizeof(BatchResult);
+
+    bool is_batch() const { return callable_sql_.find(';') != std::string::npos; }
+
+    bool batch_has_result_set() const {
+        return batch_position_ < kBatchResultCount && kBatchResults[batch_position_].result_set;
     }
 
     grpc::Status call_callable(const proto::CallResourceRequest& request,
@@ -269,6 +288,10 @@ public:
             case proto::CALL_CLOSE:
                 return grpc::Status::OK;
             case proto::CALL_EXECUTE: {
+                if (is_batch()) {
+                    response->add_values()->set_bool_value(batch_has_result_set());
+                    return grpc::Status::OK;
+                }
                 const bool rows = callable_sql_.find("rows") != std::string::npos;
                 callable_values_[3] += callable_values_[2];
                 callable_values_[1] = 42;
@@ -279,7 +302,20 @@ public:
                 return grpc::Status::OK;
             }
             case proto::CALL_GET:
-                if (target.resourcename() == "ResultSet") {
+                if (is_batch() && target.resourcename() == "ResultSet") {
+                    const int value = kBatchResults[batch_position_].value;
+                    pending_metadata_ = "BatchRows" + std::to_string(value);
+                    response->add_values()->set_string_value("rs-batch-" + std::to_string(value));
+                } else if (is_batch() && target.resourcename() == "UpdateCount") {
+                    response->add_values()->set_int_value(
+                        batch_position_ < kBatchResultCount && !batch_has_result_set()
+                            ? kBatchResults[batch_position_].value : -1);
+                } else if (is_batch() && target.resourcename() == "MoreResults") {
+                    if (batch_position_ < kBatchResultCount) {
+                        ++batch_position_;
+                    }
+                    response->add_values()->set_bool_value(batch_has_result_set());
+                } else if (target.resourcename() == "ResultSet") {
                     response->add_values()->set_string_value("rs-callable");
                 } else if (target.resourcename() == "UpdateCount") {
                     response->add_values()->set_int_value(-1);
@@ -309,6 +345,7 @@ private:
     std::string pending_metadata_;
     std::string callable_sql_;
     std::map<int, int> callable_values_;
+    std::size_t batch_position_ = 0;
 };
 
 }  // namespace

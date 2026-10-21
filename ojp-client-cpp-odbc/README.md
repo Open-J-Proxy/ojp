@@ -489,7 +489,7 @@ the database's declared precision, scale, nullability, or base-table identity
 for arbitrary query expressions. Use `SQLColumns` for authoritative declared
 table-column metadata. Catalog functions not listed above (including
 `SQLStatistics`, `SQLProcedures`, `SQLSpecialColumns`, and privilege catalogs),
-`SQLGetStmtAttr`, and `SQLMoreResults` remain unsupported. A Driver Manager or
+and `SQLGetStmtAttr` remain unsupported. A Driver Manager or
 language wrapper may require one of these functions; verify its exact calls
 with the target Driver Manager and database.
 
@@ -502,6 +502,19 @@ data-at-execution inputs in the same call, and output parameters combined with
 `SQL_DESC_NAME` on the implementation parameter descriptor and ignores it,
 because parameters are always bound by position; other descriptor fields return
 `HYC00`.
+
+A statement whose SQL contains a top-level `;` followed by more code and a
+`SELECT`, `EXEC`/`EXECUTE`, `OUTPUT`, or `RETURNING` keyword is treated as a
+multi-statement batch: it runs through a backend JDBC `CallableStatement` that
+stays open while results remain, so `SQLMoreResults` advances to the next result
+set (update counts in between are skipped) and returns `SQL_NO_DATA` at the end.
+`SQLCloseCursor`, `SQLFreeStmt(SQL_CLOSE)`, re-execution, catalog calls, and
+freeing the statement close the pending results. Batches without a top-level `;`
+(for example `IF ... SELECT ... ELSE SELECT ...`), batches with LOB or
+data-at-execution parameters, and output-parameter calls expose only the first
+result; `SQLMoreResults` then returns `SQL_NO_DATA`. With
+`SQL_ATTR_PARAMSET_SIZE` > 1, only the results of the last parameter row remain
+available.
 
 The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
 paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,

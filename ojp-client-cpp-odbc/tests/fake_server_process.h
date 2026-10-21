@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -27,9 +28,18 @@ public:
             throw std::runtime_error("Fake server did not report its port: " + first);
         }
         port_ = std::stoi(first.substr(5));
+        // The server blocks once the pipe buffer is full, so its output is drained as it arrives.
+        reader_ = std::thread([this]() {
+            for (std::string line = read_line(); !line.empty(); line = read_line()) {
+                lines_.push_back(line);
+            }
+        });
     }
 
     ~FakeServerProcess() {
+        if (reader_.joinable()) {
+            reader_.join();
+        }
         if (pipe_ != nullptr) {
             OJP_TEST_PCLOSE(pipe_);
         }
@@ -47,13 +57,10 @@ public:
 
     // Waits for the server to exit (after SQLDisconnect) and returns the calls it reported.
     std::vector<std::string> finish() {
-        std::vector<std::string> lines;
-        for (std::string line = read_line(); !line.empty(); line = read_line()) {
-            lines.push_back(line);
-        }
+        reader_.join();
         OJP_TEST_PCLOSE(pipe_);
         pipe_ = nullptr;
-        return lines;
+        return lines_;
     }
 
 private:
@@ -74,4 +81,6 @@ private:
 
     std::FILE* pipe_ = nullptr;
     int port_ = 0;
+    std::thread reader_;
+    std::vector<std::string> lines_;
 };

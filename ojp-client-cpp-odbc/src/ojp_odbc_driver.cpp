@@ -247,6 +247,9 @@ struct StatementHandle final : HandleBase {
     bool cancel_requested = false;
     grpc::ClientContext* active_context = nullptr;
     std::string sql;
+    // Server-side callable statement kept open after a multi-result execution, so that
+    // SQLMoreResults can advance it with getMoreResults.
+    std::string open_callable_uuid;
     std::map<SQLUSMALLINT, BoundParameter> parameters;
     std::map<SQLUSMALLINT, BoundColumn> bound_columns;
     std::vector<std::string> columns;
@@ -274,8 +277,10 @@ struct ParsedConnectionString {
     std::string error;
 };
 
-std::size_t count_parameter_markers(const std::string& sql) {
-    std::size_t count = 0;
+// Calls visit(index) for every character of the SQL text outside literals, quoted identifiers,
+// dollar-quoted strings and comments.
+template <typename Visit>
+void for_each_sql_code_character(const std::string& sql, Visit&& visit) {
     for (std::size_t index = 0; index < sql.size();) {
         const char character = sql[index];
         if (character == '-' && index + 1 < sql.size() && sql[index + 1] == '-') {
@@ -337,13 +342,35 @@ std::size_t count_parameter_markers(const std::string& sql) {
                 ++index;
             }
         } else {
-            if (character == '?') {
-                ++count;
-            }
+            visit(index);
             ++index;
         }
     }
+}
+
+std::size_t count_parameter_markers(const std::string& sql) {
+    std::size_t count = 0;
+    for_each_sql_code_character(sql, [&](std::size_t index) {
+        if (sql[index] == '?') {
+            ++count;
+        }
+    });
     return count;
+}
+
+// True when a top-level ';' is followed by another statement ("SELECT 1; SELECT 2").
+bool has_statement_separator(const std::string& sql) {
+    bool separator = false;
+    bool statement_after_separator = false;
+    for_each_sql_code_character(sql, [&](std::size_t index) {
+        const char character = sql[index];
+        if (character == ';') {
+            separator = true;
+        } else if (separator && !std::isspace(static_cast<unsigned char>(character))) {
+            statement_after_separator = true;
+        }
+    });
+    return statement_after_separator;
 }
 
 ParsedConnectionString parse_connection_string(const std::string& input) {
@@ -2478,6 +2505,20 @@ bool uses_update_result_set(const std::string& sql) {
     return is_dml_result_set_sql(sql) || is_procedure_call_sql(sql) || is_result_set_batch_sql(sql);
 }
 
+// Batches whose later results must stay reachable through SQLMoreResults ("SELECT 1; SELECT 2").
+// They run through a server-side statement kept open until the results are consumed or the
+// cursor is closed. Batches without a top-level ';' keep the single-result update path.
+bool may_return_multiple_results(const std::string& sql) {
+    if (!has_statement_separator(sql)) {
+        return false;
+    }
+    const auto keywords = sql_keywords(sql);
+    return std::any_of(keywords.begin(), keywords.end(), [](const std::string& keyword) {
+        return keyword == "SELECT" || keyword == "EXEC" || keyword == "EXECUTE" ||
+               keyword == "OUTPUT" || keyword == "RETURNING";
+    });
+}
+
 // Long text up to this size (UTF-8) is sent inline in the request; above it a LOB is used (the
 // server's default gRPC message limit is 4 MiB).
 constexpr std::size_t kInlineTextLobLimit = 2 * 1024 * 1024;
@@ -4147,9 +4188,94 @@ std::int32_t jdbc_parameter_type(SQLSMALLINT sql_type) {
     return type == 0 ? 12 : type;  // Types.VARCHAR when the SQL type has no JDBC equivalent.
 }
 
-// Statements with OUTPUT or INPUT_OUTPUT parameters (e.g. "{? = CALL proc(?, ?)}") run through a
-// server-side java.sql.CallableStatement driven by callResource, as the OJP JDBC driver does.
-SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t marker_count) {
+SQLRETURN callable_call(StatementHandle* statement, const std::string& callable_uuid,
+                        com::openjproxy::grpc::CallType call_type, const char* name,
+                        const std::vector<ParameterValue>& values,
+                        com::openjproxy::grpc::CallResourceResponse* response) {
+    return call_resource(statement->connection, statement,
+                         com::openjproxy::grpc::RES_CALLABLE_STATEMENT, callable_uuid, call_type,
+                         name, values, response);
+}
+
+// Positions an executed callable statement on its next result set. With skip_update_counts,
+// update counts are skipped (the last one is kept as the row count), as the OJP update path does;
+// otherwise the first update count ends the walk. Returns SQL_NO_DATA when no result set follows.
+SQLRETURN advance_callable_results(StatementHandle* statement, const std::string& callable_uuid,
+                                   bool has_result_set, bool skip_update_counts) {
+    using namespace com::openjproxy::grpc;
+    for (;;) {
+        if (has_result_set) {
+            CallResourceResponse result_set;
+            const SQLRETURN result = callable_call(statement, callable_uuid, CALL_GET, "ResultSet",
+                                                   {}, &result_set);
+            if (!SQL_SUCCEEDED(result)) {
+                return result;
+            }
+            if (result_set.values_size() == 0 ||
+                result_set.values(0).value_case() != ParameterValue::kStringValue) {
+                return fail(statement, "OJP returned an invalid result-set reference", "HY000");
+            }
+            return fetch_update_result_set(statement->connection, statement,
+                                           result_set.values(0).string_value());
+        }
+        CallResourceResponse update_count;
+        SQLRETURN result = callable_call(statement, callable_uuid, CALL_GET, "UpdateCount", {},
+                                         &update_count);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        if (update_count.values_size() == 0 ||
+            update_count.values(0).value_case() != ParameterValue::kIntValue ||
+            update_count.values(0).int_value() == -1) {
+            return SQL_NO_DATA;
+        }
+        statement->row_count = update_count.values(0).int_value();
+        if (!skip_update_counts) {
+            return SQL_NO_DATA;
+        }
+        CallResourceResponse more;
+        result = callable_call(statement, callable_uuid, CALL_GET, "MoreResults", {}, &more);
+        if (!SQL_SUCCEEDED(result)) {
+            return result;
+        }
+        has_result_set = more.values_size() > 0 &&
+            more.values(0).value_case() == ParameterValue::kBoolValue && more.values(0).bool_value();
+    }
+}
+
+// Closes the callable statement left open by a multi-result execution. The caller holds the
+// connection lock.
+SQLRETURN close_open_callable(StatementHandle* statement) {
+    if (statement->open_callable_uuid.empty()) {
+        return SQL_SUCCESS;
+    }
+    const std::string callable_uuid = std::move(statement->open_callable_uuid);
+    statement->open_callable_uuid.clear();
+    auto* connection = statement->connection;
+    if (connection == nullptr || !connection->connected || !connection->stub) {
+        return SQL_SUCCESS;
+    }
+    com::openjproxy::grpc::CallResourceResponse closed;
+    return callable_call(statement, callable_uuid, com::openjproxy::grpc::CALL_CLOSE, "", {},
+                         &closed);
+}
+
+// Best-effort close for cursor-closing and handle-freeing paths; takes the connection lock.
+void close_open_callable_locked(StatementHandle* statement) {
+    if (statement->open_callable_uuid.empty() || statement->connection == nullptr) {
+        statement->open_callable_uuid.clear();
+        return;
+    }
+    std::lock_guard<std::mutex> connection_lock(statement->connection->operation_mutex);
+    close_open_callable(statement);
+}
+
+// Statements with OUTPUT or INPUT_OUTPUT parameters (e.g. "{? = CALL proc(?, ?)}") and batches
+// with several results run through a server-side java.sql.CallableStatement driven by
+// callResource, as the OJP JDBC driver does. With keep_open, a statement positioned on a result
+// set stays open for SQLMoreResults.
+SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t marker_count,
+                                     bool keep_open) {
     using namespace com::openjproxy::grpc;
     auto* connection = statement->connection;
     ParameterValue sql_value;
@@ -4166,12 +4292,10 @@ SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t mar
         return fail(statement, "OJP returned an invalid callable statement reference", "HY000");
     }
     const std::string callable_uuid = prepared.values(0).string_value();
-    log_message(LogLevel::debug, "executing with output parameters through callable statement " +
-                callable_uuid);
+    log_message(LogLevel::debug, "executing through callable statement " + callable_uuid);
     auto call = [&](CallType call_type, const char* name, const std::vector<ParameterValue>& values,
                     CallResourceResponse* response) {
-        return call_resource(connection, statement, RES_CALLABLE_STATEMENT, callable_uuid,
-                             call_type, name, values, response);
+        return callable_call(statement, callable_uuid, call_type, name, values, response);
     };
     auto int_value = [](std::int32_t number) {
         ParameterValue value;
@@ -4188,8 +4312,8 @@ SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t mar
             const auto index = int_value(entry.first);
             if (bound.direction != SQL_PARAM_OUTPUT) {
                 if (is_lob_parameter_type(bound.parameter_type) || is_data_at_execution(bound)) {
-                    return fail(statement, "LOB parameters cannot be combined with output "
-                                "parameters", "HYC00");
+                    return fail(statement, "LOB and data-at-execution parameters cannot be used "
+                                "with output parameters or multi-result batches", "HYC00");
                 }
                 const auto type = parameter_type(bound);
                 ParameterValue value;
@@ -4223,32 +4347,15 @@ SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t mar
         const bool returns_result_set = execute_response.values_size() > 0 &&
             execute_response.values(0).value_case() == ParameterValue::kBoolValue &&
             execute_response.values(0).bool_value();
-        if (returns_result_set) {
-            CallResourceResponse result_set;
-            result = call(CALL_GET, "ResultSet", {}, &result_set);
-            if (!SQL_SUCCEEDED(result)) {
-                return result;
-            }
-            if (result_set.values_size() == 0 ||
-                result_set.values(0).value_case() != ParameterValue::kStringValue) {
-                return fail(statement, "OJP returned an invalid result-set reference", "HY000");
-            }
-            result = fetch_update_result_set(connection, statement, result_set.values(0).string_value());
-            if (!SQL_SUCCEEDED(result)) {
-                return result;
-            }
-        } else {
-            CallResourceResponse update_count;
-            result = call(CALL_GET, "UpdateCount", {}, &update_count);
-            if (!SQL_SUCCEEDED(result)) {
-                return result;
-            }
-            if (update_count.values_size() > 0 &&
-                update_count.values(0).value_case() == ParameterValue::kIntValue) {
-                statement->row_count = update_count.values(0).int_value();
-            }
+        result = advance_callable_results(statement, callable_uuid, returns_result_set, keep_open);
+        if (result == SQL_NO_DATA) {
+            result = SQL_SUCCESS;
+        } else if (!SQL_SUCCEEDED(result)) {
+            return result;
+        } else if (keep_open) {
+            statement->open_callable_uuid = callable_uuid;
         }
-        SQLRETURN overall = SQL_SUCCESS;
+        SQLRETURN overall = result;
         for (const auto& entry : statement->parameters) {
             const auto& bound = entry.second;
             if (entry.first > marker_count || bound.direction == SQL_PARAM_INPUT) {
@@ -4278,6 +4385,9 @@ SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t mar
         }
         return overall;
     }();
+    if (!statement->open_callable_uuid.empty()) {
+        return executed;
+    }
     CallResourceResponse closed;
     const SQLRETURN close_result = call(CALL_CLOSE, "", {}, &closed);
     return SQL_SUCCEEDED(executed) && !SQL_SUCCEEDED(close_result) ? close_result : executed;
@@ -4300,6 +4410,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     if (!connection->connected || !connection->stub) {
         return fail(statement, "ODBC connection is not open", "08003");
     }
+    close_open_callable(statement);
 
     std::string savepoint_name;
     const SavepointAction savepoint_action =
@@ -4311,7 +4422,16 @@ SQLRETURN execute_statement(StatementHandle* statement) {
     // Bindings persist across statements; only those with a matching '?' marker are sent.
     const auto marker_count = count_parameter_markers(statement->sql);
     if (has_output_parameters(statement, marker_count)) {
-        return execute_callable_statement(statement, marker_count);
+        return execute_callable_statement(statement, marker_count, false);
+    }
+    if (may_return_multiple_results(statement->sql) &&
+        std::none_of(statement->parameters.begin(), statement->parameters.end(),
+                     [&](const auto& entry) {
+                         return entry.first <= marker_count &&
+                             (is_lob_parameter_type(entry.second.parameter_type) ||
+                              is_data_at_execution(entry.second));
+                     })) {
+        return execute_callable_statement(statement, marker_count, true);
     }
     StatementRequest request;
     request.set_sql(statement->sql);
@@ -4772,6 +4892,7 @@ SQLRETURN execute_catalog_api(SQLHSTMT statement, const std::string& method,
     auto* target = static_cast<StatementHandle*>(statement);
     std::lock_guard<std::mutex> statement_lock(target->operation_mutex);
     std::lock_guard<std::mutex> connection_lock(target->connection->operation_mutex);
+    close_open_callable(target);
     // An empty catalog has no meaning for JDBC drivers that switch databases by catalog
     // (mssql-jdbc issues "USE []"), so it is sent as NULL, i.e. the current catalog.
     std::vector<ParameterValue> normalized = parameters;
@@ -6417,7 +6538,12 @@ SQLRETURN SQL_API SQLFreeHandle(SQLSMALLINT handle_type, SQLHANDLE handle) {
         }
         delete connection;
     } else if (handle_type == SQL_HANDLE_STMT) {
-        delete static_cast<StatementHandle*>(handle);
+        auto* statement = static_cast<StatementHandle*>(handle);
+        {
+            std::lock_guard<std::mutex> statement_lock(statement->operation_mutex);
+            close_open_callable_locked(statement);
+        }
+        delete statement;
     } else {
         return SQL_INVALID_HANDLE;
     }
@@ -7936,6 +8062,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
         if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS) {
             if (option == SQL_CLOSE) {
                 reset_data_at_execution(target);
+                close_open_callable_locked(target);
                 target->columns.clear();
                 target->column_meta.clear();
                 target->rows.clear();
@@ -8503,7 +8630,38 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT statement) {
             static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
             return SQL_INVALID_HANDLE;
         }
-        return SQL_NO_DATA;
+        auto* target = static_cast<StatementHandle*>(statement);
+        std::lock_guard<std::mutex> statement_lock(target->operation_mutex);
+        clear_diagnostics(target);
+        target->columns.clear();
+        target->column_meta.clear();
+        target->rows.clear();
+        target->get_data_offsets.clear();
+        target->row_index = 0;
+        target->row_count = -1;
+        target->has_result_set = false;
+        if (target->open_callable_uuid.empty() || target->connection == nullptr) {
+            return SQL_NO_DATA;
+        }
+        std::lock_guard<std::mutex> connection_lock(target->connection->operation_mutex);
+        if (!target->connection->connected || !target->connection->stub) {
+            target->open_callable_uuid.clear();
+            return fail(target, "ODBC connection is not open", "08003");
+        }
+        const std::string callable_uuid = target->open_callable_uuid;
+        com::openjproxy::grpc::CallResourceResponse more;
+        SQLRETURN result = callable_call(target, callable_uuid, com::openjproxy::grpc::CALL_GET,
+                                         "MoreResults", {}, &more);
+        if (SQL_SUCCEEDED(result)) {
+            const bool has_result_set = more.values_size() > 0 &&
+                more.values(0).value_case() == ParameterValue::kBoolValue &&
+                more.values(0).bool_value();
+            result = advance_callable_results(target, callable_uuid, has_result_set, true);
+        }
+        if (result == SQL_NO_DATA || !SQL_SUCCEEDED(result)) {
+            close_open_callable(target);
+        }
+        return result;
     });
 }
 

@@ -36,13 +36,20 @@ bool contains_line(const std::vector<std::string>& lines, const std::string& exp
 
 // Each SQL text is executed once; the fake server reports which execute request it received.
 const std::vector<std::string> kResultSetSql = {
-    "DECLARE @r INT; EXEC dbo.add_values @a = 2, @b = 3, @r = @r OUTPUT; SELECT @r AS r",
-    "SET NOCOUNT ON; SELECT 42 AS r",
     "IF 1 = 1 SELECT 7 AS r ELSE SELECT 8 AS r",
     "begin select 9 as r end",
     "/* batch */ WHILE 1 = 0 SELECT 1",
     "EXEC dbo.add_values 1, 2",
     "INSERT INTO items OUTPUT inserted.id VALUES (1)",
+    // A trailing ';' or one inside a literal does not separate statements.
+    "INSERT INTO items OUTPUT inserted.id VALUES (2); -- trailing comment",
+    "INSERT INTO items OUTPUT inserted.id VALUES (';')",
+};
+
+// Batches with several statements run through a callable statement so that SQLMoreResults works.
+const std::vector<std::string> kMultiResultSql = {
+    "DECLARE @r INT; EXEC dbo.add_values @a = 2, @b = 3, @r = @r OUTPUT; SELECT @r AS r",
+    "SET NOCOUNT ON; SELECT 42 AS r",
 };
 
 const std::vector<std::string> kUpdateSql = {
@@ -64,7 +71,7 @@ void execute_all(const std::string& connection_string) {
     success(SQLDriverConnect(connection, nullptr, reinterpret_cast<SQLCHAR*>(text.data()), SQL_NTS,
                              nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT), "SQLDriverConnect");
     success(SQLAllocHandle(SQL_HANDLE_STMT, connection, &statement), "Allocate statement");
-    for (const auto* list : {&kResultSetSql, &kUpdateSql}) {
+    for (const auto* list : {&kResultSetSql, &kMultiResultSql, &kUpdateSql}) {
         for (const auto& sql : *list) {
             success(SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
                                   SQL_NTS), "SQLExecDirect " + sql);
@@ -88,6 +95,12 @@ int main(int argc, char** argv) {
         for (const auto& sql : kResultSetSql) {
             require(contains_line(calls, "executeUpdateResultSet " + sql),
                     "SQL that may return a result set must use the update-result-set request: " + sql);
+        }
+        for (const auto& sql : kMultiResultSql) {
+            require(contains_line(calls, "prepareCall " + sql),
+                    "A multi-statement batch must run through a callable statement: " + sql);
+            require(!contains_line(calls, "executeUpdateResultSet " + sql),
+                    "A multi-statement batch must not use the single-result request: " + sql);
         }
         for (const auto& sql : kUpdateSql) {
             require(contains_line(calls, "executeUpdate " + sql),

@@ -8,7 +8,9 @@ import org.openjproxy.grpc.server.cache.CacheConfiguration;
 import javax.sql.DataSource;
 import javax.sql.XAConnection;
 import javax.transaction.xa.XAResource;
+import java.sql.Blob;
 import java.sql.CallableStatement;
+import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -389,6 +391,35 @@ public class Session {
     public <T> T getLob(String uuid) {
         this.notClosed();
         return (T) this.lobMap.get(uuid);
+    }
+
+    /**
+     * Removes a LOB from this session and frees it, so its content can be reclaimed
+     * before the session ends. Does nothing if the session is closed or the LOB is unknown.
+     *
+     * @param uuid the LOB UUID
+     * @return true if the LOB was registered in this session and has been removed
+     */
+    public boolean releaseLob(String uuid) {
+        if (this.closed || uuid == null) {
+            return false;
+        }
+        Map<String, Object> lobs = this.lobMap;
+        Object lob = lobs != null ? lobs.remove(uuid) : null;
+        if (lob == null) {
+            return false;
+        }
+        try {
+            if (lob instanceof Blob blob) {
+                blob.free();
+            } else if (lob instanceof Clob clob) {
+                clob.free();
+            }
+        } catch (SQLException | RuntimeException e) {
+            // Removing the reference is what matters; a driver that cannot free still lets GC reclaim it.
+            log.debug("Could not free LOB {} of session {}: {}", uuid, sessionUUID, e.getMessage());
+        }
+        return true;
     }
 
     private void notClosed() {

@@ -141,6 +141,7 @@ struct ConnectionHandle final : HandleBase {
     ConnectionDetails connection_details;
     int retry_attempts = 3;
     int retry_delay_ms = 100;
+    std::size_t lob_chunk_size = 0;
     bool load_aware = true;
     std::mutex operation_mutex;
     std::set<std::string> savepoints;
@@ -444,7 +445,11 @@ std::shared_ptr<EndpointRuntime> endpoint_runtime(
     }
     auto state = std::make_shared<EndpointRuntime>(address);
     state->tls = tls;
-    state->channel = grpc::CreateChannel(address, tls->credentials);
+    // The server returns VARBINARY(MAX)/long text inline in the result; the gRPC default (4 MiB)
+    // would cancel the call. No client-side limit, like ojp.grpc.maxInboundMessageSize in JDBC.
+    grpc::ChannelArguments channel_args;
+    channel_args.SetMaxReceiveMessageSize(-1);
+    state->channel = grpc::CreateCustomChannel(address, tls->credentials, channel_args);
     state->stub = std::shared_ptr<StatementStub>(StatementService::NewStub(state->channel).release());
     runtime.endpoints.emplace(cache_key, state);
     return state;
@@ -3064,19 +3069,53 @@ std::size_t utf8_character_units(const std::string& text, std::size_t offset, st
     return units;
 }
 
-std::size_t lob_chunk_end(const std::string& data, std::size_t offset, LobType lob_type) {
-    constexpr std::size_t kLobChunkSize = 64 * 1024;
-    std::size_t end = std::min(data.size(), offset + kLobChunkSize);
+// The server writes each chunk with Blob.setBytes and SQLServerBlob copies the whole value on every
+// call (O(n^2) overall), so larger chunks speed up the upload. A chunk must fit in
+// ojp.server.maxRequestSize (default 4 MiB); the 64 KiB headroom covers the session and other fields.
+constexpr std::size_t kDefaultLobChunkSize = 4 * 1024 * 1024 - 64 * 1024;
+constexpr int kMinLobChunkSize = 64 * 1024;
+constexpr int kMaxLobChunkSize = 256 * 1024 * 1024;
+
+std::size_t lob_chunk_end(const std::string& data, std::size_t offset, LobType lob_type,
+                          std::size_t chunk_size) {
+    std::size_t end = std::min(data.size(), offset + chunk_size);
     if (lob_type == com::openjproxy::grpc::LT_CLOB && end < data.size()) {
         while (end > offset &&
                (static_cast<unsigned char>(data[end]) & 0xc0) == 0x80) {
             --end;
         }
         if (end == offset) {
-            end = std::min(data.size(), offset + kLobChunkSize);
+            end = std::min(data.size(), offset + chunk_size);
         }
     }
     return end;
+}
+
+// Execution, fetch and LOB streams follow SQL_ATTR_QUERY_TIMEOUT (seconds). The default 0 means
+// "no limit", as in ODBC and in the OJP JDBC client: a fixed deadline would cancel
+// long queries and large LOBs (e.g. 100 MiB) in the middle of the transfer.
+void apply_query_timeout(grpc::ClientContext* context, const HandleBase* handle) {
+    const auto* statement = dynamic_cast<const StatementHandle*>(handle);
+    if (statement == nullptr) {
+        return;
+    }
+    const auto timeout = statement->stored_attributes.find(SQL_ATTR_QUERY_TIMEOUT);
+    if (timeout != statement->stored_attributes.end() && timeout->second > 0) {
+        context->set_deadline(std::chrono::system_clock::now() +
+                              std::chrono::seconds(static_cast<std::int64_t>(timeout->second)));
+    }
+}
+
+// RESOURCE_EXHAUSTED during upload usually means a chunk larger than ojp.server.maxRequestSize.
+SQLRETURN fail_lob_upload(HandleBase* handle, const grpc::Status& status,
+                          const grpc::ClientContext& context, std::size_t chunk_size) {
+    if (status.error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED) {
+        return fail(handle, "OJP rejected a LOB block of " + std::to_string(chunk_size) +
+                                " bytes (" + describe_grpc_status(status) +
+                                "); set OJP.LOB.CHUNK.SIZE below the server's "
+                                "ojp.server.maxRequestSize", "08S01");
+    }
+    return fail_grpc(handle, status, context);
 }
 
 SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType lob_type,
@@ -3087,10 +3126,12 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     if (data.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
         return fail(handle, "LOB input exceeds the supported size", "22001");
     }
+    const std::size_t chunk_size =
+        connection->lob_chunk_size > 0 ? connection->lob_chunk_size : kDefaultLobChunkSize;
     StatementService::Stub* stub = route_session_rpc(connection);
     SessionInfo request_session = connection->session;
     grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    apply_query_timeout(&context, handle);
     auto writer = stub->createLob(&context);
     std::size_t offset = 0;
     std::size_t character_position = 1;
@@ -3098,7 +3139,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     bool received_reference = false;
     LobReference reference;
     while (first_block || offset < data.size()) {
-        const std::size_t end = lob_chunk_end(data, offset, lob_type);
+        const std::size_t end = lob_chunk_end(data, offset, lob_type, chunk_size);
         LobDataBlock block;
         block.mutable_session()->CopyFrom(connection->session);
         block.set_position(lob_type == com::openjproxy::grpc::LT_CLOB
@@ -3110,7 +3151,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
             const auto status = writer->Finish();
             note_transport_failure(connection, status, context);
             return status.ok() ? fail(handle, "OJP closed the LOB upload stream", "08S01")
-                               : fail_grpc(handle, status, context);
+                               : fail_lob_upload(handle, status, context, chunk_size);
         }
         if (lob_type == com::openjproxy::grpc::LT_CLOB) {
             character_position += utf8_character_units(data, offset, end - offset);
@@ -3122,7 +3163,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
                 const auto status = writer->Finish();
                 note_transport_failure(connection, status, context);
                 return status.ok() ? fail(handle, "OJP did not return a LOB reference", "HY000")
-                                   : fail_grpc(handle, status, context);
+                                   : fail_lob_upload(handle, status, context, chunk_size);
             }
             received_reference = true;
             update_session(connection, reference.session(), request_session);
@@ -3132,7 +3173,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
         const auto status = writer->Finish();
         note_transport_failure(connection, status, context);
         return status.ok() ? fail(handle, "Unable to finish the LOB upload stream", "08S01")
-                           : fail_grpc(handle, status, context);
+                           : fail_lob_upload(handle, status, context, chunk_size);
     }
     while (writer->Read(&reference)) {
         update_session(connection, reference.session(), request_session);
@@ -3140,7 +3181,7 @@ SQLRETURN create_lob(ConnectionHandle* connection, HandleBase* handle, LobType l
     const auto status = writer->Finish();
     if (!status.ok()) {
         note_transport_failure(connection, status, context);
-        return fail_grpc(handle, status, context);
+        return fail_lob_upload(handle, status, context, chunk_size);
     }
     if (!received_reference || reference.uuid().empty()) {
         return fail(handle, "OJP returned an empty LOB reference", "HY000");
@@ -3164,7 +3205,7 @@ SQLRETURN read_lob(ConnectionHandle* connection, HandleBase* handle, const std::
     request.set_position(1);
     request.set_length(std::numeric_limits<std::int32_t>::max());
     grpc::ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+    apply_query_timeout(&context, handle);
     auto reader = stub->readLob(&context, request);
     LobDataBlock block;
     while (reader->Read(&block)) {
@@ -3987,7 +4028,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
             stub = route_session_rpc(connection);
             grpc::ClientContext context;
-            context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            apply_query_timeout(&context, statement);
             auto reader = stub->executeQuery(&context, request);
             OpResult result;
             while (reader->Read(&result)) {
@@ -4023,7 +4064,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
             fetch.set_resultsetuuid(result_set_uuid);
             fetch.set_size(1);
             grpc::ClientContext fetch_context;
-            fetch_context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            apply_query_timeout(&fetch_context, statement);
             OpResult next;
             const auto fetch_status = fetch_stub->fetchNextRows(&fetch_context, fetch, &next);
             if (!fetch_status.ok()) {
@@ -4058,7 +4099,7 @@ SQLRETURN execute_statement(StatementHandle* statement) {
         stub = route_session_rpc(connection);
         result.Clear();
         grpc::ClientContext context;
-        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+        apply_query_timeout(&context, statement);
         status = stub->executeUpdate(&context, request, &result);
         if (status.ok()) {
             break;
@@ -5060,6 +5101,21 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
                                       &connection->retry_delay_ms)) {
         return fail(connection, "OJP.MULTINODE.RETRY.DELAY must be between 0 and 60000 ms",
                     "IM012");
+    }
+    std::string lob_chunk_option = find("OJP.LOB.CHUNK.SIZE");
+    if (lob_chunk_option.empty()) {
+        const char* environment_value = std::getenv("OJP_LOB_CHUNK_SIZE");
+        lob_chunk_option = environment_value != nullptr ? environment_value : "";
+    }
+    connection->lob_chunk_size = kDefaultLobChunkSize;
+    if (!lob_chunk_option.empty()) {
+        int chunk_size = 0;
+        if (!parse_nonnegative_int_option(lob_chunk_option, kMaxLobChunkSize, &chunk_size) ||
+            chunk_size < kMinLobChunkSize) {
+            return fail(connection, "OJP.LOB.CHUNK.SIZE must be between 65536 and 268435456 bytes",
+                        "IM012");
+        }
+        connection->lob_chunk_size = static_cast<std::size_t>(chunk_size);
     }
     connection->client_uuid = make_client_uuid();
     connection->endpoint = choose_endpoint(connection->endpoints, load_aware, connection->tls);

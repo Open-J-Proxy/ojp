@@ -690,3 +690,11 @@ Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-e
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
+
+`OJP.LOB.CHUNK.SIZE` (connection string or DSN; fallback env `OJP_LOB_CHUNK_SIZE`) sets the
+block size in bytes used to upload LOB parameters (default 4128768 = 4 MiB - 64 KiB, range
+65536-268435456). The server writes each block with `Blob.setBytes`, which re-copies the whole
+value on SQL Server, so larger blocks make big uploads much faster. Each block must fit in the
+server's `ojp.server.maxRequestSize` (default 4 MiB): raise both together, keeping ~64 KiB of
+headroom. Execution, fetch and LOB streams have no client deadline unless the application sets
+`SQL_ATTR_QUERY_TIMEOUT`; the client accepts responses of any size.

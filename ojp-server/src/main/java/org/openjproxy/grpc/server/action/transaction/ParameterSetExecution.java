@@ -1,10 +1,14 @@
 package org.openjproxy.grpc.server.action.transaction;
 
 import com.openjproxy.grpc.SessionInfo;
+import io.grpc.Context;
+import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.grpc.dto.Parameter;
 import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.statement.ParameterHandler;
 
+import java.sql.BatchUpdateException;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -19,6 +23,7 @@ import java.util.List;
  * without this feature fails on the first index beyond the statement's markers, before executing
  * anything, so an older server never applies a partial or wrong update.
  */
+@Slf4j
 final class ParameterSetExecution {
 
     private ParameterSetExecution() {
@@ -26,6 +31,13 @@ final class ParameterSetExecution {
 
     /**
      * Binds every parameter set, adds it to the batch and executes the batch.
+     *
+     * <p>In auto-commit mode the batch runs in one transaction with a single commit, as ODBC lets the
+     * driver commit a parameter array as a whole. Committing each set separately costs one
+     * synchronous log flush per row, which dominates the execution time on replicated databases.
+     * If any set fails, the transaction is rolled back and the batch runs again in auto-commit mode,
+     * so the outcome of each set is the same as without the single commit, also on databases that
+     * abort the whole transaction on the first error.
      *
      * @param sessionManager the session manager (LOB parameters)
      * @param session        the current session
@@ -37,7 +49,39 @@ final class ParameterSetExecution {
      */
     static int[] execute(SessionManager sessionManager, SessionInfo session, PreparedStatement ps,
                          List<Parameter> params, int setSize) throws SQLException {
-        for (List<Parameter> set : split(params, setSize)) {
+        List<List<Parameter>> sets = split(params, setSize);
+        Connection connection = ps.getConnection();
+        if (!connection.getAutoCommit()) {
+            return executeBatch(sessionManager, session, ps, sets);
+        }
+        connection.setAutoCommit(false);
+        try {
+            int[] counts = executeBatch(sessionManager, session, ps, sets);
+            connection.commit();
+            return counts;
+        } catch (BatchUpdateException e) {
+            connection.rollback();
+            if (Context.current().isCancelled()) {
+                throw e;
+            }
+            log.debug("Parameter-set batch failed in a single transaction, running it again with "
+                    + "auto-commit: {}", e.getMessage());
+            ps.clearBatch();
+            connection.setAutoCommit(true);
+            return executeBatch(sessionManager, session, ps, sets);
+        } catch (SQLException | RuntimeException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            if (!connection.getAutoCommit()) {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    private static int[] executeBatch(SessionManager sessionManager, SessionInfo session, PreparedStatement ps,
+                                      List<List<Parameter>> sets) throws SQLException {
+        for (List<Parameter> set : sets) {
             ParameterHandler.addParametersPreparedStatement(sessionManager, session, ps, set);
             ps.addBatch();
         }

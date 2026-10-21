@@ -503,9 +503,10 @@ data-at-execution inputs in the same call, and output parameters combined with
 because parameters are always bound by position; other descriptor fields return
 `HYC00`.
 
-A statement whose SQL contains a top-level `;` followed by more code and a
+A procedure call (`EXEC`/`EXECUTE`/`CALL`/`{CALL ...}`) or a statement whose SQL
+contains a top-level `;` followed by more code and a
 `SELECT`, `EXEC`/`EXECUTE`, `OUTPUT`, or `RETURNING` keyword is treated as a
-multi-statement batch: it runs through a backend JDBC `CallableStatement` that
+multi-result batch: it runs through a backend JDBC `CallableStatement` that
 stays open while results remain, so `SQLMoreResults` advances to the next result
 set (update counts in between are skipped) and returns `SQL_NO_DATA` at the end.
 `SQLCloseCursor`, `SQLFreeStmt(SQL_CLOSE)`, re-execution, catalog calls, and

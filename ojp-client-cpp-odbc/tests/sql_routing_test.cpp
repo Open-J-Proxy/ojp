@@ -39,15 +39,17 @@ const std::vector<std::string> kResultSetSql = {
     "IF 1 = 1 SELECT 7 AS r ELSE SELECT 8 AS r",
     "begin select 9 as r end",
     "/* batch */ WHILE 1 = 0 SELECT 1",
-    "EXEC dbo.add_values 1, 2",
     "INSERT INTO items OUTPUT inserted.id VALUES (1)",
     // A trailing ';' or one inside a literal does not separate statements.
     "INSERT INTO items OUTPUT inserted.id VALUES (2); -- trailing comment",
     "INSERT INTO items OUTPUT inserted.id VALUES (';')",
 };
 
-// Batches with several statements run through a callable statement so that SQLMoreResults works.
+// Procedure calls and batches with several statements run through a callable statement so that
+// SQLMoreResults works.
 const std::vector<std::string> kMultiResultSql = {
+    "EXEC dbo.add_values 1, 2",
+    "{CALL dbo.add_values(1, 2)}",
     "DECLARE @r INT; EXEC dbo.add_values @a = 2, @b = 3, @r = @r OUTPUT; SELECT @r AS r",
     "SET NOCOUNT ON; SELECT 42 AS r",
 };

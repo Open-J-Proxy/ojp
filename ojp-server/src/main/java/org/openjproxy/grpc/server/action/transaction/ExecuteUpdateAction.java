@@ -141,7 +141,9 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                     updated = outcome.updateCount();
                     resultSetUuid = outcome.resultSetUuid();
                 } else {
-                    updated = ps.executeUpdate();
+                    try (StatementCancellation ignored = StatementCancellation.onCallCancelled(ps)) {
+                        updated = ps.executeUpdate();
+                    }
                 }
                 stmt = ps;
             } else {
@@ -152,7 +154,9 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                     updated = outcome.updateCount();
                     resultSetUuid = outcome.resultSetUuid();
                 } else {
-                    updated = stmt.executeUpdate(request.getSql());
+                    try (StatementCancellation ignored = StatementCancellation.onCallCancelled(stmt)) {
+                        updated = stmt.executeUpdate(request.getSql());
+                    }
                 }
             }
 
@@ -175,9 +179,12 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
     private UpdateExecutionOutcome executeForResultSet(Statement statement, String sql, boolean prepared,
                                                        SessionManager sessionManager,
                                                        ConnectionSessionDTO dto) throws SQLException {
-        boolean hasResultSet = prepared
-                ? ((PreparedStatement) statement).execute()
-                : statement.execute(sql);
+        boolean hasResultSet;
+        try (StatementCancellation ignored = StatementCancellation.onCallCancelled(statement)) {
+            hasResultSet = prepared
+                    ? ((PreparedStatement) statement).execute()
+                    : statement.execute(sql);
+        }
         int updateCount = -1;
         while (true) {
             if (hasResultSet) {

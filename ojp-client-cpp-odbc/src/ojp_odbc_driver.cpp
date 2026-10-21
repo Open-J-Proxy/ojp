@@ -4478,6 +4478,31 @@ SQLRETURN execute_metadata_statement(StatementHandle* statement, const std::stri
         for (auto& row : statement->rows) {
             row.resize(ODBC_COLUMNS_COLUMN_COUNT);
         }
+    } else if (method == "Procedures" || method == "ProcedureColumns") {
+        // JDBC getProcedures/getProcedureColumns share the ODBC column order (COLUMN_TYPE values
+        // match SQL_PARAM_*), but some labels differ (PRECISION vs COLUMN_SIZE) and JDBC appends
+        // SPECIFIC_NAME, so the ODBC labels are applied and the extra columns dropped.
+        static const std::vector<std::string> procedures_columns = {
+            "PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "NUM_INPUT_PARAMS",
+            "NUM_OUTPUT_PARAMS", "NUM_RESULT_SETS", "REMARKS", "PROCEDURE_TYPE"};
+        static const std::vector<std::string> procedure_columns_columns = {
+            "PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "COLUMN_NAME", "COLUMN_TYPE",
+            "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE", "BUFFER_LENGTH", "DECIMAL_DIGITS",
+            "NUM_PREC_RADIX", "NULLABLE", "REMARKS", "COLUMN_DEF", "SQL_DATA_TYPE",
+            "SQL_DATETIME_SUB", "CHAR_OCTET_LENGTH", "ORDINAL_POSITION", "IS_NULLABLE"};
+        const auto& labels = method == "Procedures" ? procedures_columns : procedure_columns_columns;
+        if (statement->columns.size() < labels.size() ||
+            std::any_of(statement->rows.begin(), statement->rows.end(),
+                        [&labels](const std::vector<Cell>& row) {
+                            return row.size() < labels.size();
+                        })) {
+            return fail(statement, "JDBC procedure metadata does not contain the required columns",
+                        "HY000");
+        }
+        statement->columns = labels;
+        for (auto& row : statement->rows) {
+            row.resize(labels.size());
+        }
     }
     statement->has_result_set = true;
     statement->row_count = static_cast<SQLLEN>(statement->rows.size());
@@ -4630,7 +4655,8 @@ SQLRETURN execute_catalog_api(SQLHSTMT statement, const std::string& method,
         }
     };
     if (method == "Tables" || method == "Columns" || method == "PrimaryKeys" ||
-        method == "ImportedKeys" || method == "ExportedKeys" || method == "CrossReference") {
+        method == "ImportedKeys" || method == "ExportedKeys" || method == "CrossReference" ||
+        method == "Procedures" || method == "ProcedureColumns") {
         null_empty_catalog(0);
     }
     if (method == "CrossReference") {
@@ -7381,6 +7407,106 @@ SQLRETURN SQL_API SQLPrimaryKeysW(SQLHSTMT statement, SQLWCHAR* catalog,
     });
 }
 
+SQLRETURN SQL_API SQLProcedures(SQLHSTMT statement, SQLCHAR* catalog,
+                                SQLSMALLINT catalog_length, SQLCHAR* schema,
+                                SQLSMALLINT schema_length, SQLCHAR* procedure,
+                                SQLSMALLINT procedure_length) {
+    return guarded(statement, "SQLProcedures", [&]() -> SQLRETURN {
+        if (statement == SQL_NULL_HSTMT ||
+            static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+            return SQL_INVALID_HANDLE;
+        }
+        auto* handle = static_cast<HandleBase*>(statement);
+        std::vector<ParameterValue> parameters;
+        SQLRETURN result = append_ansi_metadata_parameter(handle, catalog, catalog_length, &parameters);
+        if (SQL_SUCCEEDED(result)) {
+            result = append_ansi_metadata_parameter(handle, schema, schema_length, &parameters);
+        }
+        if (SQL_SUCCEEDED(result)) {
+            result = append_ansi_metadata_parameter(handle, procedure, procedure_length, &parameters);
+        }
+        return SQL_SUCCEEDED(result)
+            ? execute_catalog_api(statement, "Procedures", parameters) : result;
+    });
+}
+
+SQLRETURN SQL_API SQLProceduresW(SQLHSTMT statement, SQLWCHAR* catalog,
+                                 SQLSMALLINT catalog_length, SQLWCHAR* schema,
+                                 SQLSMALLINT schema_length, SQLWCHAR* procedure,
+                                 SQLSMALLINT procedure_length) {
+    return guarded(statement, "SQLProceduresW", [&]() -> SQLRETURN {
+        if (statement == SQL_NULL_HSTMT ||
+            static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+            return SQL_INVALID_HANDLE;
+        }
+        auto* handle = static_cast<HandleBase*>(statement);
+        std::vector<ParameterValue> parameters;
+        SQLRETURN result = append_wide_metadata_parameter(handle, catalog, catalog_length, &parameters);
+        if (SQL_SUCCEEDED(result)) {
+            result = append_wide_metadata_parameter(handle, schema, schema_length, &parameters);
+        }
+        if (SQL_SUCCEEDED(result)) {
+            result = append_wide_metadata_parameter(handle, procedure, procedure_length, &parameters);
+        }
+        return SQL_SUCCEEDED(result)
+            ? execute_catalog_api(statement, "Procedures", parameters) : result;
+    });
+}
+
+SQLRETURN SQL_API SQLProcedureColumns(SQLHSTMT statement, SQLCHAR* catalog,
+                                      SQLSMALLINT catalog_length, SQLCHAR* schema,
+                                      SQLSMALLINT schema_length, SQLCHAR* procedure,
+                                      SQLSMALLINT procedure_length, SQLCHAR* column,
+                                      SQLSMALLINT column_length) {
+    return guarded(statement, "SQLProcedureColumns", [&]() -> SQLRETURN {
+        if (statement == SQL_NULL_HSTMT ||
+            static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+            return SQL_INVALID_HANDLE;
+        }
+        auto* handle = static_cast<HandleBase*>(statement);
+        std::vector<ParameterValue> parameters;
+        SQLRETURN result = append_ansi_metadata_parameter(handle, catalog, catalog_length, &parameters);
+        if (SQL_SUCCEEDED(result)) {
+            result = append_ansi_metadata_parameter(handle, schema, schema_length, &parameters);
+        }
+        if (SQL_SUCCEEDED(result)) {
+            result = append_ansi_metadata_parameter(handle, procedure, procedure_length, &parameters);
+        }
+        if (SQL_SUCCEEDED(result)) {
+            result = append_ansi_metadata_parameter(handle, column, column_length, &parameters);
+        }
+        return SQL_SUCCEEDED(result)
+            ? execute_catalog_api(statement, "ProcedureColumns", parameters) : result;
+    });
+}
+
+SQLRETURN SQL_API SQLProcedureColumnsW(SQLHSTMT statement, SQLWCHAR* catalog,
+                                       SQLSMALLINT catalog_length, SQLWCHAR* schema,
+                                       SQLSMALLINT schema_length, SQLWCHAR* procedure,
+                                       SQLSMALLINT procedure_length, SQLWCHAR* column,
+                                       SQLSMALLINT column_length) {
+    return guarded(statement, "SQLProcedureColumnsW", [&]() -> SQLRETURN {
+        if (statement == SQL_NULL_HSTMT ||
+            static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+            return SQL_INVALID_HANDLE;
+        }
+        auto* handle = static_cast<HandleBase*>(statement);
+        std::vector<ParameterValue> parameters;
+        SQLRETURN result = append_wide_metadata_parameter(handle, catalog, catalog_length, &parameters);
+        if (SQL_SUCCEEDED(result)) {
+            result = append_wide_metadata_parameter(handle, schema, schema_length, &parameters);
+        }
+        if (SQL_SUCCEEDED(result)) {
+            result = append_wide_metadata_parameter(handle, procedure, procedure_length, &parameters);
+        }
+        if (SQL_SUCCEEDED(result)) {
+            result = append_wide_metadata_parameter(handle, column, column_length, &parameters);
+        }
+        return SQL_SUCCEEDED(result)
+            ? execute_catalog_api(statement, "ProcedureColumns", parameters) : result;
+    });
+}
+
 SQLRETURN SQL_API SQLForeignKeys(
     SQLHSTMT statement, SQLCHAR* primary_catalog, SQLSMALLINT primary_catalog_length,
     SQLCHAR* primary_schema, SQLSMALLINT primary_schema_length, SQLCHAR* primary_table,
@@ -8986,7 +9112,8 @@ SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connection, SQLUSMALLINT function_id,
             SQL_API_SQLNUMRESULTCOLS, SQL_API_SQLNUMPARAMS, SQL_API_SQLDESCRIBECOL,
             SQL_API_SQLROWCOUNT, SQL_API_SQLFREESTMT,
             SQL_API_SQLTABLES, SQL_API_SQLCOLUMNS, SQL_API_SQLPRIMARYKEYS,
-            SQL_API_SQLFOREIGNKEYS, SQL_API_SQLGETTYPEINFO, SQL_API_SQLCOLATTRIBUTE,
+            SQL_API_SQLFOREIGNKEYS, SQL_API_SQLPROCEDURES, SQL_API_SQLPROCEDURECOLUMNS,
+            SQL_API_SQLGETTYPEINFO, SQL_API_SQLCOLATTRIBUTE,
             SQL_API_SQLSETSTMTATTR, SQL_API_SQLGETSTMTATTR, SQL_API_SQLCLOSECURSOR,
             SQL_API_SQLFETCHSCROLL, SQL_API_SQLMORERESULTS,
             SQL_API_SQLGETDIAGREC, SQL_API_SQLGETDIAGFIELD, SQL_API_SQLGETINFO,

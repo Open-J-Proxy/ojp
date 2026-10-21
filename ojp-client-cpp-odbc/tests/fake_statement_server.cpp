@@ -25,6 +25,15 @@ using Clock = std::chrono::steady_clock;
 
 constexpr auto kIdleLimit = std::chrono::seconds(60);
 
+std::string describe(const proto::ParameterValue& value) {
+    switch (value.value_case()) {
+        case proto::ParameterValue::kIntValue: return std::to_string(value.int_value());
+        case proto::ParameterValue::kLongValue: return std::to_string(value.long_value());
+        case proto::ParameterValue::kStringValue: return "'" + value.string_value() + "'";
+        default: return std::string("<other>");
+    }
+}
+
 class FakeStatementService final : public proto::StatementService::Service {
 public:
     grpc::Status connect(grpc::ServerContext*, const proto::ConnectionDetails* request,
@@ -45,6 +54,14 @@ public:
                        property.bool_value();
             });
         report((update_result_set ? "executeUpdateResultSet " : "executeUpdate ") + request->sql());
+        if (request->parameters_size() > 0) {
+            std::string line = "parameters " + request->sql() + ":";
+            for (const auto& parameter : request->parameters()) {
+                line += " " + std::to_string(parameter.index()) + "=" +
+                    (parameter.values_size() > 0 ? describe(parameter.values(0)) : "<none>");
+            }
+            report(line);
+        }
         if (request->sql().find("slow") != std::string::npos) {
             const auto limit = Clock::now() + std::chrono::seconds(10);
             while (!context->IsCancelled() && Clock::now() < limit) {
@@ -61,7 +78,8 @@ public:
     }
 
     // DatabaseMetaData calls (getMetaData().getX(...)) are reported as "metadata X p1|p2|...",
-    // with NULL parameters as "<null>", and answered with a result set in the JDBC shape.
+    // with NULL parameters as "<null>" and string arrays as "[a,b]", and answered with a result
+    // set in the JDBC shape.
     grpc::Status callResource(grpc::ServerContext*, const proto::CallResourceRequest* request,
                               proto::CallResourceResponse* response) override {
         if (request->resourcetype() == proto::RES_RESULT_SET &&
@@ -85,8 +103,17 @@ public:
             if (!parameters.empty()) {
                 parameters += "|";
             }
-            parameters += parameter.value_case() == proto::ParameterValue::kStringValue
-                ? parameter.string_value() : "<null>";
+            if (parameter.value_case() == proto::ParameterValue::kStringValue) {
+                parameters += parameter.string_value();
+            } else if (parameter.value_case() == proto::ParameterValue::kStringArrayValue) {
+                std::string values;
+                for (const auto& value : parameter.string_array_value().values()) {
+                    values += (values.empty() ? "" : ",") + value;
+                }
+                parameters += "[" + values + "]";
+            } else {
+                parameters += "<null>";
+            }
         }
         report("metadata " + call.resourcename() + " " + parameters);
         std::lock_guard<std::mutex> lock(mutex_);
@@ -130,6 +157,23 @@ public:
         } else if (method.rfind("BatchRows", 0) == 0) {
             result->add_labels("value");
             add_row({number(std::stoi(method.substr(9)))});
+        } else if (method == "Catalogs") {
+            result->add_labels("TABLE_CAT");
+            add_row({text("db")});
+        } else if (method == "Schemas") {
+            result->add_labels("TABLE_SCHEM");
+            result->add_labels("TABLE_CATALOG");
+            add_row({text("dbo"), text("db")});
+        } else if (method == "TableTypes") {
+            result->add_labels("TABLE_TYPE");
+            add_row({text("TABLE")});
+        } else if (method == "Tables") {
+            for (const char* label : {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE",
+                                      "REMARKS", "TYPE_CAT"}) {
+                result->add_labels(label);
+            }
+            add_row({text("db"), text("dbo"), text("items"), text("TABLE"), text(nullptr),
+                     text(nullptr)});
         } else if (method == "Procedures") {
             for (const char* label : {"PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME",
                                       "RESERVED1", "RESERVED2", "RESERVED3", "REMARKS",
@@ -215,14 +259,6 @@ public:
         if (request.resourceuuid() != "cs-1") {
             return grpc::Status(grpc::StatusCode::NOT_FOUND, "unknown callable statement");
         }
-        auto describe = [](const proto::ParameterValue& value) {
-            switch (value.value_case()) {
-                case proto::ParameterValue::kIntValue: return std::to_string(value.int_value());
-                case proto::ParameterValue::kLongValue: return std::to_string(value.long_value());
-                case proto::ParameterValue::kStringValue: return "'" + value.string_value() + "'";
-                default: return std::string("<other>");
-            }
-        };
         std::string line = "callable " + target.resourcename();
         for (const auto& parameter : target.params()) {
             line += " " + describe(parameter);

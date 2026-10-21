@@ -7746,6 +7746,11 @@ SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT statement, SQLSMALLINT data_type) {
     });
 }
 
+// The Windows Driver Manager maps ANSI calls to the W entry point of a Unicode driver.
+SQLRETURN SQL_API SQLGetTypeInfoW(SQLHSTMT statement, SQLSMALLINT data_type) {
+    return SQLGetTypeInfo(statement, data_type);
+}
+
 SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,
                                  SQLCHAR* column_name, SQLSMALLINT name_buffer_length,
                                  SQLSMALLINT* name_length, SQLSMALLINT* data_type,

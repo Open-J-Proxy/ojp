@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -46,6 +47,11 @@ public:
     // SQL containing "slow" blocks until the client cancels the call or its deadline expires.
     grpc::Status executeUpdate(grpc::ServerContext* context, const proto::StatementRequest* request,
                                proto::OpResult* response) override {
+        for (const auto& property : request->properties()) {
+            if (property.key() == "PREPARED_STATEMENT_ADD_BATCH_FLAG" && property.bool_value()) {
+                return add_batch(context, *request, response);
+            }
+        }
         // The update-result-set request returns the first result set or the update count; the
         // fake server never has a result set, so it answers with the update count.
         const bool update_result_set = std::any_of(
@@ -80,7 +86,7 @@ public:
     // DatabaseMetaData calls (getMetaData().getX(...)) are reported as "metadata X p1|p2|...",
     // with NULL parameters as "<null>" and string arrays as "[a,b]", and answered with a result
     // set in the JDBC shape.
-    grpc::Status callResource(grpc::ServerContext*, const proto::CallResourceRequest* request,
+    grpc::Status callResource(grpc::ServerContext* context, const proto::CallResourceRequest* request,
                               proto::CallResourceResponse* response) override {
         if (request->resourcetype() == proto::RES_RESULT_SET &&
             request->target().calltype() == proto::CALL_CLOSE) {
@@ -93,6 +99,9 @@ public:
         }
         if (request->resourcetype() == proto::RES_CALLABLE_STATEMENT) {
             return call_callable(*request, response);
+        }
+        if (request->resourcetype() == proto::RES_PREPARED_STATEMENT) {
+            return call_prepared(context, *request, response);
         }
         if (request->target().resourcename() != "MetaData" || !request->target().has_nextcall()) {
             return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "unsupported resource call");
@@ -219,6 +228,90 @@ public:
         return grpc::Status::OK;
     }
 
+    // PreparedStatement.addBatch: the first row creates the statement "ps-<n>" and binds the
+    // session, as the OJP server does. A row whose first parameter is 98 fails to bind.
+    grpc::Status add_batch(grpc::ServerContext* context, const proto::StatementRequest& request,
+                           proto::OpResult* response) {
+        const int id = request.parameters_size() > 0 && request.parameters(0).values_size() > 0
+            ? request.parameters(0).values(0).int_value() : 0;
+        report("addBatch " + request.sql() + " " +
+               (request.statementuuid().empty() ? "<new>" : request.statementuuid()) + " " +
+               std::to_string(id));
+        if (id == 98) {
+            return sql_error(context, "22018", "invalid character value for cast", 245);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::string uuid = request.statementuuid();
+        if (uuid.empty()) {
+            uuid = "ps-" + std::to_string(++prepared_count_);
+            batches_[uuid].sql = request.sql();
+        } else if (batches_.find(uuid) == batches_.end()) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "unknown prepared statement");
+        }
+        batches_[uuid].ids.push_back(id);
+        response->mutable_session()->CopyFrom(request.session());
+        response->mutable_session()->set_sessionuuid("batch-session");
+        response->set_type(proto::UUID_STRING);
+        response->set_uuid_value(uuid);
+        return grpc::Status::OK;
+    }
+
+    // executeBatch fails when a row has the id 99, without the update counts, as the OJP server
+    // reports a BatchUpdateException. SQL containing "noinfo" answers SUCCESS_NO_INFO for every row
+    // and SQL containing "slow" blocks until the client cancels the call or its deadline expires.
+    grpc::Status call_prepared(grpc::ServerContext* context, const proto::CallResourceRequest& request,
+                               proto::CallResourceResponse* response) {
+        const auto& target = request.target();
+        Batch batch;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto found = batches_.find(request.resourceuuid());
+            if (found == batches_.end()) {
+                return grpc::Status(grpc::StatusCode::NOT_FOUND, "unknown prepared statement");
+            }
+            batch = found->second;
+            if (target.calltype() == proto::CALL_CLOSE) {
+                batches_.erase(found);
+            }
+        }
+        if (target.calltype() == proto::CALL_CLOSE) {
+            report("closePreparedStatement " + request.resourceuuid());
+            return grpc::Status::OK;
+        }
+        if (target.calltype() != proto::CALL_EXECUTE || target.resourcename() != "Batch") {
+            return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "unsupported prepared statement call");
+        }
+        report("executeBatch " + request.resourceuuid() + " " + std::to_string(batch.ids.size()));
+        if (batch.sql.find("slow") != std::string::npos) {
+            const auto limit = Clock::now() + std::chrono::seconds(10);
+            while (!context->IsCancelled() && Clock::now() < limit) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            report("cancelled executeBatch " + request.resourceuuid());
+            return grpc::Status(grpc::StatusCode::CANCELLED, "cancelled by client");
+        }
+        if (std::find(batch.ids.begin(), batch.ids.end(), 99) != batch.ids.end()) {
+            return sql_error(context, "23000", "duplicate key", 2627);
+        }
+        const bool no_info = batch.sql.find("noinfo") != std::string::npos;
+        auto* counts = response->add_values()->mutable_int_array_value();
+        for (std::size_t row = 0; row < batch.ids.size(); ++row) {
+            counts->add_values(no_info ? -2 : 1);
+        }
+        return grpc::Status::OK;
+    }
+
+    // Reports a SQLException the way the OJP server does (SqlErrorResponse trailer).
+    static grpc::Status sql_error(grpc::ServerContext* context, const std::string& state,
+                                  const std::string& reason, int vendor_code) {
+        proto::SqlErrorResponse error;
+        error.set_sqlstate(state);
+        error.set_reason(reason);
+        error.set_vendorcode(vendor_code);
+        context->AddTrailingMetadata("sqlerrorresponse-bin", error.SerializeAsString());
+        return grpc::Status(grpc::StatusCode::INTERNAL, reason);
+    }
+
     // Simulates "{? = CALL add_values(?, ?)}": the return value is 42 and the INPUT_OUTPUT
     // parameter 3 becomes parameter 2 + parameter 3. SQL containing "rows" also returns a result set.
     grpc::Status prepare_call(const proto::CallResourceRequest& request,
@@ -333,6 +426,12 @@ private:
     std::string callable_sql_;
     std::map<int, int> callable_values_;
     std::size_t batch_position_ = 0;
+    struct Batch {
+        std::string sql;
+        std::vector<int> ids;
+    };
+    std::map<std::string, Batch> batches_;
+    int prepared_count_ = 0;
 };
 
 }  // namespace

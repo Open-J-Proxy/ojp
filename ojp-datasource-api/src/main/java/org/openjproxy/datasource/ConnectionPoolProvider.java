@@ -74,6 +74,27 @@ public interface ConnectionPoolProvider {
     DataSource createDataSource(PoolConfig config) throws SQLException;
 
     /**
+     * Indicates whether this provider can resize a pool after creation.
+     *
+     * @return true if {@link #resizeDataSource(DataSource, int, int)} is supported
+     */
+    default boolean supportsDynamicResizing() {
+        return false;
+    }
+
+    /**
+     * Resizes an existing connection pool.
+     *
+     * @param dataSource the DataSource created by this provider
+     * @param maximumPoolSize the new maximum pool size
+     * @param minimumIdle the new minimum idle size
+     * @throws SQLException if resizing fails or is unsupported
+     */
+    default void resizeDataSource(DataSource dataSource, int maximumPoolSize, int minimumIdle) throws SQLException {
+        throw new UnsupportedOperationException("Dynamic pool resizing is not supported by " + id());
+    }
+
+    /**
      * Closes and releases all resources associated with the DataSource.
      *
      * <p>This method should:</p>

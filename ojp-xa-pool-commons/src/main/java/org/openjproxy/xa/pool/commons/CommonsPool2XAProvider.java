@@ -137,6 +137,33 @@ public class CommonsPool2XAProvider implements XAConnectionPoolProvider {
     }
 
     @Override
+    public boolean supportsDynamicResizing() {
+        return true;
+    }
+
+    @Override
+    public boolean resizePool(Object pooledDataSource, int maximumPoolSize, int minimumIdle) {
+        if (!(pooledDataSource instanceof CommonsPool2XADataSource)) {
+            throw new IllegalArgumentException("XA datasource was not created by the Commons Pool 2 provider");
+        }
+        if (maximumPoolSize < 1 || minimumIdle < 0 || minimumIdle > maximumPoolSize) {
+            throw new IllegalArgumentException("Invalid pool sizes: max=" + maximumPoolSize + ", min=" + minimumIdle);
+        }
+
+        CommonsPool2XADataSource pooled = (CommonsPool2XADataSource) pooledDataSource;
+        int currentMaximum = pooled.getMaxTotal();
+        int currentMinimum = pooled.getMinIdle();
+        if (maximumPoolSize < currentMaximum || minimumIdle < currentMinimum) {
+            pooled.setMinIdle(minimumIdle);
+            pooled.setMaxTotal(maximumPoolSize);
+        } else {
+            pooled.setMaxTotal(maximumPoolSize);
+            pooled.setMinIdle(minimumIdle);
+        }
+        return true;
+    }
+
+    @Override
     public Map<String, Object> getStatistics(XADataSource xaDataSource) {
         Map<String, Object> stats = new HashMap<>();
 

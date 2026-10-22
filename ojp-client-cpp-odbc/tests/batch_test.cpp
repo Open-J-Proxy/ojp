@@ -207,6 +207,10 @@ int main(int argc, char** argv) {
         }
         require(count_lines(calls, "cancelled executeBatch ps-5") == 1,
                 "The timed-out batch must be cancelled on the server");
+        require(count_lines(calls, "cancelPreparedStatement ps-5") == 1,
+                "The timed-out batch must be cancelled through Statement.cancel()");
+        require(count_lines(calls, "cancelPreparedStatement ps-1") == 0,
+                "A successful batch must not be cancelled");
         std::cout << "Batch tests passed\n";
         return 0;
     } catch (const std::exception& error) {

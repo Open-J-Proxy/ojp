@@ -97,6 +97,27 @@ void test_query_timeout(SQLHSTMT statement) {
             "Reset SQL_ATTR_QUERY_TIMEOUT");
 }
 
+// Multi-statement SQL runs through a server-side CallableStatement, whose execution must follow
+// SQLCancel too.
+void test_cancel_callable(SQLHSTMT statement) {
+    std::atomic<SQLRETURN> cancel_result{SQL_ERROR};
+    std::thread canceller([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        cancel_result = SQLCancel(statement);
+    });
+    const auto started = Clock::now();
+    const SQLRETURN result = exec_direct(statement, "UPDATE slow SET x = 3; SELECT 1");
+    const auto elapsed = elapsed_ms(started);
+    canceller.join();
+    require(cancel_result == SQL_SUCCESS, "SQLCancel during the callable execution must succeed");
+    require(result == SQL_ERROR, "Cancelled callable execution must fail");
+    require(sql_state(statement) == "HY008", "Cancelled callable execution must report HY008");
+    require(elapsed < 5000, "SQLCancel did not interrupt the callable execution (" +
+                                std::to_string(elapsed) + " ms)");
+    success(SQLFreeStmt(statement, SQL_CLOSE), "Close cursor after cancelled callable");
+    success(exec_direct(statement, "UPDATE fast SET x = 3"), "Execution after callable cancel");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -118,6 +139,7 @@ int main(int argc, char** argv) {
         test_idle_cancel(statement);
         test_cancel_from_other_thread(statement);
         test_query_timeout(statement);
+        test_cancel_callable(statement);
 
         success(SQLFreeHandle(SQL_HANDLE_STMT, statement), "Free statement");
         success(SQLDisconnect(connection), "SQLDisconnect");
@@ -134,6 +156,12 @@ int main(int argc, char** argv) {
                 "The server did not observe the SQLCancel");
         require(count_lines(calls, "cancelled UPDATE slow SET x = 2") == 1,
                 "The server did not observe the query timeout");
+        require(count_lines(calls, "cancelled callable execute") == 1,
+                "The server did not observe the callable SQLCancel");
+        require(count_lines(calls, "cancelCallable") == 1,
+                "The callable statement was not cancelled through Statement.cancel()");
+        require(count_lines(calls, "closeCallable") == 1,
+                "The cancelled callable statement was not closed");
         std::cout << "Cancellation and query timeout tests passed\n";
         return 0;
     } catch (const std::exception& error) {

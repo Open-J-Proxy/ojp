@@ -3701,6 +3701,30 @@ SQLRETURN call_resource(ConnectionHandle* connection, HandleBase* handle,
     return fail(handle, "OJP resource call retries were exhausted", "08S01");
 }
 
+bool execution_interrupted(const std::vector<Diagnostic>& diagnostics) {
+    return std::any_of(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& diagnostic) {
+        return diagnostic.state == "HY008" || diagnostic.state == "HYT00";
+    });
+}
+
+// Cancelling the RPC does not stop the statement on the OJP server, so after SQLCancel or a query
+// timeout Statement.cancel() is invoked on the server-side statement, best effort, to make the
+// database abort it as well. The statement diagnostics are preserved.
+void cancel_server_statement(StatementHandle* statement,
+                             com::openjproxy::grpc::ResourceType resource_type,
+                             const std::string& resource_uuid) {
+    std::vector<Diagnostic> diagnostics = std::move(statement->diagnostics);
+    statement->diagnostics.clear();
+    com::openjproxy::grpc::CallResourceResponse cancelled;
+    if (SQL_SUCCEEDED(call_resource(statement->connection, statement, resource_type, resource_uuid,
+                                    com::openjproxy::grpc::CALL_CANCEL, "", {}, &cancelled))) {
+        log_message(LogLevel::debug, "cancelled server statement " + resource_uuid);
+    } else {
+        log_message(LogLevel::warn, "could not cancel server statement " + resource_uuid);
+    }
+    statement->diagnostics = std::move(diagnostics);
+}
+
 SQLRETURN start_transaction(ConnectionHandle* connection, HandleBase* handle) {
     return invoke_session_rpc(connection, handle,
         [](StatementService::Stub* stub, grpc::ClientContext* context, const SessionInfo& request,
@@ -4207,10 +4231,11 @@ std::int32_t jdbc_parameter_type(SQLSMALLINT sql_type) {
 SQLRETURN callable_call(StatementHandle* statement, const std::string& callable_uuid,
                         com::openjproxy::grpc::CallType call_type, const char* name,
                         const std::vector<ParameterValue>& values,
-                        com::openjproxy::grpc::CallResourceResponse* response) {
+                        com::openjproxy::grpc::CallResourceResponse* response,
+                        bool statement_execution = false) {
     return call_resource(statement->connection, statement,
                          com::openjproxy::grpc::RES_CALLABLE_STATEMENT, callable_uuid, call_type,
-                         name, values, response);
+                         name, values, response, nullptr, statement_execution);
 }
 
 // Positions an executed callable statement on its next result set. With skip_update_counts,
@@ -4356,8 +4381,12 @@ SQLRETURN execute_callable_statement(StatementHandle* statement, std::size_t mar
             }
         }
         CallResourceResponse execute_response;
-        SQLRETURN result = call(CALL_EXECUTE, "", {}, &execute_response);
+        SQLRETURN result = callable_call(statement, callable_uuid, CALL_EXECUTE, "", {},
+                                         &execute_response, true);
         if (!SQL_SUCCEEDED(result)) {
+            if (execution_interrupted(statement->diagnostics)) {
+                cancel_server_statement(statement, RES_CALLABLE_STATEMENT, callable_uuid);
+            }
             return result;
         }
         const bool returns_result_set = execute_response.values_size() > 0 &&
@@ -6922,6 +6951,9 @@ static SQLRETURN execute_jdbc_batch(StatementHandle* target, SQLULEN rows, bool*
                 set_status(row, SQL_PARAM_DIAG_UNAVAILABLE);
             }
             failed = added;
+            if (execution_interrupted(target->diagnostics)) {
+                cancel_server_statement(target, RES_PREPARED_STATEMENT, statement_uuid);
+            }
             errors = std::move(target->diagnostics);
             target->diagnostics.clear();
         } else {

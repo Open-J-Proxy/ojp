@@ -27,7 +27,7 @@ Legend:
 | SQLAllocHandle / SQLFreeHandle | yes | n/a | Full | |
 | SQLBindCol | yes | n/a | Full | |
 | SQLBindParameter | yes | n/a | Partial | See below. |
-| SQLCancel | yes | n/a | Full | |
+| SQLCancel | yes | n/a | Full | Interrupts the running RPC (HY008; `SQL_ATTR_QUERY_TIMEOUT` reports HYT00). Parameter-array batches and callable statements are also stopped in the database through `Statement.cancel()` on the server; other statements run to completion on the server. |
 | SQLCloseCursor | yes | n/a | Full | Delegates to `SQLFreeStmt(SQL_CLOSE)`. |
 | SQLColAttribute | yes | yes | Partial | Unmapped fields return `HYC00`. |
 | SQLColumns | yes | yes | Full | |

@@ -98,7 +98,7 @@ public:
             return prepare_call(*request, response);
         }
         if (request->resourcetype() == proto::RES_CALLABLE_STATEMENT) {
-            return call_callable(*request, response);
+            return call_callable(context, *request, response);
         }
         if (request->resourcetype() == proto::RES_PREPARED_STATEMENT) {
             return call_prepared(context, *request, response);
@@ -278,6 +278,10 @@ public:
             report("closePreparedStatement " + request.resourceuuid());
             return grpc::Status::OK;
         }
+        if (target.calltype() == proto::CALL_CANCEL) {
+            report("cancelPreparedStatement " + request.resourceuuid());
+            return grpc::Status::OK;
+        }
         if (target.calltype() != proto::CALL_EXECUTE || target.resourcename() != "Batch") {
             return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "unsupported prepared statement call");
         }
@@ -346,11 +350,31 @@ public:
         return batch_position_ < kBatchResultCount && kBatchResults[batch_position_].result_set;
     }
 
-    grpc::Status call_callable(const proto::CallResourceRequest& request,
+    // SQL containing "slow" blocks the execution until the client cancels the call or its deadline
+    // expires; CALL_CANCEL is reported as "cancelCallable".
+    grpc::Status call_callable(grpc::ServerContext* context, const proto::CallResourceRequest& request,
                                proto::CallResourceResponse* response) {
         const auto& target = request.target();
         if (request.resourceuuid() != "cs-1") {
             return grpc::Status(grpc::StatusCode::NOT_FOUND, "unknown callable statement");
+        }
+        if (target.calltype() == proto::CALL_CANCEL) {
+            report("cancelCallable");
+            return grpc::Status::OK;
+        }
+        bool slow = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            slow = callable_sql_.find("slow") != std::string::npos;
+        }
+        if (slow && target.calltype() == proto::CALL_EXECUTE) {
+            report("callable execute slow");
+            const auto limit = Clock::now() + std::chrono::seconds(10);
+            while (!context->IsCancelled() && Clock::now() < limit) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            report("cancelled callable execute");
+            return grpc::Status(grpc::StatusCode::CANCELLED, "cancelled by client");
         }
         std::string line = "callable " + target.resourcename();
         for (const auto& parameter : target.params()) {

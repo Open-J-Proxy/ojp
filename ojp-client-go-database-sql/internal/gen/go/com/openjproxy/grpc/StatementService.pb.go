@@ -1850,8 +1850,10 @@ type SessionInfo struct {
 	ClientCount     int32            `protobuf:"varint,9,opt,name=clientCount,proto3" json:"clientCount,omitempty"`
 	MaxAdmission    int32            `protobuf:"varint,10,opt,name=maxAdmission,proto3" json:"maxAdmission,omitempty"`
 	ObservedPeak    int32            `protobuf:"varint,11,opt,name=observedPeak,proto3" json:"observedPeak,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Optional features supported by the server, announced in the connect response (e.g. "PARAMETER_SETS").
+	ServerCapabilities []string `protobuf:"bytes,12,rep,name=serverCapabilities,proto3" json:"serverCapabilities,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SessionInfo) Reset() {
@@ -1961,6 +1963,13 @@ func (x *SessionInfo) GetObservedPeak() int32 {
 	return 0
 }
 
+func (x *SessionInfo) GetServerCapabilities() []string {
+	if x != nil {
+		return x.ServerCapabilities
+	}
+	return nil
+}
+
 type OpResult struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Session *SessionInfo           `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
@@ -1970,11 +1979,13 @@ type OpResult struct {
 	//	*OpResult_IntValue
 	//	*OpResult_QueryResult
 	//	*OpResult_UuidValue
-	Result        isOpResult_Result `protobuf_oneof:"result"`
-	Uuid          string            `protobuf:"bytes,6,opt,name=uuid,proto3" json:"uuid,omitempty"`
-	Flag          string            `protobuf:"bytes,7,opt,name=flag,proto3" json:"flag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Result isOpResult_Result `protobuf_oneof:"result"`
+	Uuid   string            `protobuf:"bytes,6,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	Flag   string            `protobuf:"bytes,7,opt,name=flag,proto3" json:"flag,omitempty"`
+	// Per-set update counts of a parameter-set execution (java.sql.Statement#executeBatch semantics).
+	BatchUpdateCounts []int32 `protobuf:"varint,8,rep,packed,name=batchUpdateCounts,proto3" json:"batchUpdateCounts,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *OpResult) Reset() {
@@ -2067,6 +2078,13 @@ func (x *OpResult) GetFlag() string {
 		return x.Flag
 	}
 	return ""
+}
+
+func (x *OpResult) GetBatchUpdateCounts() []int32 {
+	if x != nil {
+		return x.BatchUpdateCounts
+	}
+	return nil
 }
 
 type isOpResult_Result interface {
@@ -2168,13 +2186,15 @@ func (x *StatementRequest) GetProperties() []*PropertyEntry {
 }
 
 type SqlErrorResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
-	SqlState      string                 `protobuf:"bytes,2,opt,name=sqlState,proto3" json:"sqlState,omitempty"`
-	VendorCode    int32                  `protobuf:"varint,3,opt,name=vendorCode,proto3" json:"vendorCode,omitempty"`
-	SqlErrorType  SqlErrorType           `protobuf:"varint,4,opt,name=sqlErrorType,proto3,enum=com.openjproxy.grpc.SqlErrorType" json:"sqlErrorType,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Reason       string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	SqlState     string                 `protobuf:"bytes,2,opt,name=sqlState,proto3" json:"sqlState,omitempty"`
+	VendorCode   int32                  `protobuf:"varint,3,opt,name=vendorCode,proto3" json:"vendorCode,omitempty"`
+	SqlErrorType SqlErrorType           `protobuf:"varint,4,opt,name=sqlErrorType,proto3,enum=com.openjproxy.grpc.SqlErrorType" json:"sqlErrorType,omitempty"`
+	// Update counts reported by a java.sql.BatchUpdateException.
+	BatchUpdateCounts []int32 `protobuf:"varint,5,rep,packed,name=batchUpdateCounts,proto3" json:"batchUpdateCounts,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SqlErrorResponse) Reset() {
@@ -2233,6 +2253,13 @@ func (x *SqlErrorResponse) GetSqlErrorType() SqlErrorType {
 		return x.SqlErrorType
 	}
 	return SqlErrorType_SQL_EXCEPTION
+}
+
+func (x *SqlErrorResponse) GetBatchUpdateCounts() []int32 {
+	if x != nil {
+		return x.BatchUpdateCounts
+	}
+	return nil
 }
 
 type LobReference struct {
@@ -3773,7 +3800,7 @@ const file_StatementService_proto_rawDesc = "" +
 	"\x04rows\x18\x03 \x03(\v2\x1e.com.openjproxy.grpc.ResultRowR\x04rows\"\x91\x01\n" +
 	"\x0fTransactionInfo\x12(\n" +
 	"\x0ftransactionUUID\x18\x01 \x01(\tR\x0ftransactionUUID\x12T\n" +
-	"\x11transactionStatus\x18\x02 \x01(\x0e2&.com.openjproxy.grpc.TransactionStatusR\x11transactionStatus\"\xcd\x03\n" +
+	"\x11transactionStatus\x18\x02 \x01(\x0e2&.com.openjproxy.grpc.TransactionStatusR\x11transactionStatus\"\xfd\x03\n" +
 	"\vSessionInfo\x12\x1a\n" +
 	"\bconnHash\x18\x01 \x01(\tR\bconnHash\x12\x1e\n" +
 	"\n" +
@@ -3788,7 +3815,8 @@ const file_StatementService_proto_rawDesc = "" +
 	"\vclientCount\x18\t \x01(\x05R\vclientCount\x12\"\n" +
 	"\fmaxAdmission\x18\n" +
 	" \x01(\x05R\fmaxAdmission\x12\"\n" +
-	"\fobservedPeak\x18\v \x01(\x05R\fobservedPeak\"\xbb\x02\n" +
+	"\fobservedPeak\x18\v \x01(\x05R\fobservedPeak\x12.\n" +
+	"\x12serverCapabilities\x18\f \x03(\tR\x12serverCapabilities\"\xe9\x02\n" +
 	"\bOpResult\x12:\n" +
 	"\asession\x18\x01 \x01(\v2 .com.openjproxy.grpc.SessionInfoR\asession\x123\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x1f.com.openjproxy.grpc.ResultTypeR\x04type\x12\x1d\n" +
@@ -3797,7 +3825,8 @@ const file_StatementService_proto_rawDesc = "" +
 	"\n" +
 	"uuid_value\x18\x05 \x01(\tH\x00R\tuuidValue\x12\x12\n" +
 	"\x04uuid\x18\x06 \x01(\tR\x04uuid\x12\x12\n" +
-	"\x04flag\x18\a \x01(\tR\x04flagB\b\n" +
+	"\x04flag\x18\a \x01(\tR\x04flag\x12,\n" +
+	"\x11batchUpdateCounts\x18\b \x03(\x05R\x11batchUpdateCountsB\b\n" +
 	"\x06result\"\x8f\x02\n" +
 	"\x10StatementRequest\x12:\n" +
 	"\asession\x18\x01 \x01(\v2 .com.openjproxy.grpc.SessionInfoR\asession\x12\x10\n" +
@@ -3808,14 +3837,15 @@ const file_StatementService_proto_rawDesc = "" +
 	"\rstatementUUID\x18\x04 \x01(\tR\rstatementUUID\x12B\n" +
 	"\n" +
 	"properties\x18\x05 \x03(\v2\".com.openjproxy.grpc.PropertyEntryR\n" +
-	"properties\"\xad\x01\n" +
+	"properties\"\xdb\x01\n" +
 	"\x10SqlErrorResponse\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1a\n" +
 	"\bsqlState\x18\x02 \x01(\tR\bsqlState\x12\x1e\n" +
 	"\n" +
 	"vendorCode\x18\x03 \x01(\x05R\n" +
 	"vendorCode\x12E\n" +
-	"\fsqlErrorType\x18\x04 \x01(\x0e2!.com.openjproxy.grpc.SqlErrorTypeR\fsqlErrorType\"\xf8\x01\n" +
+	"\fsqlErrorType\x18\x04 \x01(\x0e2!.com.openjproxy.grpc.SqlErrorTypeR\fsqlErrorType\x12,\n" +
+	"\x11batchUpdateCounts\x18\x05 \x03(\x05R\x11batchUpdateCounts\"\xf8\x01\n" +
 	"\fLobReference\x12:\n" +
 	"\asession\x18\x01 \x01(\v2 .com.openjproxy.grpc.SessionInfoR\asession\x12\x12\n" +
 	"\x04uuid\x18\x02 \x01(\tR\x04uuid\x12\"\n" +

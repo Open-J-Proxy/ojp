@@ -30,6 +30,12 @@ class SqlErrorResponse extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>.com.openjproxy.grpc.SqlErrorType sqlErrorType = 4;</code>
      */
     protected $sqlErrorType = 0;
+    /**
+     * Update counts reported by a java.sql.BatchUpdateException.
+     *
+     * Generated from protobuf field <code>repeated int32 batchUpdateCounts = 5;</code>
+     */
+    private $batchUpdateCounts;
 
     /**
      * Constructor.
@@ -41,6 +47,8 @@ class SqlErrorResponse extends \Google\Protobuf\Internal\Message
      *     @type string $sqlState
      *     @type int $vendorCode
      *     @type int $sqlErrorType
+     *     @type int[] $batchUpdateCounts
+     *           Update counts reported by a java.sql.BatchUpdateException.
      * }
      */
     public function __construct($data = NULL) {
@@ -132,6 +140,32 @@ class SqlErrorResponse extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkEnum($var, \Com\Openjproxy\Grpc\SqlErrorType::class);
         $this->sqlErrorType = $var;
+
+        return $this;
+    }
+
+    /**
+     * Update counts reported by a java.sql.BatchUpdateException.
+     *
+     * Generated from protobuf field <code>repeated int32 batchUpdateCounts = 5;</code>
+     * @return RepeatedField<int>
+     */
+    public function getBatchUpdateCounts()
+    {
+        return $this->batchUpdateCounts;
+    }
+
+    /**
+     * Update counts reported by a java.sql.BatchUpdateException.
+     *
+     * Generated from protobuf field <code>repeated int32 batchUpdateCounts = 5;</code>
+     * @param int[] $var
+     * @return $this
+     */
+    public function setBatchUpdateCounts(array|RepeatedField $var)
+    {
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::INT32);
+        $this->batchUpdateCounts = $arr;
 
         return $this;
     }

@@ -633,6 +633,7 @@ if(BUILD_TESTING)
         OjpOdbcSqlServerL8Integration
         OjpOdbcSqlServerL9Integration
         OjpOdbcSqlServerL10Integration
+        OjpOdbcSqlServerDataTypesIntegration
         PROPERTIES
         SKIP_RETURN_CODE 77
         TIMEOUT 0

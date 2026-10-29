@@ -5,6 +5,7 @@ import io.grpc.health.v1.HealthCheckResponse;
 import io.grpc.netty.NettyServerBuilder;
 import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import org.openjproxy.config.TlsConfigurationException;
+import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.grpc.server.utils.DriverLoader;
 import org.openjproxy.grpc.server.utils.DriverUtils;
 import org.slf4j.Logger;
@@ -41,6 +42,15 @@ public class GrpcServer {
         // Validate IP whitelist for server
         if (!IpWhitelistValidator.validateWhitelistRules(config.getAllowedIps())) {
             logger.error("Invalid IP whitelist configuration for server. Exiting.");
+            System.exit(1);
+        }
+
+        // Fail fast on invalid database budget settings. Without this they would only surface when the first
+        // client connects, and then on every connection attempt.
+        try {
+            DatabaseConnectionBudgetManager.getInstance();
+        } catch (RuntimeException e) {
+            logger.error("Invalid database connection budget configuration: {}. Exiting.", e.getMessage());
             System.exit(1);
         }
 

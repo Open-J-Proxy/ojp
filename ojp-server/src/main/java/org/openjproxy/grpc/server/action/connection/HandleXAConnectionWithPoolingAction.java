@@ -201,6 +201,7 @@ public class HandleXAConnectionWithPoolingAction {
                 return null;
             }
 
+            DatabaseConnectionBudgetManager budgetManager = null;
             DatabaseConnectionBudgetManager.Registration budgetRegistration = null;
             Object pooledXaDataSource = null;
             try {
@@ -241,7 +242,7 @@ public class HandleXAConnectionWithPoolingAction {
                     log.info("XA multinode coordination SKIPPED for {}: serverEndpoints null or empty", connHash);
                 }
 
-                DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+                budgetManager = DatabaseConnectionBudgetManager.getInstance();
                 budgetRegistration = budgetManager.registerPool("xa:" + connHash, parsedUrl,
                         connectionDetails.getUser(), maxPoolSize, minIdle,
                         context.getXaPoolProvider().supportsDynamicResizing(),
@@ -306,7 +307,11 @@ public class HandleXAConnectionWithPoolingAction {
                         pooledXaDataSource.getClass().getSimpleName());
 
             } catch (Exception e) {
-                DatabaseConnectionBudgetManager.getInstance().unregisterPool(budgetRegistration);
+                // Reuse the manager from the try block: calling getInstance() again here would throw a second
+                // time on invalid budget configuration and skip the error response below.
+                if (budgetManager != null) {
+                    budgetManager.unregisterPool(budgetRegistration);
+                }
                 if (pooledXaDataSource instanceof javax.sql.XADataSource) {
                     try {
                         context.getXaPoolProvider().closeXADataSource((javax.sql.XADataSource) pooledXaDataSource);

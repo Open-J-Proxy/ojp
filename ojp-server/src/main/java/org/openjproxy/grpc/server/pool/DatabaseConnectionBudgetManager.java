@@ -10,13 +10,11 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -48,6 +46,13 @@ public final class DatabaseConnectionBudgetManager {
                     Path.of("."), DatabaseConnectionBudgetManager.class.getClassLoader(), System.getProperties()));
         }
         return instance;
+    }
+
+    /**
+     * Replaces the shared instance. Intended for tests; pass {@code null} to restore lazy loading.
+     */
+    public static synchronized void setInstanceForTesting(DatabaseConnectionBudgetManager manager) {
+        instance = manager;
     }
 
     static Properties loadBudgetProperties(Path serverDirectory, ClassLoader classLoader, Properties systemProperties) {
@@ -96,9 +101,8 @@ public final class DatabaseConnectionBudgetManager {
             return registration;
         }
 
-        Pool pool = new Pool(registration, username == null ? "" : username, resizable);
-        int previousHealthyServerCount = budget.healthyServerCount;
-        budget.healthyServerCount = Math.max(1, healthyServerCount);
+        Pool pool = new Pool(registration, username == null ? "" : username, resizable,
+                Math.max(1, healthyServerCount));
         pools.put(poolId, pool);
         try {
             rebalance(budget);
@@ -106,7 +110,6 @@ public final class DatabaseConnectionBudgetManager {
             return registration;
         } catch (RuntimeException e) {
             pools.remove(poolId);
-            budget.healthyServerCount = previousHealthyServerCount;
             try {
                 rebalance(budget);
             } catch (RuntimeException rollbackFailure) {
@@ -116,40 +119,42 @@ public final class DatabaseConnectionBudgetManager {
         }
     }
 
+    /**
+     * Records how many OJP servers the clients of this pool currently see as healthy.
+     *
+     * <p>Each pool keeps its own count, and a budget is divided using the <em>largest</em> count reported by any
+     * of its pools. Assuming more servers than are really up only leaves capacity unused, whereas assuming fewer
+     * lets every server claim a bigger share and can push the database past its limit. A single client with a
+     * narrower view of the cluster therefore cannot enlarge another pool's share.
+     */
     public synchronized void updateHealthyServerCount(String poolId, int healthyServerCount) {
         Pool pool = pools.get(poolId);
         if (pool != null) {
-            updateBudgetHealthyServerCount(pool.registration.budget, healthyServerCount);
+            updatePoolHealthyServerCount(pool, healthyServerCount);
         }
     }
 
     public synchronized void updateHealthyServerCountForPoolPrefix(String poolIdPrefix, int healthyServerCount) {
-        Set<Budget> affectedBudgets = new HashSet<>();
-        pools.values().stream()
+        List<Pool> matching = pools.values().stream()
                 .filter(pool -> pool.registration.poolId.startsWith(poolIdPrefix))
-                .map(pool -> pool.registration.budget)
-                .filter(budget -> budget != null)
-                .forEach(affectedBudgets::add);
-        affectedBudgets.forEach(budget -> updateBudgetHealthyServerCount(budget, healthyServerCount));
+                .collect(Collectors.toList());
+        matching.forEach(pool -> updatePoolHealthyServerCount(pool, healthyServerCount));
     }
 
-    private void updateBudgetHealthyServerCount(Budget budget, int healthyServerCount) {
-        if (budget == null) {
-            return;
-        }
+    private void updatePoolHealthyServerCount(Pool pool, int healthyServerCount) {
         int updatedHealthyServerCount = Math.max(1, healthyServerCount);
-        if (budget.healthyServerCount == updatedHealthyServerCount) {
+        if (pool.healthyServerCount == updatedHealthyServerCount) {
             return;
         }
 
-        int previousHealthyServerCount = budget.healthyServerCount;
-        budget.healthyServerCount = updatedHealthyServerCount;
+        int previousHealthyServerCount = pool.healthyServerCount;
+        pool.healthyServerCount = updatedHealthyServerCount;
         try {
-            rebalance(budget);
+            rebalance(pool.registration.budget);
         } catch (RuntimeException e) {
-            budget.healthyServerCount = previousHealthyServerCount;
+            pool.healthyServerCount = previousHealthyServerCount;
             try {
-                rebalance(budget);
+                rebalance(pool.registration.budget);
             } catch (RuntimeException rollbackFailure) {
                 e.addSuppressed(rollbackFailure);
             }
@@ -241,7 +246,8 @@ public final class DatabaseConnectionBudgetManager {
             return;
         }
 
-        int capacity = (budget.maxConnections - budget.reserveConnections) / budget.healthyServerCount;
+        int healthyServerCount = members.stream().mapToInt(pool -> pool.healthyServerCount).max().orElse(1);
+        int capacity = (budget.maxConnections - budget.reserveConnections) / healthyServerCount;
         validatePoolCapacity(budget, capacity, members.size());
         Map<Pool, Integer> allocations = allocate(members, capacity, budget);
         keepFixedPoolsAtCurrentAllocation(members, allocations);
@@ -253,7 +259,7 @@ public final class DatabaseConnectionBudgetManager {
 
     private void validatePoolCapacity(Budget budget, int capacity, int poolCount) {
         if (capacity < poolCount) {
-            throw new IllegalStateException("Database budget '" + budget.name + "' has " + capacity
+            throw new InfeasibleBudgetException("Database budget '" + budget.name + "' has " + capacity
                     + " usable connections for " + poolCount + " pools; each pool requires at least one");
         }
     }
@@ -287,6 +293,10 @@ public final class DatabaseConnectionBudgetManager {
                     && resizeIncreases == increasing;
             if (needsResize && pool.resizer != null) {
                 resize(pool, target, targetMin);
+                // Record each applied resize immediately. If a later resize fails, the recorded sizes still
+                // describe the real pools, so the rollback rebalance computes the right corrections.
+                pool.allocatedMax = target;
+                pool.allocatedMin = targetMin;
             }
         }
     }
@@ -591,6 +601,18 @@ public final class DatabaseConnectionBudgetManager {
         }
     }
 
+    /**
+     * Thrown when a budget cannot give every pool at least one connection. Retrying cannot help until the
+     * server count, the pools or the configuration change.
+     */
+    public static final class InfeasibleBudgetException extends IllegalStateException {
+        private static final long serialVersionUID = 1L;
+
+        private InfeasibleBudgetException(String message) {
+            super(message);
+        }
+    }
+
     @FunctionalInterface
     public interface PoolResizer {
         void resize(int maximumPoolSize, int minimumIdle) throws SQLException;
@@ -607,7 +629,6 @@ public final class DatabaseConnectionBudgetManager {
         private final int maxConnections;
         private final int reserveConnections;
         private final Map<String, Double> usernameWeights;
-        private int healthyServerCount = 1;
 
         private Budget(String name, Pattern urlPattern, int maxConnections,
                        int reserveConnections, Map<String, Double> usernameWeights) {
@@ -623,14 +644,16 @@ public final class DatabaseConnectionBudgetManager {
         private final Registration registration;
         private final String username;
         private final boolean resizable;
+        private int healthyServerCount;
         private int allocatedMax;
         private int allocatedMin;
         private PoolResizer resizer;
 
-        private Pool(Registration registration, String username, boolean resizable) {
+        private Pool(Registration registration, String username, boolean resizable, int healthyServerCount) {
             this.registration = registration;
             this.username = username;
             this.resizable = resizable;
+            this.healthyServerCount = healthyServerCount;
             this.allocatedMax = registration.requestedMax;
             this.allocatedMin = registration.requestedMin;
         }

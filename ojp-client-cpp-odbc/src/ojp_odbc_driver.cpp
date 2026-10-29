@@ -7959,7 +7959,13 @@ SQLRETURN SQL_API SQLForeignKeysW(
     });
 }
 
+static SQLRETURN get_type_info_unguarded(SQLHSTMT statement, SQLSMALLINT data_type);
+
 SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT statement, SQLSMALLINT data_type) {
+    return get_type_info_unguarded(statement, data_type);
+}
+
+static SQLRETURN get_type_info_unguarded(SQLHSTMT statement, SQLSMALLINT data_type) {
     return guarded(statement, "SQLGetTypeInfo", [&]() -> SQLRETURN {
         if (statement == SQL_NULL_HSTMT ||
             static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
@@ -8008,7 +8014,7 @@ SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT statement, SQLSMALLINT data_type) {
 
 // The Windows Driver Manager maps ANSI calls to the W entry point of a Unicode driver.
 SQLRETURN SQL_API SQLGetTypeInfoW(SQLHSTMT statement, SQLSMALLINT data_type) {
-    return SQLGetTypeInfo(statement, data_type);
+    return get_type_info_unguarded(statement, data_type);
 }
 
 SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statement, SQLUSMALLINT column_number,

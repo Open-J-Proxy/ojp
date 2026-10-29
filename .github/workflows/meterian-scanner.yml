@@ -6,19 +6,37 @@ on:
       - '**meterian-bot/pr**'
   schedule:
     - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
+  branches:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.b.outputs.list }}
+    steps:
+      - id: b
+        run: |
+          lts=$(git ls-remote --heads https://github.com/${{ github.repository }} 'refs/heads/lts/*' | sed 's#.*refs/heads/##' | jq -R . | jq -sc .)
+          echo "list=$(jq -nc --argjson l "$lts" '["main"] + $l')" >> "$GITHUB_OUTPUT"
+
   meterian_scan:
-    name: Meterian client scan
+    needs: branches
+    # on push, scan only the pushed branch; on schedule/manual, scan all
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJson(needs.branches.outputs.list) }}
+    if: github.event_name != 'push' || github.ref_name == matrix.branch
+    name: Meterian scan (${{ matrix.branch }})
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Meterian Scanner
-        uses: MeterianHQ/meterian-github-action@v1.0.17
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.branch }}
+      - uses: MeterianHQ/meterian-github-action@v1.0.17
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:

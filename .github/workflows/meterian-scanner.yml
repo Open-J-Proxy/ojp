@@ -15,28 +15,36 @@ jobs:
       list: ${{ steps.b.outputs.list }}
     steps:
       - id: b
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          lts=$(git ls-remote --heads https://github.com/${{ github.repository }} 'refs/heads/lts/*' | sed 's#.*refs/heads/##' | jq -R . | jq -sc .)
-          echo "list=$(jq -nc --argjson l "$lts" '["main"] + $l')" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = "push" ]; then
+            echo "list=$(jq -nc --arg b "$REF_NAME" '[$b]')" >> "$GITHUB_OUTPUT"
+          else
+            lts=$(git ls-remote --heads "https://github.com/${{ github.repository }}" 'refs/heads/lts/*' | sed 's#.*refs/heads/##' | jq -R . | jq -sc .)
+            echo "list=$(jq -nc --argjson l "$lts" '["main"] + $l')" >> "$GITHUB_OUTPUT"
+          fi
 
   meterian_scan:
     needs: branches
-    # on push, scan only the pushed branch; on schedule/manual, scan all
     strategy:
       fail-fast: false
       matrix:
         branch: ${{ fromJson(needs.branches.outputs.list) }}
-    if: github.event_name != 'push' || github.ref_name == matrix.branch
     name: Meterian scan (${{ matrix.branch }})
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           ref: ${{ matrix.branch }}
-      - uses: MeterianHQ/meterian-github-action@v1.0.17
+
+      - name: Meterian Scanner
+        uses: MeterianHQ/meterian-github-action@v1.0.17
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:

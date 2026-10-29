@@ -4030,7 +4030,9 @@ void load_column_metadata(ConnectionHandle* connection, StatementHandle* stateme
     };
     constexpr std::size_t kAttributeCount = sizeof(kAttributes) / sizeof(kAttributes[0]);
     // Each attribute is a callResource call; they are issued in parallel (async gRPC)
-    // in batches, so the cost does not grow linearly with the number of columns.
+    // in batches, so the cost does not grow linearly with the number of columns. A server that
+    // limits concurrent requests rejects the batch with RESOURCE_EXHAUSTED; the load is then
+    // repeated one call at a time.
     constexpr std::size_t kMaxInFlight = 64;
     struct Pending {
         grpc::ClientContext context;
@@ -4038,78 +4040,91 @@ void load_column_metadata(ConnectionHandle* connection, StatementHandle* stateme
         grpc::Status status;
         std::unique_ptr<grpc::ClientAsyncResponseReader<CallResourceResponse>> reader;
     };
-    std::vector<ColumnMetadata> metadata(statement->columns.size());
-    const std::size_t total = metadata.size() * kAttributeCount;
+    std::vector<ColumnMetadata> metadata;
+    const std::size_t total = statement->columns.size() * kAttributeCount;
     std::string failure;
-    for (std::size_t batch_start = 0; batch_start < total && failure.empty(); batch_start += kMaxInFlight) {
-        const std::size_t batch_end = std::min(total, batch_start + kMaxInFlight);
-        StatementService::Stub* stub = route_session_rpc(connection);
-        grpc::CompletionQueue queue;
-        std::vector<std::unique_ptr<Pending>> pending;
-        pending.reserve(batch_end - batch_start);
-        for (std::size_t call = batch_start; call < batch_end; ++call) {
-            const Attribute& attribute = kAttributes[call % kAttributeCount];
-            CallResourceRequest request;
-            request.mutable_session()->CopyFrom(connection->session);
-            request.set_resourcetype(com::openjproxy::grpc::RES_RESULT_SET);
-            request.set_resourceuuid(result_set_uuid);
-            auto* target = request.mutable_target();
-            target->set_calltype(com::openjproxy::grpc::CALL_GET);
-            target->set_resourcename("MetaData");
-            auto* next = target->mutable_nextcall();
-            next->set_calltype(attribute.call_type);
-            next->set_resourcename(attribute.name);
-            next->add_params()->set_int_value(static_cast<int>(call / kAttributeCount + 1));
-            auto item = std::make_unique<Pending>();
-            item->context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
-            item->reader = stub->AsynccallResource(&item->context, request, &queue);
-            item->reader->Finish(&item->response, &item->status, item.get());
-            pending.push_back(std::move(item));
-        }
-        for (std::size_t received = 0; received < pending.size(); ++received) {
+    bool throttled = false;
+    auto load = [&](std::size_t max_in_flight) {
+        metadata.assign(statement->columns.size(), ColumnMetadata{});
+        failure.clear();
+        throttled = false;
+        for (std::size_t batch_start = 0; batch_start < total && failure.empty(); batch_start += max_in_flight) {
+            const std::size_t batch_end = std::min(total, batch_start + max_in_flight);
+            StatementService::Stub* stub = route_session_rpc(connection);
+            grpc::CompletionQueue queue;
+            std::vector<std::unique_ptr<Pending>> pending;
+            pending.reserve(batch_end - batch_start);
+            for (std::size_t call = batch_start; call < batch_end; ++call) {
+                const Attribute& attribute = kAttributes[call % kAttributeCount];
+                CallResourceRequest request;
+                request.mutable_session()->CopyFrom(connection->session);
+                request.set_resourcetype(com::openjproxy::grpc::RES_RESULT_SET);
+                request.set_resourceuuid(result_set_uuid);
+                auto* target = request.mutable_target();
+                target->set_calltype(com::openjproxy::grpc::CALL_GET);
+                target->set_resourcename("MetaData");
+                auto* next = target->mutable_nextcall();
+                next->set_calltype(attribute.call_type);
+                next->set_resourcename(attribute.name);
+                next->add_params()->set_int_value(static_cast<int>(call / kAttributeCount + 1));
+                auto item = std::make_unique<Pending>();
+                item->context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+                item->reader = stub->AsynccallResource(&item->context, request, &queue);
+                item->reader->Finish(&item->response, &item->status, item.get());
+                pending.push_back(std::move(item));
+            }
+            for (std::size_t received = 0; received < pending.size(); ++received) {
+                void* tag = nullptr;
+                bool ok = false;
+                if (!queue.Next(&tag, &ok)) {
+                    failure = "gRPC completion queue was shut down";
+                    break;
+                }
+                auto* item = static_cast<Pending*>(tag);
+                const std::size_t call = batch_start + static_cast<std::size_t>(
+                    std::find_if(pending.begin(), pending.end(),
+                                 [item](const auto& entry) { return entry.get() == item; }) - pending.begin());
+                const Attribute& attribute = kAttributes[call % kAttributeCount];
+                const std::size_t column = call / kAttributeCount;
+                if (!ok || !item->status.ok()) {
+                    if (ok && item->status.error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED) {
+                        throttled = true;
+                    }
+                    if (failure.empty()) {
+                        failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
+                                  " (" + statement->columns[column] + "): " +
+                                  (ok ? item->status.error_message() : "RPC was not completed");
+                    }
+                    continue;
+                }
+                if (item->response.values_size() == 0) {
+                    if (failure.empty()) {
+                        failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
+                                  " returned no value";
+                    }
+                    continue;
+                }
+                const auto& value = item->response.values(0);
+                if (value.value_case() == ParameterValue::kIntValue) {
+                    metadata[column].*attribute.field = value.int_value();
+                } else if (value.value_case() == ParameterValue::kLongValue) {
+                    metadata[column].*attribute.field = static_cast<int>(std::clamp<std::int64_t>(
+                        value.long_value(), 0, std::numeric_limits<int>::max()));
+                } else if (failure.empty()) {
+                    failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
+                              " returned an unexpected value type " + std::to_string(value.value_case());
+                }
+            }
+            queue.Shutdown();
             void* tag = nullptr;
             bool ok = false;
-            if (!queue.Next(&tag, &ok)) {
-                failure = "gRPC completion queue was shut down";
-                break;
-            }
-            auto* item = static_cast<Pending*>(tag);
-            const std::size_t call = batch_start + static_cast<std::size_t>(
-                std::find_if(pending.begin(), pending.end(),
-                             [item](const auto& entry) { return entry.get() == item; }) - pending.begin());
-            const Attribute& attribute = kAttributes[call % kAttributeCount];
-            const std::size_t column = call / kAttributeCount;
-            if (!ok || !item->status.ok()) {
-                if (failure.empty()) {
-                    failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
-                              " (" + statement->columns[column] + "): " +
-                              (ok ? item->status.error_message() : "RPC was not completed");
-                }
-                continue;
-            }
-            if (item->response.values_size() == 0) {
-                if (failure.empty()) {
-                    failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
-                              " returned no value";
-                }
-                continue;
-            }
-            const auto& value = item->response.values(0);
-            if (value.value_case() == ParameterValue::kIntValue) {
-                metadata[column].*attribute.field = value.int_value();
-            } else if (value.value_case() == ParameterValue::kLongValue) {
-                metadata[column].*attribute.field = static_cast<int>(std::clamp<std::int64_t>(
-                    value.long_value(), 0, std::numeric_limits<int>::max()));
-            } else if (failure.empty()) {
-                failure = std::string(attribute.name) + " of column " + std::to_string(column + 1) +
-                          " returned an unexpected value type " + std::to_string(value.value_case());
+            while (queue.Next(&tag, &ok)) {
             }
         }
-        queue.Shutdown();
-        void* tag = nullptr;
-        bool ok = false;
-        while (queue.Next(&tag, &ok)) {
-        }
+    };
+    load(kMaxInFlight);
+    if (!failure.empty() && throttled) {
+        load(1);
     }
     if (!failure.empty()) {
         log_message(LogLevel::warn, "result-set metadata unavailable (" + failure +

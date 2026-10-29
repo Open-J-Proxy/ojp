@@ -18,7 +18,7 @@ See the [framework chapter](../ebook/part2-chapter7-framework-integration.md#79-
 The [C++ implementation](../../ojp-client-cpp-odbc/src/ojp_odbc_driver.cpp) currently:
 
 - Exports ANSI ODBC entry points only; there are no `SQLDriverConnectW`, `SQLPrepareW`, `SQLExecDirectW`, or other wide-character exports.
-- Has no `SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, or `SQLColumns` exports.
+- Has no `SQLGetStmtAttr`, `SQLColAttribute`, `SQLTables`, or `SQLColumns` exports.
 - Implements only limited `SQLGetInfo` capability discovery and statement attributes. Basic `SQLDescribeCol` metadata is not a complete catalog or framework metadata implementation.
 - Rejects DSN-only `SQLConnect`; use `SQLDriverConnect` with explicit `SERVER` and `DATABASE`.
 
@@ -59,6 +59,12 @@ Use FireDAC's **generic ODBC** driver, not its MSSQL or another database-specifi
 | `ODBCAdvanced` | Full OJP `SERVER`, `DATABASE`, `UID`, and `PWD` fields, built at runtime below |
 | `Pooled` | `False` |
 | `LoginPrompt` | `False` on `TFDConnection` |
+
+FireDAC chooses its SQL dialect from the prefix of `SQL_DRIVER_NAME`. The OJP library name is not recognized, so FireDAC falls back to its generic dialect: it upper-cases object names and does not understand SQL Server procedure names such as `proc;1` or `@param` argument names, which leaves `TFDStoredProc` without parameters. When the backend is SQL Server, add `RDBMS=MSSQL` to the FireDAC connection parameters (not to `ODBCAdvanced`). The setting changes only FireDAC's dialect; the connection still uses the generic ODBC driver and OJP.
+
+Stored procedures with `OUTPUT`, `INPUT_OUTPUT`, and return-value parameters run through the server's JDBC `CallableStatement`. Output parameters cannot be combined with array DML (`SQL_ATTR_PARAMSET_SIZE` > 1), streamed output parameters, or LOB/data-at-execution input values in the same call; those cases return `HYC00`. `SQL_USER_NAME` returns the login name (for example `sa`), not the default schema, so qualify schema-specific metadata requests explicitly. `GetTableNames` with the default `[osMy]` scope can return no tables; use `[osMy, osOther]` to list other schemas.
+
+`NextRecordSet` works for stored-procedure calls (for example `EXEC dbo.MyProc`) and for SQL batches separated by `;` (for example `SELECT 1 AS a; SELECT 2 AS b`): the driver keeps the server-side statement open and `SQLMoreResults` returns each following result set. Other batches without a top-level `;` (such as `IF ... SELECT ... ELSE SELECT ...`), batches with LOB parameters, and stored-procedure calls with output parameters expose only their first result set.
 
 Do not set `DataSource`/`DSN` as a substitute for the explicit OJP fields. `DATABASE` must retain all JDBC options; wrap each ODBC value in braces, including the complete backend URL, and escape an embedded closing brace by doubling it. Do not use FireDAC's SQL Server-specific URL conventions for an OJP connection.
 

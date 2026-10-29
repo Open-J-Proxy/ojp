@@ -7408,8 +7408,8 @@ SQLRETURN SQL_API SQLPutData(SQLHSTMT statement, SQLPOINTER data, SQLLEN length)
     });
 }
 
-SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
-    return guarded(statement, "SQLFetch", [&]() -> SQLRETURN {
+static SQLRETURN fetch_unguarded(SQLHSTMT statement) {
+    {
         if (statement == SQL_NULL_HSTMT ||
             static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
             return SQL_INVALID_HANDLE;
@@ -7457,6 +7457,12 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
             }
         }
         return result;
+    }
+}
+
+SQLRETURN SQL_API SQLFetch(SQLHSTMT statement) {
+    return guarded(statement, "SQLFetch", [&]() -> SQLRETURN {
+        return fetch_unguarded(statement);
     });
 }
 
@@ -8313,35 +8319,41 @@ SQLRETURN SQL_API SQLRowCount(SQLHSTMT statement, SQLLEN* row_count) {
     });
 }
 
+// Internal entry points: calling the exported name would bind to the Driver Manager's symbol
+// of the same name (it is loaded in the process) and fail with SQL_INVALID_HANDLE.
+static SQLRETURN free_statement_unguarded(SQLHSTMT statement, SQLUSMALLINT option) {
+    if (statement == SQL_NULL_HSTMT ||
+        static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
+        return SQL_INVALID_HANDLE;
+    }
+    auto* target = static_cast<StatementHandle*>(statement);
+    std::lock_guard<std::mutex> lock(target->operation_mutex);
+    clear_diagnostics(target);
+    if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS) {
+        if (option == SQL_CLOSE) {
+            reset_data_at_execution(target);
+            close_open_callable_locked(target);
+            target->columns.clear();
+            target->column_meta.clear();
+            target->rows.clear();
+            target->get_data_offsets.clear();
+            target->row_count = -1;
+            target->row_index = 0;
+            target->has_result_set = false;
+        } else if (option == SQL_UNBIND) {
+            target->bound_columns.clear();
+        } else {
+            target->parameters.clear();
+            reset_data_at_execution(target);
+        }
+        return SQL_SUCCESS;
+    }
+    return fail(target, "Invalid SQLFreeStmt option", "HY092");
+}
+
 SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statement, SQLUSMALLINT option) {
     return guarded(statement, "SQLFreeStmt", [&]() -> SQLRETURN {
-        if (statement == SQL_NULL_HSTMT ||
-            static_cast<HandleBase*>(statement)->type != SQL_HANDLE_STMT) {
-            return SQL_INVALID_HANDLE;
-        }
-        auto* target = static_cast<StatementHandle*>(statement);
-        std::lock_guard<std::mutex> lock(target->operation_mutex);
-        clear_diagnostics(target);
-        if (option == SQL_CLOSE || option == SQL_UNBIND || option == SQL_RESET_PARAMS) {
-            if (option == SQL_CLOSE) {
-                reset_data_at_execution(target);
-                close_open_callable_locked(target);
-                target->columns.clear();
-                target->column_meta.clear();
-                target->rows.clear();
-                target->get_data_offsets.clear();
-                target->row_count = -1;
-                target->row_index = 0;
-                target->has_result_set = false;
-            } else if (option == SQL_UNBIND) {
-                target->bound_columns.clear();
-            } else {
-                target->parameters.clear();
-                reset_data_at_execution(target);
-            }
-            return SQL_SUCCESS;
-        }
-        return fail(target, "Invalid SQLFreeStmt option", "HY092");
+        return free_statement_unguarded(statement, option);
     });
 }
 
@@ -8867,7 +8879,7 @@ SQLRETURN SQL_API SQLSetDescFieldW(SQLHDESC descriptor, SQLSMALLINT record_numbe
 
 SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT statement) {
     return guarded(statement, "SQLCloseCursor", [&]() -> SQLRETURN {
-        return SQLFreeStmt(statement, SQL_CLOSE);
+        return free_statement_unguarded(statement, SQL_CLOSE);
     });
 }
 
@@ -8883,7 +8895,7 @@ SQLRETURN SQL_API SQLFetchScroll(SQLHSTMT statement, SQLSMALLINT orientation, SQ
                         " is not supported: OJP cursors are forward-only (use SQL_FETCH_NEXT)",
                         "HYC00");
         }
-        return SQLFetch(statement);
+        return fetch_unguarded(statement);
     });
 }
 

@@ -1,1 +1,0 @@
-org.openjproxy.jdbc.Driver,"jdbc:ojp[localhost:10595,localhost:10596,localhost:10597]_postgresql://localhost:5432/ojp_multinode_budget_test",testuser,testpassword,jdbc:postgresql://localhost:5432/ojp_multinode_budget_test

@@ -3,10 +3,8 @@ package org.openjproxy.grpc.server.readwrite;
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.PropertyEntry;
 import lombok.extern.slf4j.Slf4j;
-import org.openjproxy.datasource.ConnectionPoolProvider;
 import org.openjproxy.datasource.ConnectionPoolProviderRegistry;
 import org.openjproxy.datasource.PoolConfig;
-import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
@@ -59,15 +57,6 @@ public class ReadWriteDataSourceManager {
             String primaryConnHash,
             DataSource primaryDs,
             String datasourceName) {
-        return setupReadWriteSplitting(connectionDetails, primaryConnHash, primaryDs, datasourceName, 1);
-    }
-
-    public ReadWriteConfiguration setupReadWriteSplitting(
-            ConnectionDetails connectionDetails,
-            String primaryConnHash,
-            DataSource primaryDs,
-            String datasourceName,
-            int healthyServerCount) {
 
         // Idempotency: if the primary is already mapped and has replicas registered, nothing to do.
         if (registry.getPrimaryName(primaryConnHash) != null && registry.hasReplicas(datasourceName)) {
@@ -112,8 +101,7 @@ public class ReadWriteDataSourceManager {
         List<String> successfulReplicas = new ArrayList<>();
         for (String replicaName : config.getReplicaNames()) {
             try {
-                DataSource replicaDs = createReplicaDataSource(
-                        replicaName, props, primaryConnHash, healthyServerCount);
+                DataSource replicaDs = createReplicaDataSource(replicaName, props);
                 if (replicaDs != null) {
                     registry.registerReplica(datasourceName, replicaDs);
                     successfulReplicas.add(replicaName);
@@ -144,8 +132,7 @@ public class ReadWriteDataSourceManager {
      * @param props       configuration properties
      * @return DataSource for the replica, or null if configuration is invalid
      */
-    private DataSource createReplicaDataSource(String replicaName, Properties props, String primaryConnHash,
-                                               int healthyServerCount) {
+    private DataSource createReplicaDataSource(String replicaName, Properties props) {
         // Extract replica-specific properties with ojp. prefix
         String replicaPrefix = replicaName + ".ojp.";
 
@@ -168,19 +155,7 @@ public class ReadWriteDataSourceManager {
         long idleTimeout = getLongProperty(props, replicaPrefix + "pool.idleTimeout", 600000);
         long maxLifetime = getLongProperty(props, replicaPrefix + "pool.maxLifetime", 1800000);
 
-        DatabaseConnectionBudgetManager.Registration budgetRegistration = null;
-        ConnectionPoolProvider poolProvider = null;
-        DataSource dataSource = null;
         try {
-            poolProvider = ConnectionPoolProviderRegistry.getDefaultProvider()
-                    .orElseThrow(() -> new IllegalStateException("No connection pool providers available"));
-            DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
-            budgetRegistration = budgetManager.registerPool("replica:" + primaryConnHash + ":" + replicaName,
-                    replicaUrl, replicaUser, maxPoolSize, minIdle, poolProvider.supportsDynamicResizing(),
-                    healthyServerCount);
-            maxPoolSize = budgetRegistration.getMaximumPoolSize();
-            minIdle = budgetRegistration.getMinimumIdle();
-
             PoolConfig poolConfig = PoolConfig.builder()
                     .url(replicaUrl)
                     .username(replicaUser)
@@ -194,25 +169,12 @@ public class ReadWriteDataSourceManager {
                     .metricsPrefix("OJP-Replica-" + replicaName)
                     .build();
 
-            dataSource = poolProvider.createDataSource(poolConfig);
-            DataSource createdDataSource = dataSource;
-            ConnectionPoolProvider selectedPoolProvider = poolProvider;
-            budgetManager.attachPool(budgetRegistration, (newMaximum, newMinimum) ->
-                    selectedPoolProvider.resizeDataSource(createdDataSource, newMaximum, newMinimum),
-                    maxPoolSize, minIdle);
+            DataSource ds = ConnectionPoolProviderRegistry.createDataSource(poolConfig);
             log.info("Created replica datasource '{}' with URL: {}, maxPoolSize: {}, minIdle: {}",
                     replicaName, replicaUrl, maxPoolSize, minIdle);
 
-            return dataSource;
+            return ds;
         } catch (Exception e) {
-            DatabaseConnectionBudgetManager.getInstance().unregisterPool(budgetRegistration);
-            if (dataSource != null && poolProvider != null) {
-                try {
-                    poolProvider.closeDataSource(dataSource);
-                } catch (Exception closeFailure) {
-                    e.addSuppressed(closeFailure);
-                }
-            }
             log.error("Failed to create datasource for replica '{}': {}", replicaName, e.getMessage(), e);
             return null;
         }

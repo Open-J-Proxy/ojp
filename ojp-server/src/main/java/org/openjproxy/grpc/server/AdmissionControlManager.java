@@ -386,12 +386,6 @@ public class AdmissionControlManager {
         return slotManager;
     }
 
-    public void resizeCapacity(int newTotalSlots) {
-        if (slotManager != null) {
-            slotManager.resizeCapacity(newTotalSlots);
-        }
-    }
-
     /**
      * Gets configured fast-slot timeout (for testing/diagnostics).
      */

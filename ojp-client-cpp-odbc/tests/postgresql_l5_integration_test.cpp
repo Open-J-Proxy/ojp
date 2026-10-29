@@ -306,8 +306,11 @@ void verify_small_chunks(SQLHSTMT statement) {
     reset_statement(statement);
     execute_direct(statement, "SELECT CAST('abcdefghij' AS TEXT),"
                               " decode('00010203040506070809', 'hex')");
-    // ODBC 3.x: SQLCancel without a running execution keeps the open cursor.
+#ifdef _WIN32
+    // ODBC 3.x: SQLCancel without a running execution keeps the open cursor. unixODBC's Driver
+    // Manager instead treats it as SQLFreeStmt(SQL_CLOSE), so the check only applies on Windows.
     require_success(SQLCancel(statement), "SQLCancel(open cursor)", SQL_HANDLE_STMT, statement);
+#endif
     require_success(SQLFetch(statement), "SQLFetch(small chunks)", SQL_HANDLE_STMT, statement);
     const std::vector<SQLLEN> expected_lengths = {10, 6, 2};
     char text_buffer[5] = {};

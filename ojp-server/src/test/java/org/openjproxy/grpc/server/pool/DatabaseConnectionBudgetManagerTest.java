@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -93,11 +94,89 @@ class DatabaseConnectionBudgetManagerTest {
 
         manager.updateHealthyServerCount("regular:application", 2);
 
+        // The reporting pool still sees three servers, and the budget is divided by the largest count reported.
+        assertEquals(4, application.getMaximumPoolSize());
+        assertEquals(4, reporting.getMaximumPoolSize());
+
+        manager.updateHealthyServerCount("regular:reporting", 2);
+
         assertEquals(6, application.getMaximumPoolSize());
         assertEquals(6, reporting.getMaximumPoolSize());
         assertEquals(12, application.getMaximumPoolSize() + reporting.getMaximumPoolSize());
         assertEquals(6, applicationResizer.maximumPoolSize);
         assertEquals(6, reportingResizer.maximumPoolSize);
+    }
+
+    @Test
+    void shouldNotLetAPoolWithANarrowerClusterViewEnlargeTheSharedAllocation() {
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(24, 0));
+        DatabaseConnectionBudgetManager.Registration application = manager.registerPool(
+                "regular:application", "jdbc:postgresql://db/orders", "user-a", 24, 0, true, 3);
+        RecordingPoolResizer applicationResizer = new RecordingPoolResizer();
+        manager.attachPool(application, applicationResizer, application.getMaximumPoolSize(),
+                application.getMinimumIdle());
+        assertEquals(8, application.getMaximumPoolSize());
+
+        // A client whose URL lists a single OJP server registers a pool against the same budget.
+        DatabaseConnectionBudgetManager.Registration narrowView = manager.registerPool(
+                "regular:single-endpoint", "jdbc:postgresql://db/orders", "user-b", 24, 0, true, 1);
+
+        // Each server must still stay within a third of the 24 connections.
+        assertEquals(4, application.getMaximumPoolSize());
+        assertEquals(4, narrowView.getMaximumPoolSize());
+        assertEquals(4, applicationResizer.maximumPoolSize);
+    }
+
+    @Test
+    void shouldKeepRecordedSizesInSyncWhenAResizeFails() {
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(12, 0));
+        DatabaseConnectionBudgetManager.Registration first = manager.registerPool(
+                "pool-a", "jdbc:postgresql://db/orders", "user-a", 6, 0, true, 2);
+        ControllableResizer firstResizer = new ControllableResizer(first.getMaximumPoolSize());
+        manager.attachPool(first, firstResizer, first.getMaximumPoolSize(), first.getMinimumIdle());
+        DatabaseConnectionBudgetManager.Registration second = manager.registerPool(
+                "pool-b", "jdbc:postgresql://db/orders", "user-b", 6, 0, true, 2);
+        ControllableResizer secondResizer = new ControllableResizer(second.getMaximumPoolSize());
+        manager.attachPool(second, secondResizer, second.getMaximumPoolSize(), second.getMinimumIdle());
+        assertEquals(3, first.getMaximumPoolSize());
+        assertEquals(3, second.getMaximumPoolSize());
+
+        // Shrinking pool-a succeeds, then growing pool-b fails.
+        secondResizer.failGrowth = true;
+        assertThrows(IllegalStateException.class, () -> manager.updatePoolRequest("pool-a", 2, 0));
+
+        // The rollback must bring the real pools back to what the manager reports.
+        assertEquals(3, first.getMaximumPoolSize());
+        assertEquals(3, second.getMaximumPoolSize());
+        assertEquals(first.getMaximumPoolSize(), firstResizer.maximumPoolSize);
+        assertEquals(second.getMaximumPoolSize(), secondResizer.maximumPoolSize);
+    }
+
+    @Test
+    void shouldKeepLastGoodAllocationWhenServerCountMakesBudgetInfeasible() {
+        DatabaseConnectionBudgetManager manager = new DatabaseConnectionBudgetManager(budgetProperties(4, 0));
+        DatabaseConnectionBudgetManager.Registration first = manager.registerPool(
+                "pool-a", "jdbc:postgresql://db/orders", "user-a", 4, 0, true, 1);
+        DatabaseConnectionBudgetManager.Registration second = manager.registerPool(
+                "pool-b", "jdbc:postgresql://db/orders", "user-b", 4, 0, true, 1);
+        assertEquals(2, first.getMaximumPoolSize());
+        assertEquals(2, second.getMaximumPoolSize());
+
+        // Three servers would leave one connection per server for two pools.
+        assertThrows(DatabaseConnectionBudgetManager.InfeasibleBudgetException.class,
+                () -> manager.updateHealthyServerCount("pool-a", 3));
+
+        assertEquals(2, first.getMaximumPoolSize());
+        assertEquals(2, second.getMaximumPoolSize());
+        assertTrue(manager.updatePoolRequest("pool-a", 4, 0));
+    }
+
+    @Test
+    void shouldRejectBudgetWithoutMaximumConnections() {
+        Properties properties = new Properties();
+        properties.setProperty("ojp.server.databaseBudgets.orders.match.jdbcUrlPattern", "jdbc:postgresql://db/*");
+
+        assertThrows(IllegalArgumentException.class, () -> new DatabaseConnectionBudgetManager(properties));
     }
 
     @Test
@@ -203,6 +282,23 @@ class DatabaseConnectionBudgetManagerTest {
                     String.valueOf(priorities[i + 1]));
         }
         return properties;
+    }
+
+    private static final class ControllableResizer implements DatabaseConnectionBudgetManager.PoolResizer {
+        private int maximumPoolSize;
+        private boolean failGrowth;
+
+        private ControllableResizer(int initialMaximumPoolSize) {
+            this.maximumPoolSize = initialMaximumPoolSize;
+        }
+
+        @Override
+        public void resize(int newMaximumPoolSize, int newMinimumIdle) throws SQLException {
+            if (failGrowth && newMaximumPoolSize > maximumPoolSize) {
+                throw new SQLException("grow failed");
+            }
+            maximumPoolSize = newMaximumPoolSize;
+        }
     }
 
     private static final class RecordingPoolResizer implements DatabaseConnectionBudgetManager.PoolResizer {

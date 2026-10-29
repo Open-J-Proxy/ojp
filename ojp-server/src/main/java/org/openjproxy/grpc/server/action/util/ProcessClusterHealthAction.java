@@ -68,10 +68,22 @@ public class ProcessClusterHealthAction {
         log.info("[XA-REBALANCE] Cluster health changed for {}, healthy servers: {}, triggering pool rebalancing, isXA={}",
                 connHash, healthyServerCount, sessionInfo.getIsXA());
 
+        try {
+            applyHealthChange(context, sessionInfo, connHash, healthyServerCount);
+        } catch (RuntimeException e) {
+            // Resizing pools is a side effect of a health report and must never fail the request that carried it
+            // (this runs ahead of xaPrepare/xaCommit/xaRollback). Forget the stored health so the next request
+            // evaluates the change again instead of treating it as already applied.
+            log.error("[XA-REBALANCE] Failed to apply cluster health change for {}; will retry on the next request",
+                    connHash, e);
+            context.getClusterHealthTracker().removeTracking(connHash);
+        }
+    }
+
+    private void applyHealthChange(ActionContext context, SessionInfo sessionInfo, String connHash,
+                                   int healthyServerCount) {
         DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
-        budgetManager.updateHealthyServerCount("regular:" + connHash, healthyServerCount);
-        budgetManager.updateHealthyServerCount("xa:" + connHash, healthyServerCount);
-        budgetManager.updateHealthyServerCountForPoolPrefix("replica:" + connHash + ":", healthyServerCount);
+        updateBudgetServerCount(budgetManager, connHash, healthyServerCount);
 
         // Update the pool coordinator with new healthy server count.
         // IMPORTANT: Use the returned allocation reference directly (not a second getPoolAllocation() call)
@@ -123,6 +135,27 @@ public class ProcessClusterHealthAction {
         } else if (sessionInfo.getIsXA()) {
             // Only log missing XA registry for actual XA connections
             log.debug("[XA-REBALANCE-DEBUG] No XA registry found for XA connection {}", connHash);
+        }
+    }
+
+    private void updateBudgetServerCount(DatabaseConnectionBudgetManager budgetManager, String connHash,
+                                         int healthyServerCount) {
+        if (healthyServerCount < 1) {
+            // Same rule as ConnectionPoolConfigurer.getHealthyServerCount: a report without a single healthy
+            // server is not a usable cluster size, and treating it as one would hand this server the whole budget.
+            log.warn("[XA-REBALANCE] Cluster health for {} reports no healthy servers; keeping the current "
+                    + "database budget allocation", connHash);
+            return;
+        }
+        try {
+            budgetManager.updateHealthyServerCount("regular:" + connHash, healthyServerCount);
+            budgetManager.updateHealthyServerCount("xa:" + connHash, healthyServerCount);
+            budgetManager.updateHealthyServerCountForPoolPrefix("replica:" + connHash + ":", healthyServerCount);
+        } catch (DatabaseConnectionBudgetManager.InfeasibleBudgetException e) {
+            // Retrying cannot help until the server count, the pools or the budget change, so keep the last
+            // allocation that worked and carry on with the rest of the rebalance.
+            log.error("[XA-REBALANCE] Database budget cannot be divided across {} healthy servers for {}; "
+                    + "keeping the previous allocation: {}", healthyServerCount, connHash, e.getMessage());
         }
     }
 }

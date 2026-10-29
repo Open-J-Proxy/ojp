@@ -5104,8 +5104,8 @@ bool map_jdbc_type(const ColumnMetadata& meta, ColumnDescription* description) {
         case 2009: // SQLXML
             set(SQL_WLONGVARCHAR, "WLONGVARCHAR", precision);
             break;
-        case -2:   // BINARY
-            unbounded ? set(SQL_LONGVARBINARY, "LONGVARBINARY", precision) : set(SQL_BINARY, "BINARY", precision);
+        case -2:   // BINARY (PostgreSQL reports bytea as an unbounded BINARY)
+            unbounded ? set(SQL_VARBINARY, "VARBINARY", precision) : set(SQL_BINARY, "BINARY", precision);
             break;
         case -3:   // VARBINARY
             unbounded ? set(SQL_LONGVARBINARY, "LONGVARBINARY", precision) : set(SQL_VARBINARY, "VARBINARY", precision);

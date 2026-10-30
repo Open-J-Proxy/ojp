@@ -334,10 +334,6 @@ public class CommonsPool2XADataSource implements XADataSource, AutoCloseable {
         return pool.getMaxTotal();
     }
 
-    public int getMaxIdle() {
-        return pool.getMaxIdle();
-    }
-
     /**
      * Sets the maximum number of sessions that can be allocated in the pool.
      * Allows dynamic pool resizing at runtime for cluster rebalancing.

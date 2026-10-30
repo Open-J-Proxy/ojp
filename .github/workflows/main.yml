@@ -273,7 +273,7 @@ jobs:
         run: |
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Dojp.server.databaseBudgets.jdbcTest.match.jdbcUrlPattern=jdbc:h2:mem:ojp_budget_test* -Dojp.server.databaseBudgets.jdbcTest.maxTotalConnections=10 -Dojp.server.databaseBudgets.jdbcTest.priorities.username.sa.weight=1" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start
@@ -607,8 +607,6 @@ jobs:
 
           # Verify setting
           PGPASSWORD=testpassword psql -h 127.0.0.1 -U testuser -d defaultdb -c "SHOW max_prepared_transactions;"
-          docker exec ojp-postgres createdb -U testuser ojp_budget_test
-          docker exec ojp-postgres createdb -U testuser ojp_multinode_budget_test
 
       - name: Set up JDK 25 for build
         uses: actions/setup-java@v5
@@ -645,26 +643,6 @@ jobs:
             -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
             ${{ env.OJP_IMAGE }}
 
-      # Isolate the XA connection budget test from the other PostgreSQL integration tests.
-      - name: Start OJP Server container for XA budget test
-        run: |
-          docker run -d --name ojp-server-xa-budget \
-            --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.port=10594 -Dojp.prometheus.port=9164 -Dojp.server.databaseBudgets.xaTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_budget_test* -Dojp.server.databaseBudgets.xaTest.maxTotalConnections=10 -Dojp.server.databaseBudgets.xaTest.priorities.username.testuser.weight=1" \
-            ${{ env.OJP_IMAGE }}
-
-      - name: Start three OJP servers for multinode budget test
-        if: matrix.java-version == 25
-        run: |
-          for port in 10595 10596 10597; do
-            prometheus_port=$((port - 1430))
-            docker run -d --name "ojp-server-budget-$port" \
-              --network host \
-              -e JAVA_TOOL_OPTIONS="-Dojp.server.port=$port -Dojp.prometheus.port=$prometheus_port -Dojp.server.databaseBudgets.multinodeTest.match.jdbcUrlPattern=jdbc:postgresql://localhost:5432/ojp_multinode_budget_test* -Dojp.server.databaseBudgets.multinodeTest.maxTotalConnections=24 -Dojp.server.databaseBudgets.multinodeTest.priorities.username.testuser.weight=1" \
-              ${{ env.OJP_IMAGE }}
-          done
-          sleep 10
-
       # Start second OJP server WITH SQL enhancer enabled in OPTIMIZE mode
       # Tests will run against this server via postgres_connection.csv (port 10593)
       # OPTIMIZE mode enables conversion and optimization with schema loading support
@@ -694,18 +672,6 @@ jobs:
       - name: Test (ojp-jdbc-driver) with PostgreSQL enabled
         run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenablePostgresTests=true
 
-      - name: Verify multinode budget with three healthy servers
-        if: matrix.java-version == 25
-        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenablePostgresTests=true -DenablePostgresMultinodeBudgetTests=true -Dtest=PostgresMultinodeDatabaseConnectionBudgetIntegrationTest
-
-      - name: Stop one multinode budget server
-        if: matrix.java-version == 25
-        run: docker stop ojp-server-budget-10597
-
-      - name: Verify multinode budget is redistributed after server failure
-        if: matrix.java-version == 25
-        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenablePostgresTests=true -DenablePostgresMultinodeBudgetTests=true -Dtest=PostgresMultinodeDatabaseConnectionBudgetIntegrationTest
-
       # ===================================================================
       # SQL Enhancer Integration Test
       # ===================================================================
@@ -733,9 +699,6 @@ jobs:
         run: |
           echo "=== OJP Server (default) log ==="
           docker logs ojp-server 2>&1 || echo "ojp-server container not found"
-          echo ""
-          echo "=== OJP Server (XA budget test) log ==="
-          docker logs ojp-server-xa-budget 2>&1 || echo "ojp-server-xa-budget container not found"
           echo ""
           echo "=== OJP Server (with SQL enhancer) log ==="
           docker logs ojp-server-enhancer 2>&1 || echo "ojp-server-enhancer container not found"

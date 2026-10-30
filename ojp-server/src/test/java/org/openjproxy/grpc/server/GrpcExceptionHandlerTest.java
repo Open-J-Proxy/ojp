@@ -9,8 +9,11 @@ import io.grpc.protobuf.ProtoUtils;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
 
+import java.sql.BatchUpdateException;
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
+import java.sql.Statement;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -99,6 +102,22 @@ class GrpcExceptionHandlerTest {
                 trailers.get(ProtoUtils.keyForProto(SqlErrorResponse.getDefaultInstance()));
         assertNotNull(errorResponse);
         assertEquals(SqlErrorType.SQL_TRANSIENT_CONNECTION_EXCEPTION, errorResponse.getSqlErrorType());
+    }
+
+    @Test
+    void shouldIncludeUpdateCountsOfBatchUpdateException() {
+        CapturingObserver<Object> observer = new CapturingObserver<>();
+
+        GrpcExceptionHandler.sendSQLExceptionMetadata(
+                new BatchUpdateException("duplicate key", "23505", 0, new int[]{1, Statement.EXECUTE_FAILED, 1}),
+                observer);
+
+        StatusRuntimeException sre = assertInstanceOf(StatusRuntimeException.class, observer.error);
+        SqlErrorResponse errorResponse =
+                sre.getTrailers().get(ProtoUtils.keyForProto(SqlErrorResponse.getDefaultInstance()));
+        assertNotNull(errorResponse);
+        assertEquals("23505", errorResponse.getSqlState());
+        assertEquals(List.of(1, Statement.EXECUTE_FAILED, 1), errorResponse.getBatchUpdateCountsList());
     }
 
     private static class CapturingObserver<T> implements StreamObserver<T> {

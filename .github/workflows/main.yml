@@ -2362,7 +2362,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC H2 L1-L9 tests
+      - name: Run C++ ODBC unit and H2 L1-L9 tests
         env:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: 'localhost:1059'
@@ -2376,7 +2376,7 @@ jobs:
           OJP_TEST_H2_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbc(Parameters|Tls|H2L[1-9]Integration)$' --output-on-failure \
+            -R '^OjpOdbc(Parameters|Tls|Cancel|Batch|ParameterSets|SqlRouting|ProcedureMetadata|TablesMetadata|DriverApi|H2L[1-9]Integration)$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-l9-test.log
 
       - name: Show ojp-server.log
@@ -3020,7 +3020,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC SQL Server L1 through L10 tests
+      - name: Run C++ ODBC SQL Server L1 through L10 and data type tests
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
@@ -3037,7 +3037,7 @@ jobs:
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServerL([1-9]|10)Integration$' --output-on-failure \
+            -R '^OjpOdbcSqlServer(L([1-9]|10)|DataTypes)Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l10-test.log
 
       - name: Show OJP server log

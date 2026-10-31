@@ -1,0 +1,4 @@
+LIBRARY ojp_odbc_setup
+EXPORTS
+    ConfigDSN
+    ConfigDSNW

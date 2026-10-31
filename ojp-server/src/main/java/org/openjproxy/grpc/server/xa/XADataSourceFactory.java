@@ -28,8 +28,12 @@ public class XADataSourceFactory {
         try {
             if (lowerUrl.contains("postgresql")) {
                 return createPostgreSQLXADataSource(url, connectionDetails);
+            } else if (lowerUrl.contains("mariadb")) {
+                return createMariaDBXADataSource(url, connectionDetails);
             } else if (lowerUrl.contains("mysql")) {
                 return createMySQLXADataSource(url, connectionDetails);
+            } else if (lowerUrl.contains("h2:")) {
+                return createH2XADataSource(url, connectionDetails);
             } else if (lowerUrl.contains("oracle")) {
                 return createOracleXADataSource(url, connectionDetails);
             } else if (lowerUrl.contains("sqlserver")) {
@@ -47,6 +51,26 @@ public class XADataSourceFactory {
         } catch (Exception e) {
             log.error("Failed to create XADataSource: {}", e.getMessage(), e);
             throw new SQLException("Failed to create XADataSource: " + e.getMessage(), e);
+        }
+    }
+
+    private static XADataSource createH2XADataSource(String url, ConnectionDetails connectionDetails)
+            throws SQLException {
+        try {
+            Class.forName("org.h2.jdbcx.JdbcDataSource");
+            XADataSource xaDataSource = (XADataSource) Class.forName("org.h2.jdbcx.JdbcDataSource")
+                    .getDeclaredConstructor()
+                    .newInstance();
+            xaDataSource.getClass().getMethod("setURL", String.class).invoke(xaDataSource, url);
+            xaDataSource.getClass().getMethod("setUser", String.class)
+                    .invoke(xaDataSource, connectionDetails.getUser());
+            xaDataSource.getClass().getMethod("setPassword", String.class)
+                    .invoke(xaDataSource, connectionDetails.getPassword());
+            return xaDataSource;
+        } catch (ClassNotFoundException e) {
+            throw new SQLException("H2 JDBC driver not found. Add the H2 JDBC driver to the server classpath.", e);
+        } catch (Exception e) {
+            throw new SQLException("Failed to create H2 XADataSource: " + e.getMessage(), e);
         }
     }
 
@@ -131,6 +155,33 @@ public class XADataSourceFactory {
             throw new SQLException("MySQL JDBC driver not found. Add mysql-connector-j to classpath.", e);
         } catch (Exception e) {
             throw new SQLException("Failed to create MySQL XADataSource: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Creates a MariaDB XADataSource.
+     */
+    private static XADataSource createMariaDBXADataSource(String url, ConnectionDetails connectionDetails)
+            throws SQLException {
+        try {
+            Class.forName("org.mariadb.jdbc.MariaDbDataSource");
+
+            XADataSource xaDataSource = (XADataSource) Class.forName("org.mariadb.jdbc.MariaDbDataSource")
+                    .getDeclaredConstructor()
+                    .newInstance();
+
+            xaDataSource.getClass().getMethod("setUrl", String.class).invoke(xaDataSource, url);
+            xaDataSource.getClass().getMethod("setUser", String.class)
+                    .invoke(xaDataSource, connectionDetails.getUser());
+            xaDataSource.getClass().getMethod("setPassword", String.class)
+                    .invoke(xaDataSource, connectionDetails.getPassword());
+
+            log.info("Created MariaDB XADataSource for URL: {}", url);
+            return xaDataSource;
+        } catch (ClassNotFoundException e) {
+            throw new SQLException("MariaDB JDBC driver not found. Add mariadb-java-client to the server classpath.", e);
+        } catch (Exception e) {
+            throw new SQLException("Failed to create MariaDB XADataSource: " + e.getMessage(), e);
         }
     }
 

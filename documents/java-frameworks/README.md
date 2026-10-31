@@ -1,5 +1,7 @@
 # Introduction
-Each folder under this directory have detailed documentation on how to integrate OJP on different frameworks.
+Each folder under this directory has detailed documentation on how to integrate OJP with different frameworks.
+
+For the runtime picture, follow [Connect](../designs/CONNECT_FLOW.md), then [executeQuery](../designs/EXECUTE_QUERY_FLOW.md). For exact URL and property settings, use the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md). Return to the [documentation hub](../README.md) for other tasks.
 
 - [Spring Boot](spring-boot/README.md)
 - [Quarkus](quarkus/README.md)

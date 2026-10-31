@@ -1,0 +1,3 @@
+jdbc:ojp[localhost:1059]_h2:mem:python_l1_a;DB_CLOSE_DELAY=-1,sa,
+jdbc:ojp[localhost:1059]_h2:mem:python_l1_b;DB_CLOSE_DELAY=-1,sa,
+"jdbc:h2:mem:python_l1_csv,quoted;DB_CLOSE_DELAY=-1",sa,

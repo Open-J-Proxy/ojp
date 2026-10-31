@@ -80,7 +80,7 @@ Each target language has its own standard database-access API. When implementing
 | **PHP** | `PDO` (PHP Data Objects) | A lightweight, consistent interface for accessing various databases in PHP. |
 | **Dart** | `sql_conn` / `drift` | Uses specific community packages or the Drift library for structured data access. |
 
-> **Important operational rule:** Application-side connection pools **must be disabled** when using OJP. Double-pooling causes incorrect behavior and resource waste. This is the single most common misconfiguration.
+> **Important operational rule:** Neither an OJP client nor the application/framework integrating it may implement or enable a client-side connection pool. OJP's pool belongs on the server. Close each virtual connection promptly when its unit of work is complete; `close()` sends `terminateSession` so the server can release session resources and return any checked-out database connection to its pool for reuse. Do not keep a virtual connection open just to reuse it later.
 
 ---
 
@@ -93,6 +93,8 @@ Before diving into implementation details, understand these four foundational id
 An OJP "connection" is not a real database connection. The real JDBC connections are held exclusively in the server's connection pool. What the client holds is a `SessionInfo` — a lightweight proto message containing a `connHash` (a pool identifier), the `clientUUID`, and (once assigned) a `sessionUUID`.
 
 Opening a connection is cheap. For non-XA connections after the first one, the client can satisfy the `connect()` call entirely from a local cache: it looks up the `connHash` for the given database credentials and builds the `SessionInfo` locally without making any gRPC call. This means connection acquisition for cached credentials costs only a hash-map lookup.
+
+The `connHash` cache is metadata, not a connection pool: it MUST NOT retain or reuse virtual connections. When the application finishes a unit of work, it must close the virtual connection; the client calls `terminateSession` to notify the server to clean up session state and make server-side resources available again. Complete or roll back active transactions before closing.
 
 Multiple client connections sharing the same database credentials share the same server-side pool through the same `connHash`. The server distributes real JDBC connections across all these logical client connections.
 
@@ -131,7 +133,7 @@ The client must implement stubs for every RPC in `StatementService` and `EchoSer
 | RPC | Type | Purpose |
 |---|---|---|
 | `connect` | unary | Open a logical connection and receive `SessionInfo` |
-| `executeUpdate` | unary | DML (INSERT / UPDATE / DELETE / DDL) |
+| `executeUpdate` | unary | DML (INSERT / UPDATE / DELETE / DDL); opt-in result-producing DML returns a result-set UUID |
 | `executeQuery` | server-streaming | SELECT — returns a stream of `OpResult` blocks |
 | `fetchNextRows` | unary | Pull the next page of rows for an open result set |
 | `createLob` | client-streaming | Upload LOB data to the server in chunks |
@@ -598,8 +600,7 @@ for op_result in stub.executeQuery(StatementRequest(
         session       = session,
         sql           = "SELECT id, name FROM orders WHERE customer = ?",
         parameters    = [ParameterProto(index=1, type=PT_STRING,
-                                        values=[ParameterValue(string_value="alice")])],
-        statementUUID = str(uuid.uuid4()))):
+                                        values=[ParameterValue(string_value="alice")])])):
     qr = op_result.query_result
     if result_set_uuid is None:
         result_set_uuid = qr.resultSetUUID
@@ -624,8 +625,7 @@ resp = stub.executeUpdate(StatementRequest(
     parameters    = [
         ParameterProto(index=1, type=PT_STRING, values=[ParameterValue(string_value="alice")]),
         ParameterProto(index=2, type=PT_INT,    values=[ParameterValue(int_value=99)])
-    ],
-    statementUUID = str(uuid.uuid4())
+    ]
 ))
 session       = resp.session
 rows_affected = resp.value.int_value   # e.g., 1
@@ -687,7 +687,9 @@ All SQL is executed by populating a `StatementRequest` and calling either `execu
 
 **Parameterless SQL:** Set `sql` to the full query string and leave `parameters` empty.
 
-**Parameterized SQL:** Set `sql` with `?` positional placeholders and populate the `parameters` list with one `ParameterProto` per `?`. Assign a `statementUUID` (a random UUID per logical prepared-statement instance).
+**Parameterized SQL:** Set `sql` with `?` positional placeholders and populate the `parameters` list with one `ParameterProto` per `?`.
+
+**`statementUUID`:** Leave it empty for a new statement. The server treats a non-empty `statementUUID` as the ID of a statement it already holds in the session and looks it up, so a client-generated random UUID fails. When the server assigns a UUID to a prepared statement (`OpResult.uuid`, or `uuid_value` for add-batch results), the client may send it back to reuse that statement in the same session.
 
 **Stored-procedure calls:** First call `callResource` with `CallType.CALL_PREPARE` to register the procedure on the server and receive a `resourceUUID`. Then call `callResource` with `CallType.CALL_EXECUTE` to run it, passing IN parameters and retrieving OUT/INOUT values from `CallResourceResponse.values`.
 
@@ -703,7 +705,7 @@ StatementRequest {
 }
 ```
 
-**Execution routing:** Use `executeUpdate` for INSERT / UPDATE / DELETE / DDL (returns affected row count in `value.int_value`). Use `executeQuery` for SELECT. Always update the local `SessionInfo` from `OpResult.session`.
+**Execution routing:** Use `executeUpdate` for INSERT / UPDATE / DELETE / DDL (returns affected row count in `value.int_value`). For database-supported DML that returns rows (`RETURNING`, `OUTPUT`, or `SELECT ... FROM FINAL TABLE (...)`), send `STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY=true` with `executeUpdate`; the response carries the result-set UUID in `OpResult.uuid` and `UPDATE_RESULT_SET` in `OpResult.flag`. Fetch rows with `fetchNextRows` and close the result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`. Do not route data-changing `SELECT ... FINAL TABLE` wrappers through `executeQuery`, so writes retain primary/write-side routing. Use `executeQuery` for ordinary SELECT statements. Always update the local `SessionInfo` from every response.
 
 ### Pseudo-code
 
@@ -715,16 +717,14 @@ resp = stub.executeUpdate(StatementRequest(
     parameters    = [
         ParameterProto(index=1, type=PT_STRING, values=[ParameterValue(string_value="Alice")]),
         ParameterProto(index=2, type=PT_INT,    values=[ParameterValue(int_value=42)])
-    ],
-    statementUUID = new_uuid()
+    ]
 ))
 session       = resp.session
 rows_affected = resp.value.int_value
 
 # Query
 for op_result in stub.executeQuery(StatementRequest(
-        session=session, sql="SELECT id, name FROM orders",
-        statementUUID=new_uuid())):
+        session=session, sql="SELECT id, name FROM orders")):
     for row in op_result.query_result.rows:
         id_val   = row.values[0].int_value
         name_val = row.values[1].string_value
@@ -746,7 +746,8 @@ session   = exec_resp.session
 ```
 
 > **Reference implementation:**
-> - `ojp-jdbc-driver` — [`Statement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java): `executeQuery(sql)` and `executeUpdate(sql)` delegate to `statementService`; holds `statementUUID` assigned lazily.
+> - `ojp-jdbc-driver` — [`Statement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java): `executeQuery(sql)` and `executeUpdate(sql)` delegate to `statementService`; sends an empty `statementUUID`.
+> - `ojp-server` — [`StatementFactory`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/statement/StatementFactory.java): a non-empty `statementUUID` is looked up as an existing session statement.
 > - `ojp-jdbc-driver` — [`PreparedStatement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/PreparedStatement.java): accumulates parameters in a `SortedMap<Integer, Parameter>`; all 28 `setXxx(index, value)` methods map to the corresponding `ParameterType` (see §7.2).
 > - `ojp-jdbc-driver` — [`CallableStatement`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/CallableStatement.java): issues `callResource(CALL_PREPARE)` on construction; retrieves OUT/INOUT values via `callResource(CALL_EXECUTE)` after execution.
 
@@ -768,7 +769,7 @@ ParameterProto {
 
 | Proto enum value | Wire field in `ParameterValue` | Notes |
 |---|---|---|
-| `PT_NULL` | `is_null = true` | Explicit null |
+| `PT_NULL` | `int_value` | `java.sql.Types` code of the target column (for example `4` for `INTEGER`, `12` for `VARCHAR`, `0` when unknown); the server calls `setNull(index, code)`. `is_null` is not accepted for `PT_NULL`. |
 | `PT_BOOLEAN` | `bool_value` | |
 | `PT_BYTE` | `int_value` | Clamp to byte range |
 | `PT_SHORT` | `int_value` | Clamp to short range |
@@ -776,7 +777,7 @@ ParameterProto {
 | `PT_LONG` | `long_value` | |
 | `PT_FLOAT` | `float_value` | |
 | `PT_DOUBLE` | `double_value` | |
-| `PT_BIG_DECIMAL` | `string_value` | Encode as `"<unscaledInteger> <scale>"` — see §7.2.1 |
+| `PT_BIG_DECIMAL` | `bytes_value` | BigDecimalWire format — see §7.2.1 |
 | `PT_STRING` | `string_value` | |
 | `PT_BYTES` | `bytes_value` | Raw bytes |
 | `PT_DATE` | `date_value` | `google.type.Date` (year/month/day, no timezone) |
@@ -800,9 +801,7 @@ ParameterProto {
 
 #### 7.2.1 BigDecimal encoding
 
-BigDecimal is serialised as a space-separated string: `"<unscaledInteger> <scale>"`. Example: `BigDecimal("123.45")` yields `"12345 2"`.
-
-> **Note:** A separate binary wire format is documented in `documents/protocol/BIGDECIMAL_WIRE_FORMAT.md` for contexts where binary efficiency is needed.
+BigDecimal is sent in `bytes_value` using the BigDecimalWire format documented in [`BIGDECIMAL_WIRE_FORMAT.md`](../protocol/BIGDECIMAL_WIRE_FORMAT.md): byte `0x01`, big-endian int32 length, the unscaled integer as UTF-8 decimal digits (with a leading `-` if negative), then big-endian int32 scale. Example: `BigDecimal("123.45")` yields `01 00000005 "12345" 00000002`. The server decodes `PT_BIG_DECIMAL` only from this format, and decimal result values are returned in the same format.
 
 #### 7.2.2 Presence-aware fields
 
@@ -858,11 +857,11 @@ The OJP server must always run with `user.timezone=UTC`. Client libraries should
 
 `executeQuery` is a server-streaming RPC. The response stream contains one or more `OpResult` messages:
 
-1. **First `OpResult`**: contains the initial data batch in `query_result`: `resultSetUUID`, `labels` (ordered column names), `rows` (first batch of `ResultRow` objects), and `flag` (`"ROW_BY_ROW"` for one-row-per-message mode).
+1. **First `OpResult`**: contains the initial data batch in `query_result`: `resultSetUUID`, `labels` (ordered column names), `rows` (first batch of `ResultRow` objects), and `flag` (`"RESULT_SET_ROW_BY_ROW_MODE"` for one-row-per-message mode, used by SQL Server and DB2 when the result has binary or LOB columns).
 2. **Subsequent `OpResult` messages** (only in non-row-by-row streaming mode): additional batches until the stream closes.
 3. **`fetchNextRows`**: After the initial stream closes, call `fetchNextRows(ResultSetFetchRequest)` with `resultSetUUID` and a page size. Repeat until the response contains an empty `rows` list.
 
-Map each `ParameterValue` oneof to the host language's equivalent type following the inverse of the encoding table in §7.2. Pay attention to `is_null = true` for SQL NULL values.
+Map each `ParameterValue` oneof to the host language's equivalent type following the inverse of the encoding table in §7.2. Pay attention to `is_null = true` for SQL NULL values, and decode `bytes_value` that matches the BigDecimalWire layout as a decimal.
 
 **Cursor navigation** (scrollable result sets) — through `callResource` with `ResourceType.RES_RESULT_SET`:
 
@@ -1233,8 +1232,13 @@ analytics.ojp.health.check.interval=10000
 | `ojp.multinode.retry.attempts` | `3` | Max failover retry attempts |
 | `ojp.multinode.retry.delay` | `100` (ms) | Delay between retry attempts |
 | `ojp.datasource.name` | `"default"` | Active datasource name (sent to the server) |
-| `ojp.grpc.tls.enabled` | `false` | Enable TLS on gRPC channels |
-| `ojp.grpc.tls.cert.path` | — | Path to client certificate for mTLS |
+| `ojp.client.tls.enabled` | `false` | Enable TLS on gRPC channels in the Java reference client |
+| `ojp.client.tls.keystore.path` | — | Client certificate and private-key keystore; enables mTLS when TLS is enabled |
+| `ojp.client.tls.keystore.password` | — | Client keystore password |
+| `ojp.client.tls.keystore.type` | `JKS` | Client keystore type |
+| `ojp.client.tls.truststore.path` | JVM default | Truststore used to verify the server certificate |
+| `ojp.client.tls.truststore.password` | — | Truststore password |
+| `ojp.client.tls.truststore.type` | `JKS` | Truststore type |
 | `ojp.jdbc.clientThrottle.mode` | `reactive` | Client throttle mode: `off`, `proactive`, `reactive`, or `combined` (see §7.14) |
 
 **Duration format** — values support: no suffix = milliseconds; `ms` = milliseconds; `s` = seconds; `m` = minutes.
@@ -1283,14 +1287,14 @@ ojp.cache.queries.2.invalidateOn=users
 
 **Plaintext (default):** Create a plaintext gRPC channel targeting `dns:///host:port`. Suitable for internal networks or local development.
 
-**TLS:** When `ojp.grpc.tls.enabled = true`, create a TLS-secured channel. Use the platform's default trust store or a custom CA certificate. Support mutual TLS (mTLS) when `ojp.grpc.tls.cert.path` is set. Certificate paths and key material must be loaded from configurable filesystem paths; do not hard-code them.
+**TLS:** The Java reference client enables TLS with `ojp.client.tls.enabled=true`. It verifies the server using the JVM default truststore or the configured `ojp.client.tls.truststore.*` properties. For mTLS, also configure `ojp.client.tls.keystore.path` and its password/type with a keystore containing the client certificate and private key. The server must enable TLS and require trusted client certificates. Other clients may expose equivalent settings through their idiomatic configuration API.
 
 **Credential handling:** Passwords must never be logged or included in exception messages. Connection keys used for cache lookups (§4.1) may include the password as a cache key only — they must not be serialised or persisted.
 
 > **Reference implementation:**
 > - `ojp-grpc-commons` — [`GrpcChannelFactory.createChannel(host, port)`](../../ojp-grpc-commons/src/main/java/org/openjproxy/grpc/GrpcChannelFactory.java): creates a plaintext `ManagedChannel`; `createSecureChannel(host, port, size, tlsConfig)` builds the TLS-secured variant.
 > - `ojp-grpc-commons` — [`GrpcClientConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/GrpcClientConfig.java): loaded from `ojp.properties`; exposes `getTlsConfig()` and `getMaxInboundMessageSize()`.
-> - `ojp-grpc-commons` — [`TlsConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/TlsConfig.java): holds `enabled`, `certPath`, `keyPath`, `caPath`, and `clientAuth` flags.
+> - `ojp-grpc-commons` — [`TlsConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/TlsConfig.java): holds the TLS enabled flag and client keystore/truststore paths, passwords, and types.
 
 ---
 
@@ -1298,7 +1302,7 @@ ojp.cache.queries.2.invalidateOn=users
 
 Provide a higher-level `DataSource` (or equivalent) object that holds connection configuration and exposes a `getConnection()` method. Integrate cleanly with the host language's database access conventions (e.g., Python's DB-API 2.0, Go's `database/sql`, Node.js connection objects).
 
-**Disable** the framework's own built-in connection pool when OJP is in use. For Spring Boot (Java), provide a `spring-boot-starter-ojp` auto-configuration module that excludes `DataSourceAutoConfiguration`. For other languages, document this clearly in the library README.
+The DataSource (or equivalent) is a connection factory, **not a pool**. The client and host framework MUST NOT pool virtual connections; disable any framework-provided application-side connection pool when OJP is in use. Applications MUST close each connection promptly after its unit of work (after committing or rolling back any transaction), which calls `terminateSession` and releases server-side session resources for reuse. For Spring Boot (Java), provide a `spring-boot-starter-ojp` auto-configuration module that excludes `DataSourceAutoConfiguration`. For other languages, document this clearly in the library README.
 
 > **Reference implementation:**
 > - `ojp-jdbc-driver` — [`OjpDataSource`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/OjpDataSource.java): implements `javax.sql.DataSource`; `getConnection()` delegates to `DriverManager.getConnection(url, info)`.
@@ -1439,8 +1443,7 @@ def execute_update(sql, params):
                         "to avoid overloading the database")
     try:
         resp = stub.executeUpdate(StatementRequest(session=session, sql=sql,
-                                                   parameters=params,
-                                                   statementUUID=new_uuid()))
+                                                   parameters=params))
         session = resp.session
         throttle.update_from_session_info(session)
         return resp.value.int_value  # affected row count
@@ -1461,6 +1464,10 @@ def execute_update(sql, params):
 A conformant client implementation must ship a test suite that exercises all the aspects above. Tests that require a live OJP server (and optionally a real database) should be **gated behind feature flags** so the suite can run incrementally in CI.
 
 **Test infrastructure requirements:** A running OJP server (see `ojp-server` module and `download-drivers.sh`). At minimum, an embedded/in-process database (e.g., H2) for fast baseline tests. Optional: containerised databases gated by per-database flags.
+
+### Certification by implementation level
+
+The scenarios above are a general test inventory. To claim an achieved level, a client must pass the cumulative per-level checklist in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level) for each database reported at that level. A disabled, skipped, or unit-only test does not establish achieved coverage. L7 and above additionally require integration coverage with at least two OJP servers; L10 requires a combined multinode run with mTLS.
 
 ### Required Test Scenarios
 
@@ -1634,7 +1641,7 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | Level | Focus |
 |---|---|
 | L1 | Basic connectivity + CRUD |
-| L2 | Typed parameters + statement variants |
+| L2 | Typed parameters + statement variants, including result-producing DML where supported |
 | L3 | Result-set streaming/pagination protocol |
 | L4 | Non-XA transaction semantics + savepoints |
 | L5 | LOB/stream handling |
@@ -1642,7 +1649,7 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | L7 | Multinode load balancing + health + cluster sync |
 | L8 | Failover/recovery/redistribution operational resilience |
 | L9 | XA transaction support |
-| L10 | Full operational conformance in multinode scenarios |
+| L10 | Full operational and mTLS conformance, including multinode scenarios |
 
 ### Current reference-client status
 

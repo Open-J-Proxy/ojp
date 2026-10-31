@@ -2,7 +2,7 @@
 
 Modern Java applications rarely use raw JDBC. Instead, they leverage frameworks like Spring Boot, Quarkus, Micronaut, and Jakarta EE that provide database integration, dependency injection, and transaction management. Integrating OJP with these frameworks is straightforward, but it requires understanding how each framework handles connection pooling and datasource configuration. The key insight is simple: OJP replaces your application's connection pool, so you must disable the framework's built-in pooling to avoid double-pooling anti-patterns.
 
-In this chapter, we'll explore how to integrate OJP with four major Java application frameworks. While the specific mechanics differ, the underlying principle remains consistent: modify your connection URL, remove local pooling, and add the OJP JDBC driver dependency. Once configured, your framework's database features work exactly as before—queries, transactions, and ORM integration all function normally. The difference happens behind the scenes, where OJP manages connections centrally instead of creating isolated pools in each application instance.
+In this chapter, we'll explore how to integrate OJP with four major Java application frameworks, then distinguish the early native language APIs from possible ODBC bridges. For the Java integrations, the underlying principle remains consistent: modify your connection URL, remove local pooling, and add the OJP JDBC driver dependency. OJP manages connections centrally instead of creating isolated pools in each application instance. Do not extend the Java framework compatibility expectations to the newer clients or to unvalidated ODBC wrappers.
 
 ## 7.1 Understanding Framework Integration Patterns
 
@@ -756,6 +756,133 @@ graph TD
     M -->|Yes| O[Migration Complete]
 ```
 
+## 7.9 Non-Java APIs and ODBC Bridges
+
+For basic native examples and individual maturity assessments, start with [Chapter 3](part1-chapter3-quickstart.md#331-basic-non-java-clients). Native .NET ADO.NET, Python DB-API, Go `database/sql`, PHP's userland PDO-compatible API, Ruby DBI, and Dart Drift implementations send gRPC directly. They currently target H2 L1 and are not general ORM/framework replacements; only Python and Go additionally implement basic local transactions. Do not assume EF Core, SQLAlchemy, Active Record, or Drift migrations/transactions work just because the underlying API is familiar.
+
+An ODBC bridge is a **different route**: an existing language wrapper loads the C++ OJP driver through the platform's ODBC Driver Manager. It can potentially expose more of the C++ driver's implemented capabilities, but must first be compatible with the driver's actual API surface.
+
+> **All ODBC bridge examples in this section are experimental and not verified with OJP.** They are compatibility probes, not drop-in integrations or production-ready configurations. A successful Linux Release build/install does not validate any language wrapper; Windows and macOS builds and runtime integrations remain untested.
+
+### Compatibility gate: investigate before adopting
+
+The driver currently exports ANSI functions only, not `SQLDriverConnectW`, `SQLPrepareW`, or other `W` entry points. It lacks `SQLGetStmtAttr`, `SQLMoreResults`, `SQLColAttribute`, `SQLTables`, and `SQLColumns`; `SQLGetInfo` supports only a subset of capability requests. Even `SQLSetStmtAttr` accepts only a single-row fetch array, not general statement options. Many wrappers call these functions during connection initialization or fetch setup, so **successful C++ tests do not guarantee any wrapper below works**.
+
+Use the [C++ build requirements](../../ojp-client-cpp-odbc/README.md#build-requirements), register `OJP`, and match application/driver/Driver Manager bitness. No prebuilt OJP ODBC binaries are currently published. Prefer DSN-less `SQLDriverConnect`; the driver's `SQLConnect` implementation rejects DSN-only use.
+
+The C++ README documents the portable CMake/Ninja `release` preset, optional installation to a user-chosen prefix, per-OS registration, and the [ODBC compatibility table](../../ojp-client-cpp-odbc/README.md#using-other-languages-through-odbc). The preset disables integration tests; building the shared library is not an integration-test result.
+
+The connection fields must be:
+
+```text
+DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:ebook;DB_CLOSE_DELAY=-1};
+```
+
+Build this string at runtime and append the `UID` and `PWD` attributes from environment credentials. Brace every value and escape a literal `}` as `}}`. `SERVER` identifies OJP; `DATABASE` contains the complete backend JDBC URL. Never log a credential-bearing string. Disable application/framework pooling and Driver Manager pooling separately; a wrapper option alone may not disable the manager's process-level pool.
+
+### Candidate bridges by ecosystem
+
+| Ecosystem | Existing ODBC route | Assessment |
+|---|---|---|
+| .NET | `System.Data.Odbc.OdbcConnection` / commands / readers | Standard ADO.NET ODBC API, distinct from `Ojp.Client`. Unicode and capability/statement calls may fail; no validated EF Core integration is provided. |
+| Python | `pyodbc` | Can request ANSI connection and UTF-8 narrow-character binding; this does not fill missing metadata/statement APIs. Disable `pyodbc.pooling` before the first connection. |
+| PHP | `PDO_ODBC`, using `new PDO('odbc:' . connectionString)` | Distinct from native `OjpPDO`. Extension build, platform, ANSI/Unicode behavior, statement attributes, and metadata calls require validation. Disable persistent connections. |
+| Ruby | Ruby ODBC binding such as `ruby-odbc`, via driver connection (`drvconnect`) | Not the native OJP DBI implementation or an Active Record adapter. Binding version, platform, encoding, and extra ODBC calls need validation. |
+| Go | An external platform-dependent ODBC `database/sql` adapter | The standard library includes no ODBC driver. Select and audit an adapter with appropriate OS/Driver Manager/cgo support; its registered driver name and DSN format are adapter-specific. This is not the native registered `ojp` driver. |
+| Dart | A custom FFI ODBC layer, possibly with a custom Drift `QueryExecutor` | No drop-in Drift ODBC adapter is provided here. An FFI wrapper alone does not implement Drift lifecycle, SQL dialect, parameter/row mapping, or transactions. Prefer the native L1 executor for the documented basic path. |
+| Delphi / C++Builder | FireDAC's generic `DriverID=ODBC` bridge | **Experimental and not validated**. Unicode and metadata calls may prevent opening; see the [dedicated guide](../guides/DELPHI_FIREDAC_ODBC.md). |
+
+### Minimal .NET ODBC investigation
+
+If `System.Data.Odbc` is already available in your project, construct a DSN-less connection using its builder. This is a compatibility probe, not a known-working replacement for the native provider:
+
+```csharp
+using System;
+using System.Data.Odbc;
+
+var builder = new OdbcConnectionStringBuilder {
+    Driver = "OJP"
+};
+builder["SERVER"] = Environment.GetEnvironmentVariable("OJP_SERVER");
+builder["DATABASE"] = Environment.GetEnvironmentVariable("OJP_JDBC_URL");
+builder["UID"] = Environment.GetEnvironmentVariable("DB_USER");
+builder["PWD"] = Environment.GetEnvironmentVariable("DB_PASSWORD") ?? "";
+using var connection = new OdbcConnection(builder.ConnectionString);
+connection.Open(); // May fail on unsupported Unicode/capability calls.
+using var command = connection.CreateCommand();
+command.CommandText = "SELECT 1 AS id";
+using var reader = command.ExecuteReader();
+while (reader.Read()) {
+    Console.WriteLine(reader.GetValue(0));
+}
+```
+
+Inspect `OdbcException.Errors` for SQLSTATE, native code, and message. Disable Driver Manager pooling before using this path; do not add a framework pool. There is no documented OJP compatibility switch that makes this wrapper ANSI-only.
+
+### Python ODBC: ANSI connection and UTF-8 binding
+
+Set `OJP_ODBC_CONNECTION_STRING` to the complete DSN-less string constructed safely from environment credentials. When pyodbc is already installed:
+
+```python
+import os
+import pyodbc
+
+pyodbc.pooling = False  # Must precede the first connection in this process.
+connection = pyodbc.connect(
+    os.environ["OJP_ODBC_CONNECTION_STRING"],
+    ansi=True,
+    autocommit=True,
+)
+try:
+    connection.setencoding(encoding="utf-8", ctype=pyodbc.SQL_CHAR)
+    connection.setdecoding(pyodbc.SQL_CHAR, encoding="utf-8")
+    cursor = connection.cursor()
+    try:
+        cursor.execute("SELECT 1 AS id")
+        print(cursor.fetchall())
+    finally:
+        cursor.close()
+finally:
+    connection.close()
+```
+
+`ansi=True` requests narrow-character connection calls; `setencoding` requests narrow UTF-8 SQL/parameter binding. Neither implements missing `W` exports nor guarantees that the Driver Manager, metadata decoding, statement setup, or every pyodbc release is compatible. Validate non-ASCII values end-to-end; do not claim Unicode support from an ASCII `SELECT 1`. Catch `pyodbc.Error` and preserve diagnostics without logging secrets.
+
+### PHP ODBC: a separate PDO extension path
+
+With `PDO_ODBC` already enabled, this is an exploratory DSN-less probe:
+
+```php
+<?php
+$connection = new PDO(
+    'odbc:' . getenv('OJP_ODBC_CONNECTION_STRING'),
+    null,
+    null,
+    [PDO::ATTR_PERSISTENT => false, PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+);
+try {
+    $query = $connection->query('SELECT 1 AS id');
+    try {
+        print_r($query->fetch(PDO::FETCH_ASSOC));
+    } finally {
+        $query->closeCursor();
+        $query = null;
+    }
+} finally {
+    $connection = null;
+}
+```
+
+Supply `UID`/`PWD` inside the runtime string; no DSN registry entry is required. Capture `PDOException::errorInfo`. `closeCursor` and initialization may themselves invoke missing ODBC APIs; failures are compatibility evidence, not a reason to retry SQL automatically.
+
+For Ruby, use the binding's driver-connect operation with the same `Driver`, `SERVER`, `DATABASE`, `UID`, and `PWD` fields, not DSN-only `connect`. Close statement objects and disconnect in `ensure`; capture the binding's ODBC diagnostic records. For Go, follow the selected external adapter's documentation for DSN-less connection, diagnostics, and connection closure; configure `SetMaxIdleConns(0)` before issuing work and close rows and dedicated `sql.Conn` objects promptly. These integrations have no wrapper-specific tests in this repository.
+
+### Validation and transaction boundaries
+
+On a disposable setup, first record the exact OS, wrapper version, Driver Manager, architecture, driver build, and backend. Trace initialization to distinguish missing ODBC APIs from real SQL errors. Then check parameterized CRUD, NULLs, UTF-8, decimal/binary/temporal values, empty-result metadata, complete multi-block results, and cleanup after SQL failures.
+
+Validate local commit and rollback separately; do not infer support from the wrapper exposing `BeginTransaction`, `begin`, or `commit`. Keep DDL outside transactional assertions when the backend implicitly commits it. L9 XA is an OJP-specific C API, not transparent distributed-transaction enlistment for these wrappers. Active sessions and XA branches must not silently reroute; never blindly retry failed writes.
+
 ## Summary
 
 Integrating OJP with modern Java frameworks is straightforward once you understand the core principle: disable local connection pooling and configure the OJP JDBC driver. Spring Boot, Quarkus, Micronaut, and Jakarta EE application servers all support this integration, though each uses different configuration mechanisms.
@@ -765,5 +892,7 @@ Spring Boot users have the easiest path: add the `spring-boot-starter-ojp` depen
 The beauty of this integration is that your application code doesn't change. Repositories, services, transactions, and ORM mappings all work exactly as before. OJP integration happens entirely at the configuration layer, making it low-risk and reversible if needed.
 
 Choose your framework based on your application requirements, not OJP compatibility—all four work excellently with OJP. Focus on properly disabling local pooling, configuring appropriate timeouts, and monitoring connection behavior to ensure your integration works correctly.
+
+The Java guidance above is not a compatibility promise for non-Java frameworks. Use each native client's stated L1 scope and test evidence; treat ODBC wrappers and FireDAC as investigation paths until their exact platform/API requirements have been validated.
 
 **[IMAGE PROMPT: Create a summary diagram showing the four frameworks (Spring Boot, Quarkus, Micronaut, Jakarta EE logos) all connecting to a central OJP Server icon, which then connects to a database. Above Spring Boot show "spring-boot-starter-ojp (zero config)" with a green star. Above Quarkus show "Unpooled=true". Above Micronaut show "OjpDataSource". Above Jakarta EE show "Server datasource (JNDI)". Below the database, show benefits: "Centralized Pooling", "Coordinated Management", "Transparent to App Code". Style: Clean architectural summary with icons and clear relationships.]**

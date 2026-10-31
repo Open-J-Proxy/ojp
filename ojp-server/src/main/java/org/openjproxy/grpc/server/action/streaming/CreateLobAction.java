@@ -180,11 +180,18 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
                         ". This may indicate a race condition or session management issue.");
             }
             byte[] byteArrayData = lobDataBlock.getData().toByteArray();
+            String chunk = new String(byteArrayData, StandardCharsets.UTF_8);
+            long position = lobDataBlock.getPosition();
+            long lengthBefore = clob.length();
             try (Writer writer = clob.setCharacterStream(lobDataBlock.getPosition())) {
-                writer.write(new String(byteArrayData, StandardCharsets.UTF_8).toCharArray());
+                writer.write(chunk.toCharArray());
             } catch (IOException e) {
                 throw new SQLException("Failed to write CLOB data: " + e.getMessage(), e);
             }
+            log.debug("CLOB block written: position={}, bytes={}, codePoints={}, utf16Units={}, "
+                            + "lengthBefore={}, lengthAfter={}",
+                    position, byteArrayData.length, chunk.codePointCount(0, chunk.length()),
+                    chunk.length(), lengthBefore, clob.length());
             return byteArrayData.length;
         }
 

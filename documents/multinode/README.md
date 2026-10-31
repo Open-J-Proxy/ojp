@@ -1,5 +1,7 @@
 # Open J Proxy Multinode Configuration Guide
 
+Start with [Connect](../designs/CONNECT_FLOW.md) and [executeQuery](../designs/EXECUTE_QUERY_FLOW.md) to locate routing and session affinity in the normal journey. This guide adds multinode scenarios; the [JDBC reference](../configuration/ojp-jdbc-configuration.md) covers client properties. [Documentation hub](../README.md).
+
 ## Overview
 
 Open J Proxy supports multinode deployment for high availability, load distribution, and fault tolerance. The multinode functionality allows JDBC clients to connect to multiple OJP servers simultaneously, providing automatic failover and load balancing capabilities.

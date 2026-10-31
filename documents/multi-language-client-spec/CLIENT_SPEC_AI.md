@@ -18,6 +18,7 @@
 | **Endpoint** | A `host:port` pair identifying one Server. |
 | **Virtual Connection** | A client-side object representing logical access to a database pool, identified by a `SessionInfo` token. Does not correspond 1:1 to a real database connection. |
 | **Real Connection** | A JDBC connection held by the Server's connection pool. The Client never holds one directly. |
+| **Client-side connection pool** | Prohibited. The Client and integrating application/framework MUST NOT pool virtual connections; pool real database connections only on the Server. |
 | **connHash** | A server-computed SHA-256 string keying a specific connection pool. Computed as SHA-256(`url + user + password + datasource_name`). |
 | **SessionInfo** | A proto message propagated on every RPC. Contains `connHash`, `clientUUID`, `sessionUUID`, `transactionInfo`, `sessionStatus`, `isXA`, `targetServer`, `clusterHealth`, `clientCount`, `maxAdmission`, `observedPeak`. |
 | **sessionUUID** | A server-assigned handle for a stateful session (transaction, LOB, cursor). Absent until the Server assigns it. |
@@ -120,7 +121,7 @@ StatementRequest:
   session: SessionInfo            # MUST include current SessionInfo
   sql: string
   parameters: list[ParameterProto]
-  statementUUID: string           # new random UUID per statement instance
+  statementUUID: string           # empty for a new statement; only a UUID the server assigned (see §4.4)
   properties: list[PropertyEntry]
 
 ParameterProto:
@@ -129,14 +130,14 @@ ParameterProto:
   values: list[ParameterValue]    # one for normal params; multiple for array params
 
 ParameterValue (oneof):
-  is_null: bool                   # SQL NULL
+  is_null: bool                   # SQL NULL in results and non-PT_NULL values; PT_NULL parameters use int_value (see §4.4)
   bool_value: bool
-  int_value: int32                # also used for PT_BYTE, PT_SHORT
+  int_value: int32                # also used for PT_BYTE, PT_SHORT, and the java.sql.Types code of PT_NULL
   long_value: int64
   float_value: float
   double_value: double
-  string_value: string            # also PT_BIG_DECIMAL ("<unscaled> <scale>"), PT_CHARACTER_READER, PT_SQL_XML
-  bytes_value: bytes              # PT_BYTES, PT_ASCII_STREAM, PT_UNICODE_STREAM, PT_BINARY_STREAM
+  string_value: string            # also PT_CHARACTER_READER, PT_SQL_XML
+  bytes_value: bytes              # PT_BYTES, PT_ASCII_STREAM, PT_UNICODE_STREAM, PT_BINARY_STREAM, PT_BIG_DECIMAL (BigDecimalWire)
   date_value: google.type.Date    # PT_DATE
   time_value: google.type.TimeOfDay  # PT_TIME
   timestamp_value: TimestampWithZone # PT_TIMESTAMP
@@ -238,6 +239,12 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 
 ### 4.2 Connection Rules
 
+**Pool and close requirements:**
+
+- The client and integrating application/framework MUST NOT create or use a client-side pool of virtual connections. A `DataSource` or equivalent MUST act only as a connection factory. Reusing cached `connHash` metadata is permitted and is not connection pooling.
+- The application MUST close each virtual connection promptly when its unit of work is complete. It MUST commit or roll back any active transaction before closing.
+- On connection close, the client MUST call `terminateSession(session)` to notify the server to clean up session state and release any checked-out real database connection back to the server-side pool for reuse. After termination, the virtual connection MUST NOT be reused.
+
 **Non-XA first connect (cache miss):**
 
 1. Build `ConnectionDetails` with `url`, `user`, `password`, `clientUUID`, `serverEndpoints`, `clusterHealth`, `isXA=false`, and applicable `properties`.
@@ -270,20 +277,21 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 1. The client MUST include the current `SessionInfo` in every outgoing RPC request.
 2. The client MUST replace its local `SessionInfo` with the `SessionInfo` returned in every RPC response.
 3. When the response `SessionInfo` contains a `sessionUUID` not present in the request, the client MUST immediately register: `sessionUUID → response.targetServer`.
-4. The client MUST call `terminateSession(session)` exactly once when closing a connection. After this call, the connection MUST be considered unusable.
+4. The client MUST call `terminateSession(session)` exactly once when closing a connection. This notifies the server to release session resources, including any checked-out database connection, back to its pool for reuse. After this call, the connection MUST be considered unusable.
 
 ### 4.4 Statement Execution Rules
 
-1. The client MUST generate a new random UUID as `statementUUID` for each `StatementRequest`.
+1. The client MUST leave `statementUUID` empty for a new statement. The server treats a non-empty `statementUUID` as the ID of a statement it already holds in the session and looks it up, so the client MUST NOT invent one. The client MAY send back a UUID the server assigned to a prepared statement (`OpResult.uuid`, or `uuid_value` for add-batch results) to reuse that statement in the same session.
 2. Parameters MUST use 1-based indexing in `ParameterProto.index`.
-3. `PT_BIG_DECIMAL` MUST be encoded as `string_value = "<unscaledInteger> <scale>"` (space-separated). Example: `BigDecimal("123.45")` → `"12345 2"`.
+3. `PT_BIG_DECIMAL` MUST be encoded as `bytes_value` in the BigDecimalWire format (`documents/protocol/BIGDECIMAL_WIRE_FORMAT.md`): byte `0x01`, big-endian int32 length, the unscaled integer as UTF-8 decimal digits (with a leading `-` if negative), then big-endian int32 scale. Example: `BigDecimal("123.45")` → `01 00000005 "12345" 00000002`. Decimal result values arrive in the same format.
 4. Presence-aware fields (`url_value`, `rowid_value`, `uuid_value`, `biginteger_value`) use `google.protobuf.StringValue` wrappers. An absent (unset) wrapper MUST be treated as SQL NULL. An empty string inside the wrapper is a valid non-null value.
+5. `PT_NULL` parameters MUST carry the `java.sql.Types` code of the target column in `int_value` (for example `4` for `INTEGER`, `12` for `VARCHAR`, `0` for `NULL` when unknown). The server binds them with `setNull(index, code)`; `is_null` is not accepted for `PT_NULL`. In results, SQL NULL is returned as `is_null = true`.
 
 ### 4.5 Resource Lifecycle Rules
 
 1. LOB handles (`LobReference.uuid`) are server-side objects. They MUST NOT be used after `terminateSession()`.
 2. Result set handles (`resultSetUUID`) are server-side objects. The client MUST call `callResource(RES_RESULT_SET, CALL_CLOSE)` when done, unless the connection is being terminated.
-3. Savepoint handles (from `CALL_SET` on `RES_SAVEPOINT`) MUST NOT be used after `commitTransaction()` or `rollbackTransaction()`.
+3. Savepoint handles returned by `CALL_SET` on `RES_CONNECTION` MUST NOT be used after `commitTransaction()` or `rollbackTransaction()`. Savepoint creation uses the connection resource; rollback/release resolve the returned handle through that connection's savepoint registry.
 
 ---
 
@@ -471,14 +479,15 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 - `terminateSession()` on connection close
 - Graceful gRPC channel shutdown on process termination
 - All 28 `ParameterTypeProto` values (encode and decode): `PT_NULL`, `PT_BOOLEAN`, `PT_BYTE`, `PT_SHORT`, `PT_INT`, `PT_LONG`, `PT_FLOAT`, `PT_DOUBLE`, `PT_BIG_DECIMAL`, `PT_STRING`, `PT_BYTES`, `PT_DATE`, `PT_TIME`, `PT_TIMESTAMP`, `PT_ASCII_STREAM`, `PT_UNICODE_STREAM`, `PT_BINARY_STREAM`, `PT_OBJECT`, `PT_CHARACTER_READER`, `PT_REF`, `PT_BLOB`, `PT_CLOB`, `PT_ARRAY`, `PT_URL`, `PT_ROW_ID`, `PT_N_STRING`, `PT_N_CHARACTER_STREAM`, `PT_N_CLOB`, `PT_SQL_XML`
-- `BigDecimal` encoding as `"<unscaledInteger> <scale>"`
+- `BigDecimal` encoding as BigDecimalWire `bytes_value` (§4.4 rule 3)
+- `PT_NULL` encoding as a `java.sql.Types` code in `int_value` (§4.4 rule 5)
 - `TimestampWithZone` encoding/decoding for all 9 `TemporalType` values
 - LOB write (`createLob` client-streaming, chunked at 32–64 KB) and read (`readLob` server-streaming)
 - Non-XA transaction lifecycle (`startTransaction`, `commitTransaction`, `rollbackTransaction`)
-- Savepoints via `callResource` (`RES_SAVEPOINT`, `CALL_SET`/`CALL_ROLLBACK`/`CALL_RELEASE`)
+- Savepoints via `callResource` (`RES_CONNECTION` `CALL_SET`/`CALL_ROLLBACK`/`CALL_RELEASE`; `RES_SAVEPOINT` is used for savepoint attributes)
 - `callResource` protocol (all 7 `ResourceType` values, all 47 `CallType` codes)
 - Configuration loading: system/env properties > `ojp.properties` file > built-in defaults; per-datasource prefix `<name>.ojp.*`
-- TLS transport support (plaintext default; TLS when `ojp.grpc.tls.enabled=true`)
+- TLS transport support (plaintext default; Java reference-client TLS when `ojp.client.tls.enabled=true`, with keystore credentials for mTLS)
 - `clientUUID` generation (one UUID v4 per process lifetime)
 - `reinitializePoolOnRecoveredServer()` called **before** `endpoint.markHealthy()` on recovery
 - Read `clientCount`, `maxAdmission`, `observedPeak` from every `SessionInfo` response and pass to `ClientThrottleManager.updateFromSessionInfo()` (§8)
@@ -500,7 +509,7 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 
 - Async / non-blocking RPC API surface
 - Metrics / telemetry export (OpenTelemetry recommended)
-- Client-side connection pooling — NOTE: if implemented, pool size MUST effectively be 1 per virtual connection; double-pooling causes incorrect behavior
+- Client-side connection pooling — MUST NOT be implemented; the application-side framework's connection pool MUST also be disabled
 
 ---
 
@@ -510,16 +519,16 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 |---|---|---|
 | `open_connection(endpoint, db_url, user, password)` | `connect(ConnectionDetails)` — only on cache miss | Cache hit: no RPC; build `SessionInfo` locally |
 | `open_xa_connection(...)` | `connect(ConnectionDetails, isXA=true)` | Always RPC; pins to one endpoint |
-| `execute_query(sql, params)` | `executeQuery(StatementRequest)` | Server-streaming; first message has labels + first batch of rows |
+| `execute_query(sql, params)` | `executeQuery(StatementRequest)` | Server-streaming; first message has labels + first batch of rows. Ordinary SELECT only; data-changing SELECT wrappers use the update-result path. |
 | `fetch_more_rows(result_set_uuid, page_size)` | `fetchNextRows(ResultSetFetchRequest)` | Empty `rows` list means result set exhausted |
-| `execute_update(sql, params)` | `executeUpdate(StatementRequest)` | `OpResult.value.int_value` = affected row count |
+| `execute_update(sql, params)` | `executeUpdate(StatementRequest)` | `OpResult.value.int_value` = affected row count; for result-producing DML, set `STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY=true`, then use response `uuid`/`flag` and `fetchNextRows` to retrieve rows. |
 | `call_stored_procedure(sql, params)` | `callResource(CALL_PREPARE)` then `callResource(CALL_EXECUTE)` | `CALL_PREPARE` returns `resourceUUID` |
 | `begin_transaction()` | `startTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_ACTIVE` |
 | `commit()` | `commitTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_COMMITED` |
 | `rollback()` | `rollbackTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_ROLLBACK` |
-| `set_savepoint(name)` | `callResource(RES_SAVEPOINT, CALL_SET, "Savepoint", [name])` | Returns `resourceUUID` for later rollback/release |
-| `rollback_to_savepoint(uuid)` | `callResource(RES_SAVEPOINT, CALL_ROLLBACK, resourceUUID=uuid)` | |
-| `release_savepoint(uuid)` | `callResource(RES_SAVEPOINT, CALL_RELEASE, resourceUUID=uuid)` | |
+| `set_savepoint(name)` | `callResource(RES_CONNECTION, CALL_SET, "Savepoint", [name])` | Returns `resourceUUID` for later rollback/release |
+| `rollback_to_savepoint(uuid)` | `callResource(RES_CONNECTION, CALL_ROLLBACK, params=[uuid])` | The server resolves the registered savepoint handle |
+| `release_savepoint(uuid)` | `callResource(RES_CONNECTION, CALL_RELEASE, "Savepoint", params=[uuid])` | The server resolves and releases the registered savepoint handle |
 | `write_lob(data)` | `createLob(stream LobDataBlock)` | Client-streaming; chunk at 32–64 KB; returns `LobReference.uuid` |
 | `read_lob(uuid, pos, len)` | `readLob(ReadLobRequest)` | Server-streaming; concatenate `data` fields in order |
 | `close_result_set(uuid)` | `callResource(RES_RESULT_SET, CALL_CLOSE, resourceUUID=uuid)` | |
@@ -553,7 +562,7 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | Level | Required capability set |
 |---|---|
 | **L1** | `connect`, `executeQuery`, `executeUpdate`, `terminateSession`; basic CRUD path |
-| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants |
+| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants, including result-producing DML where supported |
 | **L3** | Streaming query/result protocol (`executeQuery` stream + `fetchNextRows`) + cursor resource lifecycle |
 | **L4** | Non-XA transaction RPCs and savepoint semantics |
 | **L5** | LOB protocol (`createLob`, `readLob`) and stream round-trips |
@@ -561,14 +570,14 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | **L7** | Multinode balancing, health checking, cluster health propagation, `connHash` cache/reconnect |
 | **L8** | Failover/recovery/redistribution operational behavior |
 | **L9** | XA RPC lifecycle and XA routing/error semantics |
-| **L10** | Full conformance of L1–L9 under multinode operational scenarios |
+| **L10** | Full L1–L9 multinode conformance plus client/server mutual TLS (mTLS) |
 
 ### 12.2 Current reference-client achieved level by database
 
 | Database | Achieved level |
 |---|---:|
 | H2 | L8 |
-| PostgreSQL | L10 |
+| PostgreSQL | L9 |
 | MySQL | L8 |
 | MariaDB | L6 |
 | Oracle | L9 |
@@ -576,9 +585,14 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | DB2 | L8 |
 | CockroachDB | L8 |
 
+The H2 Java reference client now has an XA lifecycle integration suite in
+`ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/h2/H2XAIntegrationTest.java`.
+
 ### 12.3 Conformance reporting rules
 
 1. A client implementation MUST declare target level and tested-achieved level.
 2. The tested-achieved level MUST be reported per database.
 3. Missing capabilities MUST be declared as explicit level gaps (for example: `L9 missing`).
 4. Operational level claims (L7+) SHOULD cite multinode protocol tests and database-specific evidence separately.
+5. An achieved level MUST be supported by passing candidate-client integration tests for every required scenario at that level and all lower levels, against each database reported at that level. The required scenarios and minimum coverage are defined in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level).
+6. A skipped/disabled suite, unit test alone, or another client’s passing suite MUST NOT count as candidate-client certification. L7–L10 evidence MUST include a multi-server integration run; L10 MUST exercise combined operational and XA behavior over mTLS, including successful authentication and rejection of missing or untrusted client certificates.

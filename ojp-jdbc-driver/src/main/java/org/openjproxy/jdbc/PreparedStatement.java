@@ -34,6 +34,7 @@ import java.sql.Ref;
 import java.sql.ResultSetMetaData;
 import java.sql.RowId;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -113,6 +114,10 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
         this.checkClosed();
         this.lastUpdateCount = -1;
         this.resetMoreResultsState();
+        if (SqlStatementClassifier.returnsRowsFromDml(this.sql)) {
+            return executeUpdateReturningResultSet(this.sql, new ArrayList<>(this.paramsMap.values()),
+                    this.getStatementUUID());
+        }
         log.info("Executing query for -> {}", this.sql);
         ClientThrottleManager throttle = this.connection.getThrottleManager();
         ClientThrottleMode mode = this.connection.getThrottleMode();
@@ -430,14 +435,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException {
         log.debug("setCharacterStream: {}, <Reader>, {}", parameterIndex, length);
-        this.checkClosed();
-        //TODO this will require an implementation of Reader that communicates across GRPC or maybe a conversion to InputStream
-        this.paramsMap.put(parameterIndex,
-                Parameter.builder()
-                        .type(CHARACTER_READER)
-                        .index(parameterIndex)
-                        .values(Arrays.asList(reader, length))
-                        .build());
+        this.setCharacterStream(parameterIndex, reader, (long) length);
     }
 
     @Override
@@ -485,11 +483,19 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public void setArray(int parameterIndex, Array x) throws SQLException {
         log.debug("setArray: {}, {}", parameterIndex, x);
         this.checkClosed();
+        String arrayUUID = null;
+        if (x != null) {
+            if (x instanceof org.openjproxy.jdbc.Array) {
+                arrayUUID = ((org.openjproxy.jdbc.Array) x).getUuid();
+            } else {
+                throw new SQLFeatureNotSupportedException("Only OJP proxied Array instances are currently supported.");
+            }
+        }
         this.paramsMap.put(parameterIndex,
                 Parameter.builder()
                         .type(ARRAY)
                         .index(parameterIndex)
-                        .values(Arrays.asList(x))
+                        .values(Arrays.asList(arrayUUID))
                         .build());
     }
 
@@ -748,6 +754,36 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     public void setCharacterStream(int parameterIndex, Reader reader, long length) throws SQLException {
         log.debug("setCharacterStream: {}, <Reader>, {}", parameterIndex, length);
         this.checkClosed();
+        if (reader == null) {
+            this.paramsMap.put(parameterIndex,
+                    Parameter.builder()
+                            .type(CHARACTER_READER)
+                            .index(parameterIndex)
+                            .values(Arrays.asList((Object) null))
+                            .build());
+            return;
+        }
+        try {
+            StringBuilder value = new StringBuilder();
+            char[] buffer = new char[8192];
+            long remaining = length < 0 ? Long.MAX_VALUE : length;
+            while (remaining > 0) {
+                int charsRead = reader.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                if (charsRead == -1) {
+                    break;
+                }
+                value.append(buffer, 0, charsRead);
+                remaining -= charsRead;
+            }
+            this.paramsMap.put(parameterIndex,
+                    Parameter.builder()
+                            .type(CHARACTER_READER)
+                            .index(parameterIndex)
+                            .values(Arrays.asList(value.toString()))
+                            .build());
+        } catch (IOException e) {
+            throw new SQLException("Unable to read character stream: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -775,7 +811,7 @@ public class PreparedStatement extends Statement implements java.sql.PreparedSta
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader) throws SQLException {
         log.debug("setCharacterStream: {}, <Reader>", parameterIndex);
-        this.checkClosed();
+        this.setCharacterStream(parameterIndex, reader, -1L);
     }
 
     @Override

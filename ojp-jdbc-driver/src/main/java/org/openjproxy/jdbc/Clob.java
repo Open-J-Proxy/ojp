@@ -13,6 +13,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.io.Writer;
 import java.sql.SQLException;
 
@@ -38,7 +39,7 @@ public class Clob extends Lob implements java.sql.Clob {
     @Override
     public Reader getCharacterStream() throws SQLException {
         log.debug("getCharacterStream called");
-        return null;
+        return new InputStreamReader(this.getBinaryStream(1, this.length()), StandardCharsets.UTF_8);
     }
 
     @Override
@@ -105,6 +106,6 @@ public class Clob extends Lob implements java.sql.Clob {
     @Override
     public Reader getCharacterStream(long pos, long length) throws SQLException {
         log.debug("getCharacterStream: {}, {}", pos, length);
-        return new InputStreamReader(super.getBinaryStream(pos, length));
+        return new InputStreamReader(super.getBinaryStream(pos, length), StandardCharsets.UTF_8);
     }
 }

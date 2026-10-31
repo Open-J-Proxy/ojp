@@ -28,4 +28,6 @@ To import the dashboard into your Grafana instance:
 
 - **[Cache User Guide](../guides/CACHE_USER_GUIDE.md)** - How to configure and use OJP caching features
 - **[Caching Implementation Analysis](../analysis/CACHING_IMPLEMENTATION_ANALYSIS.md)** - Technical analysis and design decisions
-- **[ADR-008](../ADRs/ADR-008-query-result-caching.md)** - Architecture Decision Record for query result caching
+- **[ADR-008](../ADRs/adr-008-use-caffeine-for-caching.md)** - Architecture Decision Record for the caching library
+- **[Query flow](../designs/EXECUTE_QUERY_FLOW.md)** - Locate capacity checks, execution, and streaming before interpreting metrics
+- **[Documentation hub](../README.md)** - Other operation flows, configuration references, and production guides

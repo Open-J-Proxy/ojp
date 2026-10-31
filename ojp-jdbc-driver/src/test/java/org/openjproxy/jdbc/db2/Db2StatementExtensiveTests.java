@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -55,6 +56,38 @@ class Db2StatementExtensiveTests {
         assertNotNull(rs);
         assertTrue(rs.next());
         rs.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/db2_connection.csv")
+    void shouldReturnRowsFromDirectAndPreparedFinalTableDml(String driverClass, String url, String user,
+                                                             String password) throws Exception {
+        this.setUp(driverClass, url, user, password);
+        try {
+            assertTrue(statement.execute("SELECT id, name FROM FINAL TABLE (INSERT INTO "
+                    + "DB2INST1.db2_statement_test (id, name) VALUES (9981, 'direct'))"));
+            try (ResultSet resultSet = statement.getResultSet()) {
+                assertTrue(resultSet.next());
+                assertEquals(9981, resultSet.getInt("id"));
+                assertEquals("direct", resultSet.getString("name"));
+                assertFalse(resultSet.next());
+            }
+
+            try (PreparedStatement preparedStatement = connection.prepareStatement(
+                    "SELECT id, name FROM FINAL TABLE (INSERT INTO "
+                            + "DB2INST1.db2_statement_test (id, name) VALUES (?, ?))")) {
+                preparedStatement.setInt(1, 9982);
+                preparedStatement.setString(2, "prepared");
+                try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                    assertTrue(resultSet.next());
+                    assertEquals(9982, resultSet.getInt("id"));
+                    assertEquals("prepared", resultSet.getString("name"));
+                    assertFalse(resultSet.next());
+                }
+            }
+        } finally {
+            statement.executeUpdate("DELETE FROM DB2INST1.db2_statement_test WHERE id IN (9981, 9982)");
+        }
     }
 
     @ParameterizedTest

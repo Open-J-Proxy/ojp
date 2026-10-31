@@ -44,13 +44,24 @@ This document outlines the planned releases and key milestones for the Open J Pr
 
 ---
 
-## 🚀 Version 1.1.0 — planned
+## 🚀 Version 1.1.0 — October/November 2026 (expected deployment)
 
 **Theme: Post-LTS feature cycle**
 
 - First feature release after the 1.0.0 GA
-- Backwards-compatible new features added to `main`
+- PostgreSQL `PGobject` JSON/JSONB support, preserving type metadata through JDBC parameter relay
+- Global per-database connection quotas shared across OJP connection pools ([PR #640](https://github.com/Open-J-Proxy/ojp/pull/640))
+- Backwards-compatible new features added to `main`; this release is not an LTS release
 - `lts/1.0` continues to receive maintenance patches in parallel
+
+---
+
+## 🚀 Version 1.2.0 — Late December 2026 (planned)
+
+**Theme: Per-pool Slow Query Segregation**
+
+- Configure Slow Query Segregation independently for each connection pool instead of relying only on the current server-wide on/off setting
+- [PR #636](https://github.com/Open-J-Proxy/ojp/pull/636) is the current open draft for analysis and design; the proposed per-datasource configuration is not implemented yet
 
 ---
 
@@ -60,6 +71,7 @@ Items under consideration for future releases:
 
 - Native reactive/non-blocking driver support
 - gRPC streaming improvements for high-throughput workloads
+- Graceful shutdown support
 - Kubernetes operator for automated OJP cluster management
 - Support for additional connection pool providers via SPI
 - `2.0.0` only when breaking changes justify a new major version

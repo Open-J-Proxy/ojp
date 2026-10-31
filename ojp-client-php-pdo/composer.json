@@ -1,0 +1,20 @@
+{
+    "name": "open-j-proxy/ojp-client-php-pdo",
+    "description": "L1 PDO-compatible PHP client for Open J Proxy",
+    "type": "library",
+    "license": "Apache-2.0",
+    "require": {
+        "php": ">=8.2",
+        "ext-grpc": "*",
+        "google/protobuf": "^5.36.2",
+        "grpc/grpc": "^1.82.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "OpenJProxy\\PDO\\": "src/",
+            "Com\\Openjproxy\\Grpc\\": "gen/Com/Openjproxy/Grpc/",
+            "Google\\Type\\": "gen/Google/Type/",
+            "GPBMetadata\\": "gen/GPBMetadata/"
+        }
+    }
+}

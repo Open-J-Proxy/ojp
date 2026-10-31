@@ -66,6 +66,7 @@ public class ResultSet extends RemoteProxyResultSet {
     private java.sql.ResultSetMetaData resultSetMetadata;
     private boolean inProxyMode;
     private boolean closed;
+    private boolean resultSetExhausted;
     private final AtomicInteger currentIdx = new AtomicInteger(0);
     private final boolean inRowByRowMode;
 
@@ -92,7 +93,8 @@ public class ResultSet extends RemoteProxyResultSet {
             this.statement = statement;
             OpResult result = nextWithSessionUpdate(itOpResult.next());
             OpQueryResult opQueryResult = ProtoConverter.fromProto(result.getQueryResult());
-            this.inRowByRowMode = CommonConstants.RESULT_SET_ROW_BY_ROW_MODE.equalsIgnoreCase(result.getFlag());
+            this.inRowByRowMode = result.getFlag().contains(CommonConstants.RESULT_SET_ROW_BY_ROW_MODE);
+            this.resultSetExhausted = result.getFlag().contains(CommonConstants.RESULT_SET_LAST_BLOCK_FLAG);
             this.setStatementService(statementService);
             this.setResultSetUUID(opQueryResult.getResultSetUUID());
             this.currentDataBlock = opQueryResult.getRows();
@@ -114,6 +116,9 @@ public class ResultSet extends RemoteProxyResultSet {
         }
         this.currentIdx.incrementAndGet();
         blockIdx.incrementAndGet();
+        if (this.resultSetExhausted && blockIdx.get() >= currentDataBlock.size()) {
+            return false;
+        }
         if (this.inRowByRowMode && blockIdx.get() > 0) {
             try {
                 // Row by row mode is used in SQL Server and DB2 only when working with LOBs as per moving the cursor earlier
@@ -181,6 +186,7 @@ public class ResultSet extends RemoteProxyResultSet {
         this.currentDataBlock = opQueryResult.getRows();
         this.blockCount.incrementAndGet();
         this.blockIdx.set(0);
+        this.resultSetExhausted = result.getFlag().contains(CommonConstants.RESULT_SET_LAST_BLOCK_FLAG);
     }
 
     private OpResult nextWithSessionUpdate(OpResult next) throws SQLException {
@@ -743,7 +749,7 @@ public class ResultSet extends RemoteProxyResultSet {
             return super.getObject(columnIndex);
         }
         lastValueRead = currentDataBlock.get(blockIdx.get())[columnIndex - 1];
-        return lastValueRead;
+        return this.resolveObjectValue(columnIndex, lastValueRead);
     }
 
     @Override
@@ -761,8 +767,12 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getCharacterStream(columnIndex);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        Clob clob = this.getClob(columnIndex);
+        if (clob == null) {
+            lastValueRead = null;
+            return null;
+        }
+        return clob.getCharacterStream();
     }
 
     @Override
@@ -771,8 +781,7 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getCharacterStream(columnLabel);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        return this.getCharacterStream(this.labelsMap.get(columnLabel.toUpperCase()) + 1);
     }
 
     @Override
@@ -1509,8 +1518,12 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getArray(columnIndex);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        lastValueRead = currentDataBlock.get(blockIdx.get())[columnIndex - 1];
+        if (lastValueRead == null) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array((Connection) this.getStatement().getConnection(),
+                this.getStatementService(), String.valueOf(lastValueRead));
     }
 
     @Override
@@ -1571,8 +1584,12 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getArray(columnLabel);
         }
-        lastValueRead = null;
-        throw new RuntimeException("Not implemented");
+        lastValueRead = currentDataBlock.get(blockIdx.get())[this.labelsMap.get(columnLabel.toUpperCase())];
+        if (lastValueRead == null) {
+            return null;
+        }
+        return new org.openjproxy.jdbc.Array((Connection) this.getStatement().getConnection(),
+                this.getStatementService(), String.valueOf(lastValueRead));
     }
 
     @Override
@@ -2254,7 +2271,16 @@ public class ResultSet extends RemoteProxyResultSet {
         if (lastValueRead == null) {
             return null;
         }
-        return (T) lastValueRead;
+        if (type == null || Object.class.equals(type)) {
+            return (T) this.resolveObjectValue(columnIndex, lastValueRead);
+        }
+        if (String.class.equals(type)) {
+            return type.cast(this.getString(columnIndex));
+        }
+        if (Clob.class.equals(type) || java.sql.Clob.class.equals(type)) {
+            return type.cast(this.getClob(columnIndex));
+        }
+        return type.cast(this.resolveObjectValue(columnIndex, lastValueRead));
     }
 
     @Override
@@ -2263,11 +2289,18 @@ public class ResultSet extends RemoteProxyResultSet {
         if (this.inProxyMode) {
             return super.getObject(columnLabel, type);
         }
-        lastValueRead = currentDataBlock.get(blockIdx.get())[this.labelsMap.get(columnLabel.toUpperCase())];
-        if (lastValueRead == null) {
-            return null;
+        return this.getObject(this.labelsMap.get(columnLabel.toUpperCase()) + 1, type);
+    }
+
+    private Object resolveObjectValue(int columnIndex, Object value) throws SQLException {
+        if (isClobReferenceValue(value)) {
+            return this.getClob(columnIndex);
         }
-        return (T) lastValueRead;
+        return value;
+    }
+
+    private boolean isClobReferenceValue(Object value) {
+        return value instanceof String && ((String) value).startsWith(CommonConstants.OJP_CLOB_PREFIX);
     }
 
     @Override

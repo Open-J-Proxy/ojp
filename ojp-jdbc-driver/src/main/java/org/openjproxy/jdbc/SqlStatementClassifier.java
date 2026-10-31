@@ -1,6 +1,8 @@
 package org.openjproxy.jdbc;
 
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Best-effort static classifier that decides, without executing the SQL, whether a statement
@@ -48,6 +50,9 @@ final class SqlStatementClassifier {
         if (sql == null) {
             return false;
         }
+        if (returnsRowsFromDml(sql)) {
+            return true;
+        }
         String withoutLeadingComments = skipLeadingWhitespaceAndComments(sql);
         String upperSql = withoutLeadingComments.toUpperCase(Locale.ROOT);
         for (String prefix : RESULT_SET_PREFIXES) {
@@ -56,6 +61,74 @@ final class SqlStatementClassifier {
             }
         }
         return false;
+    }
+
+    static boolean returnsRowsFromDml(String sql) {
+        List<String> tokens = tokenize(sql);
+        if (tokens.isEmpty()) {
+            return false;
+        }
+        String firstToken = tokens.get(0);
+        if (isDml(firstToken)
+                && (tokens.contains("RETURNING") || tokens.contains("OUTPUT"))) {
+            return true;
+        }
+        for (int index = 0; index + 3 < tokens.size(); index++) {
+            if ("FINAL".equals(tokens.get(index))
+                    && "TABLE".equals(tokens.get(index + 1))
+                    && "(".equals(tokens.get(index + 2))
+                    && isDml(tokens.get(index + 3))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isDml(String token) {
+        return "INSERT".equals(token) || "UPDATE".equals(token) || "DELETE".equals(token);
+    }
+
+    private static List<String> tokenize(String sql) {
+        List<String> tokens = new ArrayList<>();
+        int index = 0;
+        while (index < sql.length()) {
+            char current = sql.charAt(index);
+            if (Character.isWhitespace(current)) {
+                index++;
+            } else if (current == '-' && index + 1 < sql.length() && sql.charAt(index + 1) == '-') {
+                int newLine = sql.indexOf('\n', index + 2);
+                index = newLine < 0 ? sql.length() : newLine + 1;
+            } else if (current == '/' && index + 1 < sql.length() && sql.charAt(index + 1) == '*') {
+                int endComment = sql.indexOf("*/", index + 2);
+                index = endComment < 0 ? sql.length() : endComment + 2;
+            } else if (current == '\'' || current == '"' || current == '`' || current == '[') {
+                char closing = current == '[' ? ']' : current;
+                index++;
+                while (index < sql.length()) {
+                    if (sql.charAt(index++) == closing) {
+                        if (index < sql.length() && sql.charAt(index) == closing) {
+                            index++;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            } else if (Character.isLetterOrDigit(current) || current == '_') {
+                int start = index++;
+                while (index < sql.length()) {
+                    char next = sql.charAt(index);
+                    if (!Character.isLetterOrDigit(next) && next != '_' && next != '$') {
+                        break;
+                    }
+                    index++;
+                }
+                tokens.add(sql.substring(start, index).toUpperCase(Locale.ROOT));
+            } else {
+                tokens.add(String.valueOf(current));
+                index++;
+            }
+        }
+        return tokens;
     }
 
     /**

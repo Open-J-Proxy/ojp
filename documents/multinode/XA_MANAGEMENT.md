@@ -1,5 +1,7 @@
 # XA Transaction Management in OJP
 
+Start with the [simplified XA flows](../designs/MAIN_FLOWS.md#main-xa-flows): setup → branch work → completion → closure, with recovery as a separate scenario. This page explains the mechanisms behind those operations. Use the [JDBC configuration reference](../configuration/ojp-jdbc-configuration.md) for exact client-supplied pool settings and the [documentation hub](../README.md) for other tasks.
+
 **Last Updated**: 2025-12-28  
 **Status**: Production Ready  
 **Version**: Unified Connection Model with Backend Session Pooling
@@ -34,7 +36,7 @@ OJP provides comprehensive XA (distributed transaction) support with backend ses
 ### Architecture Principles
 
 1. **Separation of Concerns**:
-   - **Application Side**: Applications may use HikariCP or other pools to pool OJP JDBC connections
+   - **Application Side**: Disable application-level connection pools, including HikariCP. The transaction manager coordinates XA through OJP's XA datasource and resource; backend pooling belongs on the server. See [framework integration](../java-frameworks/README.md).
    - **Server Side**: Apache Commons Pool 2 (XA) or HikariCP (non-XA) pools PostgreSQL backend sessions via SPIs
 
 2. **Connection Strategy**:

@@ -31,6 +31,7 @@ class FakeStatementService implements StatementService {
     private final List<CallResourceRequest> callResourceInvocations = new ArrayList<>();
     private Object callResourceReturnValue;
     private SessionInfo callResourceReturnSession;
+    private Iterator<LobDataBlock> readLobResult;
 
     FakeStatementService() {
         this(null, Collections.emptyIterator());
@@ -55,6 +56,10 @@ class FakeStatementService implements StatementService {
      */
     void setCallResourceReturnSession(SessionInfo session) {
         this.callResourceReturnSession = session;
+    }
+
+    void setReadLobResult(Iterator<LobDataBlock> readLobResult) {
+        this.readLobResult = readLobResult;
     }
 
     List<CallResourceRequest> getCallResourceInvocations() {
@@ -102,7 +107,10 @@ class FakeStatementService implements StatementService {
 
     @Override
     public Iterator<LobDataBlock> readLob(LobReference lobReference, long pos, int length) throws SQLException {
-        throw new UnsupportedOperationException();
+        if (this.readLobResult == null) {
+            throw new UnsupportedOperationException();
+        }
+        return this.readLobResult;
     }
 
     @Override

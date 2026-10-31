@@ -13,6 +13,7 @@ Thank you for your interest in contributing to OJP! We welcome contributions of 
 - [Linking Issues to Pull Requests](#linking-issues-to-pull-requests)
 - [Code Style and Conventions](#code-style-and-conventions)
 - [Testing Requirements](#testing-requirements)
+- [CI Container Images](#ci-container-images)
 - [Pull Request Process](#pull-request-process)
 - [Code Review Process](#code-review-process)
 - [Contributor Recognition](#contributor-recognition)
@@ -120,6 +121,49 @@ mvn clean install -DskipTests
 For detailed setup instructions, see [Source Code Developer Setup and Local Testing](https://github.com/Open-J-Proxy/ojp/blob/main/documents/code-contributions/setup_and_testing_ojp_source.md).
 
 ---
+
+## CI Container Images
+
+Main CI builds the OJP server container once per workflow run with Java 25 and
+shares it with Docker-based integration jobs using an `ojp-server-image` workflow
+artifact. Each consumer loads the same image with `docker load`; it does not
+rebuild the image or pull its base images. The artifact expires after one day.
+If it has expired, start a new workflow run instead of rerunning only failed jobs.
+Jobs that run the server directly as a JAR are unchanged.
+
+The image build uses the GitHub Actions BuildKit cache (`ojp-server-ci` scope)
+across runs. Cache misses still build from the current checkout. GitHub's normal
+branch and pull-request cache isolation applies; caches are an optimization, not
+a replacement for the per-run image artifact.
+
+### Base-image mirror setup (maintainers)
+
+The **Refresh CI base-image mirrors** workflow copies the upstream Alpine 3.21
+and Eclipse Temurin 25 JDK Alpine images, including their platform manifests,
+to `ghcr.io/<lowercase-owner>/<lowercase-repository>/ci-base/alpine:3.21` and
+`ghcr.io/<lowercase-owner>/<lowercase-repository>/ci-base/eclipse-temurin:25-jdk-alpine`.
+It runs weekly, on relevant changes on `main`, or manually on the default branch.
+Only this default-branch workflow receives `packages: write`; it does not check
+out or execute pull-request code.
+
+Before the first Main CI image build:
+
+1. Allow this repository's Actions token to publish GHCR packages, and run
+   **Refresh CI base-image mirrors** on the default branch.
+2. In each package's settings, grant this repository's Actions token read access.
+   If the package is not linked to this repository, add the repository under
+   **Manage Actions access** with the read role. Private packages are supported;
+   Main CI logs in using its read-only `GITHUB_TOKEN`, including on fork PRs.
+
+Main CI reads available mirrors using its read-only registry credentials. If
+either mirror tag is missing or inaccessible, Main CI falls back to Docker Hub
+so the first run can bootstrap before the refresh workflow has populated GHCR.
+Once the mirrors are available, builds use GHCR and avoid repeatedly pulling
+Alpine and Temurin from Docker Hub. If the upstream tags change in
+`ojp-server/Dockerfile`, update the mirror workflow to match and refresh the
+mirrors.
+Standalone Docker publishing and tests that use other database images are not
+changed by this cache.
 
 ## Development Workflow
 
@@ -349,11 +393,48 @@ OJP is a multi-module Maven project:
 
 ### CI/CD Testing
 
-Tests run automatically in GitHub Actions:
+Main CI follows a two-phase integration test strategy: selected H2 integration jobs
+run in parallel first, then selected database-specific integration tests run only if
+every selected H2 job succeeds. This includes the Java H2 matrix and client-specific H2
+tests for .NET, Ruby, Python, and C++ ODBC. The C++ ODBC H2 job runs alongside
+the main H2 matrix; its PostgreSQL test runs in the database-specific phase,
+after both the main H2 checks and the ODBC H2 test pass.
 
-- **Main CI**: Runs H2 tests first (fast fail-fast mechanism)
-- **Specialized Jobs**: Run only after Main CI succeeds (PostgreSQL, MySQL, MariaDB, CockroachDB, Oracle, SQL Server, DB2)
-  - **PostgreSQL tests** run twice: once with standard OJP server and once with SQL enhancer enabled
+- **H2 phase**: Runs first with the fast fail-fast H2 matrix and client suites.
+- **Database-specific phase**: Runs only after the aggregate H2 gate succeeds
+  (PostgreSQL, MySQL, MariaDB, CockroachDB, Oracle, SQL Server, and DB2).
+  - **PostgreSQL tests** run twice: once with the standard OJP server and once
+    with SQL enhancer enabled.
+
+Pull requests select tests using the shared
+`.github/workflows/ci-test-selection.yml` workflow, comparing the PR head with
+its merge base. The selection summary is available in the workflow run:
+
+| Changes | Selected coverage |
+| --- | --- |
+| Markdown, `documents/`, license or notice files only | No integration suites |
+| Shared gRPC contracts, server, datasource API/providers, or XA pool | All suites, including downstream clients |
+| JDBC driver | Java H2, database, multinode, and XA suites |
+| Testcontainers | Java reactor and Java integration suites |
+| Spring Boot starter | Starter verification; framework integration notification on trusted runs |
+| Individual language clients | Only those clients' suites |
+| Root build files, workflows, or unclassified paths | All suites conservatively |
+
+Multiple changed modules select the union of their suites. Java reactor
+verification runs once on Java 25, separately from the driver's Java
+11/17/21/25 compatibility matrix. Dart coverage runs in its dedicated workflow,
+not inside the Java matrix. Go, Dart, and PHP use the same selection rules.
+Pushes to `main` and `lts/**` always select full coverage. Manual workflow runs
+also select full coverage; the `full_suite` input explicitly requests it.
+Detection uncertainty falls back to full coverage.
+
+For branch protection, require **Main CI Result**, **Go CI Result**,
+**Dart CI Result**, and **PHP CI Result**, rather than individual optional jobs.
+These checks run even for documentation-only PRs, accept intentionally skipped
+suites, and reject failures, cancellations, or selected suites unexpectedly
+being skipped. Repository administrators must update existing required-check
+settings when adopting these checks. External framework dispatch runs only on
+pushes or manual runs, never on PRs where its secret is unavailable.
 
 For more details, see [Setup and Testing OJP Source](https://github.com/Open-J-Proxy/ojp/blob/main/documents/code-contributions/setup_and_testing_ojp_source.md).
 

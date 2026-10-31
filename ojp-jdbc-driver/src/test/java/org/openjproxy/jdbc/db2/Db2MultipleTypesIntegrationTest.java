@@ -25,6 +25,7 @@ import java.time.LocalTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
@@ -481,4 +482,44 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
         conn.close();
     }
 
+    @ParameterizedTest
+    @CsvFileSource(resources = "/db2_connection.csv")
+    void arrayColumnsAreRejectedForUserDefinedType(String driverClass, String url, String user, String pwd) throws SQLException {
+        assumeFalse(isTestDisabled, "DB2 tests are disabled");
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            try (java.sql.Statement schemaStmt = conn.createStatement()) {
+                schemaStmt.execute("SET SCHEMA DB2INST1");
+            }
+
+            try {
+                TestDBUtils.executeUpdate(conn, "DROP TABLE DB2_ARRAY_TYPES_TEST");
+            } catch (SQLException ignored) {
+                // table may not exist yet
+            }
+            try {
+                TestDBUtils.executeUpdate(conn, "DROP TYPE DB2_ARRAY_VARCHAR RESTRICT");
+            } catch (SQLException ignored) {
+                // type may not exist yet
+            }
+
+            TestDBUtils.executeUpdate(conn, "CREATE TYPE DB2_ARRAY_VARCHAR AS VARCHAR(32) ARRAY[10]");
+            try {
+                SQLException ex = assertThrows(SQLException.class, () -> TestDBUtils.executeUpdate(conn,
+                        "CREATE TABLE DB2_ARRAY_TYPES_TEST (" +
+                                "id INTEGER PRIMARY KEY, " +
+                                "array_col DB2_ARRAY_VARCHAR" +
+                                ")"
+                ));
+                assertEquals("428H2", ex.getSQLState());
+            } finally {
+                try {
+                    TestDBUtils.executeUpdate(conn, "DROP TABLE DB2_ARRAY_TYPES_TEST");
+                } catch (SQLException ignored) {
+                    // table was never created
+                }
+                TestDBUtils.executeUpdate(conn, "DROP TYPE DB2_ARRAY_VARCHAR RESTRICT");
+            }
+        }
+    }
 }

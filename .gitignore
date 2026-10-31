@@ -25,3 +25,8 @@ ojp-server/target/empty-libs/
 
 # macOS hidden files
 **/.DS_Store
+
+# .NET build artifacts
+**/bin/
+**/obj/
+**/TestResults/

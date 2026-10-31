@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.DriverManager;
@@ -26,6 +27,7 @@ import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZoneOffset;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -381,6 +383,58 @@ class CockroachDBMultipleTypesIntegrationTest {
         }
 
         conn.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/cockroachdb_connection.csv")
+    void arrayRoundTripTest(String driverClass, String url, String user, String pwd) throws SQLException {
+        logger.info("Testing CockroachDB array support with Driver: {}", driverClass);
+        assumeFalse(!isTestEnabled, "CockroachDB tests are not enabled");
+
+        try (Connection conn = DriverManager.getConnection(url, user, pwd)) {
+            try {
+                TestDBUtils.executeUpdate(conn, "DROP TABLE cockroachdb_array_types_test");
+            } catch (SQLException ignored) {
+                // table may not exist yet
+            }
+
+            TestDBUtils.executeUpdate(conn,
+                    "CREATE TABLE cockroachdb_array_types_test (" +
+                    "id INT PRIMARY KEY, " +
+                    "array_col INT[]" +
+                    ")"
+            );
+
+            Array inputArray = conn.createArrayOf("INTEGER", new Object[]{1, 2, 3});
+            java.sql.PreparedStatement psInsert = conn.prepareStatement(
+                    "INSERT INTO cockroachdb_array_types_test (id, array_col) VALUES (?, ?)"
+            );
+            psInsert.setInt(1, 1);
+            psInsert.setArray(2, inputArray);
+            psInsert.executeUpdate();
+
+            java.sql.PreparedStatement psSelect = conn.prepareStatement(
+                    "SELECT array_col FROM cockroachdb_array_types_test WHERE id = ?"
+            );
+            psSelect.setInt(1, 1);
+            ResultSet rs = psSelect.executeQuery();
+
+            assertTrue(rs.next());
+            Array outputArray = rs.getArray("array_col");
+            assertNotNull(outputArray);
+            Object[] outputValues = (Object[]) outputArray.getArray();
+            assertEquals(3, outputValues.length);
+            assertEquals(1, ((Number) outputValues[0]).longValue());
+            assertEquals(2, ((Number) outputValues[1]).longValue());
+            assertEquals(3, ((Number) outputValues[2]).longValue());
+
+            outputArray.free();
+            inputArray.free();
+            rs.close();
+            psSelect.close();
+            psInsert.close();
+            TestDBUtils.executeUpdate(conn, "DROP TABLE cockroachdb_array_types_test");
+        }
     }
 
     @ParameterizedTest

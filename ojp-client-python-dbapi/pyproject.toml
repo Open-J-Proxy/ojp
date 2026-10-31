@@ -1,0 +1,28 @@
+[project]
+name = "ojp-client-python-dbapi"
+version = "0.1.0"
+description = "Single-endpoint OJP DB-API 2.0 client: H2 L1 connectivity and CRUD"
+readme = "README.rst"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+    "grpcio==1.78.0",
+    "protobuf==6.33.5",
+    "googleapis-common-protos==1.75.5",
+]
+
+[project.optional-dependencies]
+dev = ["grpcio-tools==1.78.0"]
+
+[project.scripts]
+ojp-generate-proto = "ojp._generate:main"
+
+[build-system]
+requires = ["setuptools==80.10.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ojp = ["py.typed"]

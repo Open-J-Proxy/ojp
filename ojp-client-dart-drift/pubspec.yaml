@@ -1,0 +1,17 @@
+name: ojp_client_dart_drift
+description: OJP client and Drift executor for Dart applications.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  drift: ^2.35.1
+  fixnum: ^1.1.1
+  grpc: ^5.1.0
+  protobuf: ^6.1.0
+
+dev_dependencies:
+  csv: ^8.0.0
+  test: ^1.32.0

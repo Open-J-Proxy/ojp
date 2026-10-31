@@ -49,7 +49,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-api</artifactId>
-            <version>1.62.0</version>
+            <version>${opentelemetry.version}</version>
             <scope>provided</scope>
         </dependency>
 

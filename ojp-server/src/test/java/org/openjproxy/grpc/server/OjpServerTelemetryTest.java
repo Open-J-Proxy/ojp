@@ -29,8 +29,8 @@ class OjpServerTelemetryTest {
 	@Test
 	void shouldCreateGrpcTelemetrySuccessfully() {
 		assertNotNull(grpcTelemetry);
-		assertNotNull(grpcTelemetry.newServerInterceptor());
-		assertNotNull(grpcTelemetry.newClientInterceptor());
+		assertNotNull(grpcTelemetry.createServerInterceptor());
+		assertNotNull(grpcTelemetry.createClientInterceptor());
 	}
 
 	@Test
@@ -55,8 +55,8 @@ class OjpServerTelemetryTest {
 		GrpcTelemetry noOp = noOpTelemetry.createNoOpGrpcTelemetry();
 
 		assertNotNull(noOp);
-		assertNotNull(noOp.newServerInterceptor());
-		assertNotNull(noOp.newClientInterceptor());
+		assertNotNull(noOp.createServerInterceptor());
+		assertNotNull(noOp.createClientInterceptor());
 	}
 
 	@Test
@@ -70,7 +70,7 @@ class OjpServerTelemetryTest {
 				true, true); // grpcMetricsEnabled, poolMetricsEnabled
 
 		assertNotNull(telemetry);
-		assertNotNull(telemetry.newServerInterceptor());
+		assertNotNull(telemetry.createServerInterceptor());
 	}
 
 }

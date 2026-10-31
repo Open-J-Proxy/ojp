@@ -37,10 +37,18 @@
         <jackson-core.version>2.22.3</jackson-core.version>
         <plexus-utils.version>4.0.3</plexus-utils.version>
         <log4j.version>2.25.5</log4j.version>
+        <guava.version>33.7.2-jre</guava.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Force Guava to fix CVE-2026-102554 (uncontrolled memory allocation when deserializing CompactHashMap/CompactHashSet/MapMakerInternalMap). Applies to the transitive Guava pulled in by gRPC (android flavor) and elsewhere. -->
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>${guava.version}</version>
+            </dependency>
+
             <!-- Force protobuf-java version to address CVE-2024-7254 -->
             <dependency>
                 <groupId>com.google.protobuf</groupId>

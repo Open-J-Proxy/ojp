@@ -1,5 +1,6 @@
 package org.openjproxy.grpc.server;
 
+import io.grpc.ServerBuilder;
 import io.opentelemetry.instrumentation.grpc.v1_6.GrpcTelemetry;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -29,8 +31,8 @@ class OjpServerTelemetryTest {
 	@Test
 	void shouldCreateGrpcTelemetrySuccessfully() {
 		assertNotNull(grpcTelemetry);
-		assertNotNull(grpcTelemetry.newServerInterceptor());
-		assertNotNull(grpcTelemetry.newClientInterceptor());
+		assertDoesNotThrow(() -> grpcTelemetry.configureServerBuilder(ServerBuilder.forPort(0)));
+		assertNotNull(grpcTelemetry.createClientInterceptor());
 	}
 
 	@Test
@@ -55,8 +57,8 @@ class OjpServerTelemetryTest {
 		GrpcTelemetry noOp = noOpTelemetry.createNoOpGrpcTelemetry();
 
 		assertNotNull(noOp);
-		assertNotNull(noOp.newServerInterceptor());
-		assertNotNull(noOp.newClientInterceptor());
+		assertDoesNotThrow(() -> noOp.configureServerBuilder(ServerBuilder.forPort(0)));
+		assertNotNull(noOp.createClientInterceptor());
 	}
 
 	@Test
@@ -70,7 +72,7 @@ class OjpServerTelemetryTest {
 				true, true); // grpcMetricsEnabled, poolMetricsEnabled
 
 		assertNotNull(telemetry);
-		assertNotNull(telemetry.newServerInterceptor());
+		assertDoesNotThrow(() -> telemetry.configureServerBuilder(ServerBuilder.forPort(0)));
 	}
 
 }

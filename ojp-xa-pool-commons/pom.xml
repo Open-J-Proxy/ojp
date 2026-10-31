@@ -19,7 +19,6 @@
     <properties>
         <slf4j.version>2.0.18</slf4j.version>
         <commons-pool2.version>2.13.1</commons-pool2.version>
-        <opentelemetry.version>1.62.0</opentelemetry.version>
     </properties>
 
     <dependencies>

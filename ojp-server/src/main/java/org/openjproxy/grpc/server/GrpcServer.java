@@ -113,10 +113,8 @@ public class GrpcServer {
                 .addService(statementService)
                 .addService(OjpHealthManager.getHealthStatusManager().getHealthService())
                 .intercept(new IpWhitelistingInterceptor(config.getAllowedIps()))
-                .intercept(new ConcurrencyThrottleInterceptor(config.getMaxConcurrentRequests()));
-
-        // Registered last so the telemetry interceptor runs first (gRPC runs interceptors in reverse registration order)
-        grpcTelemetry.configureServerBuilder(serverBuilder);
+                .intercept(new ConcurrencyThrottleInterceptor(config.getMaxConcurrentRequests()))
+                .intercept(grpcTelemetry.createServerInterceptor());
 
         // Configure TLS if enabled
         if (config.isTlsEnabled()) {

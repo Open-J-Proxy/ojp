@@ -25,11 +25,11 @@
 
     <dependencyManagement>
         <dependencies>
-            <!--Set transient dependencies of Guava to compatible version-->
+            <!-- Guava version is managed in the parent pom (guava.version) to fix CVE-2026-102554 -->
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
-                <version>32.1.0-jre</version>
+                <version>${guava.version}</version>
             </dependency>
             <!-- Force the entire Jackson ecosystem to 2.22.3 -->
             <dependency>

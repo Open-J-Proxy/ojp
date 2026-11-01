@@ -84,10 +84,24 @@ cd ..
 # Run with drivers mounted
 docker run --rm -d \
   --network host \
-  -v "$(pwd)/ojp-libs:/opt/ojp/ojp-libs" \
-  -e JAVA_TOOL_OPTIONS="-Duser.timezone=UTC" \
-  rrobetti/ojp:1.0.3
+  -v $(pwd)/ojp-libs:/opt/ojp/ojp-libs \
+  rrobetti/ojp:1.0.4
 ```
+
+**Alternative: Runnable JAR (No Docker)**
+
+```bash
+# Download OJP Server JAR from Maven Central
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
+chmod +x ojp-server-1.0.4-shaded.jar
+
+# Download open source JDBC drivers
+curl -LO https://raw.githubusercontent.com/Open-J-Proxy/ojp/main/ojp-server/download-drivers.sh
+bash download-drivers.sh  # Downloads H2, PostgreSQL, MySQL, MariaDB to ojp-libs/
+java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar
+```
+
+📖 See [Executable JAR Setup Guide](documents/runnable-jar/README.md) for details.
 
 ### 2. Add OJP JDBC Driver to your project
 ```xml

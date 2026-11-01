@@ -43,6 +43,10 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
 
+      - name: Get checked-out commit
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Meterian Scanner
         uses: MeterianHQ/meterian-github-action@v1.0.17
         env:
@@ -51,3 +55,4 @@ jobs:
           oss: true
           autofix_security: safe
           autofix_with_pr: true
+          cli_args: --project-branch=${{ matrix.branch }} --project-commit=${{ steps.sha.outputs.sha }}

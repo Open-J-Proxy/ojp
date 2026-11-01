@@ -4,9 +4,9 @@ Configuring the OJP server is straightforward yet powerful. The server gives you
 
 ## 6.1 Understanding Configuration Hierarchy
 
-Before diving into specific settings, it's important to understand how OJP handles configuration. The server supports two primary configuration methods that work together in a well-defined hierarchy. JVM system properties always take precedence over environment variables, giving you the flexibility to override environment-level settings when needed. This design allows you to set baseline configurations through environment variables while making targeted overrides for specific scenarios using system properties.
+Before diving into specific settings, it's important to understand how OJP handles configuration. For standard server settings, JVM system properties take precedence over environment variables. Database connection budgets also support a server-side `ojp.properties` file: JVM system properties override values in that file. This lets you keep a budget with the server deployment while still making targeted overrides at startup.
 
-This hierarchy becomes particularly valuable in containerized environments. You might set production defaults through environment variables in your Docker or Kubernetes configuration, then override specific settings for troubleshooting or testing without modifying your deployment files. The server reads both configuration sources at startup and merges them intelligently, ensuring you always get the behavior you expect.
+For standard settings, this hierarchy is particularly valuable in containerized environments. You might set production defaults through environment variables in your Docker or Kubernetes configuration, then override specific settings for troubleshooting or testing without modifying your deployment files. The server reads these sources at startup and applies JVM values before environment values.
 
 **[IMAGE PROMPT: Create a layered diagram showing configuration hierarchy with three levels: "JVM System Properties" at the top (highest priority, shown in bold color), "Environment Variables" in the middle (medium priority), and "Default Values" at the bottom (lowest priority, shown in faded color). Use arrows flowing upward labeled "Overrides" to show precedence. Include example values at each level like `-Dojp.server.port=9059`, `OJP_SERVER_PORT=1059`, and `default: 1059`. Style: Clean, hierarchical infographic with color-coded priority levels.]**
 
@@ -88,6 +88,21 @@ sequenceDiagram
     Note over Client,Server: Idle for 30s
     Server->>Client: Close Idle Connection
 ```
+
+### Database Connection Budgets
+
+There are two limits: a pool's maximum limits that one pool, while the database budget limits all matching pools combined. The budget takes precedence if the pool maxima add up to more than the database can handle.
+
+For example, two pools can each request up to 20 connections (40 total), while the database budget is 24. With 3 healthy OJP servers, each gets a shared local cap of 8 across its matching pools. If one server goes down, the other 2 recalculate to 12 each. The pool maxima still apply: a pool cannot use more than its configured maximum. Add this to `ojp.properties` on each OJP server:
+
+```properties
+ojp.server.databaseBudgets.orders.match.jdbcUrlPattern=jdbc:postgresql://db1:5432/orders*
+ojp.server.databaseBudgets.orders.maxTotalConnections=24
+```
+
+The server reads `ojp.properties` from its working directory, or from the classpath if there is no file in the working directory. You can also pass these settings as JVM properties; JVM values override file values. Restart the server after changing the budget. This is a server configuration file, not the client application's `ojp.properties` described in Chapter 5.
+
+The JDBC driver's health reports trigger recalculation, so servers need a consistent cluster-health view; this is not distributed consensus during network partitions. The budget covers pooled primary, XA, and read/write replica connections, not unpooled connections or connections from other applications. When a pool's maximum is reduced, active work may take time to finish.
 
 ## 6.3 Security Configuration
 

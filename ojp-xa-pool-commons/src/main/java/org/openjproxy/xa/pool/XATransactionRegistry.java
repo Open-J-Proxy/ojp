@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.transaction.xa.XAException;
 import javax.transaction.xa.XAResource;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -51,8 +52,10 @@ public class XATransactionRegistry {
     private final XAConnectionPoolProvider poolProvider;
     private final Object poolDataSource; // XADataSource instance from provider
     private final String serverEndpointsHash; // Hash of serverEndpoints used to create this registry
-    private final int maxPoolSize; // Max pool size used to create backend pool
-    private final int minIdle; // Min idle connections used to create backend pool
+    private volatile int maxPoolSize; // Max pool size currently configured for backend pool
+    private volatile int minIdle; // Min idle connections currently configured for backend pool
+    private final int requestedMaxPoolSize;
+    private final int requestedMinIdle;
 
     /**
      * Creates a new XA transaction registry.
@@ -64,11 +67,26 @@ public class XATransactionRegistry {
      * @param minIdle the minimum idle connections used to create the backend pool
      */
     public XATransactionRegistry(XAConnectionPoolProvider poolProvider, Object poolDataSource, String serverEndpointsHash, int maxPoolSize, int minIdle) {
+        this(poolProvider, poolDataSource, serverEndpointsHash, maxPoolSize, minIdle, maxPoolSize, minIdle);
+    }
+
+    /**
+     * Keeps the client configuration separate from health- and budget-adjusted pool sizes.
+     */
+    public XATransactionRegistry(XAConnectionPoolProvider poolProvider, Object poolDataSource,
+                                 String serverEndpointsHash, int maxPoolSize, int minIdle,
+                                 int requestedMaxPoolSize, int requestedMinIdle) {
         this.poolProvider = poolProvider;
         this.poolDataSource = poolDataSource;
         this.serverEndpointsHash = serverEndpointsHash;
         this.maxPoolSize = maxPoolSize;
         this.minIdle = minIdle;
+        this.requestedMaxPoolSize = requestedMaxPoolSize;
+        this.requestedMinIdle = requestedMinIdle;
+    }
+
+    public boolean matchesRequestedPoolSizes(int maximum, int minimum) {
+        return requestedMaxPoolSize == maximum && requestedMinIdle == minimum;
     }
 
     /**
@@ -82,7 +100,7 @@ public class XATransactionRegistry {
     }
 
     /**
-     * Gets the maximum pool size used to create the backend pool.
+     * Gets the currently configured maximum backend pool size.
      *
      * @return the max pool size
      */
@@ -91,7 +109,7 @@ public class XATransactionRegistry {
     }
 
     /**
-     * Gets the minimum idle connections used to create the backend pool.
+     * Gets the currently configured minimum idle connections.
      *
      * @return the min idle connections
      */
@@ -121,42 +139,62 @@ public class XATransactionRegistry {
      */
     public void resizeBackendPool(int newMaxPoolSize, int newMinIdle) {
         if (poolDataSource instanceof org.openjproxy.xa.pool.commons.CommonsPool2XADataSource) {
-            org.openjproxy.xa.pool.commons.CommonsPool2XADataSource commonsPool =
-                    (org.openjproxy.xa.pool.commons.CommonsPool2XADataSource) poolDataSource;
-
-            int currentMaxTotal = commonsPool.getMaxTotal();
-            int currentMinIdle = commonsPool.getMinIdle();
-
-            log.debug("[XA-POOL-RESIZE] resizeBackendPool called: old=(max={}, min={}), new=(max={}, min={}), " +
-                    "currentPoolState=(active={}, idle={})",
-                    currentMaxTotal, currentMinIdle, newMaxPoolSize, newMinIdle,
-                    commonsPool.getNumActive(), commonsPool.getNumIdle());
-
-            // Log diagnostics BEFORE resize
-            commonsPool.logPoolDiagnostics("BEFORE resize");
-
-            // Determine resize direction
-            boolean isDecreasing = (newMaxPoolSize < currentMaxTotal) || (newMinIdle < currentMinIdle);
-
-            if (isDecreasing) {
-                // When decreasing: set minIdle first, then maxTotal to avoid validation errors
-                commonsPool.setMinIdle(newMinIdle);
-                commonsPool.setMaxTotal(newMaxPoolSize);
-                log.debug("[XA-POOL-RESIZE] XA backend pool resized (DECREASED): maxTotal={}, minIdle={}",
-                        newMaxPoolSize, newMinIdle);
-            } else {
-                // When increasing: set maxTotal first, then minIdle
-                commonsPool.setMaxTotal(newMaxPoolSize);
-                commonsPool.setMinIdle(newMinIdle);
-                log.debug("[XA-POOL-RESIZE] XA backend pool resized (INCREASED): maxTotal={}, minIdle={}",
-                        newMaxPoolSize, newMinIdle);
-            }
-
-            // Log diagnostics AFTER resize
-            commonsPool.logPoolDiagnostics("AFTER resize");
-
+            resizeCommonsPool((org.openjproxy.xa.pool.commons.CommonsPool2XADataSource) poolDataSource,
+                    newMaxPoolSize, newMinIdle);
+        } else if (poolProvider.supportsDynamicResizing()) {
+            resizeProviderPool(newMaxPoolSize, newMinIdle);
         } else {
             log.warn("Cannot resize XA backend pool: poolDataSource is not CommonsPool2XADataSource");
+        }
+    }
+
+    private void resizeCommonsPool(org.openjproxy.xa.pool.commons.CommonsPool2XADataSource commonsPool,
+                                   int newMaxPoolSize, int newMinIdle) {
+        int currentMaxTotal = commonsPool.getMaxTotal();
+        int currentMinIdle = commonsPool.getMinIdle();
+        log.debug("[XA-POOL-RESIZE] resizeBackendPool called: old=(max={}, min={}), new=(max={}, min={}), "
+                        + "currentPoolState=(active={}, idle={})",
+                currentMaxTotal, currentMinIdle, newMaxPoolSize, newMinIdle,
+                commonsPool.getNumActive(), commonsPool.getNumIdle());
+        logPoolDiagnostics(commonsPool, "BEFORE resize");
+        resizeCommonsPoolInOrder(commonsPool, newMaxPoolSize, newMinIdle,
+                newMaxPoolSize < currentMaxTotal || newMinIdle < currentMinIdle);
+        logPoolDiagnostics(commonsPool, "AFTER resize");
+        this.maxPoolSize = newMaxPoolSize;
+        this.minIdle = newMinIdle;
+    }
+
+    private void resizeCommonsPoolInOrder(org.openjproxy.xa.pool.commons.CommonsPool2XADataSource commonsPool,
+                                          int newMaxPoolSize, int newMinIdle, boolean decreasing) {
+        if (decreasing) {
+            commonsPool.setMinIdle(newMinIdle);
+            commonsPool.setMaxTotal(newMaxPoolSize);
+        } else {
+            commonsPool.setMaxTotal(newMaxPoolSize);
+            commonsPool.setMinIdle(newMinIdle);
+        }
+        log.debug("[XA-POOL-RESIZE] XA backend pool resized ({}): maxTotal={}, minIdle={}",
+                decreasing ? "DECREASED" : "INCREASED", newMaxPoolSize, newMinIdle);
+    }
+
+    private void logPoolDiagnostics(org.openjproxy.xa.pool.commons.CommonsPool2XADataSource commonsPool,
+                                    String stage) {
+        if (log.isDebugEnabled()) {
+            commonsPool.logPoolDiagnostics(stage);
+        }
+    }
+
+    private void resizeProviderPool(int newMaxPoolSize, int newMinIdle) {
+        try {
+            if (poolProvider.resizePool(poolDataSource, newMaxPoolSize, newMinIdle)) {
+                this.maxPoolSize = newMaxPoolSize;
+                this.minIdle = newMinIdle;
+            } else {
+                throw new IllegalStateException("XA pool provider '" + poolProvider.id()
+                        + "' did not apply the requested resize");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to resize XA backend pool", e);
         }
     }
 

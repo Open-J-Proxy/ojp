@@ -128,6 +128,34 @@ public class DbcpConnectionPoolProvider implements ConnectionPoolProvider {
     }
 
     @Override
+    public boolean supportsDynamicResizing() {
+        return true;
+    }
+
+    @Override
+    public void resizeDataSource(DataSource dataSource, int maximumPoolSize, int minimumIdle) throws SQLException {
+        if (!(dataSource instanceof BasicDataSource)) {
+            throw new SQLException("Cannot resize a DataSource not created by the DBCP provider");
+        }
+        if (maximumPoolSize < 1 || minimumIdle < 0 || minimumIdle > maximumPoolSize) {
+            throw new IllegalArgumentException("Invalid pool sizes: max=" + maximumPoolSize + ", min=" + minimumIdle);
+        }
+
+        BasicDataSource basicDataSource = (BasicDataSource) dataSource;
+        int currentMaximum = basicDataSource.getMaxTotal();
+        int currentMinimum = basicDataSource.getMinIdle();
+        if (maximumPoolSize < currentMaximum || minimumIdle < currentMinimum) {
+            basicDataSource.setMinIdle(minimumIdle);
+            basicDataSource.setMaxIdle(maximumPoolSize);
+            basicDataSource.setMaxTotal(maximumPoolSize);
+        } else {
+            basicDataSource.setMaxTotal(maximumPoolSize);
+            basicDataSource.setMaxIdle(maximumPoolSize);
+            basicDataSource.setMinIdle(minimumIdle);
+        }
+    }
+
+    @Override
     public Map<String, Object> getStatistics(DataSource dataSource) {
         Map<String, Object> stats = new HashMap<>();
 

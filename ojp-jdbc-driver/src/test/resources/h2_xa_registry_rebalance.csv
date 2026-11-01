@@ -1,0 +1,1 @@
+org.openjproxy.jdbc.Driver,"jdbc:ojp[localhost:1059,localhost:10598,localhost:10599]_h2:mem:xa_registry_rebalance;DB_CLOSE_DELAY=-1",sa,

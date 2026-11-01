@@ -59,6 +59,7 @@ add_custom_command(
 
 add_library(ojp_odbc SHARED
     src/ojp_odbc_driver.cpp
+    src/ojp_odbc_dsn.cpp
     ${PROTO_SRCS}
     ${PROTO_HDRS})
 target_include_directories(ojp_odbc PRIVATE "${GENERATED_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -67,6 +68,22 @@ target_compile_definitions(ojp_odbc PRIVATE OJP_ODBC_BUILD_DLL)
 target_link_libraries(ojp_odbc PRIVATE
     gRPC::grpc++
     protobuf::libprotobuf)
+
+# DSN resolution reads odbc.ini/registry through the ODBC installer library.
+if(WIN32)
+    target_compile_definitions(ojp_odbc PRIVATE OJP_ODBC_HAVE_ODBCINST)
+    target_link_libraries(ojp_odbc PRIVATE odbccp32 legacy_stdio_definitions)
+else()
+    find_library(OJP_ODBCINST_LIBRARY NAMES odbcinst iodbcinst)
+    find_path(OJP_ODBCINST_INCLUDE_DIR odbcinst.h HINTS ${ODBC_INCLUDE_DIRS})
+    if(OJP_ODBCINST_LIBRARY AND OJP_ODBCINST_INCLUDE_DIR)
+        target_compile_definitions(ojp_odbc PRIVATE OJP_ODBC_HAVE_ODBCINST)
+        target_include_directories(ojp_odbc PRIVATE "${OJP_ODBCINST_INCLUDE_DIR}")
+        target_link_libraries(ojp_odbc PRIVATE "${OJP_ODBCINST_LIBRARY}")
+    else()
+        message(WARNING "odbcinst not found: DSN connections will be unavailable")
+    endif()
+endif()
 set_target_properties(ojp_odbc PROPERTIES
     OUTPUT_NAME "ojp_odbc"
     WINDOWS_EXPORT_ALL_SYMBOLS ON
@@ -80,13 +97,88 @@ install(TARGETS ojp_odbc
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(FILES include/ojp_odbc_xa.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
+option(OJP_ODBC_BUILD_SETUP "Build the Windows ODBC DSN setup DLL" ON)
+if(WIN32 AND OJP_ODBC_BUILD_SETUP)
+    add_library(ojp_odbc_setup SHARED
+        src/setup/ojp_odbc_setup.cpp
+        src/setup/ojp_odbc_setup.rc
+        src/setup/ojp_odbc_setup.def
+        src/setup/ojp_odbc_setup.manifest
+        src/ojp_odbc_dsn.cpp)
+    target_include_directories(ojp_odbc_setup PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_definitions(ojp_odbc_setup PRIVATE
+        OJP_ODBC_HAVE_ODBCINST UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+        ISOLATION_AWARE_ENABLED=1)
+    target_link_libraries(ojp_odbc_setup PRIVATE
+        odbccp32 legacy_stdio_definitions odbc32 comctl32 comdlg32 user32)
+    install(TARGETS ojp_odbc_setup
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(ojp_odbc_dsn_test tests/dsn_test.cpp src/ojp_odbc_dsn.cpp)
+    target_include_directories(ojp_odbc_dsn_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME OjpOdbcDsn COMMAND ojp_odbc_dsn_test)
+
     add_executable(ojp_odbc_parameter_test tests/parameter_test.cpp)
     target_include_directories(ojp_odbc_parameter_test PRIVATE "${GENERATED_DIR}" ${ODBC_INCLUDE_DIRS})
     target_link_libraries(ojp_odbc_parameter_test PRIVATE
         ojp_odbc gRPC::grpc++ protobuf::libprotobuf)
     add_test(NAME OjpOdbcParameters COMMAND ojp_odbc_parameter_test)
+
+    # The fake server runs in its own process: on Windows gRPC is static and two copies
+    # (test executable and ojp_odbc.dll) cannot share one process.
+    add_executable(ojp_odbc_fake_server tests/fake_statement_server.cpp ${PROTO_SRCS})
+    target_include_directories(ojp_odbc_fake_server PRIVATE "${GENERATED_DIR}")
+    target_link_libraries(ojp_odbc_fake_server PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+
+    add_executable(ojp_odbc_cancel_test tests/cancel_test.cpp)
+    target_include_directories(ojp_odbc_cancel_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_cancel_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcCancel
+        COMMAND ojp_odbc_cancel_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcCancel PROPERTIES TIMEOUT 120)
+
+    add_executable(ojp_odbc_batch_test tests/batch_test.cpp)
+    target_include_directories(ojp_odbc_batch_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_batch_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcBatch
+        COMMAND ojp_odbc_batch_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcBatch PROPERTIES TIMEOUT 120)
+
+    add_executable(ojp_odbc_sql_routing_test tests/sql_routing_test.cpp)
+    target_include_directories(ojp_odbc_sql_routing_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_sql_routing_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcSqlRouting
+        COMMAND ojp_odbc_sql_routing_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcSqlRouting PROPERTIES TIMEOUT 120)
+
+    add_executable(ojp_odbc_procedure_metadata_test tests/procedure_metadata_test.cpp)
+    target_include_directories(ojp_odbc_procedure_metadata_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_procedure_metadata_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcProcedureMetadata
+        COMMAND ojp_odbc_procedure_metadata_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcProcedureMetadata PROPERTIES TIMEOUT 120)
+
+    add_executable(ojp_odbc_tables_metadata_test tests/tables_metadata_test.cpp)
+    target_include_directories(ojp_odbc_tables_metadata_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_tables_metadata_test PRIVATE ojp_odbc)
+    add_test(NAME OjpOdbcTablesMetadata
+        COMMAND ojp_odbc_tables_metadata_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcTablesMetadata PROPERTIES TIMEOUT 120)
+
+    add_executable(ojp_odbc_driver_api_test tests/driver_api_test.cpp)
+    target_include_directories(ojp_odbc_driver_api_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_driver_api_test PRIVATE ojp_odbc)
+    set(OJP_TEST_DRIVER_API_LOG "${CMAKE_CURRENT_BINARY_DIR}/ojp_odbc_driver_api_test.log")
+    add_test(NAME OjpOdbcDriverApi
+        COMMAND ojp_odbc_driver_api_test "$<TARGET_FILE:ojp_odbc_fake_server>"
+            "${OJP_TEST_DRIVER_API_LOG}")
+    set_tests_properties(OjpOdbcDriverApi PROPERTIES TIMEOUT 120
+        ENVIRONMENT "OJP_ODBC_LOG_FILE=${OJP_TEST_DRIVER_API_LOG};OJP_ODBC_LOG_LEVEL=debug")
 
     find_program(OJP_TEST_OPENSSL openssl)
     if(OJP_TEST_OPENSSL)
@@ -408,6 +500,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
             "OJP_TEST_SQLSERVER"
             "OJP_TEST_SQLSERVER_ADDR")
+    add_executable(ojp_odbc_sqlserver_data_types_integration_test
+        tests/sqlserver_data_types_integration_test.cpp)
+    target_link_libraries(ojp_odbc_sqlserver_data_types_integration_test PRIVATE ODBC::ODBC)
+    add_dependencies(ojp_odbc_sqlserver_data_types_integration_test ojp_odbc)
+    add_test(NAME OjpOdbcSqlServerDataTypesIntegration
+        COMMAND ojp_odbc_sqlserver_data_types_integration_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/sqlserver_l1_connection.csv"
+            "OJP_TEST_SQLSERVER"
+            "OJP_TEST_SQLSERVER_ADDR")
     add_executable(ojp_odbc_sqlserver_l3_integration_test
         tests/sqlserver_l3_integration_test.cpp)
     target_link_libraries(ojp_odbc_sqlserver_l3_integration_test PRIVATE ODBC::ODBC)
@@ -532,6 +633,7 @@ if(BUILD_TESTING)
         OjpOdbcSqlServerL8Integration
         OjpOdbcSqlServerL9Integration
         OjpOdbcSqlServerL10Integration
+        OjpOdbcSqlServerDataTypesIntegration
         PROPERTIES
         SKIP_RETURN_CODE 77
         TIMEOUT 0

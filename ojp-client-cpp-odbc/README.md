@@ -4,6 +4,8 @@ This module provides an ANSI and Unicode ODBC 3.x driver for applications that
 access OJP servers from C++.
 It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
 communicates with the server over gRPC.
+[ODBC_API_COVERAGE.md](ODBC_API_COVERAGE.md) lists the implemented ODBC 3.x
+functions and the remaining work.
 
 ## Supported levels by database
 
@@ -116,6 +118,12 @@ Keep required gRPC/Protobuf dependency DLLs and the matching Visual C++ runtime
 available to the application's loader (for example alongside the application).
 Installation does not bundle third-party runtime libraries.
 
+On Windows the build also produces the DSN setup DLL `install/bin/ojp_odbc_setup.dll`
+(see [Register the installed driver](#register-the-installed-driver)). Disable it with
+`-DOJP_ODBC_BUILD_SETUP=OFF`; it is never built on other platforms. Both DLLs link
+`odbccp32.lib` together with `legacy_stdio_definitions.lib`, which the modern
+Universal CRT requires for that import library.
+
 **Platform status:** Linux has integration suites in this repository. The
 macOS and Windows instructions describe the platform build/registration path,
 not a claim that those platforms or language wrappers have passed integration
@@ -171,11 +179,15 @@ configuration location). For an isolated, user-owned configuration, put the
 entry in `/absolute/path/to/odbc-config/odbcinst.ini` and set
 `ODBCSYSINI=/absolute/path/to/odbc-config` **before starting the application**.
 Confirm registration with `odbcinst -q -d -n OJP`. This is driver registration,
-not a DSN; the driver currently requires a DSN-less connection string.
+not a DSN; see [Data sources (DSN)](#data-sources-dsn) to define one in `odbc.ini`.
+The DSN support needs the unixODBC/iODBC `odbcinst` library at build time; CMake
+warns and builds a DSN-less driver when it is missing.
 
 On Windows, register `OJP` in the matching architecture's ODBC driver registry.
-There is no installer or setup-dialog DLL yet. An administrator can import this
-`.reg` template for a **64-bit** driver after replacing the path:
+The [Windows installer](installer/windows/README.md) builds an Inno Setup installer
+(or runs `install.ps1`) that copies the 32-bit and 64-bit drivers and writes these
+entries. To register by hand, an administrator can import this `.reg` template for a
+**64-bit** driver after replacing the paths; `Setup` enables the DSN dialog:
 
 ```text
 Windows Registry Editor Version 5.00
@@ -185,13 +197,16 @@ Windows Registry Editor Version 5.00
 
 [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\OJP]
 "Driver"="C:\\OJP\\install\\bin\\ojp_odbc.dll"
+"Setup"="C:\\OJP\\install\\bin\\ojp_odbc_setup.dll"
 ```
 
 For a 32-bit driver on 64-bit Windows, the corresponding entries are under
 `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\ODBC\ODBCINST.INI`.
 The 64-bit ODBC Administrator is `%windir%\System32\odbcad32.exe`; the 32-bit
-one is `%windir%\SysWOW64\odbcad32.exe`. Their Drivers tabs show registration;
-do not expect the DSN configuration wizard to work without a setup DLL.
+one is `%windir%\SysWOW64\odbcad32.exe`. With `Setup` registered, **Add** and
+**Configure** on the User DSN / System DSN tabs open the OJP dialog, which edits
+the DSN fields, TLS options and offers **Test Connection**. The password typed for
+the test is never saved.
 
 Check runtime dependencies with `ldd` on Linux, `otool -L` on macOS, or
 `dumpbin /DEPENDENTS` in a Windows developer terminal. A registered driver that
@@ -217,8 +232,32 @@ DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:example;DB_CLOSE_DELA
 ```
 
 The ODBC connection-string braces protect semicolons in the H2 URL; a literal
-closing brace in a value is escaped by doubling it. `SQLConnect` with a DSN is
-not implemented yet.
+closing brace in a value is escaped by doubling it.
+
+### Data sources (DSN)
+
+A DSN stores every connection field except `PWD`, which is never read from or
+written to `ODBC.INI`. Connect with `DSN=name;UID=...;PWD=...` through
+`SQLDriverConnect`, or with `SQLConnect(dbc, "name", ..., uid, ..., pwd, ...)`.
+Fields given explicitly in the connection string override the DSN. An unknown
+DSN fails with SQLSTATE `IM002`.
+
+On Windows create the DSN with the ODBC Administrator (see above). With unixODBC,
+add it to `odbc.ini` (`odbcinst -j` shows the location):
+
+```ini
+[OjpExample]
+Driver=OJP
+Description=Example OJP data source
+SERVER=localhost:1059
+DATABASE=jdbc:h2:mem:example;DB_CLOSE_DELAY=-1
+UID=sa
+```
+
+Stored keys: `Description`, `SERVER`, `DATABASE`, `UID`,
+`OJP.DATASOURCE.NAME`, `OJP.XA`, `OJP.LOADAWARE.SELECTION.ENABLED`,
+`OJP.MULTINODE.RETRY.ATTEMPTS`, `OJP.MULTINODE.RETRY.DELAY` and the
+`OJP.CLIENT.TLS.*` keys described below.
 
 Start an OJP server with Java 25 and `-Duser.timezone=UTC`, provide its backend
 JDBC driver JAR, and ensure it can reach the database. `SERVER` is the **OJP
@@ -432,12 +471,11 @@ while (SQLFetch(statement) == SQL_SUCCESS) {
 SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
 ```
 
-Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections. The
-driver does not currently resolve conventional DSNs, so `SQLConnect` and
-`SQLConnectW` are not supported through a Driver Manager. In particular, do not
-pass a `SERVER=...;DATABASE=...` options string as the server name: the Driver
-Manager interprets that argument as a DSN name and may reject it before calling
-the driver.
+Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections, and
+`SQLConnect`/`SQLConnectW` with a DSN name (see [Data sources (DSN)](#data-sources-dsn)).
+Do not pass a `SERVER=...;DATABASE=...` options string as the `SQLConnect` server
+name: the Driver Manager interprets that argument as a DSN name and may reject it
+before calling the driver.
 
 #### Metadata and known limitations
 
@@ -455,9 +493,33 @@ the database's declared precision, scale, nullability, or base-table identity
 for arbitrary query expressions. Use `SQLColumns` for authoritative declared
 table-column metadata. Catalog functions not listed above (including
 `SQLStatistics`, `SQLProcedures`, `SQLSpecialColumns`, and privilege catalogs),
-`SQLGetStmtAttr`, and `SQLMoreResults` remain unsupported. A Driver Manager or
+and `SQLGetStmtAttr` remain unsupported. A Driver Manager or
 language wrapper may require one of these functions; verify its exact calls
 with the target Driver Manager and database.
+
+Bindings with `SQL_PARAM_OUTPUT` or `SQL_PARAM_INPUT_OUTPUT` (including the
+return value of `{? = CALL proc(?)}`) execute through the backend JDBC
+`CallableStatement`; output values are written to the bound buffers after
+`SQLExecute`/`SQLExecDirect`. Streamed output parameters, LOB or
+data-at-execution inputs in the same call, and output parameters combined with
+`SQL_ATTR_PARAMSET_SIZE` > 1 return `HYC00`. `SQLSetDescField` accepts
+`SQL_DESC_NAME` on the implementation parameter descriptor and ignores it,
+because parameters are always bound by position; other descriptor fields return
+`HYC00`.
+
+A procedure call (`EXEC`/`EXECUTE`/`CALL`/`{CALL ...}`) or a statement whose SQL
+contains a top-level `;` followed by more code and a
+`SELECT`, `EXEC`/`EXECUTE`, `OUTPUT`, or `RETURNING` keyword is treated as a
+multi-result batch: it runs through a backend JDBC `CallableStatement` that
+stays open while results remain, so `SQLMoreResults` advances to the next result
+set (update counts in between are skipped) and returns `SQL_NO_DATA` at the end.
+`SQLCloseCursor`, `SQLFreeStmt(SQL_CLOSE)`, re-execution, catalog calls, and
+freeing the statement close the pending results. Batches without a top-level `;`
+(for example `IF ... SELECT ... ELSE SELECT ...`), batches with LOB or
+data-at-execution parameters, and output-parameter calls expose only the first
+result; `SQLMoreResults` then returns `SQL_NO_DATA`. With
+`SQL_ATTR_PARAMSET_SIZE` > 1, only the results of the last parameter row remain
+available.
 
 The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
 paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,
@@ -656,3 +718,11 @@ Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-e
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
+
+`OJP.LOB.CHUNK.SIZE` (connection string or DSN; fallback env `OJP_LOB_CHUNK_SIZE`) sets the
+block size in bytes used to upload LOB parameters (default 4128768 = 4 MiB - 64 KiB, range
+65536-268435456). The server writes each block with `Blob.setBytes`, which re-copies the whole
+value on SQL Server, so larger blocks make big uploads much faster. Each block must fit in the
+server's `ojp.server.maxRequestSize` (default 4 MiB): raise both together, keeping ~64 KiB of
+headroom. Execution, fetch and LOB streams have no client deadline unless the application sets
+`SQL_ATTR_QUERY_TIMEOUT`; the client accepts responses of any size.

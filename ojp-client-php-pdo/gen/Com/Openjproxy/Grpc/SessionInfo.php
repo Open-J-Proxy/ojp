@@ -66,6 +66,12 @@ class SessionInfo extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>int32 observedPeak = 11;</code>
      */
     protected $observedPeak = 0;
+    /**
+     * Optional features supported by the server, announced in the connect response (e.g. "PARAMETER_SETS").
+     *
+     * Generated from protobuf field <code>repeated string serverCapabilities = 12;</code>
+     */
+    private $serverCapabilities;
 
     /**
      * Constructor.
@@ -88,6 +94,8 @@ class SessionInfo extends \Google\Protobuf\Internal\Message
      *     @type int $clientCount
      *     @type int $maxAdmission
      *     @type int $observedPeak
+     *     @type string[] $serverCapabilities
+     *           Optional features supported by the server, announced in the connect response (e.g. "PARAMETER_SETS").
      * }
      */
     public function __construct($data = NULL) {
@@ -357,6 +365,32 @@ class SessionInfo extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkInt32($var);
         $this->observedPeak = $var;
+
+        return $this;
+    }
+
+    /**
+     * Optional features supported by the server, announced in the connect response (e.g. "PARAMETER_SETS").
+     *
+     * Generated from protobuf field <code>repeated string serverCapabilities = 12;</code>
+     * @return RepeatedField<string>
+     */
+    public function getServerCapabilities()
+    {
+        return $this->serverCapabilities;
+    }
+
+    /**
+     * Optional features supported by the server, announced in the connect response (e.g. "PARAMETER_SETS").
+     *
+     * Generated from protobuf field <code>repeated string serverCapabilities = 12;</code>
+     * @param string[] $var
+     * @return $this
+     */
+    public function setServerCapabilities(array|RepeatedField $var)
+    {
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::STRING);
+        $this->serverCapabilities = $arr;
 
         return $this;
     }

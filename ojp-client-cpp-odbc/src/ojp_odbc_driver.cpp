@@ -86,6 +86,10 @@ constexpr char kResultSetLastBlockFlag[] = "RESULT_SET_LAST_BLOCK";
 constexpr char kUpdateResultSetFlag[] = "UPDATE_RESULT_SET";
 constexpr char kUpdateResultSetRequestKey[] = "STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY";
 constexpr char kAddBatchFlagKey[] = "PREPARED_STATEMENT_ADD_BATCH_FLAG";
+constexpr char kParameterSetSizeKey[] = "PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY";
+// Rows are packed into requests of about this size, well below the server's default 4 MiB
+// ojp.server.maxRequestSize.
+constexpr std::size_t kParameterSetRequestBytes = 1024 * 1024;
 // java.sql.Statement.SUCCESS_NO_INFO and EXECUTE_FAILED.
 constexpr std::int32_t kJdbcSuccessNoInfo = -2;
 constexpr std::int32_t kJdbcExecuteFailed = -3;
@@ -168,6 +172,8 @@ struct EndpointRuntime {
     std::atomic<bool> healthy{true};
     std::atomic<int> active_connections{0};
     std::atomic<std::int64_t> last_failure_ms{0};
+    // Set when the server announced it executes flattened parameter sets as one batch.
+    std::atomic<bool> parameter_sets{false};
 };
 
 struct ClientRuntime {
@@ -1315,6 +1321,32 @@ SQLRETURN write_wide_string_bytes(HandleBase* handle, const std::string& text, S
     return result;
 }
 
+// Only connect responses carry the capabilities, so they are kept per endpoint.
+void record_server_capabilities(EndpointRuntime* endpoint, const SessionInfo& response) {
+    bool parameter_sets = false;
+    for (const auto& capability : response.servercapabilities()) {
+        if (capability == "PARAMETER_SETS") {
+            parameter_sets = true;
+        }
+    }
+    endpoint->parameter_sets.store(parameter_sets);
+}
+
+// Returns the per-set update counts the server attaches to a failed parameter-set execution.
+std::vector<std::int32_t> extract_batch_update_counts(const grpc::ClientContext& context) {
+    std::vector<std::int32_t> counts;
+    for (const auto& item : context.GetServerTrailingMetadata()) {
+        if (item.first.find("sqlerrorresponse-bin") != std::string::npos) {
+            com::openjproxy::grpc::SqlErrorResponse response;
+            if (response.ParseFromString(std::string(item.second.data(), item.second.size()))) {
+                counts.assign(response.batchupdatecounts().begin(),
+                              response.batchupdatecounts().end());
+            }
+        }
+    }
+    return counts;
+}
+
 // Extracts the SqlErrorResponse (SQLSTATE, message and vendor code) sent by the OJP server.
 bool extract_sql_error(const grpc::ClientContext& context, std::string* sql_state,
                        std::string* message, SQLINTEGER* native_error) {
@@ -1475,6 +1507,7 @@ bool recover_not_found(ConnectionHandle* connection) {
         connection->channel = endpoint->channel;
         connection->stub = endpoint->stub;
         connection->connection_details.CopyFrom(details);
+        record_server_capabilities(endpoint.get(), response);
         response.set_targetserver(address);
         connection->session.CopyFrom(response);
         {
@@ -4147,8 +4180,8 @@ void load_column_metadata(ConnectionHandle* connection, StatementHandle* stateme
     }
 }
 
-// Adds the bound parameters that have a matching '?' marker to the request, shifting their
-// indexes by index_offset.
+// Adds the bound parameters that have a matching '?' marker to the request. index_offset shifts
+// the parameter indexes, used to flatten several parameter sets into one request.
 SQLRETURN add_request_parameters(StatementHandle* statement, StatementRequest* request,
                                  std::size_t marker_count, std::int32_t index_offset) {
     auto* connection = statement->connection;
@@ -5878,6 +5911,7 @@ SQLRETURN connect(ConnectionHandle* connection, const std::string& connection_st
             }
             endpoint->healthy.store(true);
             endpoint->last_failure_ms.store(0);
+            record_server_capabilities(endpoint.get(), response);
             if (!connected_to_any || address == connection->endpoint) {
                 session.CopyFrom(response);
                 connection->endpoint = address;
@@ -7020,9 +7054,197 @@ static SQLRETURN execute_jdbc_batch(StatementHandle* target, SQLULEN rows, bool*
     return SQL_SUCCESS;
 }
 
+// Sends the rows of a parameter array flattened into as few executeUpdate requests as possible;
+// the server runs each request as one JDBC batch. Leaves *handled false, without side effects,
+// when the statement or the server does not allow it, so the caller executes row by row.
+static SQLRETURN execute_parameter_sets(StatementHandle* target, SQLULEN rows, bool* handled) {
+    *handled = false;
+    auto* connection = target->connection;
+    const auto marker_count = count_parameter_markers(target->sql);
+    std::string savepoint_name;
+    if (connection == nullptr || marker_count == 0 || is_query_sql(target->sql) ||
+        uses_update_result_set(target->sql) ||
+        parse_savepoint_statement(target->sql, &savepoint_name) != SavepointAction::NONE) {
+        return SQL_SUCCESS;
+    }
+    std::lock_guard<std::mutex> connection_lock(connection->operation_mutex);
+    if (!connection->connected || !connection->stub) {
+        return SQL_SUCCESS;
+    }
+    route_session_rpc(connection);
+    if (!endpoint_runtime(connection->last_rpc_endpoint, connection->tls)->parameter_sets.load()) {
+        return SQL_SUCCESS;
+    }
+    *handled = true;
+    clear_diagnostics(target);
+    target->columns.clear();
+    target->column_meta.clear();
+    target->rows.clear();
+    target->get_data_offsets.clear();
+    target->row_index = 0;
+    target->row_count = -1;
+    target->has_result_set = false;
+    log_message(LogLevel::debug, "executing parameter array with " + std::to_string(rows) +
+                " row(s) as parameter sets of " + std::to_string(marker_count) + " marker(s)");
+
+    const auto original = target->parameters;
+    std::vector<Diagnostic> errors;
+    SQLLEN total_rows = 0;
+    bool any_count = false;
+    SQLULEN processed = 0;
+    SQLULEN failed = 0;
+    bool canceled = false;
+    auto set_status = [&](SQLULEN row, SQLUSMALLINT status) {
+        if (target->param_status_ptr != nullptr) {
+            target->param_status_ptr[row] = status;
+        }
+    };
+    // Maps the per-set update counts of the rows [first, first + count) and returns false if
+    // the request did not complete.
+    auto send = [&](StatementRequest* request, SQLULEN first, SQLULEN count) {
+        SessionInfo request_session = connection->session;
+        const SessionInfo initial_request_session = request_session;
+        std::set<std::string> attempted_endpoints;
+        bool not_found_retried = false;
+        request->mutable_session()->CopyFrom(request_session);
+        OpResult result;
+        for (int attempt = 0; attempt <= connection->retry_attempts; ++attempt) {
+            StatementService::Stub* stub = route_session_rpc(connection);
+            result.Clear();
+            grpc::ClientContext context;
+            CancellableCall cancellable_context(&context, target);
+            const auto status = stub->executeUpdate(&context, *request, &result);
+            if (status.ok()) {
+                break;
+            }
+            if (attempt < connection->retry_attempts &&
+                prepare_stateless_retry(connection, status, context, initial_request_session,
+                                        &attempted_endpoints, &not_found_retried)) {
+                request_session.CopyFrom(connection->session);
+                request->mutable_session()->CopyFrom(request_session);
+                continue;
+            }
+            if (attempt == connection->retry_attempts) {
+                note_transport_failure(connection, status, context);
+            }
+            // Drivers report the sets executed before the failure (PostgreSQL) or every set,
+            // with EXECUTE_FAILED for the failed ones (SQL Server).
+            const auto counts = extract_batch_update_counts(context);
+            fail_grpc(target, status, context);
+            canceled = status.error_code() == grpc::StatusCode::CANCELLED && cancel_requested(target);
+            const SQLULEN reported = std::min<SQLULEN>(counts.size(), count);
+            SQLULEN failed_row = first + reported;
+            for (SQLULEN index = 0; index < reported; ++index) {
+                if (counts[index] == kJdbcExecuteFailed) {
+                    set_status(first + index, SQL_PARAM_ERROR);
+                    ++failed;
+                    failed_row = std::min(failed_row, first + index);
+                } else {
+                    set_status(first + index, SQL_PARAM_SUCCESS);
+                    if (counts[index] >= 0) {
+                        total_rows += counts[index];
+                        any_count = true;
+                    }
+                }
+            }
+            processed = first + reported;
+            if (reported < count) {
+                set_status(first + reported, SQL_PARAM_ERROR);
+                ++failed;
+                ++processed;
+            }
+            prefix_parameter_row(&target->diagnostics, failed_row, &errors);
+            return false;
+        }
+        if (result.has_session()) {
+            update_session(connection, result.session(), request_session);
+        }
+        if (result.type() != com::openjproxy::grpc::INTEGER || !result.has_int_value()) {
+            fail(target, "OJP returned an invalid update result", "HY000");
+            prefix_parameter_row(&target->diagnostics, first, &errors);
+            ++failed;
+            set_status(first, SQL_PARAM_ERROR);
+            processed = first + 1;
+            return false;
+        }
+        for (SQLULEN index = 0; index < count; ++index) {
+            const std::int32_t update_count = static_cast<SQLULEN>(result.batchupdatecounts_size()) == count
+                ? result.batchupdatecounts(static_cast<int>(index)) : kJdbcSuccessNoInfo;
+            set_status(first + index, SQL_PARAM_SUCCESS);
+            if (update_count >= 0) {
+                total_rows += update_count;
+                any_count = true;
+            }
+        }
+        processed = first + count;
+        return true;
+    };
+
+    SQLULEN row = 0;
+    bool stop = false;
+    while (row < rows && !stop) {
+        if (cancel_requested(target)) {
+            fail(target, "Operation canceled", "HY008");
+            errors.insert(errors.end(), target->diagnostics.begin(), target->diagnostics.end());
+            canceled = true;
+            break;
+        }
+        StatementRequest request;
+        request.set_sql(target->sql);
+        auto* property = request.add_properties();
+        property->set_key(kParameterSetSizeKey);
+        property->set_int_value(static_cast<std::int32_t>(marker_count));
+        const SQLULEN first = row;
+        bool build_failed = false;
+        while (row < rows && request.ByteSizeLong() < kParameterSetRequestBytes) {
+            shift_parameter_row(target, original, row);
+            const int before = request.parameters_size();
+            const auto offset = static_cast<std::int32_t>((row - first) * marker_count);
+            if (!SQL_SUCCEEDED(add_request_parameters(target, &request, marker_count, offset))) {
+                request.mutable_parameters()->DeleteSubrange(before, request.parameters_size() - before);
+                build_failed = true;
+                break;
+            }
+            ++row;
+        }
+        target->parameters = original;
+        std::vector<Diagnostic> build_errors = std::move(target->diagnostics);
+        target->diagnostics.clear();
+        if (row > first && !send(&request, first, row - first)) {
+            stop = true;
+        }
+        if (build_failed && !stop) {
+            target->diagnostics = std::move(build_errors);
+            prefix_parameter_row(&target->diagnostics, row, &errors);
+            set_status(row, SQL_PARAM_ERROR);
+            ++failed;
+            processed = row + 1;
+            stop = true;
+        }
+    }
+    target->parameters = original;
+    for (SQLULEN unused = processed; unused < rows; ++unused) {
+        set_status(unused, SQL_PARAM_UNUSED);
+    }
+    target->row_count = any_count ? total_rows : -1;
+    if (target->params_processed_ptr != nullptr) {
+        *target->params_processed_ptr = processed;
+    }
+    target->diagnostics = std::move(errors);
+    if (canceled) {
+        return SQL_ERROR;
+    }
+    if (failed > 0) {
+        return target->param_status_ptr != nullptr && failed < processed
+            ? SQL_SUCCESS_WITH_INFO : SQL_ERROR;
+    }
+    return SQL_SUCCESS;
+}
+
 // Parameter bindings persist across SQLPrepare/SQLExecDirect (only SQL_RESET_PARAMS clears them).
-// Also handles SQL_ATTR_PARAMSET_SIZE > 1, as a JDBC batch when possible and otherwise by
-// executing once per array row, and fills SQL_ATTR_PARAMS_PROCESSED_PTR / SQL_ATTR_PARAM_STATUS_PTR.
+// Also handles SQL_ATTR_PARAMSET_SIZE > 1, as parameter sets or a JDBC batch when possible and
+// otherwise by executing once per array row, and fills SQL_ATTR_PARAMS_PROCESSED_PTR /
+// SQL_ATTR_PARAM_STATUS_PTR.
 static SQLRETURN execute_and_report(StatementHandle* target) {
     ExecutionScope execution(target);
     const auto paramset = target->stored_attributes.find(SQL_ATTR_PARAMSET_SIZE);
@@ -7055,7 +7277,10 @@ static SQLRETURN execute_and_report(StatementHandle* target) {
         }
     }
     bool handled = false;
-    const SQLRETURN batched = execute_jdbc_batch(target, rows, &handled);
+    SQLRETURN batched = execute_parameter_sets(target, rows, &handled);
+    if (!handled) {
+        batched = execute_jdbc_batch(target, rows, &handled);
+    }
     if (handled) {
         return batched;
     }

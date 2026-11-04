@@ -2413,7 +2413,7 @@ jobs:
           OJP_TEST_H2_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbc(Parameters|Tls|Cancel|Batch|SqlRouting|ProcedureMetadata|TablesMetadata|DriverApi|H2L[1-9]Integration)$' --output-on-failure \
+            -R '^OjpOdbc(Parameters|Tls|Cancel|Batch|ParameterSets|SqlRouting|ProcedureMetadata|TablesMetadata|DriverApi|H2L[1-9]Integration)$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-l9-test.log
 
       - name: Show ojp-server.log

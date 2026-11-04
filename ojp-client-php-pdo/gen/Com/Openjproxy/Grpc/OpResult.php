@@ -30,6 +30,12 @@ class OpResult extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>string flag = 7;</code>
      */
     protected $flag = '';
+    /**
+     * Per-set update counts of a parameter-set execution (java.sql.Statement#executeBatch semantics).
+     *
+     * Generated from protobuf field <code>repeated int32 batchUpdateCounts = 8;</code>
+     */
+    private $batchUpdateCounts;
     protected $result;
 
     /**
@@ -45,6 +51,8 @@ class OpResult extends \Google\Protobuf\Internal\Message
      *     @type string $uuid_value
      *     @type string $uuid
      *     @type string $flag
+     *     @type int[] $batchUpdateCounts
+     *           Per-set update counts of a parameter-set execution (java.sql.Statement#executeBatch semantics).
      * }
      */
     public function __construct($data = NULL) {
@@ -225,6 +233,32 @@ class OpResult extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkString($var, true);
         $this->flag = $var;
+
+        return $this;
+    }
+
+    /**
+     * Per-set update counts of a parameter-set execution (java.sql.Statement#executeBatch semantics).
+     *
+     * Generated from protobuf field <code>repeated int32 batchUpdateCounts = 8;</code>
+     * @return RepeatedField<int>
+     */
+    public function getBatchUpdateCounts()
+    {
+        return $this->batchUpdateCounts;
+    }
+
+    /**
+     * Per-set update counts of a parameter-set execution (java.sql.Statement#executeBatch semantics).
+     *
+     * Generated from protobuf field <code>repeated int32 batchUpdateCounts = 8;</code>
+     * @param int[] $var
+     * @return $this
+     */
+    public function setBatchUpdateCounts(array|RepeatedField $var)
+    {
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::INT32);
+        $this->batchUpdateCounts = $arr;
 
         return $this;
     }

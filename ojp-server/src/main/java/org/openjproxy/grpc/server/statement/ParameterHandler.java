@@ -296,8 +296,20 @@ public class ParameterHandler {
         if (blobUUID == null) {
             ps.setBlob(idx, (Blob) null);
         } else {
-            ps.setBlob(idx, sessionManager.<Blob>getLob(session, (String) blobUUID));
+            ps.setBlob(idx, requireLob(sessionManager.<Blob>getLob(session, (String) blobUUID), blobUUID));
         }
+    }
+
+    /**
+     * Fails instead of silently binding NULL when a referenced LOB is not in the session
+     * (e.g. it was already released after a previous execution).
+     */
+    private static <T> T requireLob(T lob, Object uuid) throws SQLException {
+        if (lob == null) {
+            throw new SQLException("LOB " + uuid + " not found in session; it may have been released after a "
+                    + "previous execution (see ojp.server.lob.keepUntilSessionEnd)", "HY000");
+        }
+        return lob;
     }
 
     /**
@@ -309,7 +321,7 @@ public class ParameterHandler {
         if (clobUUID == null) {
             ps.setClob(idx, (Clob) null);
         } else {
-            Clob clob = sessionManager.getLob(session, (String) clobUUID);
+            Clob clob = requireLob(sessionManager.<Clob>getLob(session, (String) clobUUID), clobUUID);
             ps.setClob(idx, clob.getCharacterStream());
         }
     }
@@ -320,7 +332,7 @@ public class ParameterHandler {
         if (clobUUID == null) {
             ps.setNull(idx, java.sql.Types.NCLOB);
         } else {
-            Clob clob = sessionManager.getLob(session, (String) clobUUID);
+            Clob clob = requireLob(sessionManager.<Clob>getLob(session, (String) clobUUID), clobUUID);
             ps.setNClob(idx, clob.getCharacterStream());
         }
     }

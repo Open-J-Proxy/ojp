@@ -1,0 +1,110 @@
+{
+  "uid": "ojp-overview",
+  "title": "OJP • Load spike demo",
+  "description": "Follow a request spike, successful-request latency, connection pressure and overload rejections. Slowest SQL is always visible. SQL metrics do not export a user identity. Standalone dashboard for Grafana 10+.",
+  "tags": ["ojp", "demo", "prometheus"],
+  "schemaVersion": 38,
+  "version": 2,
+  "editable": true,
+  "graphTooltip": 1,
+  "timezone": "utc",
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {"refresh_intervals": ["5s", "10s", "30s", "1m"]},
+  "links": [],
+  "annotations": {"list": []},
+  "templating": {
+    "list": [
+      {"name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "query": "prometheus", "refresh": 1, "current": {}, "options": []},
+      {"name": "job", "label": "Job", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values(up, job)", "refId": "job"}, "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []},
+      {"name": "instance", "label": "Instance", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values(up{job=~\"${job:regex}\"}, instance)", "refId": "instance"}, "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []}
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "text", "title": "Demo: spike → bounded connections → shedding → latency",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+      "options": {
+        "mode": "markdown",
+        "content": "Compare the **request spike**, **successful-request p95**, and **overload rejections** on the same timeline. Connections stay within configured pool capacity; waiting borrowers indicate pool contention, not the admission queue length. These measurements show what happened, not a guarantee of stable latency.\n\nRequest volume is **completed executeQuery/executeUpdate RPCs**, including failures—not incoming attempts. Rejections are gRPC status **8** (OJP maps admission overload to this status; it can have other causes). **Query users are not exported**; SQL is grouped across users/databases. SQL text may contain sensitive literals. Missing telemetry is **No data**, not healthy zero. For short spikes, use an appropriately short Prometheus scrape interval; rate windows smooth the spike."
+      }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "1 · Request spike — completed SQL RPCs / sec",
+      "description": "Completion rate for executeQuery and executeUpdate only, including rejected/failed calls. This is not an arrival-rate metric and can lag a spike while requests wait. Each instance remains separate.",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data"}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} • completed"}
+      ]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "2 · Does latency stay stable? — p95",
+      "description": "Successful executeQuery/executeUpdate RPC duration (status 0) includes server handling/waiting, not full client-observed latency. SQL execution duration is a separate recorder with no method, user or datasource label, so its population is not identical. Rejected calls do not artificially lower the successful-RPC percentile. Zero traffic leaves percentiles undefined. No fixed latency SLO is assumed.",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data"}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(rpc_server_duration_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\",rpc_grpc_status_code=\"0\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • successful RPC p95"},
+        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(ojp_sql_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • SQL execution p95"}
+      ]
+    },
+    {
+      "id": 43, "type": "timeseries", "title": "3 · Load shedding — overload responses / sec",
+      "description": "RESOURCE_EXHAUSTED (gRPC status 8) for the same SQL RPCs as the load chart. GrpcExceptionHandler.sendServerOverload uses this status for admission-control rejections. This is a status-based signal, not a dedicated shed counter; other causes can share status 8. Zero is derived only from observed RPC telemetry. Missing instrumentation remains No data.",
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "color": {"mode": "fixed", "fixedColor": "red"}}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\",rpc_grpc_status_code=\"8\"}[$__rate_interval])) or on (job, instance) (0 * sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • overload"}
+      ]
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "4 · Connections stay bounded — active / maximum",
+      "description": "OJP-managed active connections versus configured pool maximum, separately by instance, pool and Hikari/XA type. This is not total database connection usage. Nonpositive/unlimited maxima are omitted. An unused pool type may have no series.",
+      "gridPos": {"x": 8, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data"}, "overrides": [
+        {"matcher": {"id": "byRegexp", "options": ".*maximum$"}, "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [8, 4]}}]}
+      ]},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • Hikari active"},
+        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) > 0", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • Hikari maximum"},
+        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • XA active"},
+        {"refId": "D", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) > 0", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • XA maximum"}
+      ]
+    },
+    {
+      "id": 15, "type": "timeseries", "title": "5 · Pool pressure — waiting borrowers",
+      "description": "Threads waiting to acquire a Hikari/XA connection. A contention signal, not the OJP admission queue depth or a direct count of throttled requests. Requests may wait before pool acquisition, so zero here does not prove no throttling.",
+      "gridPos": {"x": 16, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data"}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • Hikari waiting"},
+        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • XA waiting"}
+      ]
+    },
+    {
+      "id": 29, "type": "table", "title": "6 · Slowest SQL — top 5 by mean latency",
+      "description": "Highest mean database execution time over the selected range, descending. Zero-execution statements are excluded; low-volume queries may rank highly. Full SQL labels may contain sensitive literals. User identity and datasource are NOT exported by the SQL recorder, so ownership cannot be shown or inferred; this groups the same SQL across users/databases on each instance.",
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 10},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data", "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": true}}, "overrides": [
+        {"matcher": {"id": "byName", "options": "sql_statement"}, "properties": [{"id": "displayName", "value": "SQL statement"}, {"id": "custom.width", "value": 700}]},
+        {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "Mean latency"}, {"id": "custom.width", "value": 180}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}
+      ]},
+      "options": {"showHeader": true, "cellHeight": "lg", "sortBy": [{"displayName": "Mean latency", "desc": true}], "footer": {"show": false}},
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "indexByName": {"sql_statement": 0, "Value": 1, "instance": 2, "job": 3}}}],
+      "targets": [
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk(5, sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_sum{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) / (sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) > 0))", "instant": true, "range": false, "format": "table"}
+      ]
+    }
+  ]
+}

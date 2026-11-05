@@ -106,7 +106,8 @@ public final class DatabaseConnectionBudgetManager {
         pools.put(poolId, pool);
         try {
             rebalance(budget);
-            log.info("Database budget '{}' assigned pool '{}' maxPoolSize={}", budget.name, poolId, pool.allocatedMax);
+            log.info("Database budget '{}' assigned pool '{}' maxPoolSize={}, healthyServers={}",
+                    budget.name, poolId, pool.allocatedMax, pool.healthyServerCount);
             return registration;
         } catch (RuntimeException e) {
             pools.remove(poolId);
@@ -149,6 +150,9 @@ public final class DatabaseConnectionBudgetManager {
 
         int previousHealthyServerCount = pool.healthyServerCount;
         pool.healthyServerCount = updatedHealthyServerCount;
+        log.info("Database budget '{}' received healthy-server update for pool '{}': {} -> {}",
+                pool.registration.budget.name, pool.registration.poolId,
+                previousHealthyServerCount, updatedHealthyServerCount);
         try {
             rebalance(pool.registration.budget);
         } catch (RuntimeException e) {
@@ -248,10 +252,24 @@ public final class DatabaseConnectionBudgetManager {
 
         int healthyServerCount = members.stream().mapToInt(pool -> pool.healthyServerCount).max().orElse(1);
         int capacity = (budget.maxConnections - budget.reserveConnections) / healthyServerCount;
+        String poolHealthCounts = members.stream()
+                .map(pool -> pool.registration.poolId + "=" + pool.healthyServerCount)
+                .collect(Collectors.joining(","));
+        log.info("Database budget '{}' rebalancing: maxTotal={}, reserve={}, effectiveHealthyServers={}, "
+                        + "localCapacity={}, poolHealthCounts=[{}]",
+                budget.name, budget.maxConnections, budget.reserveConnections, healthyServerCount,
+                capacity, poolHealthCounts);
         validatePoolCapacity(budget, capacity, members.size());
         Map<Pool, Integer> allocations = allocate(members, capacity, budget);
         keepFixedPoolsAtCurrentAllocation(members, allocations);
         validateFixedPoolAllocations(budget, members, allocations);
+        String poolAllocations = members.stream()
+                .map(pool -> pool.registration.poolId + "=" + pool.allocatedMax + "->" + allocations.get(pool)
+                        + "/" + pool.allocatedMin + "->"
+                        + Math.min(pool.registration.requestedMin, allocations.get(pool)))
+                .collect(Collectors.joining(","));
+        log.info("Database budget '{}' pool allocations (max/min current->target): [{}]",
+                budget.name, poolAllocations);
         resizePools(members, allocations, false);
         resizePools(members, allocations, true);
         updatePoolAllocations(members, allocations);
@@ -313,7 +331,11 @@ public final class DatabaseConnectionBudgetManager {
             return;
         }
         try {
+            log.info("Resizing database budget pool '{}': maxPoolSize={}, minimumIdle={}",
+                    pool.registration.poolId, max, min);
             pool.resizer.resize(max, min);
+            log.info("Resized database budget pool '{}': maxPoolSize={}, minimumIdle={}",
+                    pool.registration.poolId, max, min);
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to resize pool '" + pool.registration.poolId
                     + "' to max=" + max + ", min=" + min, e);

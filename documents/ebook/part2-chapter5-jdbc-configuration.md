@@ -57,8 +57,25 @@ jdbc:ojp[server-host:server-port(datasource-name)]_original-jdbc-url
 | `jdbc:ojp` | OJP protocol prefix | `jdbc:ojp` | Yes |
 | `[host:port]` | OJP Server location | `[localhost:1059]` | Yes |
 | `(datasource)` | Named datasource | `(mainApp)` | No |
+| `{priority}` | JDBC server priority, lower first | `localhost:1059(mainApp){1}` | No; all endpoints must specify it if used |
 | `_` | Separator | `_` | Yes |
 | Original URL | Database JDBC URL | `postgresql://...` | Yes |
+
+### Optional Local-First Server Priorities
+
+For a fixed application node with its own OJP instance, use:
+
+```text
+jdbc:ojp[localhost:1059(mainApp){1},remote-a:1059(mainApp){2},remote-b:1059(mainApp){2}]_postgresql://db:5432/mydb
+```
+
+New unbound work and XA sessions use the lowest-numbered healthy tier.
+Load-aware or round-robin selection remains in effect within that tier.
+Priorities must be positive 32-bit integers on every endpoint; unannotated
+URLs keep their current behavior. Existing sessions and transactions do not
+move on recovery. Setup and health traffic still reach remote nodes.
+See [Chapter 9](part3-chapter9-multinode-deployment.md#local-first-routing-on-fixed-enterprise-nodes)
+for recovery semantics and capacity-planning tradeoffs.
 
 ### Multi-Database Examples
 

@@ -74,7 +74,7 @@ Load-aware or round-robin selection remains in effect within that tier.
 Priorities must be positive 32-bit integers on every endpoint; unannotated
 URLs keep their current behavior. Existing sessions and transactions do not
 move on recovery. Setup and health traffic still reach remote nodes.
-See [Chapter 9](part3-chapter9-multinode-deployment.md#local-first-routing-on-fixed-enterprise-nodes)
+See [Chapter 9](part3-chapter9-multinode-deployment.md#local-first-routing-on-fixed-enterprise-nodes-and-across-availability-zones)
 for recovery semantics and capacity-planning tradeoffs.
 
 ### Multi-Database Examples

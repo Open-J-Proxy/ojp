@@ -84,12 +84,14 @@ graph TD
     H --> I
 ```
 
-### Local-First Routing on Fixed Enterprise Nodes
+### Local-First Routing on Fixed Enterprise Nodes and Across Availability Zones
 
 Not every multinode deployment should spread work across every proxy. In a
 traditional enterprise setup, application nodes are often fixed, and each node
-can run its own OJP instance. Sending SQL to another node while the local OJP
-is healthy adds a network hop without helping locality.
+can run its own OJP instance. The same priority tiers can prefer an OJP instance
+in the application's availability zone before sending work across zones. In
+either case, routing to a farther proxy while a nearer one is healthy adds
+network latency without improving locality.
 
 The JDBC driver supports optional priority tiers for this case:
 
@@ -117,6 +119,13 @@ checking enabled, recovery restores the preferred tier for new unbound work.
 With different priority tiers, recovery-triggered connection redistribution
 is suppressed so it cannot invalidate connections merely to balance across
 tiers. Close connections at the end of each unit of work as usual.
+
+New XA connections use the same priority selection: the driver chooses one
+server from the best healthy tier, and that server owns the XA session.
+If that tier is unavailable, selection falls back to the next healthy tier.
+An existing XA connection or transaction remains bound to its server if the
+preferred tier recovers; only subsequently created XA connections use the
+recovered preferred tier.
 
 Non-XA datasource setup continues to initialize all proxy pools, and health
 probes and cluster pool sizing are unchanged. This feature avoids unnecessary

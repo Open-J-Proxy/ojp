@@ -29,6 +29,20 @@ jdbc:ojp[host1:port1,host2:port2,host3:port3]_actual_jdbc_url
 
 ### Examples
 
+#### Server Priority Tiers
+
+For applications deployed on fixed enterprise nodes alongside OJP, prefer the
+local proxy before sending traffic to remote nodes:
+
+```text
+jdbc:ojp[ojp1:1059{1},ojp2:1059{2},ojp3:1059{2},ojp4:1059{3}]_postgresql://db:5432/mydb
+```
+
+Lower numbers have higher priority. New connections use priority 1 while it is
+available, then priority 2, then priority 3. Servers sharing a priority retain
+the configured load-aware or round-robin selection within that tier. URLs
+without priority annotations retain their existing behavior.
+
 #### PostgreSQL with Three OJP Servers
 ```java
 String url = "jdbc:ojp[192.168.1.10:1059,192.168.1.11:1059,192.168.1.12:1059]_postgresql://localhost:5432/mydb";

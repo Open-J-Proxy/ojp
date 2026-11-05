@@ -292,7 +292,9 @@ jobs:
       # This is the key test step - only H2 tests are enabled
       # All other database tests are disabled by default
       - name: Test (ojp-jdbc-driver) with H2 only
-        run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenableH2Tests=true
+        run: >-
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenableH2Tests=true
+          -DenableServerPriorityTests=${{ matrix.java-version == 25 }}
 
       - name: Show ojp-server.log
         if: always()  # ensures it runs even if previous steps fail

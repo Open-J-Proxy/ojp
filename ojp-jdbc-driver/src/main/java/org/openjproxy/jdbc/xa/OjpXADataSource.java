@@ -119,7 +119,8 @@ public class OjpXADataSource implements XADataSource {
             log.debug("Initializing StatementService for XA datasource: {}", dataSourceName);
 
             // Get or create the StatementService for the configured endpoint(s)
-            MultinodeUrlParser.ServiceAndUrl serviceAndUrl = MultinodeUrlParser.getOrCreateStatementService(cleanUrl);
+            MultinodeUrlParser.ServiceAndUrl serviceAndUrl = MultinodeUrlParser.getOrCreateStatementService(
+                    cleanUrl, urlParseResult.dataSourceNames);
             statementService = serviceAndUrl.getService();
             this.serverEndpoints = serviceAndUrl.getServerEndpoints();
 

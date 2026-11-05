@@ -282,9 +282,7 @@ public class MultinodeConnectionManager {
             }
 
             // Pick the least-loaded server among the remaining candidates.
-            ServerEndpoint server = healthCheckConfig.isLoadAwareSelectionEnabled()
-                    ? selectByLeastConnections(healthyServers)
-                    : selectByRoundRobin(healthyServers);
+            ServerEndpoint server = selectPreferredServer(healthyServers);
 
             if (server == null) {
                 throw new SQLException("No server could be selected for XA connection");
@@ -547,7 +545,8 @@ public class MultinodeConnectionManager {
 
         // For non-XA mode: trigger connection redistribution when servers recover.
         // XA mode handles redistribution via notifyServerRecovered() → XAConnectionRedistributor.
-        if (!recoveredServers.isEmpty() && xaConnectionRedistributor == null && healthCheckConfig.isRedistributionEnabled()) {
+        if (!recoveredServers.isEmpty() && xaConnectionRedistributor == null
+                && healthCheckConfig.isRedistributionEnabled() && !hasPriorityTiers()) {
             log.info("Triggering connection redistribution for {} recovered server(s)",
                     recoveredServers.size());
 
@@ -1006,12 +1005,26 @@ public class MultinodeConnectionManager {
             return null;
         }
 
-        // Choose selection strategy based on configuration
+        return selectPreferredServer(healthyServers);
+    }
+
+    private ServerEndpoint selectPreferredServer(List<ServerEndpoint> healthyServers) {
+        int bestPriority = healthyServers.stream()
+                .mapToInt(ServerEndpoint::getPriority)
+                .min()
+                .orElseThrow(() -> new IllegalArgumentException("No server candidates"));
+        List<ServerEndpoint> preferredServers = healthyServers.stream()
+                .filter(server -> server.getPriority() == bestPriority)
+                .collect(Collectors.toList());
         if (healthCheckConfig.isLoadAwareSelectionEnabled()) {
-            return selectByLeastConnections(healthyServers);
+            return selectByLeastConnections(preferredServers);
         } else {
-            return selectByRoundRobin(healthyServers);
+            return selectByRoundRobin(preferredServers);
         }
+    }
+
+    private boolean hasPriorityTiers() {
+        return serverEndpoints.stream().map(ServerEndpoint::getPriority).distinct().count() > 1;
     }
 
     /**
@@ -1550,7 +1563,8 @@ public class MultinodeConnectionManager {
         }
 
         // Trigger XA connection redistribution if configured
-        if (xaConnectionRedistributor != null && healthCheckConfig.isRedistributionEnabled()) {
+        // Tiered routing retains existing sessions; only new work returns to the preferred tier.
+        if (xaConnectionRedistributor != null && healthCheckConfig.isRedistributionEnabled() && !hasPriorityTiers()) {
             List<ServerEndpoint> allHealthyServers = serverEndpoints.stream()
                     .filter(ServerEndpoint::isHealthy)
                     .collect(Collectors.toList());

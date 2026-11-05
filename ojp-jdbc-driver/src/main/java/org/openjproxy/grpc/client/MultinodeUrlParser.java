@@ -28,6 +28,7 @@ public class MultinodeUrlParser {
 
     private static final Logger log = LoggerFactory.getLogger(MultinodeUrlParser.class);
     private static final Pattern OJP_PATTERN = Pattern.compile(CommonConstants.OJP_REGEX_PATTERN);
+    private static final Pattern PRIORITY_PATTERN = Pattern.compile("^([^{}]+)\\{([0-9]+)\\}$");
 
     // Cache of statement services keyed by server configuration
     private static final Map<String, StatementService> STATEMENT_SERVICE_CACHE = new ConcurrentHashMap<>();
@@ -68,10 +69,9 @@ public class MultinodeUrlParser {
         log.info("Configuring StatementService with {} endpoint(s): {}",
                 endpoints.size(), MultinodeUrlParser.formatServerList(endpoints));
 
-        // Build a cache key that includes both host:port and datasource name for each endpoint,
-        // so configurations that share the same hosts but differ in datasource routing are kept separate.
+        // Include datasource and priority so different routing policies never share health/selection state.
         String cacheKey = endpoints.stream()
-                .map(ep -> ep.getAddress() + "(" + ep.getDataSourceName() + ")")
+                .map(ep -> ep.getAddress() + "(" + ep.getDataSourceName() + "){" + ep.getPriority() + "}")
                 .collect(Collectors.joining(","));
         StatementService service = STATEMENT_SERVICE_CACHE.computeIfAbsent(cacheKey, k -> {
             log.debug("Creating MultinodeStatementService for endpoints: {}",
@@ -137,11 +137,29 @@ public class MultinodeUrlParser {
 
         // Split by comma to support multinode
         String[] serverAddresses = serverListString.split(",");
+        int annotatedEndpoints = 0;
 
         for (int i = 0; i < serverAddresses.length; i++) {
             String address = serverAddresses[i].trim();
             if (address.isEmpty()) {
                 continue;
+            }
+
+            int priority = 1;
+            if (address.contains("{") || address.contains("}")) {
+                Matcher priorityMatcher = PRIORITY_PATTERN.matcher(address);
+                if (!priorityMatcher.matches()) {
+                    throw new IllegalArgumentException("Invalid server priority in address: " + address
+                            + ". Expected format: host:port{positiveInteger}");
+                }
+                try {
+                    priority = Integer.parseInt(priorityMatcher.group(2));
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("Server priority must be between 1 and "
+                            + Integer.MAX_VALUE + ": " + address, e);
+                }
+                address = priorityMatcher.group(1).trim();
+                annotatedEndpoints++;
             }
 
             String[] hostPort = address.split(":");
@@ -166,11 +184,14 @@ public class MultinodeUrlParser {
                 ? dataSourceNames.get(i)
                 : "default";
 
-            endpoints.add(new ServerEndpoint(host, port, dataSourceName));
+            endpoints.add(new ServerEndpoint(host, port, dataSourceName, priority));
         }
 
         if (endpoints.isEmpty()) {
             throw new IllegalArgumentException("No valid server endpoints found in URL: " + url);
+        }
+        if (annotatedEndpoints > 0 && annotatedEndpoints != endpoints.size()) {
+            throw new IllegalArgumentException("Every server must specify {priority} when any server has a priority");
         }
 
         log.debug("Parsed {} server endpoints from URL: {}", endpoints.size(),
@@ -205,7 +226,7 @@ public class MultinodeUrlParser {
     }
 
     /**
-     * Formats a list of server endpoints back into the OJP URL format.
+     * Formats a list of server endpoints back into the OJP URL format, retaining priority tiers.
      *
      * @param endpoints List of server endpoints
      * @return Comma-separated string representation for URL
@@ -215,8 +236,10 @@ public class MultinodeUrlParser {
             return "";
         }
 
+        boolean includePriorities = endpoints.stream().anyMatch(endpoint -> endpoint.getPriority() != 1);
         return endpoints.stream()
-                .map(ServerEndpoint::getAddress)
+                .map(endpoint -> endpoint.getAddress()
+                        + (includePriorities ? "{" + endpoint.getPriority() + "}" : ""))
                 .collect(Collectors.joining(","));
     }
 

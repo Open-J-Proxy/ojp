@@ -1,360 +1,109 @@
 {
   "uid": "ojp-overview",
-  "title": "OJP • Operational overview",
-  "description": "OJP server operations, SQL, Hikari/XA pools, query circuit breakers and optional cache. Prometheus scrapes supply job and instance. Missing or disabled instrumentation stays No data; zero-volume ratios are omitted. SQL metrics have no datasource label. Requires Grafana 10 or newer.",
-  "tags": ["ojp", "operations", "prometheus"],
+  "title": "OJP • Load spike demo",
+  "description": "Follow a request spike, successful-request latency, connection pressure and overload rejections. Slowest SQL is always visible. SQL metrics do not export a user identity. Standalone dashboard for Grafana 10+.",
+  "tags": ["ojp", "demo", "prometheus"],
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "graphTooltip": 1,
   "timezone": "utc",
-  "refresh": "30s",
-  "time": {"from": "now-1h", "to": "now"},
-  "timepicker": {"refresh_intervals": ["10s", "30s", "1m", "5m"]},
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {"refresh_intervals": ["5s", "10s", "30s", "1m"]},
   "links": [],
-  "annotations": {"list": [{"name": "Annotations & Alerts", "type": "dashboard", "builtIn": 1, "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)", "datasource": {"type": "grafana", "uid": "-- Grafana --"}}]},
+  "annotations": {"list": []},
   "templating": {
     "list": [
-      {"name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "query": "prometheus", "refresh": 1, "hide": 0, "current": {}, "options": []},
-      {"name": "job", "label": "Job", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values(up, job)", "refId": "job"}, "definition": "label_values(up, job)", "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []},
-      {"name": "instance", "label": "Instance", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values(up{job=~\"${job:regex}\"}, instance)", "refId": "instance"}, "definition": "label_values(up{job=~\"${job:regex}\"}, instance)", "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []},
-      {"name": "pool", "label": "Pool (optional)", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values({__name__=~\"ojp_(hikari|xa)_pool_connections_active_connections\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, pool_name)", "refId": "pool"}, "definition": "Hikari and XA pool names; All also works when pool metrics are disabled", "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []},
-      {"name": "datasource", "label": "Datasource (circuits/cache)", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values({__name__=~\"ojp_(circuit_breaker_.*|cache_.*|query_execution_time_milliseconds_count)\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}, datasource)", "refId": "datasource"}, "definition": "Metric-derived circuit/cache/source-latency datasource names; not a SQL filter", "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []}
+      {"name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "query": "prometheus", "refresh": 1, "current": {}, "options": []},
+      {"name": "job", "label": "Job", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values(up, job)", "refId": "job"}, "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []},
+      {"name": "instance", "label": "Instance", "type": "query", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "query": {"query": "label_values(up{job=~\"${job:regex}\"}, instance)", "refId": "instance"}, "refresh": 1, "sort": 1, "multi": true, "includeAll": true, "allValue": ".*", "current": {"text": "All", "value": "$__all"}, "options": []}
     ]
   },
   "panels": [
-    {"id": 1, "type": "row", "title": "01 • Operations at a glance — each instance stays visible", "collapsed": false, "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1}, "panels": []},
     {
-      "id": 2, "type": "stat", "title": "Scrape health", "description": "Prometheus up per target, not application readiness. Down targets remain visible (0). Required selectors are independent of optional instrumentation.",
-      "gridPos": {"x": 0, "y": 1, "w": 3, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "none", "noValue": "No data", "mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "orientation": "auto"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "up{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
+      "id": 1, "type": "text", "title": "Demo: spike → bounded connections → shedding → latency",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 4},
+      "options": {
+        "mode": "markdown",
+        "content": "Compare the **request spike**, **successful-request p95**, and **overload rejections** on the same timeline. Connections stay within configured pool capacity; waiting borrowers indicate pool contention, not the admission queue length. These measurements show what happened, not a guarantee of stable latency.\n\nRequest volume is **completed executeQuery/executeUpdate RPCs**, including failures—not incoming attempts. Rejections are gRPC status **8** (OJP maps admission overload to this status; it can have other causes). **Query users are not exported**; SQL is grouped across users/databases. SQL text may contain sensitive literals. Missing telemetry is **No data**, not healthy zero. For short spikes, use an appropriately short Prometheus scrape interval; rate windows smooth the spike."
+      }
     },
     {
-      "id": 3, "type": "stat", "title": "SQL executions / sec", "description": "Recorded SQL executions, not all RPCs. sql_statement is summed per instance; these metrics have no datasource label.",
-      "gridPos": {"x": 3, "y": 1, "w": 4, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "noValue": "No data", "color": {"mode": "fixed", "fixedColor": "blue"}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(ojp_sql_executions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 4, "type": "stat", "title": "SQL p95", "description": "Histogram quantile of recorded SQL execution time. No samples means no usable latency.",
-      "gridPos": {"x": 7, "y": 1, "w": 4, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data", "color": {"mode": "fixed", "fixedColor": "blue"}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(ojp_sql_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 5, "type": "stat", "title": "RPC completions / sec", "description": "Actual gRPC server duration histogram count from GrpcTelemetry's server interceptor. Includes all instrumented methods and gRPC statuses, not only SQL. gRPC status is not a count of SQL/application failures: SQL errors can be returned inside OK RPC responses. No data when gRPC metrics are disabled.",
-      "gridPos": {"x": 11, "y": 1, "w": 4, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "noValue": "No data", "color": {"mode": "fixed", "fixedColor": "purple"}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 6, "type": "stat", "title": "RPC p95", "description": "Instrumented server RPC duration in milliseconds, across methods on each instance. Separate from SQL execution time.",
-      "gridPos": {"x": 15, "y": 1, "w": 3, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data", "color": {"mode": "fixed", "fixedColor": "purple"}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(rpc_server_duration_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 43, "type": "stat", "title": "RPC non-OK / sec", "description": "Non-OK gRPC response statuses, not SQL/application failures returned inside OK RPC responses. Zero is derived only from an observed RPC family; missing RPC instrumentation remains No data.",
-      "gridPos": {"x": 18, "y": 1, "w": 3, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1e-12}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_grpc_status_code=~\"[1-9][0-9]*\"}[$__rate_interval])) or on (job, instance) (0 * sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 7, "type": "stat", "title": "Non-closed query circuits", "description": "Current OPEN or HALF_OPEN circuits per instance (not the driver multinode circuit breaker). Exported closed circuits yield 0; no tracked circuits yields No data.",
-      "gridPos": {"x": 21, "y": 1, "w": 3, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (ojp_circuit_breaker_state{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"} > bool 0)", "instant": true, "range": false, "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 8, "type": "stat", "title": "Hikari • worst utilization", "description": "Highest active/max ratio per instance, preserving the responsible pool name. Pools with max <= 0 are excluded. XA remains separate.",
-      "gridPos": {"x": 0, "y": 6, "w": 6, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.8}, {"color": "red", "value": 0.95}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk by (job, instance) (1, max by (job, instance, pool_name) (ojp_hikari_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) / (max by (job, instance, pool_name) (ojp_hikari_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) > 0))", "instant": true, "range": false, "legendFormat": "{{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 9, "type": "stat", "title": "Hikari • worst waiters", "description": "Largest current waiting-thread count per instance, retaining pool identity. This is a gauge, not a counter.",
-      "gridPos": {"x": 6, "y": 6, "w": 6, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk by (job, instance) (1, max by (job, instance, pool_name) (ojp_hikari_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}))", "instant": true, "range": false, "legendFormat": "{{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 10, "type": "stat", "title": "XA • worst utilization", "description": "Highest XA active/max ratio per instance. Unlimited/non-positive maximum values are omitted; never averaged with Hikari.",
-      "gridPos": {"x": 12, "y": 6, "w": 6, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.8}, {"color": "red", "value": 0.95}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk by (job, instance) (1, max by (job, instance, pool_name) (ojp_xa_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) / (max by (job, instance, pool_name) (ojp_xa_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) > 0))", "instant": true, "range": false, "legendFormat": "{{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 11, "type": "stat", "title": "XA • worst waiters", "description": "Largest current XA waiting-thread count per instance, preserving the responsible pool.",
-      "gridPos": {"x": 18, "y": 6, "w": 6, "h": 5}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none"},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk by (job, instance) (1, max by (job, instance, pool_name) (ojp_xa_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}))", "instant": true, "range": false, "legendFormat": "{{instance}} / {{pool_name}}"}]
-    },
-    {"id": 12, "type": "row", "title": "02 • Hikari pools — capacity and acquisition", "collapsed": false, "gridPos": {"x": 0, "y": 11, "w": 24, "h": 1}, "panels": []},
-    {
-      "id": 13, "type": "timeseries", "title": "Hikari • active / idle / maximum", "description": "Connections per job, instance and pool_name; capacity stays a separate series.",
-      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 3, "type": "timeseries", "title": "1 · Request spike — completed SQL RPCs / sec",
+      "description": "Completion rate for executeQuery and executeUpdate only, including rejected/failed calls. This is not an arrival-rate metric and can lag a spike while requests wait. Each instance remains separate.",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data"}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • active"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_idle_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • idle"},
-        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • max"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} • completed"}
       ]
     },
     {
-      "id": 14, "type": "timeseries", "title": "Hikari • utilization", "description": "Active / positive maximum per pool. 80% and 95% are visual guides, not universal alert thresholds.",
-      "gridPos": {"x": 12, "y": 12, "w": 6, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.8}, {"color": "red", "value": 0.95}]}, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "thresholdsStyle": {"mode": "line"}}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) / (max by (job, instance, pool_name) (ojp_hikari_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) > 0)", "legendFormat": "{{job}} / {{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 15, "type": "timeseries", "title": "Hikari • pending threads", "description": "Current connection-acquisition waiters per pool. Not a rate.",
-      "gridPos": {"x": 18, "y": 12, "w": 6, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 16, "type": "timeseries", "title": "Hikari • acquisition p50 / p95 / p99", "description": "Histogram acquisition time, milliseconds. Rate before aggregation; le, job, instance and pool_name retained. No interpolation over missing samples.",
-      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 4, "type": "timeseries", "title": "2 · Does latency stay stable? — p95",
+      "description": "Successful executeQuery/executeUpdate RPC duration (status 0) includes server handling/waiting, not full client-observed latency. SQL execution duration is a separate recorder with no method, user or datasource label, so its population is not identical. Rejected calls do not artificially lower the successful-RPC percentile. Zero traffic leaves percentiles undefined. No fixed latency SLO is assumed.",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data"}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.50, sum by (job, instance, pool_name, le) (rate(ojp_hikari_pool_connections_acquisition_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • p50"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, pool_name, le) (rate(ojp_hikari_pool_connections_acquisition_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • p95"},
-        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.99, sum by (job, instance, pool_name, le) (rate(ojp_hikari_pool_connections_acquisition_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • p99"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(rpc_server_duration_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\",rpc_grpc_status_code=\"0\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • successful RPC p95"},
+        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(ojp_sql_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • SQL execution p95"}
       ]
     },
-    {"id": 17, "type": "row", "title": "03 • XA pools — separate instrumentation and capacity", "collapsed": false, "gridPos": {"x": 0, "y": 28, "w": 24, "h": 1}, "panels": []},
     {
-      "id": 18, "type": "timeseries", "title": "XA • active / idle / maximum", "description": "XA connection gauges per job, instance and pool_name. These are never merged with Hikari gauges.",
-      "gridPos": {"x": 0, "y": 29, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 43, "type": "timeseries", "title": "3 · Load shedding — overload responses / sec",
+      "description": "RESOURCE_EXHAUSTED (gRPC status 8) for the same SQL RPCs as the load chart. GrpcExceptionHandler.sendServerOverload uses this status for admission-control rejections. This is a status-based signal, not a dedicated shed counter; other causes can share status 8. Zero is derived only from observed RPC telemetry. Missing instrumentation remains No data.",
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "color": {"mode": "fixed", "fixedColor": "red"}}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • active"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_idle_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • idle"},
-        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • max"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\",rpc_grpc_status_code=\"8\"}[$__rate_interval])) or on (job, instance) (0 * sum by (job, instance) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_system=\"grpc\",rpc_service=\"com.openjproxy.grpc.StatementService\",rpc_method=~\"executeQuery|executeUpdate\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • overload"}
       ]
     },
     {
-      "id": 19, "type": "timeseries", "title": "XA • utilization", "description": "Active / positive maximum per XA pool. Unlimited maximum values are omitted honestly.",
-      "gridPos": {"x": 12, "y": 29, "w": 6, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.8}, {"color": "red", "value": 0.95}]}, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "thresholdsStyle": {"mode": "line"}}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) / (max by (job, instance, pool_name) (ojp_xa_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}) > 0)", "legendFormat": "{{job}} / {{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 20, "type": "timeseries", "title": "XA • pending threads", "description": "Current connection-acquisition waiters per XA pool. Gauge, not a rate.",
-      "gridPos": {"x": 18, "y": 29, "w": 6, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}}"}]
-    },
-    {
-      "id": 21, "type": "timeseries", "title": "XA • acquisition p50 / p95 / p99", "description": "XA histogram acquisition times in milliseconds. Quantiles computed independently per instance and pool.",
-      "gridPos": {"x": 0, "y": 37, "w": 24, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 13, "type": "timeseries", "title": "4 · Connections stay bounded — active / maximum",
+      "description": "OJP-managed active connections versus configured pool maximum, separately by instance, pool and Hikari/XA type. This is not total database connection usage. Nonpositive/unlimited maxima are omitted. An unused pool type may have no series.",
+      "gridPos": {"x": 8, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data"}, "overrides": [
+        {"matcher": {"id": "byRegexp", "options": ".*maximum$"}, "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [8, 4]}}]}
+      ]},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.50, sum by (job, instance, pool_name, le) (rate(ojp_xa_pool_connections_acquisition_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • p50"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, pool_name, le) (rate(ojp_xa_pool_connections_acquisition_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • p95"},
-        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.99, sum by (job, instance, pool_name, le) (rate(ojp_xa_pool_connections_acquisition_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • p99"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • Hikari active"},
+        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) > 0", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • Hikari maximum"},
+        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_active_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • XA active"},
+        {"refId": "D", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_max_connections{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) > 0", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • XA maximum"}
       ]
     },
-    {"id": 22, "type": "row", "title": "04 • SQL execution — instance-scoped, no datasource label", "collapsed": false, "gridPos": {"x": 0, "y": 45, "w": 24, "h": 1}, "panels": []},
     {
-      "id": 23, "type": "timeseries", "title": "SQL • throughput and slow throughput", "description": "Execution counters summed after rate per instance. Slow is OJP's learned relative classification, not an absolute latency SLA. A missing slow counter is not fabricated as zero.",
-      "gridPos": {"x": 0, "y": 46, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 15, "type": "timeseries", "title": "5 · Pool pressure — waiting borrowers",
+      "description": "Threads waiting to acquire a Hikari/XA connection. A contention signal, not the OJP admission queue depth or a direct count of throttled requests. Requests may wait before pool acquisition, so zero here does not prove no throttling.",
+      "gridPos": {"x": 16, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data"}, "overrides": []},
+      "options": {"tooltip": {"mode": "multi", "sort": "desc"}, "legend": {"displayMode": "list", "placement": "bottom"}},
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(ojp_sql_executions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} • all"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(ojp_sql_slow_executions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} • relative slow"}
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_hikari_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • Hikari waiting"},
+        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, pool_name) (ojp_xa_pool_connections_pending_threads{job=~\"${job:regex}\",instance=~\"${instance:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • XA waiting"}
       ]
     },
     {
-      "id": 24, "type": "timeseries", "title": "SQL • relative slow ratio", "description": "Slow execution rate / positive execution rate per instance. Missing counters and zero-volume intervals remain gaps. Classification compares learned query averages, not a fixed latency threshold.",
-      "gridPos": {"x": 12, "y": 46, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(ojp_sql_slow_executions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])) / (sum by (job, instance) (rate(ojp_sql_executions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])) > 0)", "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 25, "type": "timeseries", "title": "SQL • p50 / p95 / p99", "description": "Distribution across sql_statement on each instance, in milliseconds. Histogram quantiles are bucket estimates; statement identities appear only in the bounded drill-down.",
-      "gridPos": {"x": 0, "y": 54, "w": 16, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "id": 29, "type": "table", "title": "6 · Slowest SQL — top 5 by mean latency",
+      "description": "Highest mean database execution time over the selected range, descending. Zero-execution statements are excluded; low-volume queries may rank highly. Full SQL labels may contain sensitive literals. User identity and datasource are NOT exported by the SQL recorder, so ownership cannot be shown or inferred; this groups the same SQL across users/databases on each instance.",
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 10},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data", "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": true}}, "overrides": [
+        {"matcher": {"id": "byName", "options": "sql_statement"}, "properties": [{"id": "displayName", "value": "SQL statement"}, {"id": "custom.width", "value": 700}]},
+        {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "Mean latency"}, {"id": "custom.width", "value": 180}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}
+      ]},
+      "options": {"showHeader": true, "cellHeight": "lg", "sortBy": [{"displayName": "Mean latency", "desc": true}], "footer": {"show": false}},
+      "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}, "indexByName": {"sql_statement": 0, "Value": 1, "instance": 2, "job": 3}}}],
       "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.50, sum by (job, instance, le) (rate(ojp_sql_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • p50"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, le) (rate(ojp_sql_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • p95"},
-        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.99, sum by (job, instance, le) (rate(ojp_sql_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} • p99"}
-      ]
-    },
-    {
-      "id": 26, "type": "timeseries", "title": "SQL • weighted mean", "description": "Sum of execution time / positive count over the rate interval. Weighted by execution volume, not the average of per-statement means.",
-      "gridPos": {"x": 16, "y": 54, "w": 8, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance) (rate(ojp_sql_execution_time_milliseconds_sum{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])) / (sum by (job, instance) (rate(ojp_sql_execution_time_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval])) > 0)", "legendFormat": "{{job}} / {{instance}}"}]
-    },
-    {
-      "id": 27, "type": "row", "title": "05 • SQL drill-down — top 10 over the selected time range (sensitive SQL labels)", "collapsed": true,
-      "gridPos": {"x": 0, "y": 62, "w": 24, "h": 1},
-      "panels": [
-        {
-          "id": 28, "type": "table", "title": "Top SQL • total execution time", "description": "Top 10 statement/instance combinations by accumulated execution time over $__range. Concurrent execution time can exceed wall time. Raw SQL labels may contain sensitive data; restrict dashboard access.",
-          "gridPos": {"x": 0, "y": 63, "w": 8, "h": 10}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data", "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true}}, "overrides": [{"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "Total execution time"}]}]},
-          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Total execution time", "desc": true}]},
-          "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}],
-          "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk(10, sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_sum{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])))", "instant": true, "range": false, "format": "table"}]
-        },
-        {
-          "id": 29, "type": "table", "title": "Top SQL • mean latency", "description": "Top 10 by mean execution latency over $__range, excluding statements with zero executions. Low-volume statements can rank highly; compare the execution-count table.",
-          "gridPos": {"x": 8, "y": 63, "w": 8, "h": 10}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data", "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true}}, "overrides": [{"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "Mean latency"}]}]},
-          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Mean latency", "desc": true}]},
-          "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}],
-          "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk(10, sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_sum{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) / (sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) > 0))", "instant": true, "range": false, "format": "table"}]
-        },
-        {
-          "id": 30, "type": "table", "title": "Top SQL • execution count", "description": "Top 10 statement/instance combinations by execution-counter increase over $__range. Prometheus extrapolation may produce fractional counts.",
-          "gridPos": {"x": 16, "y": 63, "w": 8, "h": 10}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "short", "noValue": "No data", "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "filterable": true}}, "overrides": [{"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "Executions"}]}]},
-          "options": {"showHeader": true, "cellHeight": "sm", "sortBy": [{"displayName": "Executions", "desc": true}]},
-          "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true}}}],
-          "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk(10, sum by (job, instance, sql_statement) (increase(ojp_sql_executions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])))", "instant": true, "range": false, "format": "table"}]
-        }
-      ]
-    },
-    {"id": 31, "type": "row", "title": "06 • Detailed query circuit breakers — expand for query hashes", "collapsed": true, "gridPos": {"x": 0, "y": 63, "w": 24, "h": 1}, "panels": [
-    {
-      "id": 32, "type": "state-timeline", "title": "Query circuit • state", "description": "0 CLOSED, 1 OPEN, 2 HALF_OPEN, keyed by datasource and query_hash. High-cardinality detail: narrow instance/datasource selections before expanding. Removed states disappear; gaps are not interpreted as CLOSED. Distinct from JDBC driver failover circuits.",
-      "gridPos": {"x": 0, "y": 64, "w": 24, "h": 9}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "none", "noValue": "No data", "mappings": [{"type": "value", "options": {"0": {"text": "CLOSED", "color": "green"}, "1": {"text": "OPEN", "color": "red"}, "2": {"text": "HALF_OPEN", "color": "orange"}}}], "custom": {"lineWidth": 0, "fillOpacity": 85, "spanNulls": false}}, "overrides": []},
-      "options": {"showValue": "auto", "mergeValues": true, "rowHeight": 0.8, "legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, datasource, query_hash) (ojp_circuit_breaker_state{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{datasource}} / {{query_hash}}"}]
-    },
-    {
-      "id": 33, "type": "timeseries", "title": "Query circuit • trips and blocked calls", "description": "Counter rates per instance and datasource. A trip means opening due to failure conditions; blocked calls never reached SQL execution. Absent counters stay absent.",
-      "gridPos": {"x": 0, "y": 73, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_circuit_breaker_trips_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • trips"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_circuit_breaker_blocked_calls_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • blocked"}
-      ]
-    },
-    {
-      "id": 34, "type": "timeseries", "title": "Query circuit • completed OPEN duration p95", "description": "Seconds spent OPEN before leaving that state. Recorded only when an OPEN interval ends; this is not the current age of a still-open circuit.",
-      "gridPos": {"x": 12, "y": 73, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "s", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, datasource, le) (rate(ojp_circuit_breaker_open_duration_seconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{datasource}}"}]
-    }
-    ]},
-    {
-      "id": 35, "type": "row", "title": "07 • Optional query cache — volume-weighted effectiveness and source latency", "collapsed": true,
-      "gridPos": {"x": 0, "y": 64, "w": 24, "h": 1},
-      "panels": [
-        {
-          "id": 36, "type": "timeseries", "title": "Cache • hit and miss throughput", "description": "Sum counter rates across SQL labels, preserving instance and datasource. Cache-disabled deployments remain No data.",
-          "gridPos": {"x": 0, "y": 65, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "targets": [
-            {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_cache_hits_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • hits"},
-            {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_cache_misses_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • misses"}
-          ]
-        },
-        {
-          "id": 37, "type": "timeseries", "title": "Cache • volume-weighted hit ratio", "description": "Hit rate / positive combined hit+miss rate, summed across SQL labels before division. Not an average of per-SQL percentages. A missing hit or miss family leaves a gap rather than assuming zero.",
-          "gridPos": {"x": 12, "y": 65, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false}}, "overrides": []},
-          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_cache_hits_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval])) / ((sum by (job, instance, datasource) (rate(ojp_cache_hits_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval])) + sum by (job, instance, datasource) (rate(ojp_cache_misses_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))) > 0)", "legendFormat": "{{job}} / {{instance}} / {{datasource}}"}]
-        },
-        {
-          "id": 38, "type": "timeseries", "title": "Cache • entry occupancy", "description": "Current entries per instance and datasource. No exported capacity exists, so this is not a fullness percentage.",
-          "gridPos": {"x": 0, "y": 73, "w": 6, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "short", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false}}, "overrides": []},
-          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, datasource) (ojp_cache_size_entries{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{datasource}}"}]
-        },
-        {
-          "id": 39, "type": "timeseries", "title": "Cache • byte occupancy", "description": "Estimated current cached result bytes per instance and datasource; not process memory.",
-          "gridPos": {"x": 6, "y": 73, "w": 6, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "spanNulls": false}}, "overrides": []},
-          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "max by (job, instance, datasource) (ojp_cache_size_bytes{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"})", "legendFormat": "{{job}} / {{instance}} / {{datasource}}"}]
-        },
-        {
-          "id": 40, "type": "timeseries", "title": "Cache • churn and rejections", "description": "Counter rates summed over reason/table labels, retaining instance and datasource. Rejections mean results too large for caching.",
-          "gridPos": {"x": 12, "y": 73, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "targets": [
-            {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_cache_evictions_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • evictions"},
-            {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_cache_invalidations_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • invalidations"},
-            {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, datasource) (rate(ojp_cache_rejections_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} • rejections"}
-          ]
-        },
-        {
-          "id": 41, "type": "timeseries", "title": "Query source • p50 / p95 / p99", "description": "Optional cache instrumentation: milliseconds by source=cache or database, instance and datasource. Compare within each source; do not combine the distributions.",
-          "gridPos": {"x": 0, "y": 81, "w": 24, "h": 8}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-          "fieldConfig": {"defaults": {"unit": "ms", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 0, "spanNulls": false}}, "overrides": []},
-          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "targets": [
-            {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.50, sum by (job, instance, datasource, source, le) (rate(ojp_query_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\",source=~\"cache|database\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} / {{source}} • p50"},
-            {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.95, sum by (job, instance, datasource, source, le) (rate(ojp_query_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\",source=~\"cache|database\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} / {{source}} • p95"},
-            {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "histogram_quantile(0.99, sum by (job, instance, datasource, source, le) (rate(ojp_query_execution_time_milliseconds_bucket{job=~\"${job:regex}\",instance=~\"${instance:regex}\",datasource=~\"${datasource:regex}\",source=~\"cache|database\"}[$__rate_interval])))", "legendFormat": "{{job}} / {{instance}} / {{datasource}} / {{source}} • p99"}
-          ]
-        }
-      ]
-    },
-    {
-      "id": 44, "type": "row", "title": "08 • RPC / XA diagnostics — method, status and failure events", "collapsed": true,
-      "gridPos": {"x": 0, "y": 65, "w": 24, "h": 1},
-      "panels": [
-        {
-      "id": 45, "type": "timeseries", "title": "RPC • method / status throughput", "description": "Completed server RPC rate by service, method and gRPC status, preserving each instance. Status 0 is OK; SQL/application exceptions may still be encoded in OK responses.",
-      "gridPos": {"x": 0, "y": 66, "w": 8, "h": 9}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, rpc_service, rpc_method, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{rpc_service}} / {{rpc_method}} • status {{rpc_grpc_status_code}}"}]
-        },
-        {
-      "id": 46, "type": "timeseries", "title": "RPC • non-OK by method / status", "description": "Only recorded nonzero gRPC statuses. An absent non-OK family stays absent in this drill-down; the landing indicator derives zero only from observed RPC metrics. Not a complete SQL/application error count.",
-      "gridPos": {"x": 8, "y": 66, "w": 8, "h": 9}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, rpc_service, rpc_method, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\",rpc_grpc_status_code=~\"[1-9][0-9]*\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{rpc_service}} / {{rpc_method}} • status {{rpc_grpc_status_code}}"}]
-        },
-        {
-      "id": 42, "type": "timeseries", "title": "XA • exhaustion, validation failures and leaks", "description": "Actual XA event counter rates per instance and pool. Exhaustion means borrowing timed out. These are not inferred from pending threads or opened/destroyed lifecycle gauges. Missing event families remain No data.",
-      "gridPos": {"x": 16, "y": 66, "w": 8, "h": 9}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops", "min": 0, "noValue": "No data", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}}, "overrides": []},
-      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, pool_name) (rate(ojp_xa_pool_connections_exhausted_events_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • exhausted"},
-        {"refId": "B", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, pool_name) (rate(ojp_xa_pool_connections_validation_failed_failures_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • validation failures"},
-        {"refId": "C", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "sum by (job, instance, pool_name) (rate(ojp_xa_pool_connections_leaks_detected_leaks_total{job=~\"${job:regex}\",instance=~\"${instance:regex}\",pool_name=~\"${pool:regex}\"}[$__rate_interval]))", "legendFormat": "{{job}} / {{instance}} / {{pool_name}} • detected leaks"}
-      ]
-        }
+        {"refId": "A", "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "expr": "topk(5, sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_sum{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) / (sum by (job, instance, sql_statement) (increase(ojp_sql_execution_time_milliseconds_count{job=~\"${job:regex}\",instance=~\"${instance:regex}\"}[$__range])) > 0))", "instant": true, "range": false, "format": "table"}
       ]
     }
   ]

@@ -51,17 +51,16 @@ OJP uses a **single-repo multi-module Maven build** containing the following pub
 | `ojp-xa-pool-commons` | Maven Central | XA pool utilities |
 | `ojp-testcontainers` | Maven Central | Test helpers |
 | `spring-boot-starter-ojp` | Maven Central | Spring Boot auto-config |
-| `ojp-server` | Maven Central + Docker Hub | Executable (shaded) JAR to Maven Central, Docker image to Docker Hub |
+| `ojp-server` | Maven Central + Docker Hub | Executable JAR to Maven Central, Docker image to Docker Hub |
 
 The release workflow lives at `.github/workflows/release.yml`.
 
-The main `ojp-server-<version>.jar` is an executable shaded JAR with its runtime
-dependencies and merged service-provider registrations. The `-shaded.jar` classifier
-is also published for compatibility with existing scripts and Docker builds.
-JDBC drivers remain external in `ojp-libs/`. Before deployment, both artifacts
-must pass `scripts/test-server-artifact.py`, which checks their manifests,
-dependencies and service registrations, then starts each using `java -jar` in
-an isolated directory with a 45-second startup timeout.
+The main `ojp-server-<version>.jar` is an executable JAR with its runtime
+dependencies and merged service-provider registrations. JDBC drivers remain
+external in `ojp-libs/`. Before deployment, it must pass
+`scripts/test-server-artifact.py`, which checks its manifest, dependencies and
+service registrations, then starts it using `java -jar` in an isolated
+directory with a 45-second startup timeout.
 
 Version 1.0.4 published a thin main JAR without a `Main-Class`;
 use the `-shaded.jar` artifact for that version. Published Maven Central
@@ -495,16 +494,16 @@ that enables all three publishing requirements:
 | `waitForPublishing` | `true` | Block the build until publishing completes (required for CI success) |
 | `publishingServerId` | `central` | Must match the `<server><id>` in Maven settings |
 
-### ojp-server: Dual Distribution
+### ojp-server: Distribution
 
-`ojp-server` is distributed in **two forms**:
+`ojp-server` is distributed in two forms:
 
-- **Executable (shaded) JAR → Maven Central** — produced by `maven-shade-plugin` with
-  `shadedArtifactAttached=true`. This is a self-contained, runnable JAR that includes all
+- **Executable JAR → Maven Central** — produced by `maven-shade-plugin` as the main
+  artifact. This is a self-contained, runnable JAR that includes all
   dependencies and sets `org.openjproxy.grpc.server.GrpcServer` as the main class. Users
   can download and run it without Docker:
   ```bash
-  java -jar ojp-server-<version>-shaded.jar
+  java -jar ojp-server-<version>.jar
   ```
 - **Docker image → Docker Hub** — built via a multi-stage `Dockerfile` (jlink custom JRE on Alpine, ~127MB). Open-source JDBC drivers are downloaded into `ojp-libs/` before the build and copied into the image.
 

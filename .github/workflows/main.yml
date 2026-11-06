@@ -157,8 +157,7 @@ jobs:
         run: |
           VERSION=$(timeout 30s mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
           timeout 150s python3 scripts/test-server-artifact.py \
-              "ojp-server/target/ojp-server-${VERSION}.jar" \
-              "ojp-server/target/ojp-server-${VERSION}-shaded.jar"
+              "ojp-server/target/ojp-server-${VERSION}.jar"
 
       - name: Download JDBC drivers for all Java integration suites
         run: |
@@ -348,7 +347,8 @@ jobs:
 
       - name: Start OJP server
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" &>/tmp/ojp-server-dotnet.log &
           echo "OJP server PID=$!"
@@ -434,7 +434,8 @@ jobs:
 
       - name: Start OJP server
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" &>/tmp/ojp-server.log &
           echo "OJP server PID=$!"
@@ -520,7 +521,8 @@ jobs:
 
       - name: Start OJP server
         run: |
-          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*-shaded.jar' -print -quit)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           test -n "$jar"
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" > /tmp/ojp-client-python-dbapi-server.log 2>&1 &
@@ -2354,7 +2356,8 @@ jobs:
 
       - name: Start OJP server (background)
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" > /tmp/ojp-server.log 2>&1 &
           echo "OJP server PID=$!"
@@ -2373,7 +2376,8 @@ jobs:
 
       - name: Start second OJP server for H2 multinode tests
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-server/ojp-libs \
@@ -2556,7 +2560,8 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" > /tmp/ojp-server.log 2>&1 &
           echo "OJP server PID=$!"
@@ -2577,7 +2582,8 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
@@ -2771,7 +2777,8 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -Dojp.server.logLevel=DEBUG \
             -jar "$jar" > /tmp/ojp-server.log 2>&1 &
@@ -2800,7 +2807,8 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           echo 1 > /tmp/ojp-server-2-concurrency
           nohup bash -c '
             while true; do
@@ -3010,7 +3018,8 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
             -jar "$jar" > /tmp/ojp-server.log 2>&1 &
           echo "OJP server PID=$!"
@@ -3031,7 +3040,8 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: ${{ env.OJP_TEST_SERVER_TLS_OPTIONS }}
         run: |
-          jar=$(ls ojp-server/target/ojp-server-*-shaded.jar | head -1)
+          jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \

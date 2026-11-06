@@ -325,24 +325,10 @@
                 </configuration>
                 <executions>
                     <execution>
-                        <id>legacy-shaded-artifact</id>
+                        <id>shade-server</id>
                         <goals>
                             <goal>shade</goal>
                         </goals>
-                        <configuration>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                        </configuration>
-                    </execution>
-                    <execution>
-                        <id>executable-main-artifact</id>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <shadedArtifactAttached>false</shadedArtifactAttached>
-                            <!-- Keep the temporary output separate from the attached compatibility JAR. -->
-                            <shadedClassifierName>executable</shadedClassifierName>
-                        </configuration>
                     </execution>
                 </executions>
             </plugin>

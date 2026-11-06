@@ -182,8 +182,8 @@ If Docker isn't available, use the standalone executable JAR. From version **0.4
 
 ```bash
 # Download the OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.5-RC1-shaded.jar
-chmod +x ojp-server-1.0.5-RC1-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.5-RC1/ojp-server-1.0.5-RC1.jar
+chmod +x ojp-server-1.0.5-RC1.jar
 ```
 
 **Download Database Drivers**:
@@ -197,7 +197,7 @@ bash download-drivers.sh
 **Start the Server**:
 
 ```bash
-java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.5-RC1-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.5-RC1.jar
 ```
 
 **With Custom Configuration**:
@@ -208,14 +208,14 @@ java \
   -Dojp.server.port=9059 \
   -Dojp.prometheus.port=9090 \
   -Dojp.server.logLevel=DEBUG \
-  -jar ojp-server-1.0.5-RC1-shaded.jar
+  -jar ojp-server-1.0.5-RC1.jar
 ```
 
 **Run as Background Service**:
 
 ```bash
 # Start in background
-nohup java -Duser.timezone=UTC -jar ojp-server-1.0.5-RC1-shaded.jar \
+nohup java -Duser.timezone=UTC -jar ojp-server-1.0.5-RC1.jar \
   > ojp-server.log 2>&1 &
 
 # Check it's running

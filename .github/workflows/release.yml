@@ -373,8 +373,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.versions.outputs.release }}
         run: |
           timeout 150s python3 scripts/test-server-artifact.py \
-              "ojp-server/target/ojp-server-${RELEASE_VERSION}.jar" \
-              "ojp-server/target/ojp-server-${RELEASE_VERSION}-shaded.jar"
+              "ojp-server/target/ojp-server-${RELEASE_VERSION}.jar"
 
       - name: Verify Docker image starts before publishing
         timeout-minutes: 3

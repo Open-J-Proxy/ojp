@@ -131,10 +131,10 @@ cp ~/Downloads/ons.jar ./ojp-libs/
 
 ```bash
 # Default location (./ojp-libs)
-java -Duser.timezone=UTC -jar ojp-server-1.0.5-RC1-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.5-RC1.jar
 
 # Custom location
-java -Duser.timezone=UTC -Dojp.libs.path=/path/to/ojp-libs -jar ojp-server-1.0.5-RC1-shaded.jar
+java -Duser.timezone=UTC -Dojp.libs.path=/path/to/ojp-libs -jar ojp-server-1.0.5-RC1.jar
 ```
 
 ### Option 3: Docker with Custom Drivers (Volume Mount)

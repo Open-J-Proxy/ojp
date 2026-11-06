@@ -321,7 +321,7 @@ ls -lh ojp-libs/ojdbc11.jar
 **Runnable JAR with Oracle**:
 
 ```bash
-java -Duser.timezone=UTC -jar ojp-server-1.0.5-RC1-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.5-RC1.jar
 # Server will automatically load ojdbc11.jar from ./ojp-libs
 ```
 

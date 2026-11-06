@@ -128,8 +128,7 @@ jobs:
         run: |
           VERSION=$(timeout 30s mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
           timeout 150s python3 scripts/test-server-artifact.py \
-              "ojp-server/target/ojp-server-${VERSION}.jar" \
-              "ojp-server/target/ojp-server-${VERSION}-shaded.jar"
+              "ojp-server/target/ojp-server-${VERSION}.jar"
 
       - name: Build OJP Server Docker image
         run: |

@@ -55,6 +55,18 @@ OJP uses a **single-repo multi-module Maven build** containing the following pub
 
 The release workflow lives at `.github/workflows/release.yml`.
 
+The main `ojp-server-<version>.jar` is an executable shaded JAR with its runtime
+dependencies and merged service-provider registrations. The `-shaded.jar` classifier
+is also published for compatibility with existing scripts and Docker builds.
+JDBC drivers remain external in `ojp-libs/`. Before deployment, both artifacts
+must pass `scripts/test-server-artifact.py`, which checks their manifests,
+dependencies and service registrations, then starts each using `java -jar` in
+an isolated directory with a 45-second startup timeout.
+
+Version 1.0.4 published a thin main JAR without a `Main-Class`;
+use the `-shaded.jar` artifact for that version. Published Maven Central
+versions cannot be overwritten; the corrected main artifact requires a new release.
+
 ---
 
 ## Prerequisites & One-Time Setup

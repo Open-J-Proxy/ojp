@@ -152,6 +152,14 @@ jobs:
       - name: Build OJP Server and dependencies
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
+      - name: Verify executable server artifacts
+        timeout-minutes: 3
+        run: |
+          VERSION=$(timeout 30s mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
+          timeout 150s python3 scripts/test-server-artifact.py \
+              "ojp-server/target/ojp-server-${VERSION}.jar" \
+              "ojp-server/target/ojp-server-${VERSION}-shaded.jar"
+
       - name: Download JDBC drivers for all Java integration suites
         run: |
           bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs

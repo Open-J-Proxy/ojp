@@ -31,16 +31,21 @@ OpenJDK 64-Bit Server VM (build 21.0.9+10, mixed mode, sharing)
 
 The easiest way to get the OJP Server JAR is to download it directly from Maven Central — no source code or build tools required.
 
+New releases publish the executable shaded build as the main
+`ojp-server-<version>.jar`; the `-shaded.jar` classifier remains available for
+compatibility. For **1.0.4**, use `-shaded.jar`: the main JAR has
+no executable manifest or bundled dependencies. The examples below use 1.0.4.
+
 ### 1. Download the JAR
 
 ```bash
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.4/ojp-server-1.0.4-shaded.jar
 ```
 
 Or using `curl`:
 
 ```bash
-curl -LO https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
+curl -LO https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.4/ojp-server-1.0.4-shaded.jar
 ```
 
 ### 2. Make the JAR Executable (Optional)

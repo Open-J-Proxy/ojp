@@ -11,6 +11,7 @@ import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.xa.pool.XATransactionRegistry;
 
 import javax.sql.DataSource;
+import java.util.List;
 
 /**
  * Action for processing cluster health changes and triggering pool rebalancing.
@@ -83,13 +84,21 @@ public class ProcessClusterHealthAction {
     private void applyHealthChange(ActionContext context, SessionInfo sessionInfo, String connHash,
                                    int healthyServerCount) {
         DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
-        updateBudgetServerCount(budgetManager, connHash, healthyServerCount);
+        List<String> matchingConnHashes =
+                ConnectionPoolConfigurer.getPoolCoordinator().getConnHashesWithSameServerEndpoints(connHash);
+        log.info("[XA-REBALANCE] Applying cluster health from {} to {} pools with matching endpoint sets",
+                connHash, matchingConnHashes.size());
+        matchingConnHashes.forEach(matchingConnHash ->
+                updateBudgetServerCount(budgetManager, matchingConnHash, healthyServerCount));
 
-        // Update the pool coordinator with new healthy server count.
-        // IMPORTANT: Use the returned allocation reference directly (not a second getPoolAllocation() call)
-        // to prevent a race condition where a concurrent calculatePoolSizes() call can overwrite
-        // the map entry between updateHealthyServers() and getPoolAllocation(), causing the wrong
-        // (freshly-reset, un-updated) pool sizes to be applied during resize.
+        matchingConnHashes.forEach(matchingConnHash ->
+                applyPoolHealthChange(context, budgetManager, matchingConnHash, healthyServerCount,
+                        sessionInfo.getIsXA()));
+    }
+
+    private void applyPoolHealthChange(ActionContext context, DatabaseConnectionBudgetManager budgetManager,
+                                       String connHash, int healthyServerCount, boolean isXA) {
+        // Use the returned allocation directly to avoid a second lookup racing with pool creation.
         MultinodePoolCoordinator.PoolAllocation allocation =
                 ConnectionPoolConfigurer.getPoolCoordinator().updateHealthyServers(connHash, healthyServerCount);
 
@@ -132,7 +141,7 @@ public class ProcessClusterHealthAction {
                     admissionControlManager.resizeCapacity(newMaxPoolSize);
                 }
             }
-        } else if (sessionInfo.getIsXA()) {
+        } else if (isXA) {
             // Only log missing XA registry for actual XA connections
             log.debug("[XA-REBALANCE-DEBUG] No XA registry found for XA connection {}", connHash);
         }

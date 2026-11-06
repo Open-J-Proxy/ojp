@@ -13,6 +13,7 @@ import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.cache.CacheConfiguration;
 import org.openjproxy.grpc.server.cache.QueryCacheHelper;
+import org.openjproxy.grpc.server.lob.LobRetention;
 import org.openjproxy.grpc.server.readwrite.ReadReplicaSelector;
 import org.openjproxy.grpc.server.readwrite.ReadWriteDataSourceRegistry;
 import org.openjproxy.grpc.server.readwrite.ReadWriteSqlClassifier;
@@ -193,7 +194,13 @@ public class ExecuteQueryAction implements Action<StatementRequest, OpResult> {
 
         if (CollectionUtils.isNotEmpty(params)) {
             PreparedStatement ps = StatementFactory.createPreparedStatement(sessionManager, execDto, sql, params, request);
-            String resultSetUUID = sessionManager.registerResultSet(dto.getSession(), ps.executeQuery());
+            String resultSetUUID;
+            try {
+                resultSetUUID = sessionManager.registerResultSet(dto.getSession(), ps.executeQuery());
+            } finally {
+                LobRetention.releaseExecutedParameterLobs(actionContext.getServerConfiguration(), sessionManager,
+                        dto.getSession(), params);
+            }
             handleResultSet(actionContext, dto.getSession(), resultSetUUID, finalObserver);
         } else {
             Statement stmt = StatementFactory.createStatement(sessionManager, execDto.getConnection(), request);

@@ -178,8 +178,9 @@ That's it — one click.
 checkout → configure Git identity → real branch/tag push preflight
   → validate secrets and Docker credentials → set up Java
   → compute versions → set release version in all poms
-  → build (no tests) → deploy to Maven Central (-Prelease)
-  → build & push Docker image
+  → build JARs → download JDBC drivers → build Docker image locally
+  → smoke-test both executable JARs and the Docker image
+  → deploy to Maven Central (-Prelease) → push the tested Docker image
   → update docs to new release version
   → commit release pom changes → create annotated Git tag on the release commit
   → bump to next SNAPSHOT → commit next-dev version
@@ -188,6 +189,14 @@ checkout → configure Git identity → real branch/tag push preflight
 ```
 
 Detailed steps in the workflow file: `.github/workflows/release.yml`.
+
+Both startup gates run in dry-run mode as well. A build or startup failure stops
+the release before Maven Central deployment or Docker image pushes. The image
+check uses the locally built image without pulling, its default entrypoint and
+bundled drivers, and an isolated container with a randomly assigned localhost
+port. It requires the startup-complete message and a reachable server port within
+60 seconds, reports container logs on failure, and removes the test container.
+The image is not rebuilt between testing and pushing.
 
 For a full release, the first check after checkout and Git identity setup is a
 **real dummy push**, not `git push --dry-run`: it atomically pushes an empty commit

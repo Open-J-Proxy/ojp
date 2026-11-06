@@ -13,9 +13,9 @@
 #   5. Computes the release version and the next development version
 #      (see VERSION SCHEME below for details)
 #   6. Bumps all pom.xml versions to the release version
-#   7. Builds all Maven modules (no tests)
-#   8. Deploys all library modules to Maven Central via Sonatype Central
-#   9. Builds and pushes the OJP Server Docker image to Docker Hub
+#   7. Builds all Maven modules and the Docker image, then smoke-tests both
+#   8. Deploys all modules to Maven Central only after both startup gates pass
+#   9. Pushes the already-tested OJP Server Docker image to Docker Hub
 #  10. Updates all documentation to reference the new release version
 #  11. Creates a signed Git tag on the release commit
 #  12. Bumps all pom.xml versions to the next development version
@@ -355,8 +355,18 @@ jobs:
               --no-transfer-progress
 
       # -----------------------------------------------------------------------
-      # 8. Deploy all modules to Maven Central (libraries + ojp-server executable JAR)
+      # Build and test both distributions before publishing anything (also in dry runs).
       # -----------------------------------------------------------------------
+      - name: Download open source JDBC drivers
+        timeout-minutes: 5
+        run: timeout 240s bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
+
+      - name: Build release Docker image
+        timeout-minutes: 15
+        env:
+          RELEASE_VERSION: ${{ steps.versions.outputs.release }}
+        run: timeout 840s docker build -t "rrobetti/ojp:${RELEASE_VERSION}" ojp-server/
+
       - name: Verify executable server artifacts before publishing
         timeout-minutes: 3
         env:
@@ -366,6 +376,15 @@ jobs:
               "ojp-server/target/ojp-server-${RELEASE_VERSION}.jar" \
               "ojp-server/target/ojp-server-${RELEASE_VERSION}-shaded.jar"
 
+      - name: Verify Docker image starts before publishing
+        timeout-minutes: 3
+        env:
+          RELEASE_VERSION: ${{ steps.versions.outputs.release }}
+        run: timeout 150s python3 scripts/test-server-image.py "rrobetti/ojp:${RELEASE_VERSION}"
+
+      # -----------------------------------------------------------------------
+      # 8. Deploy only after both JAR and Docker startup checks succeed.
+      # -----------------------------------------------------------------------
       - name: Deploy to Maven Central
         id: central_deploy
         if: ${{ inputs.dry_run == false }}
@@ -390,24 +409,19 @@ jobs:
           fi
 
       # -----------------------------------------------------------------------
-      # 9. Build and push Docker image for ojp-server
+      # 9. Push the already-built and tested Docker image for ojp-server
       #    Image tag is the release version (e.g. rrobetti/ojp:0.4.1-beta)
       #    Also tagged as latest.
       #    Fat JAR is already built by step 7 (./mvnw clean package).
       # -----------------------------------------------------------------------
-      - name: Download open source JDBC drivers
-        if: ${{ inputs.dry_run == false }}
-        run: bash ojp-server/download-drivers.sh ./ojp-server/ojp-libs
-
       - name: Log in to Docker Hub
         if: ${{ inputs.dry_run == false }}
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USER }}" --password-stdin
 
-      - name: Build and push Docker image (${{ steps.versions.outputs.release }})
+      - name: Push tested Docker image (${{ steps.versions.outputs.release }})
         if: ${{ inputs.dry_run == false }}
         run: |
           IMAGE="rrobetti/ojp:${{ steps.versions.outputs.release }}"
-          docker build -t "$IMAGE" ojp-server/
           docker push "$IMAGE"
           # Only tag as 'latest' for GA releases from non-LTS branches.
           # Pre-releases (RC, SNAPSHOT-numbered, etc.) and LTS maintenance

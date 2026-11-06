@@ -31,22 +31,27 @@ OpenJDK 64-Bit Server VM (build 21.0.9+10, mixed mode, sharing)
 
 The easiest way to get the OJP Server JAR is to download it directly from Maven Central — no source code or build tools required.
 
+New releases publish the executable, self-contained build as the main
+`ojp-server-<version>.jar`. Version **1.0.4** has a main JAR without an
+executable manifest or bundled dependencies; use its `-shaded.jar` artifact.
+The examples below use 1.0.5.
+
 ### 1. Download the JAR
 
 ```bash
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.5/ojp-server-1.0.5.jar
 ```
 
 Or using `curl`:
 
 ```bash
-curl -LO https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
+curl -LO https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.5/ojp-server-1.0.5.jar
 ```
 
 ### 2. Make the JAR Executable (Optional)
 
 ```bash
-chmod +x ojp-server-1.0.4-shaded.jar
+chmod +x ojp-server-1.0.5.jar
 ```
 
 The JAR size is approximately **20MB** (without drivers). Open-source JDBC drivers must be downloaded separately (see below).
@@ -132,10 +137,10 @@ The server automatically loads drivers from the `./ojp-libs` directory:
 
 ```bash
 # Default location (./ojp-libs)
-java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.5.jar
 
 # Or specify custom path
-java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs -jar ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs -jar ojp-server-1.0.5.jar
 ```
 
 The server will automatically:
@@ -159,7 +164,7 @@ curl -LO https://raw.githubusercontent.com/Open-J-Proxy/ojp/main/ojp-server/down
 bash download-drivers.sh
 
 # Then run the server
-java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.5.jar
 ```
 
 ### Basic Execution with Custom Driver Location
@@ -167,7 +172,7 @@ java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar
 Run the OJP Server with external libraries in a custom location:
 
 ```bash
-java -Duser.timezone=UTC -Dojp.libs.path=/opt/drivers -jar ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -Dojp.libs.path=/opt/drivers -jar ojp-server-1.0.5.jar
 ```
 
 ### Expected Output
@@ -192,7 +197,7 @@ java -Duser.timezone=UTC \
      -Dojp.server.port=8080 \
      -Dojp.prometheus.port=9091 \
      -Dorg.slf4j.simpleLogger.defaultLogLevel=debug \
-     -jar ojp-server-1.0.4-shaded.jar
+     -jar ojp-server-1.0.5.jar
 ```
 
 ### Running as Background Process
@@ -200,7 +205,7 @@ java -Duser.timezone=UTC \
 To run the server in the background:
 
 ```bash
-nohup java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar > ojp-server.log 2>&1 &
+nohup java -Duser.timezone=UTC -jar ojp-server-1.0.5.jar > ojp-server.log 2>&1 &
 ```
 
 To stop the background process:
@@ -242,7 +247,7 @@ java -Duser.timezone=UTC \
      -Dojp.server.virtualThreads.enabled=true \
      -Dojp.server.threadPoolSize=100 \
      -Dojp.max.request.size=8388608 \
-     -jar ojp-server-1.0.4-shaded.jar
+     -jar ojp-server-1.0.5.jar
 ```
 
 ## Verification
@@ -300,7 +305,7 @@ If using an older Java version, upgrade to Java 25 or higher. You can download i
 
 **Solution**: Increase JVM heap size:
 ```bash
-java -Duser.timezone=UTC -Xmx2g -jar ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -Xmx2g -jar ojp-server-1.0.5.jar
 ```
 
 **Problem**: Missing database drivers
@@ -330,7 +335,7 @@ bash download-drivers.sh
 cp ~/Downloads/ojdbc11.jar ojp-libs/
 
 # Run server
-java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server-1.0.5.jar
 ```
 
 See the [Downloading Open Source JDBC Drivers](#downloading-open-source-jdbc-drivers) and [Adding Proprietary Database Drivers](#adding-proprietary-database-drivers-optional) sections above for detailed instructions.
@@ -346,7 +351,7 @@ java -Duser.timezone=UTC \
      -XX:MaxGCPauseMillis=100 \
      -Dojp.server.virtualThreads.enabled=true \
      -Dojp.server.threadPoolSize=500 \
-     -jar ojp-server-1.0.4-shaded.jar
+     -jar ojp-server-1.0.5.jar
 ```
 
 ## Logging Configuration
@@ -357,12 +362,12 @@ The server uses SLF4J Simple Logger. Configure logging levels:
 # Set log level to DEBUG
 java -Duser.timezone=UTC \
      -Dorg.slf4j.simpleLogger.defaultLogLevel=debug \
-     -jar ojp-server-1.0.4-shaded.jar
+     -jar ojp-server-1.0.5.jar
 
 # Disable most logging (ERROR only)
 java -Duser.timezone=UTC \
      -Dorg.slf4j.simpleLogger.defaultLogLevel=error \
-     -jar ojp-server-1.0.4-shaded.jar
+     -jar ojp-server-1.0.5.jar
 ```
 
 ## Building from Source

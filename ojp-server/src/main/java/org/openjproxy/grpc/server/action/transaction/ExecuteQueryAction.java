@@ -193,12 +193,17 @@ public class ExecuteQueryAction implements Action<StatementRequest, OpResult> {
 
         if (CollectionUtils.isNotEmpty(params)) {
             PreparedStatement ps = StatementFactory.createPreparedStatement(sessionManager, execDto, sql, params, request);
-            String resultSetUUID = sessionManager.registerResultSet(dto.getSession(), ps.executeQuery());
+            String resultSetUUID;
+            try (StatementCancellation ignored = StatementCancellation.onCallCancelled(ps)) {
+                resultSetUUID = sessionManager.registerResultSet(dto.getSession(), ps.executeQuery());
+            }
             handleResultSet(actionContext, dto.getSession(), resultSetUUID, finalObserver);
         } else {
             Statement stmt = StatementFactory.createStatement(sessionManager, execDto.getConnection(), request);
-            String resultSetUUID = sessionManager.registerResultSet(dto.getSession(),
-                    stmt.executeQuery(sql));
+            String resultSetUUID;
+            try (StatementCancellation ignored = StatementCancellation.onCallCancelled(stmt)) {
+                resultSetUUID = sessionManager.registerResultSet(dto.getSession(), stmt.executeQuery(sql));
+            }
             handleResultSet(actionContext, dto.getSession(), resultSetUUID, finalObserver);
         }
     }

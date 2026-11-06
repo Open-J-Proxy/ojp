@@ -357,6 +357,15 @@ jobs:
       # -----------------------------------------------------------------------
       # 8. Deploy all modules to Maven Central (libraries + ojp-server executable JAR)
       # -----------------------------------------------------------------------
+      - name: Verify executable server artifacts before publishing
+        timeout-minutes: 3
+        env:
+          RELEASE_VERSION: ${{ steps.versions.outputs.release }}
+        run: |
+          timeout 150s python3 scripts/test-server-artifact.py \
+              "ojp-server/target/ojp-server-${RELEASE_VERSION}.jar" \
+              "ojp-server/target/ojp-server-${RELEASE_VERSION}-shaded.jar"
+
       - name: Deploy to Maven Central
         id: central_deploy
         if: ${{ inputs.dry_run == false }}

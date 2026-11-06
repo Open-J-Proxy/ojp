@@ -123,6 +123,14 @@ jobs:
       - name: Build (ojp-server) with JDK 25
         run: mvn clean install -pl ojp-server -am -DskipTests -Dgpg.skip=true
 
+      - name: Verify executable server artifacts
+        timeout-minutes: 3
+        run: |
+          VERSION=$(timeout 30s mvn help:evaluate -Dexpression=project.version -q -DforceStdout -pl ojp-server)
+          timeout 150s python3 scripts/test-server-artifact.py \
+              "ojp-server/target/ojp-server-${VERSION}.jar" \
+              "ojp-server/target/ojp-server-${VERSION}-shaded.jar"
+
       - name: Build OJP Server Docker image
         run: |
           docker build -t ${{ needs.resolve-version.outputs.ojp_image }} ojp-server/

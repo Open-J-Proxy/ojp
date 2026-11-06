@@ -67,7 +67,7 @@ docker run --rm -d \
 
 ```bash
 # Download OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.4/ojp-server-1.0.4-shaded.jar
 chmod +x ojp-server-1.0.4-shaded.jar
 
 # Download open source JDBC drivers

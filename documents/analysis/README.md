@@ -137,6 +137,10 @@ the topology for every message type, consensus included.
 
 ## Other Analysis Documents
 
+### JDBC Request Boundaries
+
+- [REQUEST_BOUNDARY_METHODS_ANALYSIS.md](./REQUEST_BOUNDARY_METHODS_ANALYSIS.md) - Current `beginRequest()` / `endRequest()` no-op behavior, implementation strategies, creative use cases with pros and cons, and compatibility and evaluation requirements
+
 ### Request Lifecycle Extensibility
 
 - [REQUEST_LIFECYCLE_INTERCEPTOR_ANALYSIS.md](./REQUEST_LIFECYCLE_INTERCEPTOR_ANALYSIS.md) - Analysis of a Servlet Filter-inspired, ServiceLoader-based API for request lifecycle extensions, including alternatives, design considerations, risks, and open questions

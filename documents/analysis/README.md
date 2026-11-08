@@ -2,7 +2,29 @@
 
 This directory contains technical analysis documents for various OJP features and decisions.
 
-## Latest Analysis (October 2026)
+## Latest Analysis (November 2026)
+
+### Connection.abort() Implementation Possibilities
+
+**Question:** What does `Connection.abort(Executor)` do today, how could OJP
+implement it, and what useful features could it enable?
+
+**Quick Answer:** It currently throws `SQLFeatureNotSupportedException`.
+Prefer a dedicated, scoped abort RPC with concurrent lifecycle fencing,
+backend JDBC abort, and pool-aware physical retirement; asynchronous close
+or gRPC cancellation alone is not enough. Treat XA recovery separately.
+
+**Documents:**
+- [CONNECTION_ABORT_ANALYSIS_SUMMARY.md](./CONNECTION_ABORT_ANALYSIS_SUMMARY.md) - Decision summary, option comparison, and creative use cases
+- [CONNECTION_ABORT_IMPLEMENTATION_ANALYSIS.md](./CONNECTION_ABORT_IMPLEMENTATION_ANALYSIS.md) - Source evidence, JDBC semantics, eight approaches with pros/cons, races, XA, compatibility, and proposed acceptance tests
+
+**Key Takeaway:** Abort must stop only the logical connection's owned resources,
+without recycling damaged connections, closing shared channels, resurrecting
+late sessions, or losing prepared XA recovery state. This is analysis only.
+
+---
+
+## Previous Latest Analysis (October 2026)
 
 ### 🆕 ODBC Driver Distribution
 
@@ -211,5 +233,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-10-07
+**Last Updated:** 2026-11-07
 **Maintained By:** OJP Core Team

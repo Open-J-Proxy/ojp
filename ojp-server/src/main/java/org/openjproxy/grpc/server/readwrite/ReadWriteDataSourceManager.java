@@ -168,13 +168,14 @@ public class ReadWriteDataSourceManager {
         long idleTimeout = getLongProperty(props, replicaPrefix + "pool.idleTimeout", 600000);
         long maxLifetime = getLongProperty(props, replicaPrefix + "pool.maxLifetime", 1800000);
 
+        DatabaseConnectionBudgetManager budgetManager = null;
         DatabaseConnectionBudgetManager.Registration budgetRegistration = null;
         ConnectionPoolProvider poolProvider = null;
         DataSource dataSource = null;
         try {
             poolProvider = ConnectionPoolProviderRegistry.getDefaultProvider()
                     .orElseThrow(() -> new IllegalStateException("No connection pool providers available"));
-            DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+            budgetManager = DatabaseConnectionBudgetManager.getInstance();
             budgetRegistration = budgetManager.registerPool("replica:" + primaryConnHash + ":" + replicaName,
                     replicaUrl, replicaUser, maxPoolSize, minIdle, poolProvider.supportsDynamicResizing(),
                     healthyServerCount);
@@ -205,7 +206,9 @@ public class ReadWriteDataSourceManager {
 
             return dataSource;
         } catch (Exception e) {
-            DatabaseConnectionBudgetManager.getInstance().unregisterPool(budgetRegistration);
+            if (budgetManager != null) {
+                budgetManager.unregisterPool(budgetRegistration);
+            }
             if (dataSource != null && poolProvider != null) {
                 try {
                     poolProvider.closeDataSource(dataSource);

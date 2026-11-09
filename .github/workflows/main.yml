@@ -752,6 +752,15 @@ jobs:
           echo "=== OJP Server (with SQL enhancer) log ==="
           docker logs ojp-server-enhancer 2>&1 || echo "ojp-server-enhancer container not found"
 
+      - name: Show multinode budget server logs
+        if: always() && matrix.java-version == 25
+        run: |
+          for port in 10595 10596 10597; do
+            container="ojp-server-budget-$port"
+            echo "=== $container log (last 1000 lines) ==="
+            docker logs --tail 1000 "$container" 2>&1 || echo "$container container not found"
+          done
+
   # ===========================================================================
   # JOB 3: MySQL Integration Tests
   # ===========================================================================

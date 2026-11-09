@@ -453,8 +453,6 @@ public class MultinodeConnectionManager {
      * - For all modes: Checks unhealthy servers to see if they've recovered
      */
     private void performHealthCheck() {
-        log.info("Performing health check on servers");
-
         // Proactively check healthy servers to detect failures early.
         // Run when there are active XA sessions OR cached non-XA connection details.
         // This ensures both XA and non-XA pools adapt promptly when a server goes down.
@@ -462,14 +460,24 @@ public class MultinodeConnectionManager {
         // connect() call before any server has been contacted.
         boolean hasActiveSessions = !sessionToServerMap.isEmpty();
         boolean hasNonXaConnections = !connectionDetailsByConnHash.isEmpty();
+        log.debug("Health check tick for manager {}: activeSessions={}, knownPools={}, endpoints={}",
+                System.identityHashCode(this), hasActiveSessions ? sessionToServerMap.size() : 0,
+                connectionDetailsByConnHash.size(), serverEndpoints.stream()
+                        .map(endpoint -> endpoint.getAddress() + "=" + (endpoint.isHealthy() ? "UP" : "DOWN"))
+                        .collect(Collectors.joining(",")));
         if (hasActiveSessions || hasNonXaConnections) {
             List<ServerEndpoint> healthyServers = serverEndpoints.stream()
                     .filter(ServerEndpoint::isHealthy)
                     .collect(Collectors.toList());
 
             for (ServerEndpoint endpoint : healthyServers) {
-                if (!validateServer(endpoint)) {
-                    log.info("Health check: Server {} has become unhealthy", endpoint.getAddress());
+                boolean responsive = validateServer(endpoint);
+                log.debug("Health check probe result for manager {} endpoint {}: responsive={}",
+                        System.identityHashCode(this), endpoint.getAddress(), responsive);
+                if (!responsive) {
+                    log.info("Health check marked endpoint {} DOWN for manager {} (knownPools={}, activeSessions={})",
+                            endpoint.getAddress(), System.identityHashCode(this),
+                            connectionDetailsByConnHash.size(), sessionToServerMap.size());
 
                     // Mark server unhealthy
                     endpoint.setHealthy(false);
@@ -489,6 +497,9 @@ public class MultinodeConnectionManager {
                     pushClusterHealthToAllHealthyServers();
                 }
             }
+        } else {
+            log.debug("Health check probes skipped for manager {}: no active sessions or known pools",
+                    System.identityHashCode(this));
         }
 
         // Check unhealthy servers to see if they've recovered
@@ -511,7 +522,12 @@ public class MultinodeConnectionManager {
 
             // Only check if enough time has passed since last failure
             if (timeSinceFailure >= healthCheckConfig.getHealthCheckThresholdMs()) {
-                if (validateServer(endpoint)) {
+                log.debug("Checking recovery for manager {} endpoint {} after {}ms down",
+                        System.identityHashCode(this), endpoint.getAddress(), timeSinceFailure);
+                boolean responsive = validateServer(endpoint);
+                log.debug("Recovery probe result for manager {} endpoint {}: responsive={}",
+                        System.identityHashCode(this), endpoint.getAddress(), responsive);
+                if (responsive) {
                     // For non-XA connections: proactively re-initialize pools BEFORE marking the
                     // server healthy. Non-XA connect() calls are cached after the first successful
                     // connect(), so the recovered server never receives a connect() RPC from
@@ -1125,8 +1141,10 @@ public class MultinodeConnectionManager {
         endpoint.setHealthy(false);
         endpoint.setLastFailureTime(System.nanoTime());
 
-        log.warn("Marked server {} as unhealthy due to connection-level error: {}",
-                endpoint.getAddress(), exception.getMessage());
+        log.warn("Connection failure changed endpoint {} from {} to DOWN for manager {} "
+                        + "(knownPools={}, activeSessions={}): {}",
+                endpoint.getAddress(), wasHealthy ? "UP" : "DOWN", System.identityHashCode(this),
+                connectionDetailsByConnHash.size(), sessionToServerMap.size(), exception.getMessage());
 
         // XA Mode: Immediately invalidate all sessions and connections for the failed server
         // This prevents attempts to use stale sessions after server failure
@@ -1151,13 +1169,23 @@ public class MultinodeConnectionManager {
         // pushes when handleServerFailure is called multiple times for the same server.
         // Submit to the background scheduler to avoid blocking the calling query thread.
         if (wasHealthy && healthCheckScheduler != null) {
+            log.info("Scheduling cluster-health push after failure on {} for manager {}",
+                    endpoint.getAddress(), System.identityHashCode(this));
             healthCheckScheduler.submit(() -> {
                 try {
                     pushClusterHealthToAllHealthyServers();
                 } catch (Exception e) {
-                    log.warn("Failed to push cluster health after server failure detection: {}", e.getMessage());
+                    log.warn("Failed to push cluster health after failure on {} for manager {}: {}",
+                            endpoint.getAddress(), System.identityHashCode(this), e.getMessage(), e);
                 }
             });
+        } else if (wasHealthy) {
+            log.warn("Cannot schedule cluster-health push after failure on {} for manager {}: "
+                            + "periodic health checker is disabled",
+                    endpoint.getAddress(), System.identityHashCode(this));
+        } else {
+            log.debug("No cluster-health push scheduled for {} on manager {}: endpoint was already DOWN",
+                    endpoint.getAddress(), System.identityHashCode(this));
         }
 
         // Remove the failed channel from the map and shut it down gracefully
@@ -1413,31 +1441,49 @@ public class MultinodeConnectionManager {
      */
     private void pushClusterHealthToAllHealthyServers() {
         if (connectionDetailsByConnHash.isEmpty()) {
-            log.debug("No stored connection details; skipping proactive cluster health push");
+            log.warn("Skipping cluster-health push for manager {}: no cached pool connection details",
+                    System.identityHashCode(this));
             return;
         }
 
         String currentClusterHealth = generateClusterHealth();
+        List<Map.Entry<String, ConnectionDetails>> knownPools =
+                new ArrayList<>(connectionDetailsByConnHash.entrySet());
+        knownPools.sort(Map.Entry.comparingByKey());
         List<ServerEndpoint> healthyServers = serverEndpoints.stream()
                 .filter(ServerEndpoint::isHealthy)
                 .collect(Collectors.toList());
 
         if (healthyServers.isEmpty()) {
-            log.debug("No healthy servers to push cluster health to");
+            log.warn("Skipping cluster-health push for manager {}: no healthy target servers; "
+                            + "knownPools={}, health={}",
+                    System.identityHashCode(this), knownPools.size(), currentClusterHealth);
             return;
         }
 
-        log.info("Proactively pushing cluster health '{}' to {} healthy server(s)",
-                currentClusterHealth, healthyServers.size());
+        log.info("Starting cluster-health push for manager {}: health={}, knownPools={}, "
+                        + "pools={}, healthyTargets={}",
+                System.identityHashCode(this), currentClusterHealth, knownPools.size(),
+                knownPools.stream().map(entry -> entry.getKey() + "["
+                        + String.join(",", entry.getValue().getServerEndpointsList()) + "]")
+                        .collect(Collectors.joining(",")),
+                healthyServers.stream().map(ServerEndpoint::getAddress).collect(Collectors.joining(",")));
 
+        int successfulPushes = 0;
+        int failedPushes = 0;
+        int skippedPushes = 0;
         for (ServerEndpoint server : healthyServers) {
             ChannelAndStub channelAndStub = channelMap.get(server);
             if (channelAndStub == null) {
-                log.debug("No channel for server {}; skipping cluster health push", server.getAddress());
+                skippedPushes += knownPools.size();
+                log.warn("Skipping {} cluster-health push(es) for manager {} to {}: no channel",
+                        knownPools.size(),
+                        System.identityHashCode(this),
+                        server.getAddress());
                 continue;
             }
 
-            for (Map.Entry<String, ConnectionDetails> entry : connectionDetailsByConnHash.entrySet()) {
+            for (Map.Entry<String, ConnectionDetails> entry : knownPools) {
                 String connHash = entry.getKey();
                 ConnectionDetails storedDetails = entry.getValue();
                 ConnectionDetails updatedDetails = ConnectionDetails.newBuilder(storedDetails)
@@ -1445,17 +1491,27 @@ public class MultinodeConnectionManager {
                         .build();
 
                 try {
-                    channelAndStub.blockingStub
+                    SessionInfo response = channelAndStub.blockingStub
                             .withDeadlineAfter(healthCheckConfig.getHealthCheckTimeoutMs(), TimeUnit.MILLISECONDS)
                             .connect(updatedDetails);
-                    log.info("Pushed cluster health '{}' to server {} for connHash {}",
-                            currentClusterHealth, server.getAddress(), connHash);
+                    successfulPushes++;
+                    log.info("Cluster-health push succeeded for manager {}: target={}, pool={}, "
+                                    + "responseConnHash={}, health={}",
+                            System.identityHashCode(this), server.getAddress(), connHash,
+                            response.getConnHash(), currentClusterHealth);
                 } catch (Exception e) {
-                    log.warn("Failed to push cluster health to server {} for connHash {}: {}",
-                            server.getAddress(), connHash, e.getMessage());
+                    failedPushes++;
+                    log.warn("Cluster-health push failed for manager {}: target={}, pool={}, "
+                                    + "health={}, error={}",
+                            System.identityHashCode(this), server.getAddress(), connHash,
+                            currentClusterHealth, e.getMessage(), e);
                 }
             }
         }
+        log.info("Finished cluster-health push for manager {}: successful={}, failed={}, skipped={}, "
+                        + "expectedAttempts={}",
+                System.identityHashCode(this), successfulPushes, failedPushes, skippedPushes,
+                healthyServers.size() * knownPools.size());
     }
 
     /**

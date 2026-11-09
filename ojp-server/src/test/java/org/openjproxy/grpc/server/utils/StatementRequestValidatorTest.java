@@ -5,6 +5,7 @@ import com.openjproxy.grpc.StatementRequest;
 import org.junit.jupiter.api.Test;
 import org.openjproxy.constants.CommonConstants;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,5 +33,17 @@ class StatementRequestValidatorTest {
 
         assertFalse(StatementRequestValidator.requestsUpdateResultSet(noFlag));
         assertFalse(StatementRequestValidator.requestsUpdateResultSet(falseFlag));
+    }
+
+    @Test
+    void shouldReadParameterSetSize() {
+        StatementRequest request = StatementRequest.newBuilder()
+                .addProperties(PropertyEntry.newBuilder()
+                        .setKey(CommonConstants.PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY)
+                        .setIntValue(3))
+                .build();
+
+        assertEquals(3, StatementRequestValidator.parameterSetSize(request));
+        assertEquals(0, StatementRequestValidator.parameterSetSize(StatementRequest.newBuilder().build()));
     }
 }

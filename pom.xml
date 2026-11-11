@@ -35,6 +35,7 @@
         <opentelemetry.version>1.67.0</opentelemetry.version>
         <netty.version>4.2.18.Final</netty.version>
         <commons-lang3.version>3.18.0</commons-lang3.version>
+        <commons-codec.version>1.23.0</commons-codec.version>
         <jackson-core.version>2.22.3</jackson-core.version>
         <plexus-utils.version>4.0.3</plexus-utils.version>
         <log4j.version>2.25.5</log4j.version>
@@ -71,6 +72,13 @@
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
                 <version>${commons-lang3.version}</version>
+            </dependency>
+
+            <!-- CVE-2026-119078: use corrected Blake3 documentation; doFinalize behavior is unchanged. -->
+            <dependency>
+                <groupId>commons-codec</groupId>
+                <artifactId>commons-codec</artifactId>
+                <version>${commons-codec.version}</version>
             </dependency>
 
             <!-- Force jackson-core version to keep the Jackson stack aligned and fix published security issues -->

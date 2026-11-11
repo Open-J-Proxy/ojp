@@ -62,9 +62,9 @@ external in `ojp-libs/`. Before deployment, it must pass
 service registrations, then starts it using `java -jar` in an isolated
 directory with a 45-second startup timeout.
 
-Version 1.0.4 published a main JAR without a `Main-Class`; use a later release
-for an executable artifact. Published Maven Central versions cannot be
-overwritten.
+Version 1.0.4 published a thin main JAR without a `Main-Class`;
+use the `-shaded.jar` artifact for that version. Published Maven Central
+versions cannot be overwritten; the corrected main artifact requires a new release.
 
 ---
 

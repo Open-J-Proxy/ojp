@@ -77,6 +77,29 @@ public class ResultSetHelper {
     public static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
             StreamObserver<OpResult> responseObserver)
             throws SQLException {
+        handleResultSet(context, session, resultSetUUID, responseObserver, Integer.MAX_VALUE, false);
+    }
+
+    /**
+     * Processes up to {@code maxRowsPerCall} rows and sends exactly one result block.
+     * This overload is used by unary fetch RPCs, which must return one response per call.
+     *
+     * @param context          the action context providing session and database access
+     * @param session          the session information for the current client
+     * @param resultSetUUID    the unique identifier of the result set to process
+     * @param responseObserver the gRPC observer to send the result block to
+     * @param maxRowsPerCall   the maximum number of rows to include in this response
+     * @throws SQLException if a database access error occurs while reading the result set
+     */
+    public static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
+            StreamObserver<OpResult> responseObserver, int maxRowsPerCall)
+            throws SQLException {
+        handleResultSet(context, session, resultSetUUID, responseObserver, maxRowsPerCall, true);
+    }
+
+    private static void handleResultSet(ActionContext context, SessionInfo session, String resultSetUUID,
+            StreamObserver<OpResult> responseObserver, int maxRowsPerCall, boolean markLastBlock)
+            throws SQLException {
         var sessionManager = context.getSessionManager();
 
         ResultSet rs = sessionManager.getResultSet(session, resultSetUUID);
@@ -89,6 +112,7 @@ public class ResultSetHelper {
         List<ResultRow> results = new ArrayList<>();
         int row = 0;
         boolean justSent = false;
+        boolean resultSetExhausted = false;
         DbName dbName = DatabaseUtils.resolveDbName(rs.getStatement().getConnection().getMetaData().getURL());
         // Only used if result set contains LOBs in SQL Server and DB2 (if LOB's
         // present), so cursor is not read in advance,
@@ -96,7 +120,11 @@ public class ResultSetHelper {
         String resultSetMode = "";
         boolean resultSetMetadataCollected = false;
 
-        while (rs.next()) {
+        while (true) {
+            if (!rs.next()) {
+                resultSetExhausted = true;
+                break;
+            }
             if (DbName.DB2.equals(dbName) && !resultSetMetadataCollected) {
                 collectResultSetMetadata(context, session, resultSetUUID, rs);
             }
@@ -143,7 +171,13 @@ public class ResultSetHelper {
                         currentValue = LobProcessor.treatAsBlob(sessionManager, session, rs, i, context.getDbNameMap());
                         break;
                     }
-                    case Types.CLOB: {
+                    case Types.CLOB, Types.LONGVARCHAR, Types.VARCHAR: {
+                        boolean isMySqlTextLob = (DbName.MYSQL.equals(dbName) || DbName.MARIADB.equals(dbName))
+                                && isTextLobType(colTypeName);
+                        if (colType != Types.CLOB && !isMySqlTextLob) {
+                            currentValue = rs.getObject(i + 1);
+                            break;
+                        }
                         if (isSQLOrDB2) {
                             resultSetMode = CommonConstants.RESULT_SET_ROW_BY_ROW_MODE;
                         }
@@ -224,14 +258,23 @@ public class ResultSetHelper {
                 labels = null; // Labels only included in the first block
                 results = new ArrayList<>();
             }
+            if (row >= maxRowsPerCall) {
+                break;
+            }
         }
 
         if (!justSent) {
             // Send a block of remaining records
             SessionInfo enrichedSession = org.openjproxy.grpc.server.utils.SessionInfoUtils
                     .enrichWithThrottle(session, context);
+            String resultSetFlag = resultSetMode;
+            if (markLastBlock && resultSetExhausted) {
+                resultSetFlag = resultSetMode.isEmpty()
+                        ? CommonConstants.RESULT_SET_LAST_BLOCK_FLAG
+                        : resultSetMode + "|" + CommonConstants.RESULT_SET_LAST_BLOCK_FLAG;
+            }
             responseObserver.onNext(
-                    ResultSetWrapper.wrapResults(enrichedSession, results, labels, resultSetUUID, resultSetMode));
+                    ResultSetWrapper.wrapResults(enrichedSession, results, labels, resultSetUUID, resultSetFlag));
         }
 
         responseObserver.onCompleted();
@@ -254,6 +297,13 @@ public class ResultSetHelper {
         if (sessionInfo != null && !sessionInfo.getSessionUUID().isEmpty()) {
             context.getSessionManager().updateSessionActivity(sessionInfo);
         }
+    }
+
+    private static boolean isTextLobType(String columnTypeName) {
+        return "TINYTEXT".equalsIgnoreCase(columnTypeName)
+                || "TEXT".equalsIgnoreCase(columnTypeName)
+                || "MEDIUMTEXT".equalsIgnoreCase(columnTypeName)
+                || "LONGTEXT".equalsIgnoreCase(columnTypeName);
     }
 
     /**

@@ -173,7 +173,7 @@ The container is pre-configured to look for libraries in `/opt/ojp/ojp-libs`. Al
 version: '3.8'
 services:
   ojp:
-    image:     rrobetti/ojp:1.0.6
+    image: rrobetti/ojp:1.0.6
     ports:
       - "1059:1059"
     volumes:
@@ -264,7 +264,7 @@ spec:
     spec:
       containers:
       - name: ojp
-        image:         rrobetti/ojp:1.0.6
+        image: rrobetti/ojp:1.0.6
         volumeMounts:
         - name: drivers
           mountPath: /opt/ojp/ojp-libs

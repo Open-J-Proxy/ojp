@@ -755,7 +755,7 @@ version: '3.8'
 
 services:
   ojp-server:
-    image:     rrobetti/ojp:1.0.6
+    image: rrobetti/ojp:1.0.6
     ports:
       - "1059:1059"
       - "9159:9159"

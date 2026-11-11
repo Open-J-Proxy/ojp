@@ -189,15 +189,67 @@ func TestDatabaseSQLDriverShouldRejectUnsupportedArgumentsAndOptions(t *testing.
 	}
 }
 
+func TestPreparedStatementShouldReuseServerUUIDOnExecuteUpdate(t *testing.T) {
+	session := &pb.SessionInfo{}
+	var statementUUIDs []string
+	var closeRequest *pb.CallResourceRequest
+	rpc := &sqlTestRPC{
+		update: func(request *pb.StatementRequest) (*pb.OpResult, error) {
+			statementUUIDs = append(statementUUIDs, request.GetStatementUUID())
+			result := &pb.OpResult{
+				Session: session,
+				Result:  &pb.OpResult_IntValue{IntValue: 1},
+			}
+			if len(statementUUIDs) == 1 {
+				result.Uuid = "server-prepared-statement"
+			}
+			return result, nil
+		},
+		callResource: func(request *pb.CallResourceRequest) (*pb.CallResourceResponse, error) {
+			if request.GetTarget().GetCallType() == pb.CallType_CALL_CLOSE {
+				closeRequest = request
+			}
+			return &pb.CallResourceResponse{Session: session}, nil
+		},
+	}
+	connection := &rpcConnection{
+		client:  newRPCClientWithRPC(rpc, func() error { return nil }),
+		session: session,
+	}
+	statement := &sqlPreparedStatement{connection: connection, query: "INSERT INTO sample (name) VALUES (?)"}
+	for range 2 {
+		if _, err := statement.ExecContext(context.Background(), []driver.NamedValue{
+			{Ordinal: 1, Value: "sample"},
+		}); err != nil {
+			t.Fatalf("prepared execution failed: %v", err)
+		}
+	}
+	if len(statementUUIDs) != 2 || statementUUIDs[0] != "" || statementUUIDs[1] != "server-prepared-statement" {
+		t.Fatalf("expected first update to obtain and second update to reuse server UUID, got %v", statementUUIDs)
+	}
+	if err := statement.Close(); err != nil {
+		t.Fatalf("close prepared statement: %v", err)
+	}
+	if closeRequest == nil || closeRequest.GetResourceUUID() != "server-prepared-statement" {
+		t.Fatalf("expected prepared-statement close to use server UUID, got %v", closeRequest)
+	}
+	if _, err := statement.ExecContext(context.Background(), []driver.NamedValue{
+		{Ordinal: 1, Value: "sample"},
+	}); err != errStatementClosed {
+		t.Fatalf("expected execution after close to fail, got %v", err)
+	}
+}
+
 type sqlTestRPC struct {
 	pb.StatementServiceClient
-	connect   func(*pb.ConnectionDetails) (*pb.SessionInfo, error)
-	update    func(*pb.StatementRequest) (*pb.OpResult, error)
-	query     func(*pb.StatementRequest) (grpc.ServerStreamingClient[pb.OpResult], error)
-	terminate func() (*pb.SessionTerminationStatus, error)
-	start     func(*pb.SessionInfo) (*pb.SessionInfo, error)
-	commit    func(*pb.SessionInfo) (*pb.SessionInfo, error)
-	rollback  func(*pb.SessionInfo) (*pb.SessionInfo, error)
+	connect      func(*pb.ConnectionDetails) (*pb.SessionInfo, error)
+	update       func(*pb.StatementRequest) (*pb.OpResult, error)
+	query        func(*pb.StatementRequest) (grpc.ServerStreamingClient[pb.OpResult], error)
+	callResource func(*pb.CallResourceRequest) (*pb.CallResourceResponse, error)
+	terminate    func() (*pb.SessionTerminationStatus, error)
+	start        func(*pb.SessionInfo) (*pb.SessionInfo, error)
+	commit       func(*pb.SessionInfo) (*pb.SessionInfo, error)
+	rollback     func(*pb.SessionInfo) (*pb.SessionInfo, error)
 }
 
 func (s *sqlTestRPC) Connect(_ context.Context, details *pb.ConnectionDetails, _ ...grpc.CallOption) (*pb.SessionInfo, error) {
@@ -210,6 +262,10 @@ func (s *sqlTestRPC) ExecuteUpdate(_ context.Context, request *pb.StatementReque
 
 func (s *sqlTestRPC) ExecuteQuery(_ context.Context, request *pb.StatementRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[pb.OpResult], error) {
 	return s.query(request)
+}
+
+func (s *sqlTestRPC) CallResource(_ context.Context, request *pb.CallResourceRequest, _ ...grpc.CallOption) (*pb.CallResourceResponse, error) {
+	return s.callResource(request)
 }
 
 func (s *sqlTestRPC) TerminateSession(_ context.Context, _ *pb.SessionInfo, _ ...grpc.CallOption) (*pb.SessionTerminationStatus, error) {

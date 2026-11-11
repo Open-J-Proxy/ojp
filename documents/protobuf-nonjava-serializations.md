@@ -23,7 +23,7 @@ The new approach uses **protobuf-based encoding** to enable:
 
 ### 1. Containers (Maps, Lists, Properties)
 
-**Proto File**: `ojp-grpc-commons/src/main/proto/containers.proto`
+**Proto File**: `ojp-grpc-contract/proto/containers.proto`
 **Package**: `ojp.transport.v1`
 **Java Class**: `org.openjproxy.grpc.transport.ProtoSerialization`
 
@@ -116,7 +116,7 @@ try {
 
 ### 2. UUID, URL, and RowId
 
-**Proto File**: `ojp-grpc-commons/src/main/proto/StatementService.proto`
+**Proto File**: `ojp-grpc-contract/proto/StatementService.proto`
 **Helper Class**: `org.openjproxy.grpc.ProtoTypeConverters`
 
 ## Encoding Rules
@@ -457,7 +457,7 @@ String encoding adds minimal overhead:
 - No backward compatibility with old Java-serialized format
 
 **Files Changed**:
-- `ojp-grpc-commons/src/main/proto/StatementService.proto`
+- `ojp-grpc-contract/proto/StatementService.proto`
 - `ojp-grpc-commons/src/main/java/org/openjproxy/grpc/ProtoConverter.java`
 - `ojp-grpc-commons/src/main/java/org/openjproxy/grpc/ProtoTypeConverters.java` (new)
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/statement/ParameterHandler.java`
@@ -474,7 +474,7 @@ mvn clean compile
 
 Generated files location: `target/generated-sources/protobuf/java/`
 
-The protobuf-maven-plugin configuration (in `ojp-grpc-commons/pom.xml`) automatically runs protoc during the `compile` phase.
+The protobuf-maven-plugin configuration (in `ojp-grpc-commons/pom.xml`) reads the canonical definitions from `../ojp-grpc-contract/proto` and automatically runs protoc during the `compile` phase.
 
 ## Further Reading
 

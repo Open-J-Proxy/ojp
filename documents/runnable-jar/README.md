@@ -33,8 +33,8 @@ The easiest way to get the OJP Server JAR is to download it directly from Maven 
 
 New releases publish the executable, self-contained build as the main
 `ojp-server-<version>.jar`. Version **1.0.4** has a main JAR without an
-executable manifest or bundled dependencies; use a later release. The examples
-below use 1.0.5.
+executable manifest or bundled dependencies; use its `-shaded.jar` artifact.
+The examples below use 1.0.5.
 
 ### 1. Download the JAR
 

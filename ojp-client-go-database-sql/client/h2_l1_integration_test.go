@@ -130,7 +130,7 @@ func TestH2DatabaseShouldSupportL1CRUDAndLifecycle(t *testing.T) {
 	_, err = db.ExecContext(ctx, "THIS IS NOT VALID SQL")
 	assertH2SQLError(t, err, "42001")
 
-	_, err = db.QueryContext(ctx, "SELECT FROM "+table)
+	_, err = db.QueryContext(ctx, "SELEC id FROM "+table)
 	assertH2SQLError(t, err, "42001")
 
 	// Delete the row and verify an empty query still reports its result columns.

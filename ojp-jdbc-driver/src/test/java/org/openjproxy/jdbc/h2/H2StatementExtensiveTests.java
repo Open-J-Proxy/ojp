@@ -9,9 +9,11 @@ import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -54,6 +56,39 @@ public class H2StatementExtensiveTests {
         assertNotNull(rs);
         assertTrue(rs.next());
         rs.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/h2_connection.csv")
+    void shouldReturnRowsFromDirectAndPreparedDataChangingQueries(String driverClass, String url, String user,
+                                                                  String password) throws Exception {
+        this.setUp(driverClass, url, user, password);
+        String tableName = "h2_dml_returning_" + UUID.randomUUID().toString().replace("-", "");
+        statement.execute("CREATE TABLE " + tableName + " (id INT PRIMARY KEY, name VARCHAR(50))");
+        try {
+            assertTrue(statement.execute("SELECT id, name FROM FINAL TABLE (INSERT INTO " + tableName
+                    + " (id, name) VALUES (101, 'direct'))"));
+            try (ResultSet resultSet = statement.getResultSet()) {
+                assertTrue(resultSet.next());
+                assertEquals(101, resultSet.getInt("id"));
+                assertEquals("direct", resultSet.getString("name"));
+                assertFalse(resultSet.next());
+            }
+
+            try (PreparedStatement preparedStatement = connection.prepareStatement(
+                    "SELECT id, name FROM FINAL TABLE (INSERT INTO " + tableName + " (id, name) VALUES (?, ?))")) {
+                preparedStatement.setInt(1, 102);
+                preparedStatement.setString(2, "prepared");
+                try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                    assertTrue(resultSet.next());
+                    assertEquals(102, resultSet.getInt("id"));
+                    assertEquals("prepared", resultSet.getString("name"));
+                    assertFalse(resultSet.next());
+                }
+            }
+        } finally {
+            statement.execute("DROP TABLE " + tableName);
+        }
     }
 
     @ParameterizedTest

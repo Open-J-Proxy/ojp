@@ -181,7 +181,8 @@ The `-DskipTests` flag skips running tests during the build. This is useful for 
 
 OJP is organized as a multi-module Maven project with the following modules:
 
-- **ojp-grpc-commons**: Shared Protocol Buffer definitions and generated gRPC code
+- **ojp-grpc-contract**: Canonical Protocol Buffer definitions
+- **ojp-grpc-commons**: Generated Java gRPC code and shared converters
 - **ojp-jdbc-driver**: The Type 3 JDBC driver that applications use
 - **ojp-server**: The proxy server that manages database connections
 - **ojp-datasource-api**: DataSource SPI interfaces for pluggable connection pool implementations

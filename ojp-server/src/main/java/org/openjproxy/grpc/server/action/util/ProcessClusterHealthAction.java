@@ -3,12 +3,15 @@ package org.openjproxy.grpc.server.action.util;
 import com.openjproxy.grpc.SessionInfo;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.server.AdmissionControlManager;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
+import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.xa.pool.XATransactionRegistry;
 
 import javax.sql.DataSource;
+import java.util.List;
 
 /**
  * Action for processing cluster health changes and triggering pool rebalancing.
@@ -66,11 +69,36 @@ public class ProcessClusterHealthAction {
         log.info("[XA-REBALANCE] Cluster health changed for {}, healthy servers: {}, triggering pool rebalancing, isXA={}",
                 connHash, healthyServerCount, sessionInfo.getIsXA());
 
-        // Update the pool coordinator with new healthy server count.
-        // IMPORTANT: Use the returned allocation reference directly (not a second getPoolAllocation() call)
-        // to prevent a race condition where a concurrent calculatePoolSizes() call can overwrite
-        // the map entry between updateHealthyServers() and getPoolAllocation(), causing the wrong
-        // (freshly-reset, un-updated) pool sizes to be applied during resize.
+        try {
+            applyHealthChange(context, sessionInfo, connHash, healthyServerCount);
+        } catch (RuntimeException e) {
+            // Resizing pools is a side effect of a health report and must never fail the request that carried it
+            // (this runs ahead of xaPrepare/xaCommit/xaRollback). Forget the stored health so the next request
+            // evaluates the change again instead of treating it as already applied.
+            log.error("[XA-REBALANCE] Failed to apply cluster health change for {}; will retry on the next request",
+                    connHash, e);
+            context.getClusterHealthTracker().removeTracking(connHash);
+        }
+    }
+
+    private void applyHealthChange(ActionContext context, SessionInfo sessionInfo, String connHash,
+                                   int healthyServerCount) {
+        DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+        List<String> matchingConnHashes =
+                ConnectionPoolConfigurer.getPoolCoordinator().getConnHashesWithSameServerEndpoints(connHash);
+        log.info("[XA-REBALANCE] Applying cluster health from {} to {} pools with matching endpoint sets",
+                connHash, matchingConnHashes.size());
+        matchingConnHashes.forEach(matchingConnHash ->
+                updateBudgetServerCount(budgetManager, matchingConnHash, healthyServerCount));
+
+        matchingConnHashes.forEach(matchingConnHash ->
+                applyPoolHealthChange(context, budgetManager, matchingConnHash, healthyServerCount,
+                        sessionInfo.getIsXA()));
+    }
+
+    private void applyPoolHealthChange(ActionContext context, DatabaseConnectionBudgetManager budgetManager,
+                                       String connHash, int healthyServerCount, boolean isXA) {
+        // Use the returned allocation directly to avoid a second lookup racing with pool creation.
         MultinodePoolCoordinator.PoolAllocation allocation =
                 ConnectionPoolConfigurer.getPoolCoordinator().updateHealthyServers(connHash, healthyServerCount);
 
@@ -78,7 +106,10 @@ public class ProcessClusterHealthAction {
         DataSource ds = context.getDatasourceMap().get(connHash);
         if (ds instanceof HikariDataSource hikariDataSource) {
             log.debug("[XA-REBALANCE-DEBUG] Applying size changes to HikariDataSource for {}", connHash);
-            ConnectionPoolConfigurer.applyPoolSizeChanges(connHash, hikariDataSource);
+            ConnectionPoolConfigurer.applyPoolSizeChanges(connHash, hikariDataSource, allocation, context);
+        } else if (ds != null && allocation != null) {
+            DatabaseConnectionBudgetManager.getInstance().updatePoolRequest(
+                    "regular:" + connHash, allocation.getCurrentMaxPoolSize(), allocation.getCurrentMinIdle());
         } else {
             log.debug("[XA-REBALANCE-DEBUG] No HikariDataSource found for {}", connHash);
         }
@@ -95,14 +126,45 @@ public class ProcessClusterHealthAction {
 
             int newMaxPoolSize = allocation.getCurrentMaxPoolSize();
             int newMinIdle = allocation.getCurrentMinIdle();
+            if (!budgetManager.updatePoolRequest("xa:" + connHash, newMaxPoolSize, newMinIdle)) {
+                newMaxPoolSize = budgetManager.getMaximumPoolSize("xa:" + connHash, newMaxPoolSize);
+                newMinIdle = Math.min(newMinIdle, budgetManager.getMinimumIdle("xa:" + connHash, newMinIdle));
+                newMinIdle = Math.min(newMinIdle, newMaxPoolSize);
 
-            log.debug("[XA-REBALANCE-DEBUG] Resizing XA backend pool for {}: maxPoolSize={}, minIdle={}",
-                    connHash, newMaxPoolSize, newMinIdle);
+                log.debug("[XA-REBALANCE-DEBUG] Resizing XA backend pool for {}: maxPoolSize={}, minIdle={}",
+                        connHash, newMaxPoolSize, newMinIdle);
 
-            xaRegistry.resizeBackendPool(newMaxPoolSize, newMinIdle);
-        } else if (sessionInfo.getIsXA()) {
+                xaRegistry.resizeBackendPool(newMaxPoolSize, newMinIdle);
+                AdmissionControlManager admissionControlManager =
+                        context.getAdmissionControlManagers().get(connHash);
+                if (admissionControlManager != null) {
+                    admissionControlManager.resizeCapacity(newMaxPoolSize);
+                }
+            }
+        } else if (isXA) {
             // Only log missing XA registry for actual XA connections
             log.debug("[XA-REBALANCE-DEBUG] No XA registry found for XA connection {}", connHash);
+        }
+    }
+
+    private void updateBudgetServerCount(DatabaseConnectionBudgetManager budgetManager, String connHash,
+                                         int healthyServerCount) {
+        if (healthyServerCount < 1) {
+            // Same rule as ConnectionPoolConfigurer.getHealthyServerCount: a report without a single healthy
+            // server is not a usable cluster size, and treating it as one would hand this server the whole budget.
+            log.warn("[XA-REBALANCE] Cluster health for {} reports no healthy servers; keeping the current "
+                    + "database budget allocation", connHash);
+            return;
+        }
+        try {
+            budgetManager.updateHealthyServerCount("regular:" + connHash, healthyServerCount);
+            budgetManager.updateHealthyServerCount("xa:" + connHash, healthyServerCount);
+            budgetManager.updateHealthyServerCountForPoolPrefix("replica:" + connHash + ":", healthyServerCount);
+        } catch (DatabaseConnectionBudgetManager.InfeasibleBudgetException e) {
+            // Retrying cannot help until the server count, the pools or the budget change, so keep the last
+            // allocation that worked and carry on with the rest of the rebalance.
+            log.error("[XA-REBALANCE] Database budget cannot be divided across {} healthy servers for {}; "
+                    + "keeping the previous allocation: {}", healthyServerCount, connHash, e.getMessage());
         }
     }
 }

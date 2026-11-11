@@ -4,7 +4,7 @@
 > **Last updated:** 2026-09-16
 > **Scope:** Defines every aspect that a new OJP client library (in any language) must implement to be fully compatible with an OJP server. Written language-agnostically; Java-specific concepts are labelled as reference implementation only.
 > **Reference implementation:** `ojp-jdbc-driver` module.
-> **Protocol source of truth:** `ojp-grpc-commons/src/main/proto/StatementService.proto` and `echo.proto`.
+> **Protocol source of truth:** `ojp-grpc-contract/proto/StatementService.proto` and `echo.proto`.
 > **Machine-oriented companion:** [`CLIENT_SPEC_AI.md`](CLIENT_SPEC_AI.md)
 
 ---
@@ -80,7 +80,7 @@ Each target language has its own standard database-access API. When implementing
 | **PHP** | `PDO` (PHP Data Objects) | A lightweight, consistent interface for accessing various databases in PHP. |
 | **Dart** | `sql_conn` / `drift` | Uses specific community packages or the Drift library for structured data access. |
 
-> **Important operational rule:** Application-side connection pools **must be disabled** when using OJP. Double-pooling causes incorrect behavior and resource waste. This is the single most common misconfiguration.
+> **Important operational rule:** Neither an OJP client nor the application/framework integrating it may implement or enable a client-side connection pool. OJP's pool belongs on the server. Close each virtual connection promptly when its unit of work is complete; `close()` sends `terminateSession` so the server can release session resources and return any checked-out database connection to its pool for reuse. Do not keep a virtual connection open just to reuse it later.
 
 ---
 
@@ -93,6 +93,8 @@ Before diving into implementation details, understand these four foundational id
 An OJP "connection" is not a real database connection. The real JDBC connections are held exclusively in the server's connection pool. What the client holds is a `SessionInfo` — a lightweight proto message containing a `connHash` (a pool identifier), the `clientUUID`, and (once assigned) a `sessionUUID`.
 
 Opening a connection is cheap. For non-XA connections after the first one, the client can satisfy the `connect()` call entirely from a local cache: it looks up the `connHash` for the given database credentials and builds the `SessionInfo` locally without making any gRPC call. This means connection acquisition for cached credentials costs only a hash-map lookup.
+
+The `connHash` cache is metadata, not a connection pool: it MUST NOT retain or reuse virtual connections. When the application finishes a unit of work, it must close the virtual connection; the client calls `terminateSession` to notify the server to clean up session state and make server-side resources available again. Complete or roll back active transactions before closing.
 
 Multiple client connections sharing the same database credentials share the same server-side pool through the same `connHash`. The server distributes real JDBC connections across all these logical client connections.
 
@@ -131,7 +133,7 @@ The client must implement stubs for every RPC in `StatementService` and `EchoSer
 | RPC | Type | Purpose |
 |---|---|---|
 | `connect` | unary | Open a logical connection and receive `SessionInfo` |
-| `executeUpdate` | unary | DML (INSERT / UPDATE / DELETE / DDL) |
+| `executeUpdate` | unary | DML (INSERT / UPDATE / DELETE / DDL); opt-in result-producing DML returns a result-set UUID |
 | `executeQuery` | server-streaming | SELECT — returns a stream of `OpResult` blocks |
 | `fetchNextRows` | unary | Pull the next page of rows for an open result set |
 | `createLob` | client-streaming | Upload LOB data to the server in chunks |
@@ -217,7 +219,7 @@ Map the collected configuration to the `ConnectionDetails` proto fields as follo
 **`connHash` cache key (client side):** `url + "|" + user + "|" + password + "|" + datasource_name`
 
 > **Reference implementation:**
-> - `ojp-grpc-commons` — [`ConnectionDetails` proto](../../ojp-grpc-commons/src/main/proto/StatementService.proto): field definitions.
+> - `ojp-grpc-contract` — [`ConnectionDetails` proto](../../ojp-grpc-contract/proto/StatementService.proto): field definitions.
 > - `ojp-server` — [`ConnectionHashGenerator.hashConnectionDetails()`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/utils/ConnectionHashGenerator.java): SHA-256 of `url + user + password + datasource_name_from_properties`.
 > - `ojp-jdbc-driver` — [`MultinodeConnectionManager.computeConnectionKey()`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeConnectionManager.java): client-side cache key computation.
 > - `ojp-jdbc-driver` — [`MultinodeUrlParser`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeUrlParser.java): Java reference for JDBC URL parsing (Java-specific; not needed in non-Java clients).
@@ -703,7 +705,7 @@ StatementRequest {
 }
 ```
 
-**Execution routing:** Use `executeUpdate` for INSERT / UPDATE / DELETE / DDL (returns affected row count in `value.int_value`). Use `executeQuery` for SELECT. Always update the local `SessionInfo` from `OpResult.session`.
+**Execution routing:** Use `executeUpdate` for INSERT / UPDATE / DELETE / DDL (returns affected row count in `value.int_value`). For database-supported DML that returns rows (`RETURNING`, `OUTPUT`, or `SELECT ... FROM FINAL TABLE (...)`), send `STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY=true` with `executeUpdate`; the response carries the result-set UUID in `OpResult.uuid` and `UPDATE_RESULT_SET` in `OpResult.flag`. Fetch rows with `fetchNextRows` and close the result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`. Do not route data-changing `SELECT ... FINAL TABLE` wrappers through `executeQuery`, so writes retain primary/write-side routing. Use `executeQuery` for ordinary SELECT statements. Always update the local `SessionInfo` from every response.
 
 ### Pseudo-code
 
@@ -1230,8 +1232,13 @@ analytics.ojp.health.check.interval=10000
 | `ojp.multinode.retry.attempts` | `3` | Max failover retry attempts |
 | `ojp.multinode.retry.delay` | `100` (ms) | Delay between retry attempts |
 | `ojp.datasource.name` | `"default"` | Active datasource name (sent to the server) |
-| `ojp.grpc.tls.enabled` | `false` | Enable TLS on gRPC channels |
-| `ojp.grpc.tls.cert.path` | — | Path to client certificate for mTLS |
+| `ojp.client.tls.enabled` | `false` | Enable TLS on gRPC channels in the Java reference client |
+| `ojp.client.tls.keystore.path` | — | Client certificate and private-key keystore; enables mTLS when TLS is enabled |
+| `ojp.client.tls.keystore.password` | — | Client keystore password |
+| `ojp.client.tls.keystore.type` | `JKS` | Client keystore type |
+| `ojp.client.tls.truststore.path` | JVM default | Truststore used to verify the server certificate |
+| `ojp.client.tls.truststore.password` | — | Truststore password |
+| `ojp.client.tls.truststore.type` | `JKS` | Truststore type |
 | `ojp.jdbc.clientThrottle.mode` | `reactive` | Client throttle mode: `off`, `proactive`, `reactive`, or `combined` (see §7.14) |
 
 **Duration format** — values support: no suffix = milliseconds; `ms` = milliseconds; `s` = seconds; `m` = minutes.
@@ -1280,14 +1287,14 @@ ojp.cache.queries.2.invalidateOn=users
 
 **Plaintext (default):** Create a plaintext gRPC channel targeting `dns:///host:port`. Suitable for internal networks or local development.
 
-**TLS:** When `ojp.grpc.tls.enabled = true`, create a TLS-secured channel. Use the platform's default trust store or a custom CA certificate. Support mutual TLS (mTLS) when `ojp.grpc.tls.cert.path` is set. Certificate paths and key material must be loaded from configurable filesystem paths; do not hard-code them.
+**TLS:** The Java reference client enables TLS with `ojp.client.tls.enabled=true`. It verifies the server using the JVM default truststore or the configured `ojp.client.tls.truststore.*` properties. For mTLS, also configure `ojp.client.tls.keystore.path` and its password/type with a keystore containing the client certificate and private key. The server must enable TLS and require trusted client certificates. Other clients may expose equivalent settings through their idiomatic configuration API.
 
 **Credential handling:** Passwords must never be logged or included in exception messages. Connection keys used for cache lookups (§4.1) may include the password as a cache key only — they must not be serialised or persisted.
 
 > **Reference implementation:**
 > - `ojp-grpc-commons` — [`GrpcChannelFactory.createChannel(host, port)`](../../ojp-grpc-commons/src/main/java/org/openjproxy/grpc/GrpcChannelFactory.java): creates a plaintext `ManagedChannel`; `createSecureChannel(host, port, size, tlsConfig)` builds the TLS-secured variant.
 > - `ojp-grpc-commons` — [`GrpcClientConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/GrpcClientConfig.java): loaded from `ojp.properties`; exposes `getTlsConfig()` and `getMaxInboundMessageSize()`.
-> - `ojp-grpc-commons` — [`TlsConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/TlsConfig.java): holds `enabled`, `certPath`, `keyPath`, `caPath`, and `clientAuth` flags.
+> - `ojp-grpc-commons` — [`TlsConfig`](../../ojp-grpc-commons/src/main/java/org/openjproxy/config/TlsConfig.java): holds the TLS enabled flag and client keystore/truststore paths, passwords, and types.
 
 ---
 
@@ -1295,7 +1302,7 @@ ojp.cache.queries.2.invalidateOn=users
 
 Provide a higher-level `DataSource` (or equivalent) object that holds connection configuration and exposes a `getConnection()` method. Integrate cleanly with the host language's database access conventions (e.g., Python's DB-API 2.0, Go's `database/sql`, Node.js connection objects).
 
-**Disable** the framework's own built-in connection pool when OJP is in use. For Spring Boot (Java), provide a `spring-boot-starter-ojp` auto-configuration module that excludes `DataSourceAutoConfiguration`. For other languages, document this clearly in the library README.
+The DataSource (or equivalent) is a connection factory, **not a pool**. The client and host framework MUST NOT pool virtual connections; disable any framework-provided application-side connection pool when OJP is in use. Applications MUST close each connection promptly after its unit of work (after committing or rolling back any transaction), which calls `terminateSession` and releases server-side session resources for reuse. For Spring Boot (Java), provide a `spring-boot-starter-ojp` auto-configuration module that excludes `DataSourceAutoConfiguration`. For other languages, document this clearly in the library README.
 
 > **Reference implementation:**
 > - `ojp-jdbc-driver` — [`OjpDataSource`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/OjpDataSource.java): implements `javax.sql.DataSource`; `getConnection()` delegates to `DriverManager.getConnection(url, info)`.
@@ -1457,6 +1464,10 @@ def execute_update(sql, params):
 A conformant client implementation must ship a test suite that exercises all the aspects above. Tests that require a live OJP server (and optionally a real database) should be **gated behind feature flags** so the suite can run incrementally in CI.
 
 **Test infrastructure requirements:** A running OJP server (see `ojp-server` module and `download-drivers.sh`). At minimum, an embedded/in-process database (e.g., H2) for fast baseline tests. Optional: containerised databases gated by per-database flags.
+
+### Certification by implementation level
+
+The scenarios above are a general test inventory. To claim an achieved level, a client must pass the cumulative per-level checklist in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level) for each database reported at that level. A disabled, skipped, or unit-only test does not establish achieved coverage. L7 and above additionally require integration coverage with at least two OJP servers; L10 requires a combined multinode run with mTLS.
 
 ### Required Test Scenarios
 
@@ -1630,7 +1641,7 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | Level | Focus |
 |---|---|
 | L1 | Basic connectivity + CRUD |
-| L2 | Typed parameters + statement variants |
+| L2 | Typed parameters + statement variants, including result-producing DML where supported |
 | L3 | Result-set streaming/pagination protocol |
 | L4 | Non-XA transaction semantics + savepoints |
 | L5 | LOB/stream handling |
@@ -1638,7 +1649,7 @@ To standardize implementation maturity across languages, OJP now defines a 10-le
 | L7 | Multinode load balancing + health + cluster sync |
 | L8 | Failover/recovery/redistribution operational resilience |
 | L9 | XA transaction support |
-| L10 | Full operational conformance in multinode scenarios |
+| L10 | Full operational and mTLS conformance, including multinode scenarios |
 
 ### Current reference-client status
 
@@ -1656,9 +1667,9 @@ When implementing a new language client, declare both target and tested level pe
 
 | File | Location |
 |---|---|
-| Main protocol | `ojp-grpc-commons/src/main/proto/StatementService.proto` |
-| Generic value containers | `ojp-grpc-commons/src/main/proto/containers.proto` |
-| Echo / heartbeat | `ojp-grpc-commons/src/main/proto/echo.proto` |
+| Main protocol | `ojp-grpc-contract/proto/StatementService.proto` |
+| Generic value containers | `ojp-grpc-contract/proto/containers.proto` |
+| Echo / heartbeat | `ojp-grpc-contract/proto/echo.proto` |
 
 ## Appendix B — Reference implementation classes
 

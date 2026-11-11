@@ -50,7 +50,8 @@ This is a **multi-module Maven project**. All modules share the parent `pom.xml`
 
 | Module | Purpose |
 |---|---|
-| `ojp-grpc-commons` | Shared Protobuf/gRPC contracts (`.proto` files) |
+| `ojp-grpc-contract` | Canonical Protobuf/gRPC contracts (`.proto` files) |
+| `ojp-grpc-commons` | Generated Java gRPC stubs and shared Java converters |
 | `ojp-jdbc-driver` | JDBC driver implementation |
 | `ojp-server` | gRPC server, HikariCP pool management, session/transaction tracking |
 | `ojp-datasource-api` | SPI interface: `ConnectionPoolProvider` |
@@ -132,6 +133,11 @@ For IDE runs, always add `-Dfile.encoding=UTF-8 -Duser.timezone=UTC` as JVM argu
 - Use JUnit 5. Follow the `shouldReturnXxxWhenYyy` naming convention.
 - Prefer `ojp-testcontainers` for new tests over manually managed Docker databases.
 
+### PR tests and documentation
+
+- Tests run with the PR, and a PR is expected to be merged only after its tests pass. Focus on including the correct integration test coverage in the PR.
+- Write documentation describing the intended behavior as implemented, assuming the required tests pass. Do not add conditional status wording such as “remain in progress pending successful real-server CI runs” to Markdown files.
+
 ---
 
 ## Code Style
@@ -211,12 +217,20 @@ mvn clean install   # lint + compile + test + package
 
 ## Key Areas and Tips
 
-- **gRPC protocol changes**: Edit `.proto` files in `ojp-grpc-commons/src/main/proto/`, then run `mvn clean install -pl ojp-grpc-commons`. Both driver and server must be updated together.
+- **gRPC protocol changes**: Edit `.proto` files in `ojp-grpc-contract/proto/`, then run `mvn clean install -pl ojp-grpc-commons`. Both driver and server must be updated together.
 - **New database support**: Supply the JDBC driver JAR in `ojp-libs/`. Add integration tests behind a new `-DenableXxxTests=true` flag.
 - **Multinode**: Logic lives in `ojp-jdbc-driver`. URL format: `jdbc:ojp[host1:port1,host2:port2]_actual_jdbc_url`. Session stickiness must survive failover.
 - **Spring Boot starter**: Disable Spring Boot's HikariCP auto-configuration when using OJP.
 - **Circuit breaker timeout** defaults to 60 seconds — account for this in failure-simulation tests.
 - **SPI implementations**: Register via `META-INF/services/` as required by `ServiceLoader`.
+
+### Implementing a client in a non-Java language
+
+- **Start with the [multi-language client specification](../documents/multi-language-client-spec/)**. Read `CLIENT_SPEC_AI.md`, and `CLIENT_IMPLEMENTATION_LEVELS.md`; treat them as the contract for behavior, protocol use, testing, and claimed support levels.
+- Before designing a feature, inspect the JDBC driver and existing non-Java clients for equivalent behavior. Reuse proven protocol and lifecycle patterns, while keeping the public API idiomatic for the target language. Do not copy an implementation blindly when its language runtime has different connection or resource semantics.
+- Prefer the dedicated protobuf RPCs for their intended operations: use `executeQuery` for queries, `executeUpdate` for updates, and the dedicated connection and transaction RPCs where applicable. Use `callResource` only when no dedicated RPC provides the required operation; it is a generic fallback, not the default route for SQL execution. Some operations, such as metadata, cursor/resource management, and savepoints, are specifically represented through `callResource` in the contract.
+- Make real-server integration tests a first-class part of the client, following the parameterized approach used by `ojp-jdbc-driver` integration tests. Start each test scenario from a CSV fixture containing **one or more database connection configurations**, and run the scenario for every row. Do not hardcode a single connection or make the test runner assume the CSV will always contain only one: adding another database/connection should not require rewriting the test. Exercise the public client API against a real OJP server, and only claim implementation levels/databases supported by passing integration coverage. Unit tests supplement, but do not replace, these tests.
+- Never add explicit or implicit client-side pooling of virtual OJP connections. A connection source is a factory, not a pool; disable host-framework pooling when it would retain or reuse virtual connections. Open a fresh virtual connection for each independent operation/unit of work, reuse that connection only for the duration of its explicit transaction or unit of work, then commit or roll back as appropriate and close it promptly so the client terminates the server session. The real database connection pool belongs on the OJP server.
 
 ---
 

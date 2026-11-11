@@ -1,6 +1,6 @@
 module github.com/open-j-proxy/ojp-client-go-database-sql
 
-go 1.25.14
+go 1.27.0
 
 require (
 	google.golang.org/genproto v0.0.0-20260810153831-ec0a7760b754

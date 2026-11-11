@@ -4,7 +4,7 @@
 > **Last updated:** 2026-09-16
 > **Scope:** Defines the complete behavioral contract for any OJP client implementation.
 > **Keywords:** MUST, MUST NOT, SHOULD, MAY as defined in RFC 2119.
-> **Protocol source:** `ojp-grpc-commons/src/main/proto/StatementService.proto`, `echo.proto`
+> **Protocol source:** `ojp-grpc-contract/proto/StatementService.proto`, `echo.proto`
 > **Human-readable companion:** [`CLIENT_SPEC.md`](CLIENT_SPEC.md)
 
 ---
@@ -18,6 +18,7 @@
 | **Endpoint** | A `host:port` pair identifying one Server. |
 | **Virtual Connection** | A client-side object representing logical access to a database pool, identified by a `SessionInfo` token. Does not correspond 1:1 to a real database connection. |
 | **Real Connection** | A JDBC connection held by the Server's connection pool. The Client never holds one directly. |
+| **Client-side connection pool** | Prohibited. The Client and integrating application/framework MUST NOT pool virtual connections; pool real database connections only on the Server. |
 | **connHash** | A server-computed SHA-256 string keying a specific connection pool. Computed as SHA-256(`url + user + password + datasource_name`). |
 | **SessionInfo** | A proto message propagated on every RPC. Contains `connHash`, `clientUUID`, `sessionUUID`, `transactionInfo`, `sessionStatus`, `isXA`, `targetServer`, `clusterHealth`, `clientCount`, `maxAdmission`, `observedPeak`. |
 | **sessionUUID** | A server-assigned handle for a stateful session (transaction, LOB, cursor). Absent until the Server assigns it. |
@@ -238,6 +239,12 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 
 ### 4.2 Connection Rules
 
+**Pool and close requirements:**
+
+- The client and integrating application/framework MUST NOT create or use a client-side pool of virtual connections. A `DataSource` or equivalent MUST act only as a connection factory. Reusing cached `connHash` metadata is permitted and is not connection pooling.
+- The application MUST close each virtual connection promptly when its unit of work is complete. It MUST commit or roll back any active transaction before closing.
+- On connection close, the client MUST call `terminateSession(session)` to notify the server to clean up session state and release any checked-out real database connection back to the server-side pool for reuse. After termination, the virtual connection MUST NOT be reused.
+
 **Non-XA first connect (cache miss):**
 
 1. Build `ConnectionDetails` with `url`, `user`, `password`, `clientUUID`, `serverEndpoints`, `clusterHealth`, `isXA=false`, and applicable `properties`.
@@ -270,7 +277,7 @@ SqlErrorResponse (in gRPC trailing metadata on Status.INTERNAL):
 1. The client MUST include the current `SessionInfo` in every outgoing RPC request.
 2. The client MUST replace its local `SessionInfo` with the `SessionInfo` returned in every RPC response.
 3. When the response `SessionInfo` contains a `sessionUUID` not present in the request, the client MUST immediately register: `sessionUUID → response.targetServer`.
-4. The client MUST call `terminateSession(session)` exactly once when closing a connection. After this call, the connection MUST be considered unusable.
+4. The client MUST call `terminateSession(session)` exactly once when closing a connection. This notifies the server to release session resources, including any checked-out database connection, back to its pool for reuse. After this call, the connection MUST be considered unusable.
 
 ### 4.4 Statement Execution Rules
 
@@ -480,7 +487,7 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 - Savepoints via `callResource` (`RES_CONNECTION` `CALL_SET`/`CALL_ROLLBACK`/`CALL_RELEASE`; `RES_SAVEPOINT` is used for savepoint attributes)
 - `callResource` protocol (all 7 `ResourceType` values, all 47 `CallType` codes)
 - Configuration loading: system/env properties > `ojp.properties` file > built-in defaults; per-datasource prefix `<name>.ojp.*`
-- TLS transport support (plaintext default; TLS when `ojp.grpc.tls.enabled=true`)
+- TLS transport support (plaintext default; Java reference-client TLS when `ojp.client.tls.enabled=true`, with keystore credentials for mTLS)
 - `clientUUID` generation (one UUID v4 per process lifetime)
 - `reinitializePoolOnRecoveredServer()` called **before** `endpoint.markHealthy()` on recovery
 - Read `clientCount`, `maxAdmission`, `observedPeak` from every `SessionInfo` response and pass to `ClientThrottleManager.updateFromSessionInfo()` (§8)
@@ -502,7 +509,7 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 
 - Async / non-blocking RPC API surface
 - Metrics / telemetry export (OpenTelemetry recommended)
-- Client-side connection pooling — NOTE: if implemented, pool size MUST effectively be 1 per virtual connection; double-pooling causes incorrect behavior
+- Client-side connection pooling — MUST NOT be implemented; the application-side framework's connection pool MUST also be disabled
 
 ---
 
@@ -512,9 +519,9 @@ The `inFlight` counter MUST be atomically clamped to `max(0, inFlight - 1)` on r
 |---|---|---|
 | `open_connection(endpoint, db_url, user, password)` | `connect(ConnectionDetails)` — only on cache miss | Cache hit: no RPC; build `SessionInfo` locally |
 | `open_xa_connection(...)` | `connect(ConnectionDetails, isXA=true)` | Always RPC; pins to one endpoint |
-| `execute_query(sql, params)` | `executeQuery(StatementRequest)` | Server-streaming; first message has labels + first batch of rows |
+| `execute_query(sql, params)` | `executeQuery(StatementRequest)` | Server-streaming; first message has labels + first batch of rows. Ordinary SELECT only; data-changing SELECT wrappers use the update-result path. |
 | `fetch_more_rows(result_set_uuid, page_size)` | `fetchNextRows(ResultSetFetchRequest)` | Empty `rows` list means result set exhausted |
-| `execute_update(sql, params)` | `executeUpdate(StatementRequest)` | `OpResult.value.int_value` = affected row count |
+| `execute_update(sql, params)` | `executeUpdate(StatementRequest)` | `OpResult.value.int_value` = affected row count; for result-producing DML, set `STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY=true`, then use response `uuid`/`flag` and `fetchNextRows` to retrieve rows. |
 | `call_stored_procedure(sql, params)` | `callResource(CALL_PREPARE)` then `callResource(CALL_EXECUTE)` | `CALL_PREPARE` returns `resourceUUID` |
 | `begin_transaction()` | `startTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_ACTIVE` |
 | `commit()` | `commitTransaction(SessionInfo)` | Returns `SessionInfo` with `TRX_COMMITED` |
@@ -555,7 +562,7 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | Level | Required capability set |
 |---|---|
 | **L1** | `connect`, `executeQuery`, `executeUpdate`, `terminateSession`; basic CRUD path |
-| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants |
+| **L2** | Typed parameter mapping (`ParameterTypeProto`) + statement variants, including result-producing DML where supported |
 | **L3** | Streaming query/result protocol (`executeQuery` stream + `fetchNextRows`) + cursor resource lifecycle |
 | **L4** | Non-XA transaction RPCs and savepoint semantics |
 | **L5** | LOB protocol (`createLob`, `readLob`) and stream round-trips |
@@ -563,14 +570,14 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | **L7** | Multinode balancing, health checking, cluster health propagation, `connHash` cache/reconnect |
 | **L8** | Failover/recovery/redistribution operational behavior |
 | **L9** | XA RPC lifecycle and XA routing/error semantics |
-| **L10** | Full conformance of L1–L9 under multinode operational scenarios |
+| **L10** | Full L1–L9 multinode conformance plus client/server mutual TLS (mTLS) |
 
 ### 12.2 Current reference-client achieved level by database
 
 | Database | Achieved level |
 |---|---:|
 | H2 | L8 |
-| PostgreSQL | L10 |
+| PostgreSQL | L9 |
 | MySQL | L8 |
 | MariaDB | L6 |
 | Oracle | L9 |
@@ -587,3 +594,5 @@ The H2 Java reference client now has an XA lifecycle integration suite in
 2. The tested-achieved level MUST be reported per database.
 3. Missing capabilities MUST be declared as explicit level gaps (for example: `L9 missing`).
 4. Operational level claims (L7+) SHOULD cite multinode protocol tests and database-specific evidence separately.
+5. An achieved level MUST be supported by passing candidate-client integration tests for every required scenario at that level and all lower levels, against each database reported at that level. The required scenarios and minimum coverage are defined in [`CLIENT_IMPLEMENTATION_LEVELS.md`](CLIENT_IMPLEMENTATION_LEVELS.md#6-certification-test-requirements-by-level).
+6. A skipped/disabled suite, unit test alone, or another client’s passing suite MUST NOT count as candidate-client certification. L7–L10 evidence MUST include a multi-server integration run; L10 MUST exercise combined operational and XA behavior over mTLS, including successful authentication and rejection of missing or untrusted client certificates.

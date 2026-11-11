@@ -1840,7 +1840,7 @@ type SessionInfo struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	ConnHash   string                 `protobuf:"bytes,1,opt,name=connHash,proto3" json:"connHash,omitempty"`
 	ClientUUID string                 `protobuf:"bytes,2,opt,name=clientUUID,proto3" json:"clientUUID,omitempty"`
-	// only set if connection has to be the same among different requests, within transaction boundaries or when using LOB objects.
+	//only set if connection has to be the same among different requests, within transaction boundaries or when using LOB objects.
 	SessionUUID     string           `protobuf:"bytes,3,opt,name=sessionUUID,proto3" json:"sessionUUID,omitempty"`
 	TransactionInfo *TransactionInfo `protobuf:"bytes,4,opt,name=transactionInfo,proto3" json:"transactionInfo,omitempty"`
 	SessionStatus   SessionStatus    `protobuf:"varint,5,opt,name=sessionStatus,proto3,enum=com.openjproxy.grpc.SessionStatus" json:"sessionStatus,omitempty"`
@@ -2241,7 +2241,7 @@ type LobReference struct {
 	Uuid         string                 `protobuf:"bytes,2,opt,name=uuid,proto3" json:"uuid,omitempty"`
 	BytesWritten int32                  `protobuf:"varint,3,opt,name=bytesWritten,proto3" json:"bytesWritten,omitempty"`
 	LobType      LobType                `protobuf:"varint,4,opt,name=lobType,proto3,enum=com.openjproxy.grpc.LobType" json:"lobType,omitempty"`
-	// 5 till 6 only used to query Binary streams.
+	//5 till 6 only used to query Binary streams.
 	ColumnIndex   int32  `protobuf:"varint,5,opt,name=columnIndex,proto3" json:"columnIndex,omitempty"`
 	StmtUUID      string `protobuf:"bytes,6,opt,name=stmtUUID,proto3" json:"stmtUUID,omitempty"`
 	unknownFields protoimpl.UnknownFields

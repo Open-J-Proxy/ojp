@@ -7,6 +7,7 @@ import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.datasource.ConnectionPoolProviderRegistry;
+import org.openjproxy.datasource.ConnectionPoolProvider;
 import org.openjproxy.datasource.PoolConfig;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
@@ -17,6 +18,7 @@ import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
+import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.grpc.server.pool.DataSourceConfigurationManager;
 import org.openjproxy.grpc.server.pool.PreparedStatementCachePropertyTranslator;
 import org.openjproxy.grpc.server.readwrite.ReadWriteConfiguration;
@@ -152,6 +154,9 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                     context.getUnpooledConnectionDetailsMap().get(connHash);
 
             if (ds == null && unpooledDetails == null) {
+                DatabaseConnectionBudgetManager budgetManager = null;
+                DatabaseConnectionBudgetManager.Registration budgetRegistration = null;
+                ConnectionPoolProvider poolProvider = null;
                 try {
                     // Get datasource-specific configuration from client properties
                     Properties clientProperties = ConnectionPoolConfigurer.extractClientProperties(connectionDetails);
@@ -191,6 +196,16 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                     connHash, serverEndpoints.size(), maxPoolSize, minIdle);
                         }
 
+                        poolProvider = ConnectionPoolProviderRegistry.getDefaultProvider()
+                                .orElseThrow(() -> new IllegalStateException("No connection pool providers available"));
+                        budgetManager = DatabaseConnectionBudgetManager.getInstance();
+                        String parsedUrl = UrlParser.parseUrl(connectionDetails.getUrl());
+                        budgetRegistration = budgetManager.registerPool("regular:" + connHash, parsedUrl,
+                                connectionDetails.getUser(), maxPoolSize, minIdle, poolProvider.supportsDynamicResizing(),
+                                ConnectionPoolConfigurer.getHealthyServerCount(connectionDetails));
+                        maxPoolSize = budgetRegistration.getMaximumPoolSize();
+                        minIdle = budgetRegistration.getMinimumIdle();
+
                         // Get transaction isolation from configuration, default to READ_COMMITTED
                         Integer configuredTransactionIsolation = dsConfig.getDefaultTransactionIsolation();
                         Integer defaultTransactionIsolation = configuredTransactionIsolation != null
@@ -204,7 +219,6 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                     connHash, configuredTransactionIsolation);
                         }
 
-                        String parsedUrl = UrlParser.parseUrl(connectionDetails.getUrl());
                         Map<String, String> statementCacheProperties =
                                 PreparedStatementCachePropertyTranslator.buildNonXaProperties(
                                         context.getServerConfiguration(), parsedUrl);
@@ -229,7 +243,19 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 connHash, dsConfig.getConnectionTimeout(), CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS);
 
                         // Create DataSource with properly configured transaction isolation
-                        ds = ConnectionPoolProviderRegistry.createDataSource(poolConfig);
+                        ds = poolProvider.createDataSource(poolConfig);
+                        DataSource createdDataSource = ds;
+                        ConnectionPoolProvider selectedPoolProvider = poolProvider;
+                        DatabaseConnectionBudgetManager.Registration attachedRegistration = budgetRegistration;
+                        budgetManager.attachPool(attachedRegistration, (newMaximum, newMinimum) -> {
+                            selectedPoolProvider.resizeDataSource(createdDataSource, newMaximum, newMinimum);
+                            AdmissionControlManager admissionControlManager =
+                                    context.getAdmissionControlManagers().get(connHash);
+                            if (admissionControlManager != null) {
+                                admissionControlManager.resizeCapacity(newMaximum);
+                            }
+                        },
+                                maxPoolSize, minIdle);
                         log.info("Created DataSource with transaction isolation level: {}", defaultTransactionIsolation);
 
                         context.getDatasourceMap().put(connHash, ds);
@@ -248,6 +274,19 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                     }
 
                 } catch (Exception e) {
+                    // Reuse the manager from the try block: calling getInstance() again here would throw a second
+                    // time on invalid budget configuration and skip the error response below.
+                    if (budgetManager != null) {
+                        budgetManager.unregisterPool(budgetRegistration);
+                    }
+                    if (ds != null && poolProvider != null) {
+                        context.getDatasourceMap().remove(connHash, ds);
+                        try {
+                            poolProvider.closeDataSource(ds);
+                        } catch (Exception closeFailure) {
+                            e.addSuppressed(closeFailure);
+                        }
+                    }
                     log.error("Failed to create datasource for connection hash {}: {}", connHash, e.getMessage(), e);
                     SQLException sqlException = new SQLException("Failed to create datasource: " + e.getMessage(), e);
                     sendSQLExceptionMetadata(sqlException, responseObserver);
@@ -395,7 +434,8 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                     context.getReadWriteDataSourceRegistry());
 
             ReadWriteConfiguration config = rwManager.setupReadWriteSplitting(
-                    connectionDetails, connHash, ds, datasourceName);
+                    connectionDetails, connHash, ds, datasourceName,
+                    ConnectionPoolConfigurer.getHealthyServerCount(connectionDetails));
 
             if (config != null) {
                 log.info("Read/write splitting successfully configured for datasource '{}'", datasourceName);

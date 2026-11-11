@@ -19,7 +19,7 @@ graph TB
     end
     
     subgraph "Shared Contract"
-    GRPC[ojp-grpc-commons<br/>Protocol Definitions]
+    GRPC[ojp-grpc-contract<br/>Protocol Definitions]
     end
     
     subgraph "Server Side"
@@ -61,11 +61,11 @@ Language API → ODBC wrapper → Driver Manager → OJP C++ ODBC driver
 
 Native clients expose .NET ADO.NET, Python DB-API 2.0, Go `database/sql`, PHP's PDO-compatible API, Ruby DBI, and Dart's Drift executor. Each currently targets single-server L1 connectivity and CRUD, with its own limits and test evidence. Python and Go also implement basic local transactions; this does not establish full L4 conformance. The Java JDBC client has broader, database-specific coverage. See the [quick-start client matrix](part1-chapter3-quickstart.md#native-client-maturity) rather than assuming protocol sharing means feature parity.
 
-The C++ driver exposes ANSI ODBC to C++ and potentially to other languages through an ODBC wrapper. Its tested coverage extends through L9 for H2 and L10 for SQL Server; PostgreSQL is L1. L9 XA uses the OJP-specific C API in `ojp_odbc_xa.h`, not transparent enlistment through ordinary ODBC wrappers. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse.
+The C++ driver exposes ANSI ODBC to C++ and potentially to other languages through an ODBC wrapper. It supports H2 through L9 and PostgreSQL, SQL Server, MariaDB and MySQL through L10. The combined L10 suites verify certificate authentication and rejection on both mTLS endpoints alongside XA affinity, multinode failover and recovered-node reuse. XA uses the OJP-specific C API in `ojp_odbc_xa.h`, not transparent enlistment through ordinary ODBC wrappers.
 
 An ODBC wrapper adds its own compatibility requirements. The driver has no wide-character (`W`) exports, incomplete metadata/capability discovery, and no DSN-only `SQLConnect` support. A wrapper can fail during connection setup before any SQL reaches the server. [Chapter 7](part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) explains candidate bridges.
 
-Both paths still use the server's JDBC drivers and pools. Disable local/framework/Driver Manager pooling and close application resources promptly. The early native clients and C++ ODBC transport currently use plaintext gRPC; they do not inherit the Java driver's TLS configuration. Use a trusted private environment or an externally secured transport, and do not enable the experimental SQL enhancer.
+Both paths still use the server's JDBC drivers and pools. Disable local/framework/Driver Manager pooling and close application resources promptly. The early native clients use plaintext gRPC; C++ ODBC supports verified TLS/mTLS through its own `OJP.CLIENT.TLS.*` options and does not inherit the Java driver's TLS configuration. Enable TLS/mTLS or use a trusted private environment or an externally secured transport, and do not enable the experimental SQL enhancer.
 
 ### ojp-server: The gRPC Server
 
@@ -209,7 +209,7 @@ The driver implements the JDBC API interfaces to ensure compliance with the stan
 
 The gRPC contract is language-neutral, and OJP now includes early client modules that expose language-native database APIs: Go `database/sql`, Dart Drift, .NET ADO.NET, PHP PDO-compatible, Python DB-API 2.0, Ruby DBI, and C++ ODBC. Each is a separate client implementation that communicates with the same OJP server; these are not wrappers around the Java driver.
 
-The six native language clients target single-endpoint H2 L1 (basic connectivity and CRUD), with different test evidence. C++ ODBC is more advanced: H2 L1-L9 and SQL Server L1-L10 integration suites have passed, while PostgreSQL has L1 coverage. Neither protocol sharing nor these levels establishes parity with the JDBC driver's full database/operational coverage or production readiness. See the [client implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) and the individual [Go](../../ojp-client-go-database-sql/README.md), [Dart](../../ojp-client-dart-drift/README.md), [.NET](../../ojp-client-dotnet-ado-net/README.md), [PHP](../../ojp-client-php-pdo/README.md), [Python](../../ojp-client-python-dbapi/README.rst), [Ruby](../../ojp-client-ruby-dbi/README.md), and [C++ ODBC](../../ojp-client-cpp-odbc/README.md) guides.
+The six native language clients target single-endpoint H2 L1 (basic connectivity and CRUD), with different test evidence. C++ ODBC is more advanced: H2 supports L9, while PostgreSQL, SQL Server, MariaDB and MySQL have combined XA/multinode L10 suites requiring mTLS. Neither protocol sharing nor these levels establishes parity with the JDBC driver's full database/operational coverage or production readiness. See the [client implementation levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) and the individual [Go](../../ojp-client-go-database-sql/README.md), [Dart](../../ojp-client-dart-drift/README.md), [.NET](../../ojp-client-dotnet-ado-net/README.md), [PHP](../../ojp-client-php-pdo/README.md), [Python](../../ojp-client-python-dbapi/README.rst), [Ruby](../../ojp-client-ruby-dbi/README.md), and [C++ ODBC](../../ojp-client-cpp-odbc/README.md) guides.
 
 **JDBC Implementation Mapping**:
 
@@ -306,16 +306,17 @@ conn.close();
 
 **Important Consideration**: When using OJP, you must **disable** any existing application-level connection pooling (HikariCP, C3P0, DBCP2) as it creates double-pooling and defeats OJP's purpose.
 
-### ojp-grpc-commons: Shared Contracts
+### ojp-grpc-contract: Shared Protocol Source
 
 ```mermaid
 graph LR
+    PROTO[Canonical Protocol Buffer Contracts<br/>ojp-grpc-contract/proto]
     subgraph "ojp-jdbc-driver"
     DRIVER_CODE[Driver Code<br/>Connection, Statement]
     DRIVER_GEN[Generated Java Classes<br/>StatementRequest<br/>OpResult<br/>StatementServiceGrpc]
     end
     subgraph "ojp-grpc-commons"
-    PROTO[Protocol Buffer Contracts<br/>StatementService.proto]
+    COMMONS_GEN[Generated Java Stubs<br/>Shared by driver and server]
     SAMPLE_REQ[StatementRequest<br/>session<br/>sql<br/>parameters<br/>statementUUID]
     SAMPLE_RES[OpResult Stream<br/>query_result<br/>labels<br/>rows]
     end
@@ -323,8 +324,9 @@ graph LR
     SERVER_GEN[Generated Java Classes<br/>StatementRequest<br/>OpResult<br/>StatementServiceGrpc]
     SERVER_CODE[Server Code<br/>StatementServiceImpl]
     end
-    PROTO -->|protoc generates| DRIVER_GEN
-    PROTO -->|protoc generates| SERVER_GEN
+    PROTO -->|Maven compiles| COMMONS_GEN
+    COMMONS_GEN --> DRIVER_GEN
+    COMMONS_GEN --> SERVER_GEN
     SAMPLE_REQ -.->|defined in| PROTO
     SAMPLE_RES -.->|defined in| PROTO
     DRIVER_CODE --> DRIVER_GEN
@@ -340,9 +342,9 @@ graph LR
     style SERVER_CODE fill:#fff59d
 ```
 
-The **ojp-grpc-commons** module contains the gRPC service definitions and Protocol Buffer message schemas shared between the driver and server.
+The **ojp-grpc-contract** package contains the gRPC service definitions and Protocol Buffer message schemas shared between clients and the server. `ojp-grpc-commons` generates and publishes the Java stubs from these files.
 
-This module serves as the contract between client and server. It defines the gRPC service interfaces in `.proto` files, specifying exactly how client and server communicate. These files describe all request and response message structures with precise field types and semantics. From these proto files, Java classes are auto-generated at build time, ensuring both sides work with identical data structures. This approach guarantees version compatibility—when driver and server are compiled against the same proto definitions, protocol mismatches become impossible.
+The proto files define exactly how clients and the server communicate. The Java stubs are generated at build time by `ojp-grpc-commons`; other clients generate bindings from the same package, so all implementations share the same wire contract.
 
 **Protocol Buffer Example**:
 
@@ -465,7 +467,15 @@ sequenceDiagram
 
 ### Session Management
 
-OJP sessions provide the bridge between stateless gRPC calls and stateful JDBC behavior. Every driver request carries a `sessionId`, and the server uses that identifier to find the right transaction state, isolation level, connection, and cached statement resources.
+OJP sessions provide the bridge between independent gRPC calls and stateful JDBC behavior. Session-bound requests carry `SessionInfo.sessionUUID` (shown as `sessionId` below), and the server uses that identifier to find the right transaction state, connection, and statement resources.
+
+**A session is not a TCP connection or a gRPC stream.** The Java driver remembers which OJP server owns each session and sends its requests there. XA sessions are bound when `getXAConnection()` connects and remain bound for that `XAConnection`'s lifetime, even across sequential transactions. XA control calls use ordinary unary RPCs; a transaction-long bidirectional stream is not needed for this affinity.
+
+**Simple example:** With servers A and B, an XA connection receives session S from A. Its start, SQL, prepare, and commit requests all go to A with session S. Replacing the underlying transport connection to the same running A does not, by itself, change S or move it to B.
+
+This is not a promise of uninterrupted transactions: a network error can invalidate the driver's session, and a server restart loses its in-memory sessions. The driver reports failure rather than moving an established transaction to B. If a commit reply is lost, the outcome may be unknown; the transaction manager must resolve it through XA recovery, not blindly replay the work. A long-lived stream can also break and would not solve recovery.
+
+**Deployment caveat:** Give the driver stable, node-specific endpoints (as in the multinode JDBC URL), not a shared address that can route successive RPCs or reconnects to different OJP instances. Sessions are not replicated between nodes.
 
 ```mermaid
 graph LR
@@ -1283,7 +1293,8 @@ OJP's architecture is built on three core components working in harmony:
 
 1. **ojp-jdbc-driver**: A complete JDBC implementation that provides virtual connections and communicates via gRPC
 2. **ojp-server**: A gRPC server managing HikariCP connection pools and executing SQL operations
-3. **ojp-grpc-commons**: Shared Protocol Buffer contracts ensuring type-safe communication
+3. **ojp-grpc-contract**: Canonical Protocol Buffer contracts ensuring type-safe communication
+4. **ojp-grpc-commons**: Java stubs and shared Java converters generated from the contract
 
 The client role also includes native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs and the C++ ANSI ODBC driver. All reach the same server-side JDBC pools, but capability/test coverage differs. Language ODBC wrappers add another compatibility boundary and remain experimental, unvalidated routes.
 

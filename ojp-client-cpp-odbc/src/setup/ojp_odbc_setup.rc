@@ -1,0 +1,85 @@
+#include <windows.h>
+#include "resource.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDD_SETUP DIALOGEX 0, 0, 340, 332
+STYLE DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "OJP ODBC Data Source Setup"
+FONT 8, "MS Shell Dlg", 0, 0, 0x1
+BEGIN
+    LTEXT           "Data Source Name*:", IDC_STATIC, 8, 10, 70, 8
+    EDITTEXT        IDC_DSN, 82, 8, 250, 12, ES_AUTOHSCROLL
+    LTEXT           "Description:", IDC_STATIC, 8, 26, 70, 8
+    EDITTEXT        IDC_DESCRIPTION, 82, 24, 250, 12, ES_AUTOHSCROLL
+
+    GROUPBOX        "Connection", IDC_STATIC, 4, 42, 332, 126
+    LTEXT           "Server(s)*:", IDC_STATIC, 12, 58, 66, 8
+    EDITTEXT        IDC_SERVER, 82, 56, 246, 12, ES_AUTOHSCROLL
+    LTEXT           "host:port[,host:port]", IDC_STATIC, 82, 70, 246, 8, WS_DISABLED
+    LTEXT           "Database URL*:", IDC_STATIC, 12, 84, 66, 8
+    EDITTEXT        IDC_DATABASE, 82, 82, 246, 12, ES_AUTOHSCROLL
+    LTEXT           "jdbc:postgresql://host:5432/db", IDC_STATIC, 82, 96, 246, 8, WS_DISABLED
+    LTEXT           "User ID:", IDC_STATIC, 12, 112, 66, 8
+    EDITTEXT        IDC_UID, 82, 110, 246, 12, ES_AUTOHSCROLL
+    LTEXT           "Password:", IDC_STATIC, 12, 128, 66, 8
+    EDITTEXT        IDC_PWD, 82, 126, 246, 12, ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "Password is used only for Test Connection and is never saved.",
+                    IDC_STATIC, 82, 140, 246, 8, WS_DISABLED
+    LTEXT           "OJP datasource name:", IDC_STATIC, 12, 154, 66, 8
+    EDITTEXT        IDC_DATASOURCE_NAME, 82, 152, 246, 12, ES_AUTOHSCROLL
+
+    GROUPBOX        "Options", IDC_STATIC, 4, 172, 332, 48
+    CONTROL         "XA mode", IDC_XA, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
+                    12, 186, 100, 10
+    CONTROL         "Load-aware server selection", IDC_LOAD_AWARE, "Button",
+                    BS_AUTO3STATE | WS_TABSTOP, 120, 186, 150, 10
+    LTEXT           "Retry attempts:", IDC_STATIC, 12, 204, 66, 8
+    EDITTEXT        IDC_RETRY_ATTEMPTS, 82, 202, 40, 12, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Retry delay (ms):", IDC_STATIC, 150, 204, 66, 8
+    EDITTEXT        IDC_RETRY_DELAY, 220, 202, 50, 12, ES_AUTOHSCROLL | ES_NUMBER
+
+    GROUPBOX        "TLS", IDC_STATIC, 4, 224, 332, 78
+    CONTROL         "Enable TLS", IDC_TLS_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP,
+                    12, 238, 100, 10
+    LTEXT           "Root CA certificate:", IDC_STATIC, 12, 256, 66, 8
+    EDITTEXT        IDC_TLS_ROOTCERT, 82, 254, 220, 12, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BROWSE_ROOTCERT, 306, 254, 22, 12
+    LTEXT           "Client certificate:", IDC_STATIC, 12, 272, 66, 8
+    EDITTEXT        IDC_TLS_CERT, 82, 270, 220, 12, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BROWSE_CERT, 306, 270, 22, 12
+    LTEXT           "Client key:", IDC_STATIC, 12, 288, 66, 8
+    EDITTEXT        IDC_TLS_KEY, 82, 286, 220, 12, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BROWSE_KEY, 306, 286, 22, 12
+
+    PUSHBUTTON      "Test Connection", IDC_TEST, 4, 310, 70, 14
+    DEFPUSHBUTTON   "OK", IDOK, 230, 310, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 286, 310, 50, 14
+END
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0, 1, 0, 0
+PRODUCTVERSION 0, 1, 0, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "OJP ODBC Driver Setup"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "ojp_odbc_setup"
+            VALUE "OriginalFilename", "ojp_odbc_setup.dll"
+            VALUE "ProductName", "OJP ODBC Driver"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

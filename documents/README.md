@@ -86,7 +86,7 @@ Use the source links at the end of each flow to verify behavior in the current c
 
 - [Driver entry point](../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Driver.java), [connection lifecycle](../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Connection.java), and [statement operations](../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java)
 - [Server statement service](../ojp-server/src/main/java/org/openjproxy/grpc/server/StatementServiceImpl.java)
-- [Shared gRPC contracts](../ojp-grpc-commons/src/main/proto/)
+- [Shared gRPC contracts](../ojp-grpc-contract/proto/)
 - [StatementServiceImpl Action Pattern Migration](designs/STATEMENTSERVICE_ACTION_PATTERN_MIGRATION.md) - Implementation background
 
 ## Use and operate OJP
@@ -133,9 +133,9 @@ Use the source links at the end of each flow to verify behavior in the current c
 - [Ruby client](../ojp-client-ruby-dbi/README.md) - DBI
 - [C++ ODBC client](../ojp-client-cpp-odbc/README.md) - ODBC driver
 
-These clients have different capabilities from the Java driver. Consult [Client Implementation Levels](multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) for L1–L10 capabilities, tested scope, and integration-test evidence rather than assuming feature parity.
+These clients have different capabilities from the Java driver. Consult [Client Implementation Levels](multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md) for L1–L10 capabilities, tested scope, and integration-test evidence rather than assuming feature parity. L10 now includes mTLS.
 
-Start with [basic examples for all clients](ebook/part1-chapter3-quickstart.md#331-basic-non-java-clients) and its [per-client maturity matrix](ebook/part1-chapter3-quickstart.md#native-client-maturity). The native .NET, Python, Go, PHP, Ruby, and Dart clients target H2 L1; their CI evidence and limitations differ. C++ ODBC's H2 L1-L9 and SQL Server L1-L10 integration suites have passed; PostgreSQL has L1 coverage. See its [build requirements](../ojp-client-cpp-odbc/README.md#build-requirements) before building the driver.
+Start with [basic examples for all clients](ebook/part1-chapter3-quickstart.md#331-basic-non-java-clients) and its [per-client maturity matrix](ebook/part1-chapter3-quickstart.md#native-client-maturity). The native .NET, Python, Go, PHP, Ruby, and Dart clients target H2 L1; their CI evidence and limitations differ. C++ ODBC's H2 L1-L9 suites have passed; its combined L10 suites cover operational/XA behavior but do not validate mTLS, so they do not establish L10 under the updated scale. See its [build requirements](../ojp-client-cpp-odbc/README.md#build-requirements) before building the driver.
 
 ODBC is a separate possible route through `System.Data.Odbc`, `pyodbc`, `PDO_ODBC`, Ruby ODBC, or an external Go ODBC adapter. These wrappers are not validated by the C++ test suites. ANSI-only exports and incomplete metadata can prevent them from connecting; Dart has no drop-in Drift ODBC integration here. See the [bridge guidance](ebook/part2-chapter7-framework-integration.md#79-non-java-apis-and-odbc-bridges) before choosing this route.
 
@@ -179,7 +179,7 @@ ODBC is a separate possible route through `System.Data.Odbc`, `pyodbc`, `PDO_ODB
 
 ### Protocol
 
-- [Shared protocol sources](../ojp-grpc-commons/src/main/proto/)
+- [Shared protocol sources](../ojp-grpc-contract/proto/)
 - [BigDecimal Wire Format](protocol/BIGDECIMAL_WIRE_FORMAT.md)
 - [Protobuf Non-Java Serializations](protobuf-nonjava-serializations.md)
 - [Multi-language Client Specification](multi-language-client-spec/CLIENT_SPEC.md) - Protocol and client responsibilities

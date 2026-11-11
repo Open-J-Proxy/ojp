@@ -71,7 +71,7 @@ serialise it (e.g. `toByteArray()` with a matching deserialisation step on the d
 
 **Why this was not adopted:**
 
-Adding new proto messages requires regenerating gRPC stubs in *both* `ojp-grpc-commons` and all
+Adding new proto messages requires regenerating gRPC stubs in `ojp-grpc-commons` and all
 dependent modules (`ojp-server`, `ojp-jdbc-driver`). For a feature whose only purpose is
 transporting diagnostic warnings — not data or control flow — this overhead is disproportionate.
 More importantly, it changes the shared API contract between the server and driver in a way that
@@ -179,7 +179,7 @@ public static SQLWarning buildWarningChain(List<Map<String, Object>> entries) {
 | `ojp-jdbc-driver` | `Statement.java` | Same as `Connection` |
 | `ojp-jdbc-driver` | `SqlWarningUtils.java` (new) | `buildWarningChain(List<Map<String, Object>>)` |
 
-No changes to `ojp-grpc-commons` or `StatementService.proto`.
+No changes to `ojp-grpc-contract` or `StatementService.proto`.
 
 ---
 

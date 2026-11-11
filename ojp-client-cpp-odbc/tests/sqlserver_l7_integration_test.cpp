@@ -1,4 +1,6 @@
 // Verifies SQL Server pool reuse and OJP multinode selection through ODBC.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -16,47 +18,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the SQL Server connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in SQL Server CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -166,7 +128,7 @@ SQLHDBC open_connection(SQLHENV environment, const DatabaseConfig& config,
         "DRIVER={OJP};SERVER=" + brace_value(endpoints) +
         ";DATABASE=" + brace_value(config.url) +
         ";UID=" + brace_value(config.user) +
-        ";P" "WD=" + brace_value(config.password) +
+        ";PWD=" + brace_value(config.password) +
         ";OJP.LOADAWARE.SELECTION.ENABLED=" +
         std::string(load_aware ? "true" : "false") + ";";
     require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string), SQL_NTS,
@@ -194,27 +156,9 @@ void verify_value(SQLHSTMT statement, const std::string& table, SQLINTEGER id,
                     SQL_HANDLE_STMT, statement);
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error(
-            "expected SQL Server L7 CSV path, enable variable, and endpoints variable");
-    }
-    const std::string enable_variable = argv[2];
-    const std::string endpoints_variable = argv[3];
-    if (!is_enabled(environment_value(enable_variable))) {
-        std::cout << "Skipped: set " << enable_variable
-                  << "=true to run the SQL Server L7 suite\n";
-        return 77;
-    }
-    const auto endpoints = split_endpoints(environment_value(endpoints_variable));
-    const std::string unavailable_endpoint =
-        environment_value("OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR").empty()
-            ? "127.0.0.1:1"
-            : environment_value("OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR");
-    if (std::find(endpoints.begin(), endpoints.end(), unavailable_endpoint) != endpoints.end()) {
-        throw std::runtime_error("the unavailable test endpoint must not be a healthy endpoint");
-    }
-    const DatabaseConfig config = read_connection_config(argv[1]);
+int run_connection(const DatabaseConfig& config,
+                   const std::string& endpoints_variable,
+                   const std::string& unavailable_endpoint) {
     const std::string server_list =
         unavailable_endpoint + "," + environment_value(endpoints_variable);
     const std::string table = "dbo.ojp_cpp_mssql_l7_" + random_suffix();
@@ -307,6 +251,31 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC SQL Server L7 multinode integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error(
+            "expected SQL Server L7 CSV path, enable variable, and endpoints variable");
+    }
+    const std::string enable_variable = argv[2];
+    const std::string endpoints_variable = argv[3];
+    if (!is_enabled(environment_value(enable_variable))) {
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the SQL Server L7 suite\n";
+        return 77;
+    }
+    const auto endpoints = split_endpoints(environment_value(endpoints_variable));
+    const std::string unavailable_endpoint =
+        environment_value("OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR").empty()
+            ? "127.0.0.1:1"
+            : environment_value("OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR");
+    if (std::find(endpoints.begin(), endpoints.end(), unavailable_endpoint) != endpoints.end()) {
+        throw std::runtime_error("the unavailable test endpoint must not be a healthy endpoint");
+    }
+    return ojp::test::run_connections(argv[1], [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoints_variable, unavailable_endpoint);
+    });
 }
 
 }  // namespace

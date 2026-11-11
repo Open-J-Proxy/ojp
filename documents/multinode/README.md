@@ -29,6 +29,77 @@ jdbc:ojp[host1:port1,host2:port2,host3:port3]_actual_jdbc_url
 
 ### Examples
 
+#### Server Priority Tiers
+
+For applications deployed on fixed enterprise nodes alongside OJP, prefer the
+local proxy before sending traffic to remote nodes:
+
+```text
+jdbc:ojp[ojp1:1059{1},ojp2:1059{2},ojp3:1059{2},ojp4:1059{3}]_postgresql://db:5432/mydb
+```
+
+Lower numbers have higher priority. New connections use priority 1 while it is
+available, then priority 2, then priority 3. Servers sharing a priority retain
+the configured load-aware or round-robin selection within that tier. URLs
+without priority annotations retain their existing behavior.
+
+Priorities are positive integers from `1` to `2147483647`. They need not be
+consecutive, and the numeric priority, not the position in the URL, determines
+the tier. If any endpoint has a priority, **every endpoint must have one**;
+mixed annotated/unannotated lists and malformed priorities are rejected.
+All endpoints with the same priority behave like an ordinary multinode list.
+
+Named datasources can be combined with priorities:
+
+```text
+jdbc:ojp[localhost:1059(app){1},remote-a:1059(app){2},remote-b:1059(app){2}]_postgresql://db:5432/mydb
+```
+
+`host:port{priority}(datasource)` is also accepted. This is a **JDBC driver**
+feature; no OJP server or protocol change is required, and the annotation is
+not part of the network address.
+
+Priority applies to new, unbound SQL work and new XA sessions. Existing
+sessions, result sets, and transactions stay bound to their original server.
+A connection-level failure removes that server from selection; all healthy
+peers in its tier take precedence over the next tier. Database errors such as
+invalid SQL or authentication failures do not make a server unavailable.
+Priority is not a load-spillover mechanism: a busy but healthy local server
+still takes precedence over an idle remote server.
+
+With the health checker enabled (the default), a recovered preferred server
+receives new work after normal recovery validation. When the URL contains
+different priority tiers, recovery does not trigger connection redistribution
+or invalidate existing connections just to balance tiers. Close existing
+fallback connections normally to return subsequent work to the local node;
+transactions are never migrated for priority. Health checking remains enabled.
+
+**Operational tradeoff:** non-XA setup still initializes pools on all nodes,
+and cluster coordination, pool sizing, and health probes are unchanged.
+Priorities reduce remote SQL routing, not all remote traffic or backend pool
+capacity reservations. Size pools and database budgets for this local-first
+traffic pattern and the capacity needed when a node fails. Configure each
+application node with its own local OJP endpoint at priority 1, rather than
+giving every application the same preferred remote node. Keep application-side
+connection pooling disabled.
+
+#### Priority Routing Integration Tests
+
+The four-node H2 suite uses real OJP containers, with CSV-driven cases for both
+load-aware and round-robin modes. It covers preferred-node routing, tier
+exhaustion, all-node failure, equal-tier balancing, recovery and transaction
+affinity, XA routing, independent priority policies, and unannotated URLs.
+Run after installing the reactor dependencies:
+
+```bash
+OJP_IMAGE=rrobetti/ojp:<your-built-tag> ./mvnw test -pl ojp-jdbc-driver \
+  -Dtest=ServerPriorityTest,ServerPriorityIntegrationTest \
+  -DenableServerPriorityTests=true
+```
+
+Docker must be available; the image must contain the H2 driver. Main CI enables
+this suite in its Java 25 H2 job.
+
 #### PostgreSQL with Three OJP Servers
 ```java
 String url = "jdbc:ojp[192.168.1.10:1059,192.168.1.11:1059,192.168.1.12:1059]_postgresql://localhost:5432/mydb";
@@ -154,6 +225,12 @@ Each OJP server in a multinode setup should be configured identically with the s
 **Regular Connection Pools**: Pool sizes (`maximumPoolSize`, `minimumIdle`) are divided among healthy servers. When a server fails, remaining servers increase their pool sizes to maintain total capacity.
 
 **XA Backend Session Pools**: XA backend session pool sizes (`ojp.xa.connection.pool.maxTotal`, `ojp.xa.connection.pool.minIdle`) are also divided among healthy servers, with dynamic rebalancing on server failure or recovery.
+
+Health and database-budget rebalancing resize an existing XA pool without replacing its transaction registry. New connections reuse that registry, preserving active transactions. Registry configuration checks compare the original client pool settings, not the live sizes: a pool configured for 20 connections can grow from 7 to 10 when a three-server cluster loses one server without being recreated.
+
+**The pool maximum and database budget are different limits.** A pool's configured maximum limits that one pool; `maxTotalConnections` caps the combined connections of all matching pools. The database budget takes precedence when the pool maxima add up to more.
+
+For example, two pools can each request up to 20 connections (40 total), while the database budget is 24. With 3 healthy OJP servers, each server applies a shared local cap of 8 across its matching pools. If one server goes down, the 2 remaining servers recalculate their local caps to 12 each. The pool maxima still apply, so a pool can use only its configured maximum. Set the same budget on every server. The JDBC driver's health reports trigger recalculation; servers need a consistent health view, as this is not distributed consensus during network partitions.
 
 #### XA Multinode Example
 

@@ -2,7 +2,60 @@
 
 This directory contains technical analysis documents for various OJP features and decisions.
 
-## Latest Analysis (October 2026)
+## Latest Analysis (November 2026)
+
+### Transaction Multiplexing and JDBC Request Boundaries
+
+**Question:** Could OJP share physical connections between transactions like PgBouncer, and could JDBC `beginRequest()` / `endRequest()` improve safe reuse?
+
+**Quick Answer:** Add an opt-in, non-XA transaction mode that separates logical sessions from physical leases, preserves dependent resources and logical settings, and releases admission capacity with the lease. JDBC request boundaries are optional driver-specific enhancements, not portable transaction detection or session reset.
+
+**Documents:**
+- [TRANSACTION_MULTIPLEXING_ANALYSIS_SUMMARY.md](./TRANSACTION_MULTIPLEXING_ANALYSIS_SUMMARY.md) - Decision summary, compatibility constraints, and implementation gates
+- [TRANSACTION_MULTIPLEXING_ANALYSIS.md](./TRANSACTION_MULTIPLEXING_ANALYSIS.md) - Current source lifecycle, PgBouncer comparison, lease design, driver/pool evidence, risks, and real-server experiments
+
+**Key Takeaway:** Safe multiplexing requires transaction/resource ownership and certified cleanup; calling begin/end alone does not implement it.
+
+---
+
+### SQL Injection Protection
+
+**Question:** What would be required to add SQL injection defense in depth
+to OJP Server without breaking JDBC behavior?
+
+**Quick Answer:** Preserve application parameterization and add an optional
+server-owned SQL policy boundary, starting with observation and approved
+templates for selected workloads. Cover query-cache hits, reflected resource
+calls, batches, callable statements, LOB preparation, and statement reuse.
+
+**Document:** [SQL_INJECTION_PROTECTION_ANALYSIS.md](./SQL_INJECTION_PROTECTION_ANALYSIS.md)
+- Source-backed execution inventory, policy/parser alternatives, identity and privacy requirements
+- Phased work packages, compatibility/performance gates, and acceptance tests
+- Analysis only; no runtime protection is introduced
+
+---
+
+### Connection.abort() Implementation Possibilities
+
+**Question:** What does `Connection.abort(Executor)` do today, how could OJP
+implement it, and what useful features could it enable?
+
+**Quick Answer:** It currently throws `SQLFeatureNotSupportedException`.
+Prefer a dedicated, scoped abort RPC with concurrent lifecycle fencing,
+backend JDBC abort, and pool-aware physical retirement; asynchronous close
+or gRPC cancellation alone is not enough. Treat XA recovery separately.
+
+**Documents:**
+- [CONNECTION_ABORT_ANALYSIS_SUMMARY.md](./CONNECTION_ABORT_ANALYSIS_SUMMARY.md) - Decision summary, option comparison, and creative use cases
+- [CONNECTION_ABORT_IMPLEMENTATION_ANALYSIS.md](./CONNECTION_ABORT_IMPLEMENTATION_ANALYSIS.md) - Source evidence, JDBC semantics, eight approaches with pros/cons, races, XA, compatibility, and proposed acceptance tests
+
+**Key Takeaway:** Abort must stop only the logical connection's owned resources,
+without recycling damaged connections, closing shared channels, resurrecting
+late sessions, or losing prepared XA recovery state. This is analysis only.
+
+---
+
+## Previous Latest Analysis (October 2026)
 
 ### 🆕 ODBC Driver Distribution
 
@@ -137,6 +190,14 @@ the topology for every message type, consensus included.
 
 ## Other Analysis Documents
 
+### JDBC Request Boundaries
+
+- [REQUEST_BOUNDARY_METHODS_ANALYSIS.md](./REQUEST_BOUNDARY_METHODS_ANALYSIS.md) - Current `beginRequest()` / `endRequest()` no-op behavior, implementation strategies, creative use cases with pros and cons, and compatibility and evaluation requirements
+
+### Request Lifecycle Extensibility
+
+- [REQUEST_LIFECYCLE_INTERCEPTOR_ANALYSIS.md](./REQUEST_LIFECYCLE_INTERCEPTOR_ANALYSIS.md) - Analysis of a Servlet Filter-inspired, ServiceLoader-based API for request lifecycle extensions, including alternatives, design considerations, risks, and open questions
+
 ### XA Pool Architecture
 
 - [xa-pool-spi/](./xa-pool-spi/) - XA Connection Pool SPI design
@@ -207,5 +268,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-10-07
+**Last Updated:** 2026-11-11
 **Maintained By:** OJP Core Team

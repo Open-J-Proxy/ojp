@@ -1,206 +1,35 @@
 # OJP C++ ODBC Client
 
-This module provides an ANSI ODBC driver for applications that access OJP
-servers from C++. It currently provides **L1 for H2, PostgreSQL, and SQL Server**,
-**L2-L5 for H2 and SQL Server**, **L6 for H2 and SQL Server**, and
-**L7-L9 for H2** and **L7-L10 for SQL Server** from the
-[client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
-It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
+This module provides an ANSI and Unicode ODBC 3.x driver for applications that
+access OJP servers from C++.
+It uses the shared `StatementService.proto` from `ojp-grpc-contract` and
 communicates with the server over gRPC.
+[ODBC_API_COVERAGE.md](ODBC_API_COVERAGE.md) lists the implemented ODBC 3.x
+functions and the remaining work.
 
-## Current implementation level assessment
+## Supported levels by database
 
-| Assessment | Value |
-|---|---|
-| Highest implemented level | **L9 for H2; L10 for SQL Server; L1 for PostgreSQL** |
-| Summary | H2 and SQL Server add XA resource-manager operations through the OJP C API in `ojp_odbc_xa.h`. XA connections always connect with `isXA=true`, pin to one endpoint, and never reroute active XA operations. SQL Server L10 combines XA affinity with multinode failover and recovered-node reuse. |
+| Database | Highest supported level |
+|---|---:|
+| H2 | **L9** |
+| PostgreSQL | **L10** |
+| SQL Server | **L10** |
+| MySQL | **L10** |
+| MariaDB | **L10** |
+| Oracle | Not established |
+| DB2 | Not established |
+| CockroachDB | Not established |
 
-### Current test-proven coverage by database
+### MariaDB streamed CLOB limitation
 
-| Database | Highest achieved level (current tests) | Evidence |
-|---|---:|---|
-| **H2** | **L9** | L1-L9 integration suites passed, including stateless failover, pool-exhaustion safety, recovered-node reuse, and XA lifecycle/recovery in `h2_l9_integration_test.cpp`. |
-| PostgreSQL | **L1** | `l1_integration_test.cpp` exercises ODBC → one OJP server → PostgreSQL. |
-| SQL Server | **L10** | L1-L10 integration suites passed, including XA lifecycle/recovery in `sqlserver_l9_integration_test.cpp` and combined multinode/XA coverage in `sqlserver_l10_integration_test.cpp`. |
-| MySQL | Not established | No database-specific integration suite in this module. |
-| MariaDB | Not established | No database-specific integration suite in this module. |
-| Oracle | Not established | No database-specific integration suite in this module. |
-| DB2 | Not established | No database-specific integration suite in this module. |
-| CockroachDB | Not established | No database-specific integration suite in this module. |
+Large multi-chunk CLOB writes containing supplementary Unicode characters
+(such as emoji) can be corrupted by the current interaction between OJP's
+positioned CLOB writes and MariaDB Connector/J. The MariaDB L5 large-payload
+round trip therefore uses the same ASCII `MEDIUMTEXT` and `MEDIUMBLOB` payloads
+as the JDBC reference test; small UTF-8 CLOB round trips remain covered. Large
+supplementary-Unicode CLOB round trips are not currently supported.
 
 Level definitions: [client implementation levels](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md).
-
-## L1 capabilities
-
-L1 includes connection establishment and termination, query and update
-execution, basic result columns and scalar values, input parameters for common
-ODBC scalar types, and SQL error diagnostics. The implementation supports
-`SQLDriverConnect`, `SQLPrepare`/`SQLExecute`, `SQLBindParameter` for input
-parameters, `SQLExecDirect`, forward-only `SQLFetch`/`SQLGetData`, and affected
-row counts. The current parameter/value mapping covers null, booleans, signed
-integers, floats, doubles, decimals, dates, times, timestamps, strings, and
-binary values. NULL parameters are sent with the `java.sql.Types` code matching
-the bound ODBC SQL type, because the server binds them with `setNull`. Disable application-side
-connection pooling when using OJP.
-
-The H2 L2 suite covers typed decimal, temporal, integer, floating-point,
-boolean, text, and binary input parameters, both direct and prepared statement
-execution, basic result-column metadata, and retrieval of the generated identity
-value through H2 SQL. Unlike the JDBC H2 type suite, this ODBC suite does not
-cover Java-specific types, timezone-aware values, or arrays; those have no
-equivalent in the currently implemented ODBC parameter mapping. The ODBC API
-has no portable equivalent of JDBC `getGeneratedKeys()`, so generated
-identities are read with database SQL rather than a driver-specific
-generated-keys API.
-
-The H2 and SQL Server L3 suites retrieve 10,001 ordered rows through the
-server-streaming query protocol, check result metadata and end-of-result
-behavior, and exercise closing a partially consumed result and reusing the
-statement for full and empty results. The SQL Server suite also returns multiple
-`VARBINARY` rows, exercising the server's row-by-row result mode and
-`fetchNextRows` pagination. The client consumes every `executeQuery` stream and
-closes its server-side result set with `callResource(RES_RESULT_SET, CALL_CLOSE)`.
-The client also uses `fetchNextRows` when the server marks a result as row-by-row.
-
-The H2 L4 suite maps ODBC autocommit and `SQLEndTran`/`SQLTransact` to the
-transaction RPCs, and maps `SQL_ATTR_TXN_ISOLATION` to connection resource calls.
-ODBC has no portable savepoint API, so the client accepts `SAVEPOINT name`,
-`ROLLBACK TO [SAVEPOINT] name`, and `RELEASE [SAVEPOINT] name` statements and
-implements them with OJP savepoint resource calls. These statements are
-intercepted by the client and are not sent to H2.
-
-The H2 L5 suite binds `SQL_LONGVARBINARY` and `SQL_LONGVARCHAR` values using
-ODBC data-at-execution (`SQLParamData`/`SQLPutData`). The client uploads BLOB and
-CLOB chunks through `createLob`, then sends the returned handle as a `PT_BLOB`
-or `PT_CLOB` parameter. `SQLGetData` hydrates BLOB and CLOB references through
-`readLob`; the suite verifies a 180 KB binary value, multi-byte UTF-8 CLOB data,
-and typed NULL LOB parameters.
-
-The H2 L6 suite verifies session affinity with a local temporary table across
-multiple statements, CRUD operations, and transaction boundaries. Session UUIDs
-are bound to their target server; all session-scoped RPCs use that binding, and
-an RPC failure is surfaced without retrying on another server.
-
-The H2 L7 suite connects through multiple OJP endpoints, checks shared-pool
-connection reuse and cluster CRUD, and includes an unavailable endpoint to
-verify it is marked down and excluded from subsequent selection. The client
-balances new connections by least active connections by default, with round-robin
-available through `OJP.LOADAWARE.SELECTION.ENABLED=false`. Endpoint channels are
-shared process-wide; background health checks propagate topology and recreate
-pools before a recovered endpoint is marked healthy. Stateless `NOT_FOUND`
-responses invalidate the cached pool and retry once after reconnecting.
-
-The SQL Server L7 suite covers multinode behavior with the SQL Server fixture,
-including multi-endpoint CRUD, cached pool reuse, and an unavailable endpoint.
-L8 adds failover/recovery checks and requires its first endpoint to be restartable
-by a supervisor using a PID file. Health probes use the `connect` RPC every 5 seconds by default;
-configure a positive interval in milliseconds with the
-`OJP_HEALTH_CHECK_INTERVAL_MS` environment variable. Active sessions are never
-retried on another endpoint.
-
-The SQL Server L2 suite mirrors the types in the JDBC driver's
-`SQLServerMultipleTypesIntegrationTest`:
-
-| SQL Server type (JDBC test) | ODBC binding / retrieval in the L2 suite |
-|---|---|
-| `INT`, `BIGINT`, `SMALLINT` | `SQL_C_SLONG`/`SQL_C_SBIGINT`/`SQL_C_SSHORT` parameters, read back as integers |
-| `TINYINT` (value 255) | Bound as `SQL_C_SLONG`/`SQL_INTEGER`, like the JDBC test's `setInt`; SQL Server `TINYINT` is unsigned, so 255 does not fit `SQL_C_STINYINT` |
-| `BIT` | `SQL_C_BIT` |
-| `FLOAT`, `REAL` | `SQL_C_DOUBLE`, `SQL_C_FLOAT` |
-| `DECIMAL(10, 2)`, `MONEY`, `SMALLMONEY` | `SQL_C_NUMERIC` and decimal text parameters, read back directly as decimal text |
-| `NVARCHAR`, `NTEXT`, `TEXT`, `NVARCHAR(MAX)`, `VARCHAR(MAX)` | `SQL_C_CHAR` with UTF-8 text, including Chinese characters and an emoji, and a 50 KB value |
-| `VARBINARY(1)`, `VARBINARY(4)`, `VARBINARY(MAX)` | `SQL_C_BINARY`, including a 10,000-byte value, and a multi-row `VARBINARY` query (the server sends these rows one at a time) |
-| `DATE`, `TIME`, `DATETIME2`, `SMALLDATETIME` | `SQL_C_TYPE_DATE`, `SQL_C_TYPE_TIME`, `SQL_C_TYPE_TIMESTAMP` |
-| `DATETIMEOFFSET` (`OffsetDateTime`, `OffsetTime`, `Instant`) | UTC timestamp structs and offset text such as `2024-12-01 10:10:10 +02:00`; values are read back as UTC, and a text `CAST` confirms the stored offset |
-| `UNIQUEIDENTIFIER` | Generated with `NEWID()` and read back as GUID text |
-| `IMAGE`, `XML`, `GEOMETRY`, `GEOGRAPHY`, `HIERARCHYID`, `SQL_VARIANT` | Created and returned as `SQL_NULL_DATA`, as in the JDBC test, which never writes them either |
-| NULL values | Typed NULL parameters plus omitted columns returned as `SQL_NULL_DATA` |
-
-These JDBC cases are not ported, and here is why:
-
-- **Java-specific types.** `LocalDate`, `LocalTime`, and `LocalDateTime` versus
-  `java.sql.Date`, `Time`, and `Timestamp`: ODBC has one C struct per SQL type,
-  so each pair maps to the same `DATE`, `TIME`, or `DATETIME2` binding.
-- **Arrays.** `createArrayOf` has no ODBC equivalent.
-- **Timezone-aware ODBC types.** The client does not implement SQL Server's
-  driver-specific `SQL_SS_TIMESTAMPOFFSET` C type. Offsets are therefore sent as
-  text.
-
-Generated SQL Server identities are read with `IDENT_CURRENT` for the table
-that the run creates.
-
-## L5 LOB coverage
-
-The SQL Server L5 suite streams `SQL_LONGVARBINARY` parameters through
-`SQLParamData`/`SQLPutData`, which the driver forwards to `createLob` in 64 KiB
-chunks. The integration test round-trips large, small, empty, and NULL
-`VARBINARY(MAX)` values through SQL Server and verifies the returned bytes.
-`readLob` is also supported for LOB references returned by the server; SQL
-Server query results are currently hydrated as binary values by the server.
-
-Decimal results arrive as BigDecimalWire bytes
-([format](../documents/protocol/BIGDECIMAL_WIRE_FORMAT.md)). Like the JDBC
-driver, the client decodes result bytes that match this layout exactly as
-decimal text and returns other bytes as binary.
-
-## L4 transaction coverage
-
-The H2 L4 suite covers commit, rollback, autocommit transitions, savepoint
-rollback/release, isolation, and invalidated savepoint handles. The SQL Server
-suite follows transaction and savepoint cases in
-`SQLServerConnectionExtensiveTests` and `SQLServerSavepointTests` from the JDBC
-reference client, and verifies commit, rollback, autocommit transitions, nested
-savepoint rollback/release, and isolation through OJP.
-
-ODBC has no standard savepoint API. The client maps `SAVEPOINT name` and
-`SAVE TRANSACTION name`, `ROLLBACK TO [SAVEPOINT] name` and
-`ROLLBACK TRANSACTION name`, plus `RELEASE [SAVEPOINT] name` to the
-`callResource` operations in `CLIENT_SPEC_AI.md`. These directives are
-intercepted by the client and not forwarded to the database.
-
-Output parameters, wide-character ODBC entry points, complete metadata
-discovery, configurable fetch-size pagination, full L8 recovery/redistribution,
-and client-side throttling are not implemented. XA operations use the same
-session-affinity routing and do not retry or reroute after a branch has started.
-
-## Conformance with `CLIENT_SPEC_AI.md`
-
-The same driver code serves H2, PostgreSQL, and SQL Server, so these points
-apply to all three databases.
-
-Implemented rules:
-
-| Spec rule | Implementation |
-|---|---|
-| 4.1.1 process-stable UUID v4 `clientUUID` | Generated once per process |
-| 4.2 `ConnectionDetails` | Non-XA uses `isXA=false`; `OJP.XA=TRUE` connections use `isXA=true` and always make a connect RPC |
-| 4.3.1–4.3.2 send and replace `SessionInfo` | Sent with every request and replaced from every `executeQuery`, `executeUpdate`, `fetchNextRows`, and `callResource` response |
-| 4.3.4 `terminateSession` exactly once | Sent once by `SQLDisconnect`; the connection is unusable afterwards, even if the call fails |
-| 4.4.1 empty `statementUUID` for new statements | Always sent empty; prepared statements are not reused on the server |
-| 4.4.2 1-based parameter indexes | ODBC parameter numbers are passed through |
-| 4.4.3 `PT_BIG_DECIMAL` as BigDecimalWire `bytes_value` | Decimal parameters are encoded, and decimal results decoded, in this format |
-| 4.4.4 `StringValue` wrapper fields | `uuid_value`, `biginteger_value`, `url_value`, `rowid_value`, and `rowidlifetime_value` results are decoded as text |
-| 4.4.5 `PT_NULL` with a `java.sql.Types` code in `int_value` | Derived from the bound ODBC SQL type; unknown types send `0` (`Types.NULL`) |
-| 4.5.2 close result sets | Rows are read eagerly, then the result set is closed with `callResource(RES_RESULT_SET, CALL_CLOSE)` |
-| L4 transaction lifecycle | `startTransaction`, `commitTransaction`, and `rollbackTransaction` replace local `SessionInfo` from each response |
-| 4.5.3 savepoint lifecycle | Savepoints are created through `RES_CONNECTION/CALL_SET` and invalidated locally after transaction completion |
-| L5 LOB lifecycle | `createLob` sends 64 KB `LT_BLOB`/`LT_CLOB` chunks, updates the session from returned references, and `readLob` concatenates response blocks |
-| L4 ODBC operations | `SQL_ATTR_AUTOCOMMIT`, `SQLEndTran`/`SQLTransact`, and transaction-isolation attributes map to transaction RPCs and `callResource` |
-| L5 SQL Server LOBs | `SQL_LONGVARBINARY` data-at-execution uses chunked `createLob`; LOB references can be read with `readLob` |
-| L6 session affinity | H2 and SQL Server route session-scoped RPCs exclusively to the bound `targetServer`; failures are surfaced without retry or reroute |
-| L7 multinode operations | Shared endpoint channels, least-connections/round-robin selection, health probes and cluster-health propagation, connHash caching, and stateless `NOT_FOUND` reconnect/retry |
-| L9 XA operations | `ojp_odbc_xa.h` exposes all ten XA RPCs; XA connections pin to their selected endpoint, and a failed active XA operation returns `XAER_RMFAIL` without rerouting |
-| Section 3 transitions | Calls on a closed connection fail with `08003` without sending an RPC |
-
-In row-by-row mode (SQL Server and DB2 results with binary or LOB columns),
-the client pulls the remaining rows with `fetchNextRows`. Earlier versions
-returned only the first row.
-
-Spec rules outside the implemented levels or still incomplete:
-
-- **L5 for PostgreSQL:** `createLob` and `readLob`.
-- **L8:** full failover/recovery and connection redistribution.
-- **Section 8:** client-side admission throttling.
 
 ## Build requirements
 
@@ -212,7 +41,7 @@ Spec rules outside the implemented levels or still incomplete:
 - An extracted source archive of [googleapis](https://github.com/googleapis/googleapis) to
   provide `google/type/date.proto` and `google/type/timeofday.proto`
 - The full OJP source tree: the build also reads
-  `ojp-grpc-commons/src/main/proto/StatementService.proto`
+  `ojp-grpc-contract/proto/StatementService.proto`
 
 **CMake is the cross-platform build tool**, rather than Maven or a separate
 shell script for each OS. The checked-in `release` preset runs the same
@@ -289,6 +118,12 @@ Keep required gRPC/Protobuf dependency DLLs and the matching Visual C++ runtime
 available to the application's loader (for example alongside the application).
 Installation does not bundle third-party runtime libraries.
 
+On Windows the build also produces the DSN setup DLL `install/bin/ojp_odbc_setup.dll`
+(see [Register the installed driver](#register-the-installed-driver)). Disable it with
+`-DOJP_ODBC_BUILD_SETUP=OFF`; it is never built on other platforms. Both DLLs link
+`odbccp32.lib` together with `legacy_stdio_definitions.lib`, which the modern
+Universal CRT requires for that import library.
+
 **Platform status:** Linux has integration suites in this repository. The
 macOS and Windows instructions describe the platform build/registration path,
 not a claim that those platforms or language wrappers have passed integration
@@ -344,11 +179,15 @@ configuration location). For an isolated, user-owned configuration, put the
 entry in `/absolute/path/to/odbc-config/odbcinst.ini` and set
 `ODBCSYSINI=/absolute/path/to/odbc-config` **before starting the application**.
 Confirm registration with `odbcinst -q -d -n OJP`. This is driver registration,
-not a DSN; the driver currently requires a DSN-less connection string.
+not a DSN; see [Data sources (DSN)](#data-sources-dsn) to define one in `odbc.ini`.
+The DSN support needs the unixODBC/iODBC `odbcinst` library at build time; CMake
+warns and builds a DSN-less driver when it is missing.
 
 On Windows, register `OJP` in the matching architecture's ODBC driver registry.
-There is no installer or setup-dialog DLL yet. An administrator can import this
-`.reg` template for a **64-bit** driver after replacing the path:
+The [Windows installer](installer/windows/README.md) builds an Inno Setup installer
+(or runs `install.ps1`) that copies the 32-bit and 64-bit drivers and writes these
+entries. To register by hand, an administrator can import this `.reg` template for a
+**64-bit** driver after replacing the paths; `Setup` enables the DSN dialog:
 
 ```text
 Windows Registry Editor Version 5.00
@@ -358,13 +197,16 @@ Windows Registry Editor Version 5.00
 
 [HKEY_LOCAL_MACHINE\SOFTWARE\ODBC\ODBCINST.INI\OJP]
 "Driver"="C:\\OJP\\install\\bin\\ojp_odbc.dll"
+"Setup"="C:\\OJP\\install\\bin\\ojp_odbc_setup.dll"
 ```
 
 For a 32-bit driver on 64-bit Windows, the corresponding entries are under
 `HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\ODBC\ODBCINST.INI`.
 The 64-bit ODBC Administrator is `%windir%\System32\odbcad32.exe`; the 32-bit
-one is `%windir%\SysWOW64\odbcad32.exe`. Their Drivers tabs show registration;
-do not expect the DSN configuration wizard to work without a setup DLL.
+one is `%windir%\SysWOW64\odbcad32.exe`. With `Setup` registered, **Add** and
+**Configure** on the User DSN / System DSN tabs open the OJP dialog, which edits
+the DSN fields, TLS options and offers **Test Connection**. The password typed for
+the test is never saved.
 
 Check runtime dependencies with `ldd` on Linux, `otool -L` on macOS, or
 `dumpbin /DEPENDENTS` in a Windows developer terminal. A registered driver that
@@ -390,13 +232,69 @@ DRIVER={OJP};SERVER={localhost:1059};DATABASE={jdbc:h2:mem:example;DB_CLOSE_DELA
 ```
 
 The ODBC connection-string braces protect semicolons in the H2 URL; a literal
-closing brace in a value is escaped by doubling it. `SQLConnect` with a DSN is
-not implemented yet.
+closing brace in a value is escaped by doubling it.
+
+### Data sources (DSN)
+
+A DSN stores every connection field except `PWD`, which is never read from or
+written to `ODBC.INI`. Connect with `DSN=name;UID=...;PWD=...` through
+`SQLDriverConnect`, or with `SQLConnect(dbc, "name", ..., uid, ..., pwd, ...)`.
+Fields given explicitly in the connection string override the DSN. An unknown
+DSN fails with SQLSTATE `IM002`.
+
+On Windows create the DSN with the ODBC Administrator (see above). With unixODBC,
+add it to `odbc.ini` (`odbcinst -j` shows the location):
+
+```ini
+[OjpExample]
+Driver=OJP
+Description=Example OJP data source
+SERVER=localhost:1059
+DATABASE=jdbc:h2:mem:example;DB_CLOSE_DELAY=-1
+UID=sa
+```
+
+Stored keys: `Description`, `SERVER`, `DATABASE`, `UID`,
+`OJP.DATASOURCE.NAME`, `OJP.XA`, `OJP.LOADAWARE.SELECTION.ENABLED`,
+`OJP.MULTINODE.RETRY.ATTEMPTS`, `OJP.MULTINODE.RETRY.DELAY` and the
+`OJP.CLIENT.TLS.*` keys described below.
 
 Start an OJP server with Java 25 and `-Duser.timezone=UTC`, provide its backend
 JDBC driver JAR, and ensure it can reach the database. `SERVER` is the **OJP
 endpoint**, not the database address; `DATABASE` is a backend JDBC URL, not
 `jdbc:ojp[...]`. See the [server quick start](../README.md#quick-start).
+
+### TLS and mutual TLS
+
+Plaintext is the default for compatibility. Enable TLS for connections outside
+a trusted/private network, and configure the OJP server to require client
+certificates for mutual TLS.
+
+| Connection option | Environment fallback | Value |
+|---|---|---|
+| `OJP.CLIENT.TLS.ENABLED` | `OJP_CLIENT_TLS_ENABLED` | Enable verified TLS |
+| `OJP.CLIENT.TLS.ROOTCERT` | `OJP_CLIENT_TLS_ROOTCERT` | PEM file containing trusted server certificates / CA roots; omitted uses gRPC's default roots |
+| `OJP.CLIENT.TLS.CERT` | `OJP_CLIENT_TLS_CERT` | PEM client certificate chain |
+| `OJP.CLIENT.TLS.KEY` | `OJP_CLIENT_TLS_KEY` | PEM unencrypted client private key |
+
+Connection options override environment values, including explicitly empty
+values. Supply both client certificate and private key, or neither for
+server-authenticated TLS. TLS credential options require TLS to be enabled.
+Unreadable/empty credential files and invalid configuration fail with
+`HY024`; connection/handshake failures return `08001`. Server certificate
+trust and endpoint hostname verification remain enabled; there is no insecure
+certificate-verification bypass or plaintext fallback. The same credentials
+apply to every endpoint, including health probes and recovered nodes.
+
+```text
+DRIVER={OJP};SERVER={localhost:1059,localhost:1060};DATABASE={jdbc:postgresql://localhost:5432/defaultdb};OJP.CLIENT.TLS.ENABLED=true;OJP.CLIENT.TLS.ROOTCERT={/secure/server-ca.pem};OJP.CLIENT.TLS.CERT={/secure/client-chain.pem};OJP.CLIENT.TLS.KEY={/secure/client-key.pem};
+```
+
+Add backend credentials through your application's secret configuration.
+Restrict private-key file permissions to the client account. TLS options are
+local driver configuration, not backend JDBC properties. This secures the
+application-to-OJP hop; configure database TLS separately for the OJP-to-database
+hop.
 
 ODBC applications link against the **Driver Manager**, not directly against
 gRPC or `ojp_odbc`. Use ANSI APIs and UTF-8 text; do not compile this example
@@ -514,13 +412,121 @@ standard Python, ADO.NET, or FireDAC local transaction APIs.
 
 ### Using other languages through ODBC
 
-The driver implements advanced OJP capabilities, but it is **not a complete
-ODBC API implementation**. It exports ANSI functions, not the `...W` Unicode
-entry points. `SQLConnect`/DSN-only connections, catalog functions such as
-`SQLTables`/`SQLColumns`, `SQLColAttribute`, `SQLGetStmtAttr`, and
-`SQLMoreResults` are not implemented; `SQLGetInfo` covers only a subset.
-Driver Manager ANSI/Unicode conversion does not establish wrapper compatibility.
-Some wrappers request unsupported metadata even for a simple query.
+The driver implements the common connection, statement, transaction, result,
+and metadata paths, but is **not a complete ODBC API implementation**. The
+supported functions include `SQLDriverConnect[W]`, `SQLConnect[W]`,
+`SQLExecDirect[W]`, `SQLPrepare[W]`, `SQLNumParams`, `SQLBindParameter`, `SQLBindCol`,
+`SQLGetData`, `SQLTables[W]`, `SQLColumns[W]`, `SQLPrimaryKeys[W]`,
+`SQLForeignKeys[W]`, `SQLGetTypeInfo`, `SQLDescribeCol[W]`,
+`SQLColAttribute[W]`, `SQLGetInfo[W]`, `SQLGetFunctions`, and
+`SQLGetDiagRec[W]`. The W entry points share their ODBC function IDs with the
+ANSI forms in `SQLGetFunctions`.
+
+#### Unicode encoding and lengths
+
+ANSI `SQLCHAR` text is treated as UTF-8; the driver does not convert from the
+process locale or Windows code page. W entry points convert between UTF-8 and
+the platform's `SQLWCHAR` representation (UTF-16 code units where
+`sizeof(SQLWCHAR) == 2`, otherwise UTF-32 code units). Invalid wide sequences
+fail with SQLSTATE `22018`. Use `SQL_C_WCHAR` with `SQL_WCHAR`, `SQL_WVARCHAR`,
+or `SQL_WLONGVARCHAR` for Unicode parameters and results.
+
+String lengths passed to W connection, statement, and catalog functions count
+`SQLWCHAR` units; `SQL_NTS` is supported. `SQLBindParameter`, `SQLBindCol`, and
+`SQLGetData` buffer lengths and indicators for `SQL_C_WCHAR` are byte counts.
+Output buffers are terminated when they have room for a terminator, and
+truncation returns `SQL_SUCCESS_WITH_INFO` with SQLSTATE `01004`. Applications
+should size wide buffers using `sizeof(SQLWCHAR)`, not `sizeof(wchar_t)`.
+
+Example prepared Unicode query (the input buffer includes a trailing zero, but
+the indicator reports only the payload bytes):
+
+```cpp
+SQLWCHAR sql[] = { 'S','E','L','E','C','T',' ','?','\0' };
+SQLWCHAR text[] = { 0x6771, 0x4eac, 0 };
+SQLLEN text_bytes = 2 * sizeof(SQLWCHAR);
+SQLPrepareW(statement, sql, SQL_NTS);
+SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WVARCHAR,
+                 32, 0, text, sizeof(text), &text_bytes);
+SQLExecute(statement);
+```
+
+For a Unicode connection, build the same `DRIVER`, `SERVER`, `DATABASE`, `UID`,
+and `PWD` fields in a `SQLWCHAR` buffer and pass it to `SQLDriverConnectW`
+(connection-string syntax is unchanged). The earlier ANSI example shows the
+corresponding `SQLDriverConnect` path.
+
+Metadata and transaction calls use the regular ODBC statement/connection
+handles:
+
+```cpp
+SQLSetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT,
+                  reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF), 0);
+SQLCHAR table_type[] = "TABLE";
+SQLTables(statement, nullptr, 0, nullptr, 0, table_name, SQL_NTS,
+          table_type, SQL_NTS);
+while (SQLFetch(statement) == SQL_SUCCESS) {
+    // Read TABLE_NAME with SQLGetData(statement, 3, SQL_C_CHAR, ...).
+}
+SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
+```
+
+Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections, and
+`SQLConnect`/`SQLConnectW` with a DSN name (see [Data sources (DSN)](#data-sources-dsn)).
+Do not pass a `SERVER=...;DATABASE=...` options string as the `SQLConnect` server
+name: the Driver Manager interprets that argument as a DSN name and may reject it
+before calling the driver.
+
+#### Metadata and known limitations
+
+`SQLTables`, `SQLColumns`, `SQLPrimaryKeys`, `SQLForeignKeys`, and
+`SQLGetTypeInfo` call the connected JDBC driver's `DatabaseMetaData` through
+OJP Server, so catalog discovery does not embed database-specific SQL. Their
+result sets can be fetched with the normal statement APIs. `SQLGetInfo` reports
+the backend product/transaction information and a supported subset of ODBC
+capabilities; unrecognized information types return `HYC00`.
+
+`SQLDescribeCol` and `SQLColAttribute` can report the result label and infer a
+limited type/size from returned values. The current gRPC query result does not
+carry the complete JDBC `ResultSetMetaData`, so these functions cannot promise
+the database's declared precision, scale, nullability, or base-table identity
+for arbitrary query expressions. Use `SQLColumns` for authoritative declared
+table-column metadata. Catalog functions not listed above (including
+`SQLStatistics`, `SQLProcedures`, `SQLSpecialColumns`, and privilege catalogs),
+and `SQLGetStmtAttr` remain unsupported. A Driver Manager or
+language wrapper may require one of these functions; verify its exact calls
+with the target Driver Manager and database.
+
+Bindings with `SQL_PARAM_OUTPUT` or `SQL_PARAM_INPUT_OUTPUT` (including the
+return value of `{? = CALL proc(?)}`) execute through the backend JDBC
+`CallableStatement`; output values are written to the bound buffers after
+`SQLExecute`/`SQLExecDirect`. Streamed output parameters, LOB or
+data-at-execution inputs in the same call, and output parameters combined with
+`SQL_ATTR_PARAMSET_SIZE` > 1 return `HYC00`. `SQLSetDescField` accepts
+`SQL_DESC_NAME` on the implementation parameter descriptor and ignores it,
+because parameters are always bound by position; other descriptor fields return
+`HYC00`.
+
+A procedure call (`EXEC`/`EXECUTE`/`CALL`/`{CALL ...}`) or a statement whose SQL
+contains a top-level `;` followed by more code and a
+`SELECT`, `EXEC`/`EXECUTE`, `OUTPUT`, or `RETURNING` keyword is treated as a
+multi-result batch: it runs through a backend JDBC `CallableStatement` that
+stays open while results remain, so `SQLMoreResults` advances to the next result
+set (update counts in between are skipped) and returns `SQL_NO_DATA` at the end.
+`SQLCloseCursor`, `SQLFreeStmt(SQL_CLOSE)`, re-execution, catalog calls, and
+freeing the statement close the pending results. Batches without a top-level `;`
+(for example `IF ... SELECT ... ELSE SELECT ...`), batches with LOB or
+data-at-execution parameters, and output-parameter calls expose only the first
+result; `SQLMoreResults` then returns `SQL_NO_DATA`. With
+`SQL_ATTR_PARAMSET_SIZE` > 1, only the results of the last parameter row remain
+available.
+
+The L1 ODBC integration suite exercises ANSI and Unicode connection/statement
+paths plus catalog discovery against the existing H2, PostgreSQL, MariaDB/MySQL,
+and SQL Server fixtures. Tests require a running OJP Server and database;
+disabled database suites skip unless their existing `OJP_TEST_*` variables are
+enabled. Driver Manager ANSI/Unicode conversion alone does not establish
+wrapper compatibility.
 
 | Application API | Bridge | Status / guide |
 |---|---|---|
@@ -536,66 +542,114 @@ Treat these as integration paths to evaluate while the corresponding native
 clients mature, **not production-certified substitutes**. Validate
 connect/query/parameters/transactions/UTF-8/cleanup with your exact wrapper,
 Driver Manager, OS, architecture, and database. Disable all application-side
-pooling. The current driver uses plaintext gRPC: use a trusted/private network
+pooling. Enable [TLS/mTLS](#tls-and-mutual-tls) or use a trusted/private network
 or an externally secured deployment boundary. Never log credential-bearing
 connection strings. See the [ebook integration chapter](../documents/ebook/part2-chapter7-framework-integration.md).
 
 ## Integration tests
 
-The H2, PostgreSQL, and SQL Server tests read backend connection details from
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server tests read backend connection details from
 their respective fixtures:
 [`h2_l1_connection.csv`](tests/testdata/h2_l1_connection.csv),
 [`postgresql_l1_connection.csv`](tests/testdata/postgresql_l1_connection.csv),
+[`mariadb_l1_connection.csv`](tests/testdata/mariadb_l1_connection.csv),
 and
 [`sqlserver_l1_connection.csv`](tests/testdata/sqlserver_l1_connection.csv).
 The H2 L7 multinode suite uses
 [`h2_l7_connection.csv`](tests/testdata/h2_l7_connection.csv), whose file-backed
 H2 database enables `AUTO_SERVER` so both OJP server processes see the same data.
-They exercise the ODBC API through the Driver Manager against a running OJP
-server and the respective database. The SQL Server fixture follows the OJP JDBC
-driver's SQL Server test setup (`defaultdb`, `testuser`, and SQL Server 2022),
-including the SQLSTATE expected for the L1 suite's invalid SQL. The Microsoft
-JDBC driver reports `42S01` for this syntax error rather than the standard
-`42000`, and OJP passes it through unchanged. Each test uses a unique
-table per run and verifies connection readiness, prepared INSERT/SELECT/UPDATE,
-DELETE, row counts, result values, empty results, SQL error diagnostics, and
-session termination. The separate H2 L2 suite reuses the H2 L1 connection
-fixture and covers typed parameters, generated identity retrieval, and basic
-result metadata. The SQL Server L2 suite does the same using the SQL Server
-fixture. The L2 suites are database-specific, so the shared L1 executable does
-not need database-dependent branches.
+Every integration executable runs its original assertions sequentially for every
+CSV record, with fresh ODBC handles and cleanup for each connection. Records have
+three fields: JDBC URL, username, and password. Quoted commas, doubled quotes,
+CRLF, and quoted multiline fields are supported. Empty lines are ignored; empty
+input and malformed nonempty records fail before contacting a server. Reports
+identify the physical starting row and an allowlisted backend label only.
+Raw driver diagnostics are not logged because they can reformat credentials.
+Failures stop the suite immediately.
+Disabled suites return 77 without opening the CSV or contacting a server.
 
-The H2 and SQL Server L3 suites cover multi-block reads, result metadata,
-end-of-result behavior, empty results, and closing a result before reusing the
-statement. SQL Server L3 also selects multiple `VARBINARY` rows to exercise
-row-by-row server streaming through `fetchNextRows`.
-
-The H2 L5 suite additionally checks BLOB/CLOB input streams sent in multiple
-ODBC chunks, multi-block LOB reads, UTF-8 character preservation, and SQL NULL
-handling for both LOB types. H2 and SQL Server L6 verify temporary-table state
-across SQL operations and committed transactions. Both L7 suites use at least
-two OJP endpoints to check multinode CRUD, cached-pool reuse, and handling of an
-unavailable endpoint. H2 L8 stops and
-restarts the first configured OJP server to verify stateless operation failover,
-pool-exhaustion and SQL-error handling, and reuse of the recovered server. Run
-it only with disposable test servers; its PID file must identify the first
-endpoint, and a supervisor must restart that server after it exits.
-The H2 L9 suite uses two OJP servers and a shared file-backed H2 database. It
-covers XA connection mode, resource-manager identity, two-phase commit and
-recovery, rollback, one-phase commit, timeout operations, forget, and
-`XAER_RMFAIL` without rerouting when the server hosting an active XA branch stops.
-The SQL Server L9 suite follows the Java SQL Server XA reference coverage and
-also verifies recovery, resource-manager identity, forget, and
-`XAER_RMFAIL` without rerouting when the server hosting an active XA branch stops.
-The L10 suite combines the L9 XA lifecycle with a multinode CRUD failover,
-surviving-node availability, SQL error classification, and reuse of the restarted
-OJP node. SQL Server L10 is a client target; the Java reference-client matrix
-currently records SQL Server at L9.
+MySQL and MariaDB share all ten MariaDB test executables and the
+`mariadb_l1_connection.csv` fixture, which contains both JDBC URLs.
+The existing `OJP_TEST_MARIADB*` flags enable both records. CTest registers only
+`OjpOdbcMariaDBL1Integration` through `OjpOdbcMariaDBL10Integration`; there are no
+separate MySQL registrations or flags. Main CI starts MariaDB 10.11 and MySQL 8.4
+simultaneously and runs these suites once.
+The MySQL row uses port 3306; the MariaDB row uses port 3307. Both require
+`defaultdb` and a disposable `testuser` account. The MySQL row disables database TLS
+and allows public-key retrieval for local tests only; do not use these settings
+for production connections. Supply each backend's JDBC driver to OJP.
+For MySQL L9/L10 recovery scans, grant the disposable test account
+`XA_RECOVER_ADMIN` on `*.*` in addition to its privileges on `defaultdb`;
+Main CI applies this grant automatically.
+The shared MariaDB/MySQL L7-L8 suites require two OJP endpoints that can both
+reach each database in the shared fixture. L8 stops and recovers its first
+endpoint, so that server must be supervised by a restart loop and its PID file
+must identify the server process. Configure it with
+`ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
+For L9/L10, restart it with the default unlimited concurrency (`0`); the L8-only
+limit can reject concurrent health probes and XA calls. Main CI makes this
+transition between L8 and L9 while retaining the same restart supervisor.
+The PostgreSQL L7-L9 suites use the PostgreSQL fixture and require two OJP endpoints
+connected to the same PostgreSQL database. PostgreSQL L8 stops the first endpoint,
+so its PID file must identify the server process that a supervisor will restart.
+Configure that server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion
+assertion. PostgreSQL L9 exercises XA, including two-phase commit and prepared
+transaction recovery, so configure PostgreSQL with `max_prepared_transactions > 0`.
+Use disposable test servers: H2 L8-L9, PostgreSQL L8-L9, and MariaDB/MySQL and SQL Server L8-L10 stop an OJP server.
+PID files must identify the endpoint being stopped, and a supervisor must
+restart that server.
+L8–L10 wait for the stopped server's new PID and a successful readiness query on
+that endpoint, not a fixed sleep. L9 checks XA node loss before waiting, then
+waits before continuing to the next record. Run restart suites sequentially,
+not with parallel CTest jobs.
+Execution deadlines apply separately to each record (180 seconds; 120 for H2
+L8), so CSV files can contain any number of connections without exhausting a
+single suite-wide CTest timeout. A timed-out record reports its row and
+terminates the test process immediately, as a CTest timeout would; subsequent
+records cannot hide it.
 
 Start OJP using Java 25 and UTC, with each database reachable at the address in
 its CSV fixture. SQL Server must have `defaultdb` and a `testuser` login with
 database-owner permissions, as in the JDBC integration-test container setup.
-Then build and run the tests:
+For L10, both OJP servers must require trusted client certificates, including
+after supervisor restarts. Generate disposable credentials with the same
+fixture used by the [JDBC mTLS test](../ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/MtlsIntegrationTest.java).
+The generator requires Java 25's `keytool` and the OpenSSL command-line tool.
+
+```sh
+bash scripts/generate-jdbc-mtls-test-certificates.sh /tmp/ojp-odbc-mtls-certs
+export OJP_CLIENT_TLS_ENABLED=true
+export OJP_CLIENT_TLS_ROOTCERT=/tmp/ojp-odbc-mtls-certs/server-cert.pem
+export OJP_CLIENT_TLS_CERT=/tmp/ojp-odbc-mtls-certs/client-cert.pem
+export OJP_CLIENT_TLS_KEY=/tmp/ojp-odbc-mtls-certs/client-key.pem
+export OJP_TEST_TLS_UNTRUSTED_CERT=/tmp/ojp-odbc-mtls-certs/untrusted-client-cert.pem
+export OJP_TEST_TLS_UNTRUSTED_KEY=/tmp/ojp-odbc-mtls-certs/untrusted-client-key.pem
+```
+
+Start each Java 25 server with UTC and these additional JVM properties
+(test-store password: `ojp-test-only`; never reuse these credentials outside tests):
+
+```text
+-Dojp.server.tls.enabled=true
+-Dojp.server.tls.keystore.path=/tmp/ojp-odbc-mtls-certs/server-keystore.p12
+-Dojp.server.tls.keystore.******
+-Dojp.server.tls.keystore.type=PKCS12
+-Dojp.server.tls.truststore.path=/tmp/ojp-odbc-mtls-certs/server-truststore.p12
+-Dojp.server.tls.truststore.******
+-Dojp.server.tls.truststore.type=PKCS12
+-Dojp.server.tls.clientAuthRequired=true
+```
+
+The generated server certificate covers `localhost` and `127.0.0.1`.
+The L10 suites authenticate and query every endpoint, reject missing and
+untrusted client certificates, then run the combined failover, recovery,
+sticky-session, SQL-error and XA scenarios with the trusted identity.
+The shared MariaDB suite runs both MySQL and MariaDB CSV rows. Main CI enables
+mTLS for all PostgreSQL, MariaDB/MySQL and SQL Server suites, not just L10.
+Enabled L10 suites fail if TLS settings or negative-test credentials are missing.
+
+Then build and run the tests (omit L10 flags and TLS exports when deliberately
+running lower-level suites against plaintext servers):
 
 ```sh
 cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
@@ -609,6 +663,29 @@ OJP_TEST_H2_L9=true \
 OJP_TEST_H2_L9_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_H2_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_POSTGRESQL=true OJP_TEST_POSTGRESQL_ADDR=localhost:1059 \
+OJP_TEST_POSTGRESQL_L7=true \
+OJP_TEST_POSTGRESQL_L7_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_POSTGRESQL_L8=true \
+OJP_TEST_POSTGRESQL_L8_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_POSTGRESQL_L9=true \
+OJP_TEST_POSTGRESQL_L9_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_POSTGRESQL_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_POSTGRESQL_L10=true \
+OJP_TEST_POSTGRESQL_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_POSTGRESQL_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB=true OJP_TEST_MARIADB_ADDR=localhost:1059 \
+OJP_TEST_MARIADB_L7=true \
+OJP_TEST_MARIADB_L7_ADDRS=localhost:1059,localhost:1060 \
+OJP_TEST_MARIADB_L8=true \
+OJP_TEST_MARIADB_L8_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB_L9=true \
+OJP_TEST_MARIADB_L9_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L9_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
+OJP_TEST_MARIADB_L10=true \
+OJP_TEST_MARIADB_L10_ADDRS=localhost:1060,localhost:1059 \
+OJP_TEST_MARIADB_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 OJP_TEST_SQLSERVER=true OJP_TEST_SQLSERVER_ADDR=localhost:1059 \
 OJP_TEST_SQLSERVER_L7_ADDRS=localhost:1059,localhost:1060 \
 OJP_TEST_SQLSERVER_L8=true OJP_TEST_SQLSERVER_L8_ADDRS=localhost:1060,localhost:1059 \
@@ -625,27 +702,27 @@ OJP_TEST_SQLSERVER_L10_TARGET_PID_FILE=/tmp/ojp-server-2.pid \
 Each test is skipped when its corresponding enable variable is unset or false.
 When enabled, missing endpoint configuration or unavailable required servers
 fail the test instead of silently skipping it. Set
-`OJP_TEST_H2_L7_UNAVAILABLE_ADDR` or
+`OJP_TEST_H2_L7_UNAVAILABLE_ADDR`,
+`OJP_TEST_MARIADB_L7_UNAVAILABLE_ADDR`,
+`OJP_TEST_POSTGRESQL_L7_UNAVAILABLE_ADDR`, or
 `OJP_TEST_SQLSERVER_L7_UNAVAILABLE_ADDR` to override the default unused endpoint
 (`127.0.0.1:1`) in the corresponding L7 test.
-The H2 and SQL Server L8 tests require a PID file for their first endpoint and
-restart that server automatically through the test supervisor. Their endpoint
-lists put the restartable server first. Configure that server with
-`ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
+The H2, PostgreSQL, MariaDB, MySQL, and SQL Server L8 tests require a PID file for their first endpoint and
+restart that server automatically through the test supervisor. The PostgreSQL,
+MariaDB, MySQL, and SQL Server L9/L10 tests also require a PID file for their first
+endpoint, which must be restarted by a supervisor. Their endpoint lists put the
+restartable server first.
+H2 L9 instead puts the surviving server first and the restartable XA server
+last; its target PID file must identify that last endpoint.
+Configure the L8 server with `ojp.server.maxConcurrentRequests=1` for the pool-exhaustion assertion.
 The ODBC connection-string options `OJP.MULTINODE.RETRY.ATTEMPTS` and
 `OJP.MULTINODE.RETRY.DELAY` configure stateless failover retries (defaults: 3
 attempts, range 0–10; and 100 ms between attempts, range 0–60000).
 
-The C++ ODBC H2 workflow job runs `OjpOdbcH2L1Integration` through
-`OjpOdbcH2L9Integration`; L7-L9 run against two OJP servers. L9 requires its
-second endpoint's PID file and stops that server during the active-XA affinity
-assertion. The C++ ODBC SQL Server
-workflow job runs `OjpOdbcSqlServerL1Integration` through
-`OjpOdbcSqlServerL2Integration`, `OjpOdbcSqlServerL3Integration`,
-`OjpOdbcSqlServerL4Integration`, `OjpOdbcSqlServerL5Integration`,
-`OjpOdbcSqlServerL6Integration`, `OjpOdbcSqlServerL7Integration`, and
-`OjpOdbcSqlServerL8Integration`, `OjpOdbcSqlServerL9Integration`, and
-`OjpOdbcSqlServerL10Integration`; L7-L10 use two OJP server processes. L8-L10
-stop the first endpoint and rely on the workflow supervisor to restart it. L9
-and L10 verify that active XA work does not fail over to the other endpoint;
-L10 also exercises stateless failover and recovered-node reuse in the same suite.
+`OJP.LOB.CHUNK.SIZE` (connection string or DSN; fallback env `OJP_LOB_CHUNK_SIZE`) sets the
+block size in bytes used to upload LOB parameters (default 4128768 = 4 MiB - 64 KiB, range
+65536-268435456). The server writes each block with `Blob.setBytes`, which re-copies the whole
+value on SQL Server, so larger blocks make big uploads much faster. Each block must fit in the
+server's `ojp.server.maxRequestSize` (default 4 MiB): raise both together, keeping ~64 KiB of
+headroom. Execution, fetch and LOB streams have no client deadline unless the application sets
+`SQL_ATTR_QUERY_TIMEOUT`; the client accepts responses of any size.

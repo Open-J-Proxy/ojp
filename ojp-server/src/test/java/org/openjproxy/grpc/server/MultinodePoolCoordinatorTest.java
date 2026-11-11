@@ -91,6 +91,20 @@ class MultinodePoolCoordinatorTest {
     }
 
     @Test
+    void shouldMatchHealthReportsOnlyToPoolsWithTheSameEndpointSet() {
+        MultinodePoolCoordinator coordinator = new MultinodePoolCoordinator();
+        coordinator.calculatePoolSizes("source", TWENTY, FOUR,
+                Arrays.asList("server1:1059", "server2:1059"));
+        coordinator.calculatePoolSizes("same-cluster", TWENTY, FOUR,
+                Arrays.asList("server2:1059", "server1:1059"));
+        coordinator.calculatePoolSizes("different-cluster", TWENTY, FOUR,
+                Arrays.asList("server1:1059", "server3:1059"));
+
+        assertEquals(Arrays.asList("same-cluster", "source"),
+                coordinator.getConnHashesWithSameServerEndpoints("source"));
+    }
+
+    @Test
     void testRemoveAllocation() {
         MultinodePoolCoordinator coordinator = new MultinodePoolCoordinator();
 

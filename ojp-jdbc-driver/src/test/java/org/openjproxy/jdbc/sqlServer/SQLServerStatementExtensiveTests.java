@@ -10,6 +10,7 @@ import org.junit.jupiter.params.provider.ArgumentsSource;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -81,6 +82,43 @@ public class SQLServerStatementExtensiveTests {
         stmt.close();
         TestDBUtils.cleanupTestTables(conn, "sqlserver_stmt_basic_test");
         conn.close();
+    }
+
+    @ParameterizedTest
+    @ArgumentsSource(SQLServerConnectionProvider.class)
+    void shouldReturnRowsFromDirectAndPreparedOutputDml(String driverClass, String url, String user,
+                                                        String password) throws SQLException {
+        assumeFalse(isTestDisabled, "SQL Server tests are disabled");
+        Connection conn = DriverManager.getConnection(url, user, password);
+        String table = "sqlserver_dml_output_test";
+        try {
+            TestDBUtils.createBasicTestTable(conn, table, TestDBUtils.SqlSyntax.SQLSERVER, false);
+            try (Statement stmt = conn.createStatement()) {
+                assertTrue(stmt.execute("INSERT INTO " + table + " (id, name) OUTPUT INSERTED.id, "
+                        + "INSERTED.name VALUES (9981, N'direct')"));
+                try (ResultSet resultSet = stmt.getResultSet()) {
+                    assertTrue(resultSet.next());
+                    assertEquals(9981, resultSet.getInt("id"));
+                    assertEquals("direct", resultSet.getString("name"));
+                    assertFalse(resultSet.next());
+                }
+
+                try (PreparedStatement preparedStatement = conn.prepareStatement("INSERT INTO " + table
+                        + " (id, name) OUTPUT INSERTED.id, INSERTED.name VALUES (?, ?)")) {
+                    preparedStatement.setInt(1, 9982);
+                    preparedStatement.setString(2, "prepared");
+                    try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                        assertTrue(resultSet.next());
+                        assertEquals(9982, resultSet.getInt("id"));
+                        assertEquals("prepared", resultSet.getString("name"));
+                        assertFalse(resultSet.next());
+                    }
+                }
+            }
+        } finally {
+            TestDBUtils.cleanupTestTables(conn, table);
+            conn.close();
+        }
     }
 
     @ParameterizedTest

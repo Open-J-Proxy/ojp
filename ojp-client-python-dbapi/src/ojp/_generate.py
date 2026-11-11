@@ -1,4 +1,4 @@
-"""Reproducible protocol generation from the repository's canonical schema."""
+"""Reproducible protocol generation from the shared contract package."""
 
 import argparse
 import importlib.metadata
@@ -20,12 +20,12 @@ def main() -> None:
     candidates = (package.parents[2], Path.cwd(), *Path.cwd().parents)
     root = args.repo_root or next(
         (candidate for candidate in candidates
-         if (candidate / "ojp-grpc-commons/src/main/proto/StatementService.proto").is_file()),
+         if (candidate / "ojp-grpc-contract/proto/StatementService.proto").is_file()),
         None,
     )
     if root is None:
         parser.error("canonical StatementService.proto not found; supply --repo-root")
-    source = root / "ojp-grpc-commons/src/main/proto"
+    source = root / "ojp-grpc-contract/proto"
     if not (source / "StatementService.proto").is_file():
         parser.error("canonical StatementService.proto not found; supply --repo-root")
     # Common protos are namespace packages, so locate the installed distribution.

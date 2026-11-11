@@ -5,23 +5,35 @@ It connects to `ojp-server` over gRPC and runs a simple CRUD flow.
 
 ## Current Implementation Level Assessment
 
-| Assessment | Value |
-|---|---|
-| Highest implemented level in this module | **L1** |
-| Summary | A public single-endpoint L1 API is implemented. The H2 real-server L1 suite passes locally; CI confirmation is pending. |
+| Assessment                               | Value                                                                                                                                                                                                  |
+|------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Highest covered level in this module   | **L3 (H2)**                                                                                                                                                                                            |
+| Summary                                  | H2 real-server integration suites cover L1 CRUD and lifecycle, L2 typed parameters, prepared updates, generated keys and metadata, and L3 streaming, pagination and result-set lifecycle.                 |
 
 ### Current Test-Proven Coverage by Database (`ojp-client-go-database-sql`)
 
-| Database | Highest achieved level (current tests) | Evidence highlights |
-|---|---:|---|
-| **H2** | **L1** | `client_test.TestH2DatabaseShouldSupportL1CRUDAndLifecycle` exercises Go `database/sql` → one OJP server → H2. |
-| **PostgreSQL** | **Not established** | No database-specific integration suite in this module yet. |
-| **MySQL** | **Not established** | No database-specific integration suite in this module yet. |
-| **MariaDB** | **Not established** | No database-specific integration suite in this module yet. |
-| **Oracle** | **Not established** | No database-specific integration suite in this module yet. |
-| **SQL Server** | **Not established** | No database-specific integration suite in this module yet. |
-| **DB2** | **Not established** | No database-specific integration suite in this module yet. |
-| **CockroachDB** | **Not established** | No database-specific integration suite in this module yet. |
+| Database        | Highest achieved level (current tests) | Evidence highlights                                                                                                                                                                                  |
+|-----------------|---------------------------------------:|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **H2**          | **L3** | L1: `TestH2DatabaseShouldSupportL1CRUDAndLifecycle`; L2: `TestH2DatabaseShouldSupportL2Capabilities`; L3: `TestH2DatabaseShouldSupportL3Capabilities` and `TestH2DatabaseShouldSupportL3FetchNextRowsAndClose`. |
+| **PostgreSQL**  |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+| **MySQL**       |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+| **MariaDB**     |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+| **Oracle**      |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+| **SQL Server**  |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+| **DB2**         |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+| **CockroachDB** |                    **Not established** | No database-specific integration suite in this module yet.                                                                                                                                           |
+
+### Level Implementation Status
+
+| Level  | Capability                                                               | Status      | Evidence                                                                       |
+|--------|--------------------------------------------------------------------------|-------------|--------------------------------------------------------------------------------|
+| **L2** | Typed parameter handling (supported `ParameterTypeProto` values)        | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities`                                    |
+| **L2** | Prepared updates reuse the server `StatementUUID` returned by `ExecuteUpdate` | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities`                                    |
+| **L2** | Generated keys through `CALL_GET` + `GeneratedKeys` + `fetchNextRows`   | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities` (`LastInsertId`)                  |
+| **L2** | Result-set metadata through chained `getMetaData` calls                 | **Covered** | `TestH2DatabaseShouldSupportL2Capabilities` (`ColumnTypes`)                    |
+| **L3** | Server-streaming query result handling                                  | **Covered** | `TestH2DatabaseShouldSupportL3Capabilities`                                    |
+| **L3** | Pagination through `fetchNextRows`                                      | **Covered** | `TestH2DatabaseShouldSupportL3FetchNextRowsAndClose`                           |
+| **L3** | ResultSet lifecycle and early close                                     | **Covered** | `TestH2DatabaseShouldSupportL3Capabilities` and fetch test                     |
 
 Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
 
@@ -271,16 +283,30 @@ Run all unit tests:
 go test ./...
 ```
 
-## H2 L1 Integration Tests
+## H2 Integration Tests
 
-The H2 suite runs Go through a real OJP gRPC server to an H2 database. Start the server using Java 25 and UTC, then run:
+The H2 suites run Go through a real OJP gRPC server to an H2 database. Start the server using Java 25 and UTC, then run:
 
 ```bash
+# L1 — CRUD and connection lifecycle
 OJP_TEST_H2=true \
 OJP_TEST_H2_ADDR=localhost:1059 \
 go test -count=1 -v ./client -run '^TestH2DatabaseShouldSupportL1CRUDAndLifecycle$'
+
+# L2 — Typed parameters, prepared statements, generated keys, metadata
+OJP_TEST_H2=true \
+OJP_TEST_H2_ADDR=localhost:1059 \
+go test -count=1 -v ./client -run '^TestH2DatabaseShouldSupportL2Capabilities$'
+
+# L3 — Server-streaming, fetch-next-rows pagination, ResultSet lifecycle
+OJP_TEST_H2=true \
+OJP_TEST_H2_ADDR=localhost:1059 \
+go test -count=1 -v ./client -run '^TestH2DatabaseShouldSupportL3'
 ```
 
-When `OJP_TEST_H2` is enabled, missing connection configuration or an unavailable database fails the test; the suite never treats an unavailable H2 server as a skip.
+When `OJP_TEST_H2` is enabled, missing connection configuration or an unavailable database fails the test; the suites never treat an unavailable H2 server as a skip.
 
-The test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv` and exercises the standard `database/sql` API. It uses a unique table per run, performs a protocol/database readiness check, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and database close behavior. Run the test repeatedly with `-count=2` to check for conflicts.
+The L1 test reads the JDBC URL, username, and password from `client/testdata/h2_l1_connection.csv` and exercises the standard `database/sql` API. It uses a unique table per run, performs a protocol/database readiness check, and checks exact row values, update counts, SQLState/vendor errors, deadline handling, empty results, and database close behavior. Run the test repeatedly with `-count=2` to check for conflicts.
+
+
+The L3 suites exercise multi-block server-streaming, explicit `fetchNextRows` pagination, ordered results, exhausted and early-closed result sets, and resource cleanup.

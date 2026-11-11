@@ -108,7 +108,7 @@ java -Duser.timezone=UTC -jar ojp-server-1.0.6.jar
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>1.0.3</version>
+    <version>1.0.6</version>
 </dependency>
 ```
 

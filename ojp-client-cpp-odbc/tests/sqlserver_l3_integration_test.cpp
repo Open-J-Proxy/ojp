@@ -1,4 +1,6 @@
 // Verifies SQL Server multi-block and row-by-row result streaming and result-set lifecycle through ODBC.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -11,51 +13,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the SQL Server connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in SQL Server CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -164,6 +127,30 @@ void verify_text_rows(SQLHSTMT statement, SQLINTEGER expected_rows) {
            "fetching past the end of the streamed result set did not return SQL_NO_DATA");
 }
 
+void verify_output_rows(SQLHSTMT statement,
+                        const std::vector<std::pair<SQLINTEGER, std::string>>& expected_rows) {
+    SQLSMALLINT column_count = 0;
+    require_success(SQLNumResultCols(statement, &column_count), "SQLNumResultCols(OUTPUT)",
+                    SQL_HANDLE_STMT, statement);
+    expect(column_count == 2, "expected two columns in the SQL Server OUTPUT result set");
+    for (const auto& expected : expected_rows) {
+        require_success(SQLFetch(statement), "SQLFetch(OUTPUT row)", SQL_HANDLE_STMT, statement);
+        SQLINTEGER id = 0;
+        SQLLEN id_length = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &id, sizeof(id), &id_length),
+                        "SQLGetData(OUTPUT id)", SQL_HANDLE_STMT, statement);
+        SQLCHAR label[64] = {};
+        SQLLEN label_length = 0;
+        require_success(SQLGetData(statement, 2, SQL_C_CHAR, label, sizeof(label), &label_length),
+                        "SQLGetData(OUTPUT label)", SQL_HANDLE_STMT, statement);
+        expect(id == expected.first &&
+                   std::string(reinterpret_cast<const char*>(label)) == expected.second,
+               "SQL Server OUTPUT returned incorrect values");
+    }
+    expect(SQLFetch(statement) == SQL_NO_DATA,
+           "SQL Server OUTPUT returned unexpected additional rows");
+}
+
 void verify_binary_rows(SQLHSTMT statement) {
     const std::vector<std::vector<SQLCHAR>> expected_payloads = {
         {0x01, 0x02, 0x03, 0x04}, {0x10, 0x20, 0x30, 0x40}, {0xfe, 0xdc, 0xba, 0x98}};
@@ -199,35 +186,8 @@ void verify_binary_rows(SQLHSTMT statement) {
            "fetching past the binary result set did not return SQL_NO_DATA");
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error(
-            "expected SQL Server CSV path, enable variable, and endpoint variable");
-    }
-    const std::string csv_path = argv[1];
-    const std::string enable_variable = argv[2];
-    const std::string endpoint_variable = argv[3];
-    const char* enabled_value = std::getenv(enable_variable.c_str());
-    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
-    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
-    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
-        std::cout << "Skipped: set " << enable_variable
-                  << "=true to run the SQL Server L3 suite\n";
-        return 77;
-    }
-    if (enabled != "true" && enabled != "1" && enabled != "yes") {
-        throw std::runtime_error(enable_variable + " must be true or false");
-    }
-    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
-    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
-    if (endpoint.empty()) {
-        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
-                                 "=true");
-    }
-    const DatabaseConfig config = read_connection_config(csv_path);
+int run_connection(const DatabaseConfig& config,
+                   const std::string& endpoint) {
     constexpr SQLINTEGER total_rows = 10001;
     const std::string suffix = random_suffix();
     const std::string text_table = "ojp_cpp_mssql_l3_text_" + suffix;
@@ -250,7 +210,7 @@ int run_integration_test(int argc, char** argv) {
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+            ";PWD=" + brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr, sql_text(connection_string),
                                          SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
                         "SQLDriverConnect", SQL_HANDLE_DBC, connection);
@@ -286,6 +246,46 @@ int run_integration_test(int argc, char** argv) {
         execute_direct(statement, "SELECT id AS ID, label FROM " + text_table + " WHERE id < 0");
         verify_text_rows(statement, 0);
         close_statement(statement, "SQLFreeStmt(empty result)");
+
+        execute_direct(statement, "INSERT INTO " + text_table +
+                                      " (id, label) OUTPUT INSERTED.id, INSERTED.label "
+                                      "VALUES (10002, 'SQLSERVER_OUTPUT_DIRECT'), "
+                                      "(10003, 'SQLSERVER_OUTPUT_SECOND')");
+        verify_output_rows(statement, {
+            {10002, "SQLSERVER_OUTPUT_DIRECT"}, {10003, "SQLSERVER_OUTPUT_SECOND"}});
+        close_statement(statement, "SQLFreeStmt(OUTPUT result)");
+
+        execute_direct(statement, "UPDATE " + text_table +
+                                      " SET label = 'SQLSERVER_OUTPUT_UPDATED' "
+                                      "OUTPUT INSERTED.id, INSERTED.label WHERE id = 10002");
+        verify_output_rows(statement, {{10002, "SQLSERVER_OUTPUT_UPDATED"}});
+        close_statement(statement, "SQLFreeStmt(UPDATE OUTPUT result)");
+
+        execute_direct(statement, "DELETE FROM " + text_table +
+                                      " OUTPUT DELETED.id, DELETED.label WHERE id = 10003");
+        verify_output_rows(statement, {{10003, "SQLSERVER_OUTPUT_SECOND"}});
+        close_statement(statement, "SQLFreeStmt(DELETE OUTPUT result)");
+
+        SQLINTEGER output_id = 10004;
+        SQLLEN output_id_length = sizeof(output_id);
+        SQLCHAR output_label[] = "SQLSERVER_OUTPUT_PREPARED";
+        SQLLEN output_label_length = SQL_NTS;
+        const std::string prepared_output_sql =
+            "INSERT INTO " + text_table +
+            " (id, label) OUTPUT INSERTED.id, INSERTED.label VALUES (?, ?)";
+        require_success(SQLPrepare(statement, sql_text(prepared_output_sql), SQL_NTS),
+                        "SQLPrepare(OUTPUT)", SQL_HANDLE_STMT, statement);
+        require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                                         SQL_INTEGER, 0, 0, &output_id, sizeof(output_id),
+                                         &output_id_length),
+                        "SQLBindParameter(OUTPUT id)", SQL_HANDLE_STMT, statement);
+        require_success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                                         SQL_VARCHAR, sizeof(output_label), 0, output_label,
+                                         sizeof(output_label), &output_label_length),
+                        "SQLBindParameter(OUTPUT label)", SQL_HANDLE_STMT, statement);
+        require_success(SQLExecute(statement), "SQLExecute(OUTPUT)", SQL_HANDLE_STMT, statement);
+        verify_output_rows(statement, {{output_id, "SQLSERVER_OUTPUT_PREPARED"}});
+        close_statement(statement, "SQLFreeStmt(prepared OUTPUT result)");
 
         execute_direct(statement, "CREATE TABLE " + binary_table +
                                       " (id INT PRIMARY KEY, payload VARBINARY(4) NOT NULL)");
@@ -329,6 +329,39 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC SQL Server L3 integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error(
+            "expected SQL Server CSV path, enable variable, and endpoint variable");
+    }
+    const std::string csv_path = argv[1];
+    const std::string enable_variable = argv[2];
+    const std::string endpoint_variable = argv[3];
+    const char* enabled_value = std::getenv(enable_variable.c_str());
+    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
+    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
+        std::cout << "Skipped: set " << enable_variable
+                  << "=true to run the SQL Server L3 suite\n";
+        return 77;
+    }
+    if (enabled != "true" && enabled != "1" && enabled != "yes") {
+        throw std::runtime_error(enable_variable + " must be true or false");
+    }
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
+    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
+    if (endpoint.empty()) {
+        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
+                                 "=true");
+    }
+    return ojp::test::run_connections(csv_path, [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoint);
+    });
 }
 
 }  // namespace

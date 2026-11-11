@@ -24,4 +24,4 @@ When using OJP, disable any existing connection pooling in your application (suc
 **Important**: OJP will not work properly if another connection pool is enabled on the application side. Make sure to disable all application-level connection pooling before using OJP.
 
 ### ojp-grpc-commons
-The ojp-grpc-commons module contains the shared gRPC contracts used between the ojp-server and ojp-jdbc-driver. These contracts define the communication protocol and structure for requests and responses exchanged between the server and the driver.
+The ojp-grpc-commons module generates Java gRPC stubs from the canonical definitions in [`ojp-grpc-contract`](../ojp-grpc-contract/proto/). The server and JDBC driver share these generated classes and Java protocol converters.

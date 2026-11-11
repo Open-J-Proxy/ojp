@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	pb "github.com/open-j-proxy/ojp-client-go-database-sql/internal/gen/go/com/openjproxy/grpc"
@@ -78,7 +79,12 @@ func decodeValue(value *pb.ParameterValue) (any, error) {
 		if typed.BigintegerValue == nil {
 			return nil, nil
 		}
-		return typed.BigintegerValue.GetValue(), nil
+		s := typed.BigintegerValue.GetValue()
+		n, ok := new(big.Int).SetString(s, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid big integer value %q", s)
+		}
+		return n, nil
 	case *pb.ParameterValue_StringArrayValue:
 		if typed.StringArrayValue == nil {
 			return []string(nil), nil
@@ -89,4 +95,17 @@ func decodeValue(value *pb.ParameterValue) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported result value %T", typed)
 	}
+}
+
+func decodeValueTo[T any](value *pb.ParameterValue) (T, error) {
+	var zero T
+	decoded, err := decodeValue(value)
+	if err != nil {
+		return zero, err
+	}
+	v, ok := decoded.(T)
+	if !ok {
+		return zero, fmt.Errorf("cannot decode %T as %T", decoded, zero)
+	}
+	return v, nil
 }

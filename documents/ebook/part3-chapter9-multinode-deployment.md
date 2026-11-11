@@ -84,6 +84,62 @@ graph TD
     H --> I
 ```
 
+### Local-First Routing on Fixed Enterprise Nodes and Across Availability Zones
+
+Not every multinode deployment should spread work across every proxy. In a
+traditional enterprise setup, application nodes are often fixed, and each node
+can run its own OJP instance. The same priority tiers can prefer an OJP instance
+in the application's availability zone before sending work across zones. In
+either case, routing to a farther proxy while a nearer one is healthy adds
+network latency without improving locality.
+
+The JDBC driver supports optional priority tiers for this case:
+
+```java
+String url = "jdbc:ojp[localhost:1059{1},ojp2:1059{2},ojp3:1059{2},ojp4:1059{3}]" +
+             "_postgresql://db:5432/mydb";
+```
+
+Here, new work goes to the local proxy at priority 1. If it is unavailable,
+the driver balances between the two priority-2 proxies. Priority 3 is used only
+when no server in either earlier tier is healthy. Numeric priority wins over
+URL order; positive integers can have gaps. Every server must specify a
+priority if any server does. Without annotations, existing multinode behavior
+is unchanged.
+
+Load-aware and round-robin selection still work, but only within the best
+available tier. A busy healthy local proxy does not cause spillover to remote
+nodes. Assign the local endpoint priority 1 separately on each application
+node; a single preferred endpoint shared by every application would create
+a hotspot instead.
+
+Priority does not override session affinity. An existing transaction on a
+fallback proxy stays there even if the local proxy recovers. With health
+checking enabled, recovery restores the preferred tier for new unbound work.
+With different priority tiers, recovery-triggered connection redistribution
+is suppressed so it cannot invalidate connections merely to balance across
+tiers. Close connections at the end of each unit of work as usual.
+
+New XA connections use the same priority selection: the driver chooses one
+server from the best healthy tier, and that server owns the XA session.
+If that tier is unavailable, selection falls back to the next healthy tier.
+An existing XA connection or transaction remains bound to its server if the
+preferred tier recovers; only subsequently created XA connections use the
+recovered preferred tier.
+
+Non-XA datasource setup continues to initialize all proxy pools, and health
+probes and cluster pool sizing are unchanged. This feature avoids unnecessary
+remote SQL routing; it does not promise zero remote traffic or concentrate all
+backend pool capacity on the local node. Plan database budgets and failover
+capacity accordingly, and keep application-side pooling disabled.
+
+Named datasources work with priorities too:
+`localhost:1059(app){1},remote:1059(app){2}`. The equivalent
+`localhost:1059{1}(app)` spelling is also accepted. This URL extension is
+implemented in the JDBC client, without a new server or protocol requirement.
+See the [multinode guide](../multinode/README.md#server-priority-tiers) for the
+complete rules and four-node integration-test instructions.
+
 ### Connection Establishment Process
 
 When your application requests a connection using a multinode URL, the JDBC driver goes through a sophisticated process to select the right server and establish the connection. Understanding this process helps you reason about your system's behavior.
@@ -632,7 +688,7 @@ During migration, update all application instances to use the multinode URL simu
 
 ### Rollback Plan
 
-If issues arise, rolling back is as simple as reverting the URL change. Your original server continues working throughout the migration, so reverting the URL immediately restores single-node behavior. No data loss or state corruption occurs because the servers are stateless proxies.
+If issues arise, revert the URL change for new connections to restore single-node behavior. Existing sessions and transactions still belong to their original OJP server: the servers hold in-memory session state and are not stateless proxies. Drain existing connections before switching; do not expect changing the URL to migrate active transactions. See [Session Management](part1-chapter2-architecture.md#session-management).
 
 ## Summary
 

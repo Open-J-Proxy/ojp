@@ -263,7 +263,8 @@ mvn test -DenableH2Tests=true
 
 ```
 ojp/
-├── ojp-grpc-commons/       # Shared protocol definitions
+├── ojp-grpc-contract/      # Canonical protocol definitions
+├── ojp-grpc-commons/       # Generated Java stubs and shared converters
 ├── ojp-server/             # Server implementation
 ├── ojp-jdbc-driver/        # JDBC driver implementation
 ├── ojp-datasource-api/     # Pool abstraction API
@@ -539,14 +540,14 @@ Implementation, an integration suite existing, and that suite passing CI are dif
 
 | Client | Current implementation | Reported evidence and important boundaries |
 |---|---|---|
-| [Java JDBC](../../ojp-jdbc-driver/README.md) | Reference JDBC driver; broad types, transactions, LOBs, multinode, and XA | Database-specific levels: H2 L8 (new XA suite pending), PostgreSQL L10, MySQL L8, MariaDB L6, Oracle/SQL Server L9, DB2/CockroachDB L8. See the reference matrix, not an across-all-databases L10 claim. |
+| [Java JDBC](../../ojp-jdbc-driver/README.md) | Reference JDBC driver; broad types, transactions, LOBs, multinode, and XA | Database-specific levels: H2 L8 (new XA suite pending), PostgreSQL L9, MySQL L8, MariaDB L6, Oracle/SQL Server L9, DB2/CockroachDB L8. The client supports mTLS configuration, but lacks an integration test for the handshake required at L10. |
 | [.NET ADO.NET](../../ojp-client-dotnet-ado-net/README.md) | L1: `OjpConnection`, commands, positional parameters, buffered forward-only reader | H2 opt-in suite exists; not yet CI-confirmed. One endpoint; no transactions, pagination, LOBs, or metadata discovery. |
 | [Python DB-API 2.0](../../ojp-client-python-dbapi/README.rst) | H2 L1; qmark parameters, buffered results, DB-API exceptions, basic manual transactions | H2 integration coverage includes transaction visibility and complete multi-block results. Basic transactions/scalar metadata do not establish L4. No failover, savepoints, or LOB hydration. |
 | [Go `database/sql`](../../ojp-client-go-database-sql/README.md) | L1 public registered `ojp` driver; positional parameters and basic `BeginTx`/commit/rollback | H2 L1 suite passes locally; CI confirmation pending. One endpoint; non-default isolation/read-only transaction options are rejected. |
 | [PHP PDO-compatible](../../ojp-client-php-pdo/README.md) | L1 through userland `OjpPDO`, not a native PDO driver | H2 L1 suite passes in CI. Instantiate `OjpPDO`, not `new PDO('ojp:...')`. Buffered results; no transactions, named parameters, or LOBs. |
 | [Ruby DBI](../../ojp-client-ruby-dbi/README.md) | L1 DBI driver, positional parameters, basic CRUD | H2 L1 coverage is reported; CI confirmation pending. No Active Record adapter, transactions, pagination, or multinode failover. |
 | [Dart Drift](../../ojp-client-dart-drift/README.md) | L1 public connection and `OjpDriftExecutor` | H2 L1 integration coverage reported. Transactions throw `UnsupportedError`; `runInsert` returns `0`, not a generated ID. Initial query stream only; no cursor pagination. Backend SQL must not assume SQLite compatibility. |
-| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2 through L9; SQL Server through L10; PostgreSQL L1 | H2 L1-L9 and SQL Server L1-L10 integration suites passed. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
+| [C++ ANSI ODBC](../../ojp-client-cpp-odbc/README.md) | H2 through L9; PostgreSQL, SQL Server, MariaDB and MySQL through L10 | Combined operational/XA L10 suites require mTLS on both endpoints and verify trusted, missing and untrusted client certificates. Plaintext remains the default outside these suites; enable `OJP.CLIENT.TLS.*` explicitly. Other databases not established. ODBC wrapper compatibility is a separate, unvalidated question. |
 
 ### .NET: a native ADO.NET connection
 

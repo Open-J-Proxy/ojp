@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.CsvFileSource;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -56,6 +57,37 @@ public class PostgresStatementExtensiveTests {
         assertNotNull(rs);
         assertTrue(rs.next());
         rs.close();
+    }
+
+    @ParameterizedTest
+    @CsvFileSource(resources = "/postgres_connection.csv")
+    void shouldReturnRowsFromDirectAndPreparedReturningDml(String driverClass, String url, String user,
+                                                            String password) throws Exception {
+        this.setUp(driverClass, url, user, password);
+        try {
+            assertTrue(statement.execute("INSERT INTO postgres_statement_test (id, name) "
+                    + "VALUES (9981, 'direct') RETURNING id, name"));
+            try (ResultSet resultSet = statement.getResultSet()) {
+                assertTrue(resultSet.next());
+                assertEquals(9981, resultSet.getInt("id"));
+                assertEquals("direct", resultSet.getString("name"));
+                assertFalse(resultSet.next());
+            }
+
+            try (PreparedStatement preparedStatement = connection.prepareStatement(
+                    "INSERT INTO postgres_statement_test (id, name) VALUES (?, ?) RETURNING id, name")) {
+                preparedStatement.setInt(1, 9982);
+                preparedStatement.setString(2, "prepared");
+                try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                    assertTrue(resultSet.next());
+                    assertEquals(9982, resultSet.getInt("id"));
+                    assertEquals("prepared", resultSet.getString("name"));
+                    assertFalse(resultSet.next());
+                }
+            }
+        } finally {
+            statement.executeUpdate("DELETE FROM postgres_statement_test WHERE id IN (9981, 9982)");
+        }
     }
 
     @ParameterizedTest

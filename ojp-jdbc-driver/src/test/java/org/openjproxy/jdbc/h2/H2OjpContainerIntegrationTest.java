@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.openjproxy.testcontainers.OjpContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -26,7 +27,11 @@ class H2OjpContainerIntegrationTest {
     @BeforeAll
     static void setupClass() {
         // Start OJP container
-        ojpContainer = new OjpContainer();
+        String image = System.getenv("OJP_IMAGE");
+        ojpContainer = image == null || image.isBlank()
+                ? new OjpContainer()
+                : new OjpContainer(DockerImageName.parse(image)
+                        .asCompatibleSubstituteFor("rrobetti/ojp:0.4.2-beta"));
         ojpContainer.start();
 
         // Get the connection string for OJP

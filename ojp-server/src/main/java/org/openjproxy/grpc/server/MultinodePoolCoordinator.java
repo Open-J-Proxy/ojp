@@ -3,8 +3,11 @@ package org.openjproxy.grpc.server;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.constants.CommonConstants;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -42,13 +45,20 @@ public class MultinodePoolCoordinator {
         private final int originalMaxPoolSize;
         private final int originalMinIdle;
         private final int totalServers;
+        private final List<String> serverEndpoints;
         private int healthyServers;
 
         public PoolAllocation(int originalMaxPoolSize, int originalMinIdle, int totalServers) {
+            this(originalMaxPoolSize, originalMinIdle, totalServers, List.of());
+        }
+
+        public PoolAllocation(int originalMaxPoolSize, int originalMinIdle, int totalServers,
+                              List<String> serverEndpoints) {
             this.originalMaxPoolSize = originalMaxPoolSize;
             this.originalMinIdle = originalMinIdle;
             this.totalServers = totalServers;
             this.healthyServers = totalServers;
+            this.serverEndpoints = serverEndpoints == null ? List.of() : List.copyOf(serverEndpoints);
         }
 
         public int getCurrentMaxPoolSize() {
@@ -86,6 +96,10 @@ public class MultinodePoolCoordinator {
         public int getHealthyServers() {
             return healthyServers;
         }
+
+        public List<String> getServerEndpoints() {
+            return serverEndpoints;
+        }
     }
 
     /**
@@ -122,7 +136,8 @@ public class MultinodePoolCoordinator {
         //   2. No allocation exists yet but updateHealthyServers() was called while the map was
         //      empty — a "pending" count is stored in pendingHealthyServers.  We consume it here
         //      so the pool is created at the correct (expanded) size immediately.
-        PoolAllocation allocation = new PoolAllocation(requestedMaxPoolSize, requestedMinIdle, serverCount);
+        PoolAllocation allocation = new PoolAllocation(requestedMaxPoolSize, requestedMinIdle, serverCount,
+                serverEndpoints);
         PoolAllocation existingAllocation = poolAllocations.get(connHash);
         if (existingAllocation != null && existingAllocation.getHealthyServers() < serverCount) {
             allocation.updateHealthyServerCount(existingAllocation.getHealthyServers());
@@ -195,6 +210,30 @@ public class MultinodePoolCoordinator {
      */
     public PoolAllocation getPoolAllocation(String connHash) {
         return poolAllocations.get(connHash);
+    }
+
+    /**
+     * Returns pools whose configured endpoint set matches the given pool.
+     * Health reports describe one endpoint set and must not be applied to a different cluster.
+     *
+     * @param connHash connection hash identifying the source pool
+     * @return matching pool hashes, including the source when it has an allocation
+     */
+    public List<String> getConnHashesWithSameServerEndpoints(String connHash) {
+        PoolAllocation source = poolAllocations.get(connHash);
+        if (source == null || source.getServerEndpoints().isEmpty()) {
+            return List.of(connHash);
+        }
+
+        Set<String> sourceEndpoints = new HashSet<>(source.getServerEndpoints());
+        List<String> matchingConnHashes = new ArrayList<>();
+        poolAllocations.forEach((poolConnHash, allocation) -> {
+            if (sourceEndpoints.equals(new HashSet<>(allocation.getServerEndpoints()))) {
+                matchingConnHashes.add(poolConnHash);
+            }
+        });
+        matchingConnHashes.sort(String::compareTo);
+        return matchingConnHashes;
     }
 
     /**

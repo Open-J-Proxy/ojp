@@ -1,4 +1,6 @@
 // Verifies H2 typed parameters, prepared queries, generated IDs, and column metadata through ODBC.
+#include "connection_suite.h"
+
 #include <sql.h>
 #include <sqlext.h>
 
@@ -15,47 +17,7 @@
 
 namespace {
 
-struct DatabaseConfig {
-    std::string url;
-    std::string user;
-    std::string password;
-};
-
-DatabaseConfig read_connection_config(const std::string& path) {
-    std::ifstream input(path);
-    std::string line;
-    if (!input || !std::getline(input, line)) {
-        throw std::runtime_error("cannot read the H2 connection CSV");
-    }
-    std::vector<std::string> fields;
-    std::string field;
-    bool quoted = false;
-    for (std::size_t index = 0; index < line.size(); ++index) {
-        const char character = line[index];
-        if (quoted) {
-            if (character == '"' && index + 1 < line.size() && line[index + 1] == '"') {
-                field.push_back('"');
-                ++index;
-            } else if (character == '"') {
-                quoted = false;
-            } else {
-                field.push_back(character);
-            }
-        } else if (character == ',') {
-            fields.push_back(field);
-            field.clear();
-        } else if (character == '"' && field.empty()) {
-            quoted = true;
-        } else {
-            field.push_back(character);
-        }
-    }
-    fields.push_back(field);
-    if (quoted || fields.size() != 3 || fields[0].empty()) {
-        throw std::runtime_error("expected JDBC URL, username, and password in H2 CSV");
-    }
-    return {fields[0], fields[1], fields[2]};
-}
+using ojp::test::DatabaseConfig;
 
 std::string brace_value(const std::string& value) {
     std::string escaped;
@@ -123,36 +85,15 @@ void assert_text(SQLHSTMT statement, SQLUSMALLINT column, const std::string& exp
     }
 }
 
-int run_integration_test(int argc, char** argv) {
-    if (argc != 4) {
-        throw std::runtime_error("expected H2 CSV path, enable variable, and endpoint variable");
-    }
-    const std::string csv_path = argv[1];
-    const std::string enable_variable = argv[2];
-    const std::string endpoint_variable = argv[3];
-    const char* enabled_value = std::getenv(enable_variable.c_str());
-    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
-    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
-        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
-    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
-        std::cout << "Skipped: set " << enable_variable << "=true to run the H2 L2 suite\n";
-        return 77;
-    }
-    if (enabled != "true" && enabled != "1" && enabled != "yes") {
-        throw std::runtime_error(enable_variable + " must be true or false");
-    }
-    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
-    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
-    if (endpoint.empty()) {
-        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
-                                 "=true");
-    }
-    const DatabaseConfig config = read_connection_config(csv_path);
+int run_connection(const DatabaseConfig& config,
+                   const std::string& endpoint) {
     SQLHENV environment = SQL_NULL_HENV;
     SQLHDBC connection = SQL_NULL_HDBC;
     SQLHSTMT statement = SQL_NULL_HSTMT;
     const std::string table = "ojp_cpp_l2_" + random_suffix();
+    const std::string delta_table = table + "_delta";
     bool table_created = false;
+    bool delta_table_created = false;
     try {
         require_success(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
                                        reinterpret_cast<SQLHANDLE*>(&environment)),
@@ -168,7 +109,7 @@ int run_integration_test(int argc, char** argv) {
             "DRIVER={OJP};SERVER=" + brace_value(endpoint) +
             ";DATABASE=" + brace_value(config.url) +
             ";UID=" + brace_value(config.user) +
-            ";P" "WD=" + brace_value(config.password) + ";";
+            ";PWD=" + brace_value(config.password) + ";";
         require_success(SQLDriverConnect(connection, nullptr,
             reinterpret_cast<SQLCHAR*>(const_cast<char*>(connection_string.c_str())),
             SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
@@ -187,6 +128,69 @@ int run_integration_test(int argc, char** argv) {
             " double_value DOUBLE NOT NULL, boolean_value BOOLEAN NOT NULL,"
             " text_value VARCHAR(40) NOT NULL, binary_value VARBINARY(3) NOT NULL)");
         table_created = true;
+        execute_direct(statement, "CREATE TABLE " + delta_table +
+                                  " (id INTEGER PRIMARY KEY, label VARCHAR(64) NOT NULL)");
+        delta_table_created = true;
+
+        execute_direct(statement, "SELECT id, label FROM FINAL TABLE (INSERT INTO " +
+                                  delta_table + " (id, label) VALUES (1, 'H2_DELTA_TABLE'))");
+        SQLSMALLINT delta_columns = 0;
+        require_success(SQLNumResultCols(statement, &delta_columns),
+                        "SQLNumResultCols(FINAL TABLE)", SQL_HANDLE_STMT, statement);
+        if (delta_columns != 2 || SQLFetch(statement) != SQL_SUCCESS) {
+            throw std::runtime_error("H2 FINAL TABLE did not return the inserted row");
+        }
+        SQLINTEGER delta_id = 0;
+        SQLLEN delta_id_length = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &delta_id, sizeof(delta_id),
+                                   &delta_id_length),
+                        "SQLGetData(FINAL TABLE id)", SQL_HANDLE_STMT, statement);
+        assert_text(statement, 2, "H2_DELTA_TABLE");
+        if (delta_id != 1 || SQLFetch(statement) != SQL_NO_DATA) {
+            throw std::runtime_error("H2 FINAL TABLE returned incorrect rows");
+        }
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(FINAL TABLE)",
+                        SQL_HANDLE_STMT, statement);
+
+        const std::string delta_insert = "SELECT id, label FROM FINAL TABLE (INSERT INTO " +
+            delta_table + " (id, label) VALUES (?, ?))";
+        require_success(SQLPrepare(statement, reinterpret_cast<SQLCHAR*>(
+                                      const_cast<char*>(delta_insert.c_str())), SQL_NTS),
+                        "SQLPrepare(FINAL TABLE)", SQL_HANDLE_STMT, statement);
+        SQLINTEGER delta_parameter_id = 2;
+        SQLLEN delta_parameter_id_length = sizeof(delta_parameter_id);
+        require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_SLONG,
+                                         SQL_INTEGER, 0, 0, &delta_parameter_id,
+                                         sizeof(delta_parameter_id), &delta_parameter_id_length),
+                        "SQLBindParameter(FINAL TABLE id)", SQL_HANDLE_STMT, statement);
+        SQLCHAR delta_parameter_label[] = "H2_DELTA_TABLE_PREPARED";
+        SQLLEN delta_parameter_label_length = SQL_NTS;
+        require_success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_CHAR,
+                                         SQL_VARCHAR, sizeof(delta_parameter_label), 0,
+                                         delta_parameter_label, sizeof(delta_parameter_label),
+                                         &delta_parameter_label_length),
+                        "SQLBindParameter(FINAL TABLE label)", SQL_HANDLE_STMT, statement);
+        require_success(SQLExecute(statement), "SQLExecute(FINAL TABLE)",
+                        SQL_HANDLE_STMT, statement);
+        delta_columns = 0;
+        require_success(SQLNumResultCols(statement, &delta_columns),
+                        "SQLNumResultCols(prepared FINAL TABLE)", SQL_HANDLE_STMT, statement);
+        if (delta_columns != 2 || SQLFetch(statement) != SQL_SUCCESS) {
+            throw std::runtime_error("prepared H2 FINAL TABLE did not return the inserted row");
+        }
+        delta_id = 0;
+        delta_id_length = 0;
+        require_success(SQLGetData(statement, 1, SQL_C_SLONG, &delta_id, sizeof(delta_id),
+                                   &delta_id_length),
+                        "SQLGetData(prepared FINAL TABLE id)", SQL_HANDLE_STMT, statement);
+        assert_text(statement, 2, "H2_DELTA_TABLE_PREPARED");
+        if (delta_id != delta_parameter_id || SQLFetch(statement) != SQL_NO_DATA) {
+            throw std::runtime_error("prepared H2 FINAL TABLE returned incorrect rows");
+        }
+        require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(prepared FINAL TABLE)",
+                        SQL_HANDLE_STMT, statement);
+        require_success(SQLFreeStmt(statement, SQL_RESET_PARAMS),
+                        "SQLFreeStmt(FINAL TABLE parameters)", SQL_HANDLE_STMT, statement);
 
         const std::string insert = "INSERT INTO " + table +
             " (amount, business_date, business_time, created_at, tiny_value, small_value,"
@@ -396,6 +400,8 @@ int run_integration_test(int argc, char** argv) {
         require_success(SQLFreeStmt(statement, SQL_CLOSE), "SQLFreeStmt(select)",
                         SQL_HANDLE_STMT, statement);
 
+        execute_direct(statement, "DROP TABLE IF EXISTS " + delta_table);
+        delta_table_created = false;
         execute_direct(statement, "DROP TABLE IF EXISTS " + table);
         table_created = false;
         require_success(SQLFreeHandle(SQL_HANDLE_STMT, statement),
@@ -408,6 +414,11 @@ int run_integration_test(int argc, char** argv) {
         require_success(SQLFreeHandle(SQL_HANDLE_ENV, environment), "SQLFreeHandle(environment)");
         environment = SQL_NULL_HENV;
     } catch (...) {
+        if (delta_table_created && statement != SQL_NULL_HSTMT) {
+            const std::string drop = "DROP TABLE IF EXISTS " + delta_table;
+            SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(
+                const_cast<char*>(drop.c_str())), SQL_NTS);
+        }
         if (table_created && statement != SQL_NULL_HSTMT) {
             const std::string drop = "DROP TABLE IF EXISTS " + table;
             SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(
@@ -427,6 +438,35 @@ int run_integration_test(int argc, char** argv) {
     }
     std::cout << "C++ ODBC H2 L2 integration test passed\n";
     return 0;
+}
+
+int run_integration_test(int argc, char** argv) {
+    if (argc != 4) {
+        throw std::runtime_error("expected H2 CSV path, enable variable, and endpoint variable");
+    }
+    const std::string csv_path = argv[1];
+    const std::string enable_variable = argv[2];
+    const std::string endpoint_variable = argv[3];
+    const char* enabled_value = std::getenv(enable_variable.c_str());
+    std::string enabled = enabled_value == nullptr ? "" : enabled_value;
+    std::transform(enabled.begin(), enabled.end(), enabled.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (enabled.empty() || enabled == "false" || enabled == "0" || enabled == "no") {
+        std::cout << "Skipped: set " << enable_variable << "=true to run the H2 L2 suite\n";
+        return 77;
+    }
+    if (enabled != "true" && enabled != "1" && enabled != "yes") {
+        throw std::runtime_error(enable_variable + " must be true or false");
+    }
+    const char* endpoint_value = std::getenv(endpoint_variable.c_str());
+    const std::string endpoint = endpoint_value == nullptr ? "" : endpoint_value;
+    if (endpoint.empty()) {
+        throw std::runtime_error(endpoint_variable + " is required when " + enable_variable +
+                                 "=true");
+    }
+    return ojp::test::run_connections(csv_path, [&](const DatabaseConfig& config) {
+        return run_connection(config, endpoint);
+    });
 }
 
 }  // namespace

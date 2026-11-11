@@ -47,7 +47,8 @@ mode, so any future use case can reuse it without a protocol change.
 
 ## 2. What already exists to build on
 
-- **`ojp-grpc-commons`** defines `StatementService.proto` — JDBC-shaped RPCs
+- **`ojp-grpc-contract`** defines `StatementService.proto` — JDBC-shaped RPCs;
+  `ojp-grpc-commons` generates and shares the Java stubs
   only (`executeQuery`, `createLob`/`readLob`, statement calls). No
   server→client push channel and no server→server channel exist today.
 - **`ConnectionDetails`** already carries `repeated string serverEndpoints`

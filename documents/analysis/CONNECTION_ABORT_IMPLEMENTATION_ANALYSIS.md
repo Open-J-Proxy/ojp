@@ -78,7 +78,7 @@ connections without allocating any.
 
 ### 2.3 Transport and routing
 
-[`StatementService.proto`](../../ojp-grpc-commons/src/main/proto/StatementService.proto):474-495
+[`StatementService.proto`](../../ojp-grpc-contract/proto/StatementService.proto):474-495
 has `terminateSession` and `callResource`, but no dedicated abort RPC.
 The generic parameter representation does not carry executors;
 [`ProtoConverter.java`](../../ojp-grpc-commons/src/main/java/org/openjproxy/grpc/ProtoConverter.java):430-436

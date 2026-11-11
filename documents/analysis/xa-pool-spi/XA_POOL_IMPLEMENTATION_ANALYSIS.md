@@ -1042,7 +1042,7 @@ ojp-server/src/main/java/org/openjproxy/grpc/server/
 │   └── XATransactionRegistry.java
 └── StatementServiceImpl.java (modified to use registry)
 
-ojp-grpc-commons/src/main/proto/
+ojp-grpc-contract/proto/
 └── StatementService.proto (extend StatementRequest with optional Xid field)
 
 ojp-server/src/test/java/org/openjproxy/grpc/server/xa/

@@ -263,7 +263,8 @@ mvn test -DenableH2Tests=true
 
 ```
 ojp/
-├── ojp-grpc-commons/       # Shared protocol definitions
+├── ojp-grpc-contract/      # Canonical protocol definitions
+├── ojp-grpc-commons/       # Generated Java stubs and shared converters
 ├── ojp-server/             # Server implementation
 ├── ojp-jdbc-driver/        # JDBC driver implementation
 ├── ojp-datasource-api/     # Pool abstraction API

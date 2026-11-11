@@ -473,7 +473,7 @@ Show the contract acting as a bridge/shared language
 Include sample proto message definitions (StatementRequest, ResultSetResponse)
 Use professional technical documentation style
 
-The **ojp-grpc-commons** module contains the gRPC service definitions and Protocol Buffer message schemas shared between the driver and server.
+The **ojp-grpc-contract** package contains the gRPC service definitions and Protocol Buffer message schemas shared between clients and the server; **ojp-grpc-commons** contains the generated Java stubs and shared converters.
 
 This module serves as the contract between client and server. It defines the gRPC service interfaces in `.proto` files, specifying exactly how client and server communicate. These files describe all request and response message structures with precise field types and semantics. From these proto files, Java classes are auto-generated at build time, ensuring both sides work with identical data structures. This approach guarantees version compatibility—when driver and server are compiled against the same proto definitions, protocol mismatches become impossible.
 

@@ -352,7 +352,8 @@ GitHub recognizes the following keywords for automatic issue closing:
 
 OJP is a multi-module Maven project:
 
-- **ojp-grpc-commons**: Shared gRPC protocol definitions
+- **ojp-grpc-contract**: Canonical gRPC protocol definitions
+- **ojp-grpc-commons**: Generated Java gRPC stubs and shared Java converters
 - **ojp-jdbc-driver**: JDBC driver implementation
 - **ojp-server**: Proxy server implementation
 

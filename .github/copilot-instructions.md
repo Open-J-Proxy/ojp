@@ -50,7 +50,8 @@ This is a **multi-module Maven project**. All modules share the parent `pom.xml`
 
 | Module | Purpose |
 |---|---|
-| `ojp-grpc-commons` | Shared Protobuf/gRPC contracts (`.proto` files) |
+| `ojp-grpc-contract` | Canonical Protobuf/gRPC contracts (`.proto` files) |
+| `ojp-grpc-commons` | Generated Java gRPC stubs and shared Java converters |
 | `ojp-jdbc-driver` | JDBC driver implementation |
 | `ojp-server` | gRPC server, HikariCP pool management, session/transaction tracking |
 | `ojp-datasource-api` | SPI interface: `ConnectionPoolProvider` |
@@ -216,7 +217,7 @@ mvn clean install   # lint + compile + test + package
 
 ## Key Areas and Tips
 
-- **gRPC protocol changes**: Edit `.proto` files in `ojp-grpc-commons/src/main/proto/`, then run `mvn clean install -pl ojp-grpc-commons`. Both driver and server must be updated together.
+- **gRPC protocol changes**: Edit `.proto` files in `ojp-grpc-contract/proto/`, then run `mvn clean install -pl ojp-grpc-commons`. Both driver and server must be updated together.
 - **New database support**: Supply the JDBC driver JAR in `ojp-libs/`. Add integration tests behind a new `-DenableXxxTests=true` flag.
 - **Multinode**: Logic lives in `ojp-jdbc-driver`. URL format: `jdbc:ojp[host1:port1,host2:port2]_actual_jdbc_url`. Session stickiness must survive failover.
 - **Spring Boot starter**: Disable Spring Boot's HikariCP auto-configuration when using OJP.

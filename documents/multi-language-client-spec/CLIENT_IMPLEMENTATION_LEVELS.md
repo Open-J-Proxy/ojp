@@ -3,7 +3,7 @@
 > **Status:** Draft
 > **Purpose:** Define a common maturity scale (max 10 levels) for OJP clients and show current test-proven level coverage by database in the Java reference client.
 > **Companions:** [`CLIENT_SPEC.md`](CLIENT_SPEC.md), [`CLIENT_SPEC_AI.md`](CLIENT_SPEC_AI.md)
-> **Protocol source:** `ojp-grpc-commons/src/main/proto/StatementService.proto`, `echo.proto`
+> **Protocol source:** `ojp-grpc-contract/proto/StatementService.proto`, `echo.proto`
 
 ---
 

@@ -51,7 +51,8 @@ The e-book is designed to guide readers from understanding the core problem OJP 
 - **2.1 System Components**
   - ojp-server: The gRPC server
   - ojp-jdbc-driver: The JDBC implementation
-  - ojp-grpc-commons: Shared contracts
+  - ojp-grpc-contract: Canonical shared contracts
+  - ojp-grpc-commons: Generated Java stubs and converters
 - **2.2 Communication Protocol**
   - gRPC protocol benefits
   - Request-response flow

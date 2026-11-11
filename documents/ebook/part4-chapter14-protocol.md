@@ -157,7 +157,7 @@ The language-neutral protocol means you can build OJP clients in any language th
 
 ### Protocol Buffer Compilation
 
-Start by obtaining OJP's `.proto` definition files. These live in the `ojp-grpc-commons` module of the OJP repository. You'll need:
+Start by obtaining OJP's `.proto` definition files from the `ojp-grpc-contract/proto` directory. These shared definitions are also used to generate the Java stubs in `ojp-grpc-commons`. You'll need:
 - `ojp_service.proto` - Defines the main gRPC service methods
 - `ojp_types.proto` - Defines message types for requests and responses
 - `ojp_common.proto` - Shared type definitions

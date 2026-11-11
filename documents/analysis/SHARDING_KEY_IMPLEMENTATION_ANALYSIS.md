@@ -192,4 +192,4 @@ Do not treat passing a `ShardingKey` through the existing generic reflection pat
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/action/streaming/SessionConnectionHelper.java` and `ojp-server/src/main/java/org/openjproxy/grpc/server/Session.java` — physical backend connection acquisition and session pinning.
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/readwrite/ReadWriteDataSourceRegistry.java` — existing read/write datasource routing registry.
 - `ojp-server/src/main/java/org/openjproxy/grpc/server/JavaSqlInterfacesConverter.java` — JDBC interface classification, including sharding interfaces.
-- `ojp-grpc-commons/src/main/proto/StatementService.proto` — current connection/session protocol, which has no ShardingKey representation.
+- `ojp-grpc-contract/proto/StatementService.proto` — current connection/session protocol, which has no ShardingKey representation.

@@ -19,7 +19,7 @@ graph TB
     end
     
     subgraph "Shared Contract"
-    GRPC[ojp-grpc-commons<br/>Protocol Definitions]
+    GRPC[ojp-grpc-contract<br/>Protocol Definitions]
     end
     
     subgraph "Server Side"
@@ -306,16 +306,17 @@ conn.close();
 
 **Important Consideration**: When using OJP, you must **disable** any existing application-level connection pooling (HikariCP, C3P0, DBCP2) as it creates double-pooling and defeats OJP's purpose.
 
-### ojp-grpc-commons: Shared Contracts
+### ojp-grpc-contract: Shared Protocol Source
 
 ```mermaid
 graph LR
+    PROTO[Canonical Protocol Buffer Contracts<br/>ojp-grpc-contract/proto]
     subgraph "ojp-jdbc-driver"
     DRIVER_CODE[Driver Code<br/>Connection, Statement]
     DRIVER_GEN[Generated Java Classes<br/>StatementRequest<br/>OpResult<br/>StatementServiceGrpc]
     end
     subgraph "ojp-grpc-commons"
-    PROTO[Protocol Buffer Contracts<br/>StatementService.proto]
+    COMMONS_GEN[Generated Java Stubs<br/>Shared by driver and server]
     SAMPLE_REQ[StatementRequest<br/>session<br/>sql<br/>parameters<br/>statementUUID]
     SAMPLE_RES[OpResult Stream<br/>query_result<br/>labels<br/>rows]
     end
@@ -323,8 +324,9 @@ graph LR
     SERVER_GEN[Generated Java Classes<br/>StatementRequest<br/>OpResult<br/>StatementServiceGrpc]
     SERVER_CODE[Server Code<br/>StatementServiceImpl]
     end
-    PROTO -->|protoc generates| DRIVER_GEN
-    PROTO -->|protoc generates| SERVER_GEN
+    PROTO -->|Maven compiles| COMMONS_GEN
+    COMMONS_GEN --> DRIVER_GEN
+    COMMONS_GEN --> SERVER_GEN
     SAMPLE_REQ -.->|defined in| PROTO
     SAMPLE_RES -.->|defined in| PROTO
     DRIVER_CODE --> DRIVER_GEN
@@ -340,9 +342,9 @@ graph LR
     style SERVER_CODE fill:#fff59d
 ```
 
-The **ojp-grpc-commons** module contains the gRPC service definitions and Protocol Buffer message schemas shared between the driver and server.
+The **ojp-grpc-contract** package contains the gRPC service definitions and Protocol Buffer message schemas shared between clients and the server. `ojp-grpc-commons` generates and publishes the Java stubs from these files.
 
-This module serves as the contract between client and server. It defines the gRPC service interfaces in `.proto` files, specifying exactly how client and server communicate. These files describe all request and response message structures with precise field types and semantics. From these proto files, Java classes are auto-generated at build time, ensuring both sides work with identical data structures. This approach guarantees version compatibility—when driver and server are compiled against the same proto definitions, protocol mismatches become impossible.
+The proto files define exactly how clients and the server communicate. The Java stubs are generated at build time by `ojp-grpc-commons`; other clients generate bindings from the same package, so all implementations share the same wire contract.
 
 **Protocol Buffer Example**:
 
@@ -1291,7 +1293,8 @@ OJP's architecture is built on three core components working in harmony:
 
 1. **ojp-jdbc-driver**: A complete JDBC implementation that provides virtual connections and communicates via gRPC
 2. **ojp-server**: A gRPC server managing HikariCP connection pools and executing SQL operations
-3. **ojp-grpc-commons**: Shared Protocol Buffer contracts ensuring type-safe communication
+3. **ojp-grpc-contract**: Canonical Protocol Buffer contracts ensuring type-safe communication
+4. **ojp-grpc-commons**: Java stubs and shared Java converters generated from the contract
 
 The client role also includes native .NET, Python, Go, PHP, Ruby, and Dart L1 APIs and the C++ ANSI ODBC driver. All reach the same server-side JDBC pools, but capability/test coverage differs. Language ODBC wrappers add another compatibility boundary and remain experimental, unvalidated routes.
 

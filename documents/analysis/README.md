@@ -4,6 +4,23 @@ This directory contains technical analysis documents for various OJP features an
 
 ## Latest Analysis (November 2026)
 
+### SQL Injection Protection
+
+**Question:** What would be required to add SQL injection defense in depth
+to OJP Server without breaking JDBC behavior?
+
+**Quick Answer:** Preserve application parameterization and add an optional
+server-owned SQL policy boundary, starting with observation and approved
+templates for selected workloads. Cover query-cache hits, reflected resource
+calls, batches, callable statements, LOB preparation, and statement reuse.
+
+**Document:** [SQL_INJECTION_PROTECTION_ANALYSIS.md](./SQL_INJECTION_PROTECTION_ANALYSIS.md)
+- Source-backed execution inventory, policy/parser alternatives, identity and privacy requirements
+- Phased work packages, compatibility/performance gates, and acceptance tests
+- Analysis only; no runtime protection is introduced
+
+---
+
 ### Connection.abort() Implementation Possibilities
 
 **Question:** What does `Connection.abort(Executor)` do today, how could OJP

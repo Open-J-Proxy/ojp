@@ -278,7 +278,7 @@ To verify SQL enhancer functionality:
 2. **Start OJP Server WITHOUT enhancer**:
    ```bash
    java -Dojp.libs.path=./ojp-libs \
-     -jar ojp-server-shaded.jar
+     -jar ojp-server-<version>.jar
    # Listens on port 1059
    ```
 
@@ -291,7 +291,7 @@ To verify SQL enhancer functionality:
      -Dojp.sql.enhancer.mode=OPTIMIZE \
      -Dojp.sql.enhancer.dialect=POSTGRESQL \
      -Dojp.server.logLevel=DEBUG \
-     -jar ojp-server-shaded.jar
+     -jar ojp-server-<version>.jar
    # Listens on port 10593
    ```
 

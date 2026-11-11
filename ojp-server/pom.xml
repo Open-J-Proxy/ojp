@@ -25,11 +25,11 @@
 
     <dependencyManagement>
         <dependencies>
-            <!--Set transient dependencies of Guava to compatible version-->
+            <!-- Guava version is managed in the parent pom (guava.version) to fix CVE-2026-102554 -->
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
-                <version>32.1.0-jre</version>
+                <version>${guava.version}</version>
             </dependency>
             <!-- Force the entire Jackson ecosystem to 2.22.3 -->
             <dependency>
@@ -38,6 +38,13 @@
                 <version>2.22.3</version>
                 <scope>import</scope>
                 <type>pom</type>
+            </dependency>
+            <!-- Keep the OpenTelemetry incubator API aligned with the core API/SDK (the SDK uses incubator
+                 bound-instrument classes since 1.65.0; a stale transitive jar causes NoClassDefFoundError) -->
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-api-incubator</artifactId>
+                <version>${opentelemetry.version}-alpha</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -155,7 +162,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-api</artifactId>
-            <version>1.62.0</version>
+            <version>${opentelemetry.version}</version>
         </dependency>
 
         <!-- OpenTelemetry SDK -->
@@ -163,7 +170,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk</artifactId>
-            <version>1.62.0</version>
+            <version>${opentelemetry.version}</version>
         </dependency>
 
         <!-- OpenTelemetry gRPC instrumentation -->
@@ -171,7 +178,8 @@
         <dependency>
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-grpc-1.6</artifactId>
-            <version>2.17.1-alpha</version>
+            <!-- Instrumentation 2.33.x is built against OpenTelemetry core 1.67.x -->
+            <version>2.33.1-alpha</version>
         </dependency>
 
         <!-- Prometheus exporter -->
@@ -187,6 +195,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-zipkin</artifactId>
+            <!-- opentelemetry-exporter-zipkin was removed upstream in 1.65.0 (no newer release); keep it pinned separately. Consider migrating to the OTLP exporter. -->
             <version>1.62.0</version>
         </dependency>
 
@@ -195,7 +204,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
-            <version>1.62.0</version>
+            <version>${opentelemetry.version}</version>
         </dependency>
 
         <!-- HTTP server for metrics endpoint -->
@@ -275,7 +284,7 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-testing</artifactId>
-            <version>1.62.0</version>
+            <version>${opentelemetry.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -285,35 +294,41 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <forceCreation>true</forceCreation>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.5.1</version>
+                <configuration>
+                    <createDependencyReducedPom>false</createDependencyReducedPom>
+                    <filters>
+                        <filter>
+                            <artifact>*:*</artifact>
+                            <excludes>
+                                <exclude>META-INF/*.SF</exclude>
+                                <exclude>META-INF/*.DSA</exclude>
+                                <exclude>META-INF/*.RSA</exclude>
+                                <exclude>META-INF/*.EC</exclude>
+                            </excludes>
+                        </filter>
+                    </filters>
+                    <transformers>
+                        <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                        <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                            <mainClass>org.openjproxy.grpc.server.GrpcServer</mainClass>
+                        </transformer>
+                    </transformers>
+                </configuration>
                 <executions>
                     <execution>
+                        <id>shade-server</id>
                         <goals>
                             <goal>shade</goal>
                         </goals>
-                        <configuration>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                            <!-- Exclude signature files to prevent "Invalid signature file digest" errors -->
-                            <!-- This is necessary when shading signed JARs (added dynamically by CI workflows) -->
-                            <filters>
-                                <filter>
-                                    <artifact>*:*</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/*.SF</exclude>
-                                        <exclude>META-INF/*.DSA</exclude>
-                                        <exclude>META-INF/*.RSA</exclude>
-                                        <exclude>META-INF/*.EC</exclude>
-                                    </excludes>
-                                </filter>
-                            </filters>
-                            <transformers>
-                                <transformer implementation=
-                                                     "org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.openjproxy.grpc.server.GrpcServer</mainClass>
-                                </transformer>
-                            </transformers>
-                        </configuration>
                     </execution>
                 </executions>
             </plugin>

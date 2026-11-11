@@ -3,9 +3,13 @@
 # so the module list never drifts out of sync when new dependencies are added.
 FROM eclipse-temurin:25-jdk-alpine AS jre-build
 
-COPY target/ojp-server-*-shaded.jar /tmp/ojp-server.jar
+COPY target/ojp-server-*.jar /tmp/
 
-RUN MODULES=$(jdeps --ignore-missing-deps --print-module-deps /tmp/ojp-server.jar) && \
+RUN SERVER_JAR=$(find /tmp -maxdepth 1 -type f -name 'ojp-server-*.jar' \
+        ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit) && \
+    test -n "$SERVER_JAR" && \
+    mv "$SERVER_JAR" /tmp/ojp-server.jar && \
+    MODULES=$(jdeps --ignore-missing-deps --print-module-deps /tmp/ojp-server.jar) && \
     jlink \
         --add-modules ${MODULES} \
         --strip-debug \
@@ -28,7 +32,7 @@ RUN addgroup -S ojp && adduser -S ojp -G ojp && \
 WORKDIR /opt/ojp
 
 COPY --chown=ojp:ojp ojp-libs/ /opt/ojp/ojp-libs/
-COPY --chown=ojp:ojp target/ojp-server-*-shaded.jar /opt/ojp/ojp-server.jar
+COPY --from=jre-build --chown=ojp:ojp /tmp/ojp-server.jar /opt/ojp/ojp-server.jar
 
 USER ojp
 

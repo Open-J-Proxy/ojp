@@ -14,7 +14,8 @@ files. This avoids copying protocol definitions into language-specific client so
 
 The package is versioned with SemVer and pinned by a content hash
 (`CONTRACT_HASH.json`). A wire-contract change requires a deliberate version bump, and
-`npm run verify` detects edits that have not been recorded. The hash scripts use Bash.
+the Bash verification script detects edits that have not been recorded. Hash maintenance
+does not require npm or any installed package.
 
 ## What's included
 
@@ -35,7 +36,7 @@ code changes:
 - **MINOR** — an additive, backward-compatible change (new RPC, new optional field).
 - **PATCH** — no semantic change to the wire contract (e.g. comments, formatting).
 
-`npm run verify` fails the build if `proto/*.proto` no longer matches the hash recorded for
+`scripts/verify-hash.sh` fails if `proto/*.proto` no longer matches the hash recorded for
 the current `package.json` version — this makes an un-bumped contract change impossible to
 merge unnoticed.
 
@@ -66,14 +67,14 @@ below) rather than a mechanical guarantee enforced by npm itself.
 
 ## Maintainer workflow — updating the contract
 
-Edit the proto files in `proto/` directly. After reviewing a contract change, bump the
-package version according to the compatibility policy and record the new hash:
+Edit the proto files in `proto/` directly. After reviewing a contract change, manually
+update the `version` in `package.json` according to the compatibility policy, then record
+the new hash and verify it:
 
 ```bash
 git diff proto/          # review exactly what changed
-npm version <major|minor|patch>   # per the versioning policy above
-npm run record-hash      # runs the Bash script to update CONTRACT_HASH.json
-npm run verify           # confirms everything is consistent
+bash scripts/record-hash.sh
+bash scripts/verify-hash.sh
 ```
 
 Then run `mvn clean install -pl ojp-grpc-commons` to regenerate the Java stubs, regenerate
@@ -81,14 +82,12 @@ affected non-Java bindings, and test the clients before publishing/tagging a rel
 
 ## Scripts
 
-```bash
-npm run verify          # fails if proto/*.proto drifted from the recorded hash
-npm run record-hash     # (re-)records the hash for the current package.json version
-```
+Run `bash scripts/verify-hash.sh` to check for drift. After bumping the package version and
+reviewing a contract change, run `bash scripts/record-hash.sh` to update the recorded hash.
 
 ### Windows
 
 Install [Git for Windows](https://git-scm.com/download/win), which includes Git Bash, and
-open Git Bash in the repository. From the contract package directory, run the same npm
-commands above; Git Bash provides Bash and `sha256sum` for the scripts. You can also run
-them directly with `bash scripts/verify-hash.sh` or `bash scripts/record-hash.sh`.
+open Git Bash in the contract package directory. Git Bash provides Bash and `sha256sum`;
+run `bash scripts/verify-hash.sh` or `bash scripts/record-hash.sh` directly. No npm
+installation is needed for either script.

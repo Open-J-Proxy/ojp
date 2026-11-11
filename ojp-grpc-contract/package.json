@@ -6,9 +6,5 @@
     "proto",
     "CONTRACT_HASH.json"
   ],
-  "scripts": {
-    "verify": "bash scripts/verify-hash.sh",
-    "record-hash": "bash scripts/record-hash.sh"
-  },
   "private": true
 }

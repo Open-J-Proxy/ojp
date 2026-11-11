@@ -7,8 +7,8 @@
     "CONTRACT_HASH.json"
   ],
   "scripts": {
-    "verify": "python3 scripts/verify_hash.py",
-    "record-hash": "python3 scripts/record_hash.py"
+    "verify": "bash scripts/verify-hash.sh",
+    "record-hash": "bash scripts/record-hash.sh"
   },
   "private": true
 }

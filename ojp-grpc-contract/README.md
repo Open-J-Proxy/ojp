@@ -14,7 +14,7 @@ files. This avoids copying protocol definitions into language-specific client so
 
 The package is versioned with SemVer and pinned by a content hash
 (`CONTRACT_HASH.json`). A wire-contract change requires a deliberate version bump, and
-`npm run verify` detects edits that have not been recorded. The hash scripts use Python 3.
+`npm run verify` detects edits that have not been recorded. The hash scripts use Bash.
 
 ## What's included
 
@@ -72,7 +72,7 @@ package version according to the compatibility policy and record the new hash:
 ```bash
 git diff proto/          # review exactly what changed
 npm version <major|minor|patch>   # per the versioning policy above
-npm run record-hash      # runs the Python script to update CONTRACT_HASH.json
+npm run record-hash      # runs the Bash script to update CONTRACT_HASH.json
 npm run verify           # confirms everything is consistent
 ```
 
@@ -85,3 +85,10 @@ affected non-Java bindings, and test the clients before publishing/tagging a rel
 npm run verify          # fails if proto/*.proto drifted from the recorded hash
 npm run record-hash     # (re-)records the hash for the current package.json version
 ```
+
+### Windows
+
+Install [Git for Windows](https://git-scm.com/download/win), which includes Git Bash, and
+open Git Bash in the repository. From the contract package directory, run the same npm
+commands above; Git Bash provides Bash and `sha256sum` for the scripts. You can also run
+them directly with `bash scripts/verify-hash.sh` or `bash scripts/record-hash.sh`.

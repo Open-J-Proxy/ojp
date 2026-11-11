@@ -117,6 +117,11 @@ The Driver Manager maps the ODBC 2.x functions to their ODBC 3.x equivalents.
 ### SQLSetConnectAttr
 
 - Applied: `SQL_ATTR_AUTOCOMMIT`, `SQL_ATTR_TXN_ISOLATION`.
+- ANSI and Unicode setters/getters share the same autocommit state on the
+  existing connection. `SQL_ATTR_AUTOCOMMIT` getters return a `SQLUINTEGER`.
+  Switching OFF starts an OJP transaction; switching ON implicitly commits
+  pending work through JDBC `setAutoCommit(true)`. Reapplying the current mode
+  is a no-op. Invalid values return `HY024`; failed RPCs preserve the local mode.
 - Stored for `SQLGetConnectAttr` but without effect, because OJP controls
   timeouts and networking: `SQL_ATTR_LOGIN_TIMEOUT`,
   `SQL_ATTR_CONNECTION_TIMEOUT`, `SQL_ATTR_ACCESS_MODE`, `SQL_ATTR_QUIET_MODE`,

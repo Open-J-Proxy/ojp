@@ -122,6 +122,10 @@ The Driver Manager maps the ODBC 2.x functions to their ODBC 3.x equivalents.
   Switching OFF starts an OJP transaction; switching ON implicitly commits
   pending work through JDBC `setAutoCommit(true)`. Reapplying the current mode
   is a no-op. Invalid values return `HY024`; failed RPCs preserve the local mode.
+  Explicit commit/rollback leaves manual mode enabled; session routing and
+  transaction ownership use the existing OJP machinery. XA connections cannot
+  enable autocommit. See the [driver guide](README.md#autocommit-and-python-frameworks)
+  for pyodbc usage and the Django adapter follow-up.
 - Stored for `SQLGetConnectAttr` but without effect, because OJP controls
   timeouts and networking: `SQL_ATTR_LOGIN_TIMEOUT`,
   `SQL_ATTR_CONNECTION_TIMEOUT`, `SQL_ATTR_ACCESS_MODE`, `SQL_ATTR_QUIET_MODE`,

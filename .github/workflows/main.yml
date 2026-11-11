@@ -2601,11 +2601,12 @@ jobs:
         run: |
           jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
             ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          echo 0 > /tmp/ojp-server-2-concurrency
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
                 -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
-                -Dojp.server.maxConcurrentRequests=1 \
+                -Dojp.server.maxConcurrentRequests="$(cat /tmp/ojp-server-2-concurrency)" \
                 -jar "$1" >> /tmp/ojp-server-2.log 2>&1 &
               server_pid=$!
               echo "$server_pid" > /tmp/ojp-server-2.pid
@@ -2644,7 +2645,7 @@ jobs:
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC PostgreSQL L1-L10 tests
+      - name: Run C++ ODBC PostgreSQL L1-L7 and autocommit tests
         env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
@@ -2679,8 +2680,65 @@ jobs:
             sleep 2
           done
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcPostgreSql(L([1-9]|10)|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
+            -R '^OjpOdbcPostgreSql(L[1-7]|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
             2>&1 | tee ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l10-test.log
+
+      - name: Apply L8-only concurrency limit
+        run: |
+          echo 1 > /tmp/ojp-server-2-concurrency
+          old_pid=$(cat /tmp/ojp-server-2.pid)
+          kill "$old_pid"
+          for i in $(seq 1 30); do
+            new_pid=$(cat /tmp/ojp-server-2.pid)
+            if [ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null \
+              && (echo > /dev/tcp/localhost/1060) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for the PostgreSQL L8 OJP server"
+          exit 1
+
+      - name: Run C++ ODBC PostgreSQL L8 test
+        env:
+          OJP_TEST_POSTGRESQL_L8: 'true'
+          OJP_TEST_POSTGRESQL_L8_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
+        run: |
+          set -o pipefail
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcPostgreSqlL8Integration$' --output-on-failure \
+            2>&1 | tee -a ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l10-test.log
+
+      - name: Remove L8-only concurrency limit
+        run: |
+          echo 0 > /tmp/ojp-server-2-concurrency
+          old_pid=$(cat /tmp/ojp-server-2.pid)
+          kill "$old_pid"
+          for i in $(seq 1 30); do
+            new_pid=$(cat /tmp/ojp-server-2.pid)
+            if [ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null \
+              && (echo > /dev/tcp/localhost/1060) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for the unlimited-concurrency PostgreSQL server"
+          exit 1
+
+      - name: Run C++ ODBC PostgreSQL L9-L10 tests
+        env:
+          OJP_TEST_POSTGRESQL_L9: 'true'
+          OJP_TEST_POSTGRESQL_L9_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_POSTGRESQL_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
+          OJP_TEST_POSTGRESQL_L10: 'true'
+          OJP_TEST_POSTGRESQL_L10_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_POSTGRESQL_L10_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
+        run: |
+          set -o pipefail
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcPostgreSqlL(9|10)Integration$' --output-on-failure \
+            2>&1 | tee -a ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l10-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2834,7 +2892,7 @@ jobs:
         run: |
           jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
             ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
-          echo 1 > /tmp/ojp-server-2-concurrency
+          echo 0 > /tmp/ojp-server-2-concurrency
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
@@ -2877,19 +2935,43 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DOJP_ODBC_TEST_PYODBC=ON
           cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run shared C++ ODBC L1-L8 tests
+      - name: Run shared C++ ODBC L1-L7 and autocommit tests
         run: |
           set -o pipefail
           export OJP_TEST_MARIADB=true
           export OJP_TEST_MARIADB_ADDR=localhost:1059
           export OJP_TEST_MARIADB_L7=true
           export OJP_TEST_MARIADB_L7_ADDRS=localhost:1059,localhost:1060
-          export OJP_TEST_MARIADB_L8=true
-          export OJP_TEST_MARIADB_L8_ADDRS=localhost:1060,localhost:1059
-          export OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcMariaDB(L[1-8]|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
+            -R '^OjpOdbcMariaDB(L[1-7]|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-mariadb-mysql-l1-l10-test.log
+
+      - name: Apply L8-only concurrency limit
+        run: |
+          echo 1 > /tmp/ojp-server-2-concurrency
+          old_pid=$(cat /tmp/ojp-server-2.pid)
+          kill "$old_pid"
+          for i in $(seq 1 30); do
+            new_pid=$(cat /tmp/ojp-server-2.pid)
+            if [ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null \
+              && (echo > /dev/tcp/localhost/1060) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for the MariaDB L8 OJP server"
+          exit 1
+
+      - name: Run shared C++ ODBC L8 test
+        env:
+          OJP_TEST_MARIADB_L8: 'true'
+          OJP_TEST_MARIADB_L8_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
+        run: |
+          set -o pipefail
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcMariaDBL8Integration$' --output-on-failure \
+            2>&1 | tee -a /tmp/cpp-odbc-mariadb-mysql-l1-l10-test.log
 
       - name: Remove L8-only concurrency limit for XA suites
         run: |

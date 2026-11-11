@@ -3126,6 +3126,7 @@ jobs:
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
+          OJP_TEST_SQLSERVER_L7: 'true'
           OJP_TEST_SQLSERVER_L7_ADDRS: 'localhost:1059,localhost:1060'
           OJP_TEST_SQLSERVER_L8: 'true'
           OJP_TEST_SQLSERVER_L8_ADDRS: 'localhost:1060,localhost:1059'

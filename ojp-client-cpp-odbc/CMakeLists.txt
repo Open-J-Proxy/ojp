@@ -236,13 +236,15 @@ if(BUILD_TESTING)
             if(TOPOLOGY STREQUAL "Single")
                 set(AUTOCOMMIT_ADDR "${AUTOCOMMIT_ENV}_ADDR")
                 set(AUTOCOMMIT_NODES 1)
+                set(AUTOCOMMIT_ENABLE "${AUTOCOMMIT_ENV}")
             else()
                 set(AUTOCOMMIT_ADDR "${AUTOCOMMIT_ENV}_L7_ADDRS")
                 set(AUTOCOMMIT_NODES 2)
+                set(AUTOCOMMIT_ENABLE "${AUTOCOMMIT_ENV}_L7")
             endif()
             set(AUTOCOMMIT_ARGS
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/${AUTOCOMMIT_CSV}"
-                "${AUTOCOMMIT_ENV}" "${AUTOCOMMIT_ADDR}" "${AUTOCOMMIT_NODES}")
+                "${AUTOCOMMIT_ENABLE}" "${AUTOCOMMIT_ADDR}" "${AUTOCOMMIT_NODES}")
             set(AUTOCOMMIT_TEST "OjpOdbc${BACKEND}Autocommit${TOPOLOGY}Integration")
             add_test(NAME "${AUTOCOMMIT_TEST}"
                 COMMAND ojp_odbc_autocommit_integration_test ${AUTOCOMMIT_ARGS})

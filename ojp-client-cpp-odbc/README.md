@@ -544,6 +544,7 @@ cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
   -DOJP_ODBC_TEST_PYODBC=ON
 cmake --build ojp-client-cpp-odbc/build --parallel 2
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
+  OJP_TEST_H2_L7=true \
   OJP_TEST_H2_L7_ADDRS=localhost:1059,localhost:1060 \
   ctest --test-dir ojp-client-cpp-odbc/build \
     -R '^OjpOdbc(Autocommit|H2(Pyodbc)?Autocommit(Single|Multinode)Integration)$' \
@@ -553,7 +554,8 @@ OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
 The existing H2, PostgreSQL, MariaDB/MySQL and SQL Server CI jobs run the native
 and pyodbc suites with their existing database fixtures and endpoint variables
 (`OJP_TEST_<DATABASE>_ADDR` and `OJP_TEST_<DATABASE>_L7_ADDRS`). Multinode tests
-require distinct endpoints, run against the shared list and each node
+are enabled separately with `OJP_TEST_<DATABASE>_L7=true`, require distinct
+endpoints, run against the shared list and each node
 individually, and use the shared file-backed H2 fixture rather than independent
 in-memory databases. SQL Server visibility checks require
 `ALTER DATABASE defaultdb SET READ_COMMITTED_SNAPSHOT ON`, configured in CI,

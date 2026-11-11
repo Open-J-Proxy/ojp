@@ -21,6 +21,7 @@ void success(SQLRETURN result, SQLSMALLINT type, SQLHANDLE handle) {
     SQLCHAR state[6] = {};
     SQLCHAR message[1024] = {};
     SQLGetDiagRec(type, handle, 1, state, nullptr, message, sizeof(message), nullptr);
+    std::cerr << "Autocommit ODBC failure: SQLSTATE " << state << '\n';
     throw std::runtime_error(std::string(reinterpret_cast<char*>(state)) + ": " +
                              reinterpret_cast<char*>(message));
 }
@@ -43,11 +44,21 @@ public:
 
     Connection(SQLHENV environment, const std::string& text) {
         success(SQLAllocHandle(SQL_HANDLE_DBC, environment, &handle), SQL_HANDLE_ENV, environment);
-        success(SQLDriverConnect(handle, nullptr,
-                                  reinterpret_cast<SQLCHAR*>(const_cast<char*>(text.c_str())),
-                                  SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
-                SQL_HANDLE_DBC, handle);
-        success(SQLAllocHandle(SQL_HANDLE_STMT, handle, &statement), SQL_HANDLE_DBC, handle);
+        bool connected = false;
+        try {
+            success(SQLDriverConnect(handle, nullptr,
+                                      reinterpret_cast<SQLCHAR*>(const_cast<char*>(text.c_str())),
+                                      SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
+                    SQL_HANDLE_DBC, handle);
+            connected = true;
+            success(SQLAllocHandle(SQL_HANDLE_STMT, handle, &statement), SQL_HANDLE_DBC, handle);
+        } catch (...) {
+            if (connected) {
+                SQLDisconnect(handle);
+            }
+            SQLFreeHandle(SQL_HANDLE_DBC, handle);
+            throw;
+        }
     }
 
     ~Connection() {
@@ -62,6 +73,14 @@ public:
 
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
+
+    void close() {
+        success(SQLFreeHandle(SQL_HANDLE_STMT, statement), SQL_HANDLE_DBC, handle);
+        statement = SQL_NULL_HSTMT;
+        success(SQLDisconnect(handle), SQL_HANDLE_DBC, handle);
+        success(SQLFreeHandle(SQL_HANDLE_DBC, handle), SQL_HANDLE_DBC, handle);
+        handle = SQL_NULL_HDBC;
+    }
 
     void execute(const std::string& sql) {
         success(SQLExecDirect(statement,
@@ -148,7 +167,7 @@ int run(const ojp::test::DatabaseConfig& config, const std::string& endpoints) {
         }
         const auto original_handle = writer.handle;
         std::ostringstream name;
-        name << "ojp_ac_" << std::hex << std::random_device{}();
+        name << "ojp_ac_" << std::hex << std::random_device{}() << std::random_device{}();
         const auto table = name.str();
         observer.execute("CREATE TABLE " + table + " (id INT PRIMARY KEY)");
         try {
@@ -216,13 +235,8 @@ int run(const ojp::test::DatabaseConfig& config, const std::string& endpoints) {
                 visible(101, 0);
                 success(SQLFreeHandle(SQL_HANDLE_STMT, insert), SQL_HANDLE_DBC, writer.handle);
                 insert = SQL_NULL_HSTMT;
-                success(SQLFreeHandle(SQL_HANDLE_STMT, writer.statement),
-                        SQL_HANDLE_DBC, writer.handle);
-                writer.statement = SQL_NULL_HSTMT;
-                success(SQLDisconnect(writer.handle), SQL_HANDLE_DBC, writer.handle);
+                writer.close();
                 visible(101, 0);
-                success(SQLFreeHandle(SQL_HANDLE_DBC, writer.handle), SQL_HANDLE_ENV, environment);
-                writer.handle = SQL_NULL_HDBC;
             } catch (...) {
                 if (insert != SQL_NULL_HSTMT) {
                     SQLFreeHandle(SQL_HANDLE_STMT, insert);
@@ -234,6 +248,7 @@ int run(const ojp::test::DatabaseConfig& config, const std::string& endpoints) {
                 SQLEndTran(SQL_HANDLE_DBC, writer.handle, SQL_ROLLBACK);
             }
             observer.execute("DROP TABLE " + table);
+            observer.close();
             throw;
         }
         observer.execute("DROP TABLE " + table);

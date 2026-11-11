@@ -46,7 +46,7 @@ Ending an RPC is not ending an application request. A gRPC SQL response can leav
 
 The existing H2 and PostgreSQL extensive tests simply invoke the inherited methods and expect no exception: [H2 lines 329-331](../../ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/h2/H2ConnectionExtensiveTests.java#L329) and [PostgreSQL lines 353-355](../../ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/postgres/PostgresConnectionExtensiveTests.java#L353). They do not establish remote forwarding, cleanup, request identity, affinity, or transaction safeguards.
 
-[`StatementService.proto`](../../ojp-grpc-commons/src/main/proto/StatementService.proto#L473) has connection, SQL, cursor/LOB, transaction, generic resource, and XA RPCs, but no dedicated request-boundary RPC. [`SessionInfo`](../../ojp-grpc-commons/src/main/proto/StatementService.proto#L183) has session and transaction identity plus server affinity and admission information, not a unit-of-work identifier or boundary generation.
+[`StatementService.proto`](../../ojp-grpc-contract/proto/StatementService.proto#L473) has connection, SQL, cursor/LOB, transaction, generic resource, and XA RPCs, but no dedicated request-boundary RPC. [`SessionInfo`](../../ojp-grpc-contract/proto/StatementService.proto#L183) has session and transaction identity plus server affinity and admission information, not a unit-of-work identifier or boundary generation.
 
 ### What already manages resources
 

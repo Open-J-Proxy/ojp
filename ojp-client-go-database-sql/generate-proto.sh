@@ -9,7 +9,7 @@ fi
 
 module_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$module_dir/.." && pwd)"
-proto_dir="$repo_root/ojp-grpc-commons/src/main/proto"
+proto_dir="$repo_root/ojp-grpc-contract/proto"
 maven_target="$repo_root/ojp-grpc-commons/target"
 generated_dir="$module_dir/internal/gen/go"
 temporary_dir="$(mktemp -d)"

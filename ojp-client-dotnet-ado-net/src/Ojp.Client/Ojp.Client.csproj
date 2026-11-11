@@ -14,8 +14,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="../../../ojp-grpc-commons/src/main/proto/StatementService.proto"
-              ProtoRoot="../../../ojp-grpc-commons/src/main/proto"
+    <Protobuf Include="../../../ojp-grpc-contract/proto/StatementService.proto"
+              ProtoRoot="../../../ojp-grpc-contract/proto"
               GrpcServices="Client"
               AdditionalImportDirs="$(NuGetPackageRoot)google.api.commonprotos/2.17.0/content/protos" />
   </ItemGroup>

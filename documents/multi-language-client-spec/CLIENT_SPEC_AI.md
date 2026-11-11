@@ -4,7 +4,7 @@
 > **Last updated:** 2026-09-16
 > **Scope:** Defines the complete behavioral contract for any OJP client implementation.
 > **Keywords:** MUST, MUST NOT, SHOULD, MAY as defined in RFC 2119.
-> **Protocol source:** `ojp-grpc-commons/src/main/proto/StatementService.proto`, `echo.proto`
+> **Protocol source:** `ojp-grpc-contract/proto/StatementService.proto`, `echo.proto`
 > **Human-readable companion:** [`CLIENT_SPEC.md`](CLIENT_SPEC.md)
 
 ---

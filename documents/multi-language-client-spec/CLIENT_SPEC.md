@@ -4,7 +4,7 @@
 > **Last updated:** 2026-09-16
 > **Scope:** Defines every aspect that a new OJP client library (in any language) must implement to be fully compatible with an OJP server. Written language-agnostically; Java-specific concepts are labelled as reference implementation only.
 > **Reference implementation:** `ojp-jdbc-driver` module.
-> **Protocol source of truth:** `ojp-grpc-commons/src/main/proto/StatementService.proto` and `echo.proto`.
+> **Protocol source of truth:** `ojp-grpc-contract/proto/StatementService.proto` and `echo.proto`.
 > **Machine-oriented companion:** [`CLIENT_SPEC_AI.md`](CLIENT_SPEC_AI.md)
 
 ---
@@ -219,7 +219,7 @@ Map the collected configuration to the `ConnectionDetails` proto fields as follo
 **`connHash` cache key (client side):** `url + "|" + user + "|" + password + "|" + datasource_name`
 
 > **Reference implementation:**
-> - `ojp-grpc-commons` — [`ConnectionDetails` proto](../../ojp-grpc-commons/src/main/proto/StatementService.proto): field definitions.
+> - `ojp-grpc-contract` — [`ConnectionDetails` proto](../../ojp-grpc-contract/proto/StatementService.proto): field definitions.
 > - `ojp-server` — [`ConnectionHashGenerator.hashConnectionDetails()`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/utils/ConnectionHashGenerator.java): SHA-256 of `url + user + password + datasource_name_from_properties`.
 > - `ojp-jdbc-driver` — [`MultinodeConnectionManager.computeConnectionKey()`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeConnectionManager.java): client-side cache key computation.
 > - `ojp-jdbc-driver` — [`MultinodeUrlParser`](../../ojp-jdbc-driver/src/main/java/org/openjproxy/grpc/client/MultinodeUrlParser.java): Java reference for JDBC URL parsing (Java-specific; not needed in non-Java clients).
@@ -1667,9 +1667,9 @@ When implementing a new language client, declare both target and tested level pe
 
 | File | Location |
 |---|---|
-| Main protocol | `ojp-grpc-commons/src/main/proto/StatementService.proto` |
-| Generic value containers | `ojp-grpc-commons/src/main/proto/containers.proto` |
-| Echo / heartbeat | `ojp-grpc-commons/src/main/proto/echo.proto` |
+| Main protocol | `ojp-grpc-contract/proto/StatementService.proto` |
+| Generic value containers | `ojp-grpc-contract/proto/containers.proto` |
+| Echo / heartbeat | `ojp-grpc-contract/proto/echo.proto` |
 
 ## Appendix B — Reference implementation classes
 

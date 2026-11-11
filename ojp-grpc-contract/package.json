@@ -1,0 +1,10 @@
+{
+  "name": "@ojp/grpc-contract",
+  "version": "1.0.0",
+  "description": "Versioned source of truth for OJP gRPC/Protobuf contract (.proto files).",
+  "files": [
+    "proto",
+    "CONTRACT_HASH.json"
+  ],
+  "private": true
+}

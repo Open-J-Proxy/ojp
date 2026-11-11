@@ -4,6 +4,20 @@ This directory contains technical analysis documents for various OJP features an
 
 ## Latest Analysis (November 2026)
 
+### Transaction Multiplexing and JDBC Request Boundaries
+
+**Question:** Could OJP share physical connections between transactions like PgBouncer, and could JDBC `beginRequest()` / `endRequest()` improve safe reuse?
+
+**Quick Answer:** Add an opt-in, non-XA transaction mode that separates logical sessions from physical leases, preserves dependent resources and logical settings, and releases admission capacity with the lease. JDBC request boundaries are optional driver-specific enhancements, not portable transaction detection or session reset.
+
+**Documents:**
+- [TRANSACTION_MULTIPLEXING_ANALYSIS_SUMMARY.md](./TRANSACTION_MULTIPLEXING_ANALYSIS_SUMMARY.md) - Decision summary, compatibility constraints, and implementation gates
+- [TRANSACTION_MULTIPLEXING_ANALYSIS.md](./TRANSACTION_MULTIPLEXING_ANALYSIS.md) - Current source lifecycle, PgBouncer comparison, lease design, driver/pool evidence, risks, and real-server experiments
+
+**Key Takeaway:** Safe multiplexing requires transaction/resource ownership and certified cleanup; calling begin/end alone does not implement it.
+
+---
+
 ### SQL Injection Protection
 
 **Question:** What would be required to add SQL injection defense in depth
@@ -254,5 +268,5 @@ When adding new analysis documents:
 
 ---
 
-**Last Updated:** 2026-11-07
+**Last Updated:** 2026-11-11
 **Maintained By:** OJP Core Team

@@ -1,7 +1,7 @@
 # @ojp/grpc-contract
 
-Versioned distribution of the **OJP gRPC/Protobuf contract** (`.proto` files) for Node.js
-clients such as [`@ojp/node-driver`](../ojp-node-driver).
+Versioned distribution of the **OJP gRPC/Protobuf contract** (`.proto` files) for non-Java
+clients, including [`@ojp/node-driver`](../ojp-node-driver).
 
 > Status: **MVP under development**. API subject to change until stable v1.0.0 of the
 > OJP Node.js ecosystem as a whole.
@@ -34,7 +34,9 @@ requires a deliberate version bump here — it can never drift in silently.
 
 | File | Description |
 |---|---|
-| `proto/StatementService.proto` | The gRPC service contract used by `ojp-server` and all OJP clients. |
+| `proto/StatementService.proto` | The statement service contract used by `ojp-server` and all OJP clients. |
+| `proto/echo.proto` | The echo/health-check service contract used by OJP clients. |
+| `proto/containers.proto` | Shared transport container messages used by OJP clients. |
 | `CONTRACT_HASH.json` | `{ version, sha256 }` — the recorded hash of `proto/*.proto` for the current package version. |
 
 ## Versioning policy
@@ -79,21 +81,21 @@ below) rather than a mechanical guarantee enforced by npm itself.
 ## Maintainer workflow — updating the contract
 
 This package must never be hand-edited directly. To pull in a change made upstream (in the
-main `ojp` monorepo's `ojp-grpc-commons`), this package's folder must currently sit
-**inside** an `ojp` monorepo checkout (e.g. `<ojp-checkout>/ojp-grpc-contract`, next to
-`<ojp-checkout>/ojp-grpc-commons`) — `pull-from-ojp.js` resolves the source path relative
-to its own location, not via any configurable setting:
+main `ojp` monorepo's `ojp-grpc-commons`), run the pull script from an `ojp` checkout.
+It copies the contract proto files from the sibling `ojp-grpc-commons` directory:
 
 ```bash
-npm run pull-from-ojp   # copies the latest .proto from a sibling ../ojp checkout
+npm run pull-from-ojp   # copies the latest client contract protos from ojp-grpc-commons
 git diff proto/          # review exactly what changed
 npm version <major|minor|patch>   # per the versioning policy above
 npm run record-hash      # updates CONTRACT_HASH.json to match
 npm run verify           # confirms everything is consistent
 ```
 
-Then bump the pinned version in every consumer (e.g. `@ojp/node-driver`'s `package.json`)
-and re-test them against the new contract before publishing/tagging a release.
+Non-Java client bindings in this repository are generated or loaded from this package's
+`proto/` directory; Java clients continue to consume the shared Maven artifact. After
+changing the contract, regenerate affected bindings and test each client before
+publishing/tagging a release.
 
 ## Scripts
 

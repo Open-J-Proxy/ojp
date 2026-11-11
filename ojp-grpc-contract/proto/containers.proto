@@ -1,0 +1,48 @@
+syntax = "proto3";
+option java_multiple_files = true;
+package ojp.transport.v1;
+
+import "google/protobuf/struct.proto";
+
+// Container wraps any serializable value type to enable type-safe deserialization.
+// This allows us to know which type was serialized without ambiguity.
+message Container {
+  oneof content {
+    Value value = 1;          // Primitive value or nested structure
+    Object object = 2;        // Map/Object
+    Array array = 3;          // List/Array
+    Properties properties = 4; // Properties (String -> String map)
+  }
+}
+
+// Value represents a single value that can be a primitive, object, array, or null.
+// This is used to represent any JSON-like value structure in a type-safe manner.
+message Value {
+  oneof kind {
+    string s = 1;           // String value
+    double n = 2;           // Numeric value (covers int, long, float, double)
+    bool b = 3;             // Boolean value
+    Object o = 4;           // Object/Map value
+    Array a = 5;            // Array/List value
+    google.protobuf.NullValue null_value = 6;  // Explicit null marker
+  }
+}
+
+// Object represents a map/dictionary structure with string keys and arbitrary values.
+// Uses map<string, Value> to preserve key-value pairs.
+// Note: Iteration order is not guaranteed by protobuf maps, but implementations
+// should use LinkedHashMap to preserve insertion order in Java.
+message Object {
+  map<string, Value> entries = 1;
+}
+
+// Array represents a list/array structure with ordered values.
+message Array {
+  repeated Value values = 1;
+}
+
+// Properties represents a simple map with string keys and string values.
+// This is a special case for java.util.Properties where all values are strings.
+message Properties {
+  map<string, string> entries = 1;
+}

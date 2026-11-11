@@ -1,0 +1,16 @@
+syntax = "proto3";
+package org.openjproxy.grpc;
+option java_multiple_files = true;
+option java_outer_classname = "EchoServiceProto";
+
+service EchoService {
+  rpc Echo (EchoRequest) returns (EchoResponse);
+}
+
+message EchoRequest {
+  string message = 1;
+}
+
+message EchoResponse {
+  string message = 1;
+}

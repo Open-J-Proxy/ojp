@@ -164,4 +164,4 @@ The suite loads the backend JDBC URL and credentials from `tests/Ojp.Client.Inte
 
 ## Protocol and maturity
 
-The protocol bindings are generated from `ojp-grpc-commons/src/main/proto/StatementService.proto` as part of the build. L1 capability boundaries are defined in [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md); protocol and compatibility requirements are in [`CLIENT_SPEC.md`](../documents/multi-language-client-spec/CLIENT_SPEC.md).
+The protocol bindings are generated from `ojp-grpc-contract/proto/StatementService.proto` as part of the build. L1 capability boundaries are defined in [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md); protocol and compatibility requirements are in [`CLIENT_SPEC.md`](../documents/multi-language-client-spec/CLIENT_SPEC.md).

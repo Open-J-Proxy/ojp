@@ -1,5 +1,5 @@
 /**
- * Maintainer-only helper: copies the latest StatementService.proto from a sibling `ojp`
+ * Maintainer-only helper: copies the latest client contract protos from a sibling `ojp`
  * monorepo checkout (`../../ojp-grpc-commons/src/main/proto`, i.e. assumes this package's
  * parent folder sits next to `ojp-grpc-commons`) into this package's proto/ folder.
  *
@@ -17,7 +17,7 @@ const path = require('path');
 
 const SOURCE_DIR = path.resolve(__dirname, '../../ojp-grpc-commons/src/main/proto');
 const DEST_DIR = path.resolve(__dirname, '../proto');
-const FILES = ['StatementService.proto'];
+const FILES = ['StatementService.proto', 'echo.proto', 'containers.proto'];
 
 for (const file of FILES) {
   const source = path.join(SOURCE_DIR, file);

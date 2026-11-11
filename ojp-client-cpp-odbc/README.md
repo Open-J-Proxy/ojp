@@ -2,7 +2,7 @@
 
 This module provides an ANSI and Unicode ODBC 3.x driver for applications that
 access OJP servers from C++.
-It uses the canonical `StatementService.proto` from `ojp-grpc-commons` and
+It uses the shared `StatementService.proto` from `ojp-grpc-contract` and
 communicates with the server over gRPC.
 [ODBC_API_COVERAGE.md](ODBC_API_COVERAGE.md) lists the implemented ODBC 3.x
 functions and the remaining work.
@@ -41,7 +41,7 @@ Level definitions: [client implementation levels](../documents/multi-language-cl
 - An extracted source archive of [googleapis](https://github.com/googleapis/googleapis) to
   provide `google/type/date.proto` and `google/type/timeofday.proto`
 - The full OJP source tree: the build also reads
-  `ojp-grpc-commons/src/main/proto/StatementService.proto`
+  `ojp-grpc-contract/proto/StatementService.proto`
 
 **CMake is the cross-platform build tool**, rather than Maven or a separate
 shell script for each OS. The checked-in `release` preset runs the same

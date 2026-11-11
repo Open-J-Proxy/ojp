@@ -10,7 +10,7 @@ find_package(gRPC CONFIG REQUIRED)
 find_package(ODBC REQUIRED)
 find_package(Threads REQUIRED)
 
-set(OJP_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ojp-grpc-commons/src/main/proto")
+set(OJP_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ojp-grpc-contract/proto")
 set(GOOGLEAPIS_PROTO_DIR "" CACHE PATH "Root directory containing google/type/date.proto")
 if(NOT EXISTS "${GOOGLEAPIS_PROTO_DIR}/google/type/date.proto" OR
    NOT EXISTS "${GOOGLEAPIS_PROTO_DIR}/google/type/timeofday.proto")

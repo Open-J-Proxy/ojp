@@ -109,7 +109,7 @@ docker run --rm -d \
   --name ojp-server \
   --network host \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:1.0.4
+  rrobetti/ojp:1.0.6
 ```
 
 This command downloads the OJP Server image (approximately 50MB) and starts it with your downloaded drivers mounted. The server starts on port 1059 for gRPC communication and exposes metrics on port 9159 for Prometheus. The `-d` flag runs the container in detached mode, while `--rm` ensures the container is automatically removed when stopped.
@@ -143,7 +143,7 @@ docker run --rm -d \
   -e OJP_SERVER_PORT=9059 \
   -e OJP_PROMETHEUS_PORT=9090 \
   -e OJP_SERVER_LOGLEVEL=DEBUG \
-  rrobetti/ojp:1.0.4
+  rrobetti/ojp:1.0.6
 ```
 
 **For Proprietary Databases** (Oracle, SQL Server, DB2):
@@ -158,7 +158,7 @@ docker run --rm -d \
   --name ojp-server \
   --network host \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:1.0.4
+  rrobetti/ojp:1.0.6
 ```
 
 Place all required JDBC driver JARs in the `ojp-libs` directory on your host machine before starting the container.
@@ -182,8 +182,8 @@ If Docker isn't available, use the standalone executable JAR. From version **0.4
 
 ```bash
 # Download the OJP Server JAR from Maven Central
-wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.0-RC1/ojp-server-1.0.4-shaded.jar
-chmod +x ojp-server-1.0.4-shaded.jar
+wget https://repo1.maven.org/maven2/org/openjproxy/ojp-server/1.0.6/ojp-server-1.0.6.jar
+chmod +x ojp-server-1.0.6.jar
 ```
 
 **Download Database Drivers**:
@@ -197,7 +197,7 @@ bash download-drivers.sh
 **Start the Server**:
 
 ```bash
-java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.4-shaded.jar
+java -Duser.timezone=UTC -jar ojp-server/target/ojp-server-1.0.6.jar
 ```
 
 **With Custom Configuration**:
@@ -208,14 +208,14 @@ java \
   -Dojp.server.port=9059 \
   -Dojp.prometheus.port=9090 \
   -Dojp.server.logLevel=DEBUG \
-  -jar ojp-server-1.0.4-shaded.jar
+  -jar ojp-server-1.0.6.jar
 ```
 
 **Run as Background Service**:
 
 ```bash
 # Start in background
-nohup java -Duser.timezone=UTC -jar ojp-server-1.0.4-shaded.jar \
+nohup java -Duser.timezone=UTC -jar ojp-server-1.0.6.jar \
   > ojp-server.log 2>&1 &
 
 # Check it's running
@@ -263,7 +263,8 @@ mvn test -DenableH2Tests=true
 
 ```
 ojp/
-├── ojp-grpc-commons/       # Shared protocol definitions
+├── ojp-grpc-contract/      # Canonical protocol definitions
+├── ojp-grpc-commons/       # Generated Java stubs and shared converters
 ├── ojp-server/             # Server implementation
 ├── ojp-jdbc-driver/        # JDBC driver implementation
 ├── ojp-datasource-api/     # Pool abstraction API
@@ -891,7 +892,7 @@ docker network create ojp-network
 docker run --network ojp-network --name postgres postgres:15
 
 # Start OJP Server
-docker run --network ojp-network --name ojp-server rrobetti/ojp:1.0.4
+docker run --network ojp-network --name ojp-server rrobetti/ojp:1.0.6
 
 # Application connects to: ojp-server:1059
 # OJP connects to: postgres:5432

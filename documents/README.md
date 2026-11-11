@@ -86,7 +86,7 @@ Use the source links at the end of each flow to verify behavior in the current c
 
 - [Driver entry point](../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Driver.java), [connection lifecycle](../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Connection.java), and [statement operations](../ojp-jdbc-driver/src/main/java/org/openjproxy/jdbc/Statement.java)
 - [Server statement service](../ojp-server/src/main/java/org/openjproxy/grpc/server/StatementServiceImpl.java)
-- [Shared gRPC contracts](../ojp-grpc-commons/src/main/proto/)
+- [Shared gRPC contracts](../ojp-grpc-contract/proto/)
 - [StatementServiceImpl Action Pattern Migration](designs/STATEMENTSERVICE_ACTION_PATTERN_MIGRATION.md) - Implementation background
 
 ## Use and operate OJP
@@ -179,7 +179,7 @@ ODBC is a separate possible route through `System.Data.Odbc`, `pyodbc`, `PDO_ODB
 
 ### Protocol
 
-- [Shared protocol sources](../ojp-grpc-commons/src/main/proto/)
+- [Shared protocol sources](../ojp-grpc-contract/proto/)
 - [BigDecimal Wire Format](protocol/BIGDECIMAL_WIRE_FORMAT.md)
 - [Protobuf Non-Java Serializations](protobuf-nonjava-serializations.md)
 - [Multi-language Client Specification](multi-language-client-spec/CLIENT_SPEC.md) - Protocol and client responsibilities

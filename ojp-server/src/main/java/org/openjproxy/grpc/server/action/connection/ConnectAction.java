@@ -154,6 +154,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                     context.getUnpooledConnectionDetailsMap().get(connHash);
 
             if (ds == null && unpooledDetails == null) {
+                DatabaseConnectionBudgetManager budgetManager = null;
                 DatabaseConnectionBudgetManager.Registration budgetRegistration = null;
                 ConnectionPoolProvider poolProvider = null;
                 try {
@@ -197,7 +198,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
                         poolProvider = ConnectionPoolProviderRegistry.getDefaultProvider()
                                 .orElseThrow(() -> new IllegalStateException("No connection pool providers available"));
-                        DatabaseConnectionBudgetManager budgetManager = DatabaseConnectionBudgetManager.getInstance();
+                        budgetManager = DatabaseConnectionBudgetManager.getInstance();
                         String parsedUrl = UrlParser.parseUrl(connectionDetails.getUrl());
                         budgetRegistration = budgetManager.registerPool("regular:" + connHash, parsedUrl,
                                 connectionDetails.getUser(), maxPoolSize, minIdle, poolProvider.supportsDynamicResizing(),
@@ -273,7 +274,11 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                     }
 
                 } catch (Exception e) {
-                    DatabaseConnectionBudgetManager.getInstance().unregisterPool(budgetRegistration);
+                    // Reuse the manager from the try block: calling getInstance() again here would throw a second
+                    // time on invalid budget configuration and skip the error response below.
+                    if (budgetManager != null) {
+                        budgetManager.unregisterPool(budgetRegistration);
+                    }
                     if (ds != null && poolProvider != null) {
                         context.getDatasourceMap().remove(connHash, ds);
                         try {

@@ -1,0 +1,2 @@
+org.openjproxy.jdbc.Driver,h2:mem:server_priority;DB_CLOSE_DELAY=-1,sa,,true
+org.openjproxy.jdbc.Driver,h2:mem:server_priority;DB_CLOSE_DELAY=-1,sa,,false

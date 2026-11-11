@@ -266,6 +266,21 @@ class ParameterHandlerTest {
         verifyNoInteractions(sessionManager);
     }
 
+    @ParameterizedTest
+    @EnumSource(value = ParameterType.class, names = {"BLOB", "CLOB", "N_CLOB"})
+    void shouldFailWhenLobIsNotInSession(ParameterType type) throws SQLException {
+        Parameter param = Parameter.builder().index(1).type(type)
+                .values(List.of("released-lob")).build();
+
+        SQLException error = assertThrows(SQLException.class, () ->
+                ParameterHandler.addParam(sessionManager, session, 1, ps, param));
+
+        assertEquals("HY000", error.getSQLState());
+        assertTrue(error.getMessage().contains("released-lob"),
+                "The error should name the missing LOB: " + error.getMessage());
+        verifyNoInteractions(ps);
+    }
+
     @Test
     void shouldBindBytesParameterDirectly() throws SQLException {
         byte[] value = new byte[]{1, 2, 3};

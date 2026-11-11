@@ -96,7 +96,8 @@ public class UrlParser {
                 // Extract dataSource name from parentheses and trim whitespace
                 dataSourceName = endpoint.substring(parenStart + 1, parenEnd).trim();
                 // Remove the dataSource part from endpoint
-                cleanEndpoint = endpoint.substring(0, parenStart).trim();
+                cleanEndpoint = endpoint.substring(0, parenStart).trim()
+                        + endpoint.substring(parenEnd + 1).trim();
             }
 
             dataSourceNames.add(dataSourceName);

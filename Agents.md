@@ -39,7 +39,8 @@ This is a **multi-module Maven project**. All modules share the parent `pom.xml`
 
 | Module | Purpose |
 |---|---|
-| `ojp-grpc-commons` | Shared Protobuf/gRPC contracts (`.proto` files). Both driver and server depend on this. |
+| `ojp-grpc-contract` | Canonical Protobuf/gRPC contracts (`.proto` files). |
+| `ojp-grpc-commons` | Java stubs generated from `ojp-grpc-contract` and shared Java converters. Both driver and server depend on this. |
 | `ojp-jdbc-driver` | JDBC driver implementation (`OjpDriver`, `OjpConnection`, `OjpStatement`, `OjpResultSet`, …) |
 | `ojp-server` | gRPC server, HikariCP pool management, session/transaction tracking, slow-query segregation |
 | `ojp-datasource-api` | SPI interface: `ConnectionPoolProvider` |
@@ -195,7 +196,7 @@ When implementing either SPI, register the implementation via `META-INF/services
 
 ### Modifying the gRPC protocol
 
-- Edit `.proto` files in `ojp-grpc-commons/src/main/proto/`.
+- Edit `.proto` files in `ojp-grpc-contract/proto/`.
 - Run `mvn clean install -pl ojp-grpc-commons` to regenerate Java stubs.
 - Both driver and server must be updated together; the stubs are shared.
 - Be careful with backward compatibility — the driver and server may be deployed independently.

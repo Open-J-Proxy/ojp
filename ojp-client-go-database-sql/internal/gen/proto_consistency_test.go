@@ -73,13 +73,13 @@ func findStatementServiceProto(t *testing.T) string {
 		t.Fatalf("find working directory: %v", err)
 	}
 	for {
-		candidate := filepath.Join(directory, "ojp-grpc-commons", "src", "main", "proto", "StatementService.proto")
+		candidate := filepath.Join(directory, "ojp-grpc-contract", "proto", "StatementService.proto")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatal("could not locate ojp-grpc-commons/src/main/proto/StatementService.proto")
+			t.Fatal("could not locate ojp-grpc-contract/proto/StatementService.proto")
 		}
 		directory = parent
 	}

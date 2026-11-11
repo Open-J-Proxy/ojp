@@ -473,7 +473,7 @@ Show the contract acting as a bridge/shared language
 Include sample proto message definitions (StatementRequest, ResultSetResponse)
 Use professional technical documentation style
 
-The **ojp-grpc-commons** module contains the gRPC service definitions and Protocol Buffer message schemas shared between the driver and server.
+The **ojp-grpc-contract** package contains the gRPC service definitions and Protocol Buffer message schemas shared between clients and the server; **ojp-grpc-commons** contains the generated Java stubs and shared converters.
 
 This module serves as the contract between client and server. It defines the gRPC service interfaces in `.proto` files, specifying exactly how client and server communicate. These files describe all request and response message structures with precise field types and semantics. From these proto files, Java classes are auto-generated at build time, ensuring both sides work with identical data structures. This approach guarantees version compatibility—when driver and server are compiled against the same proto definitions, protocol mismatches become impossible.
 
@@ -1106,7 +1106,7 @@ docker run --rm -d \
   --name ojp-server \
   --network host \
   -v "$(pwd)/ojp-libs":/opt/ojp/ojp-libs \
-  rrobetti/ojp:1.0.4
+  rrobetti/ojp:1.0.6
 ```
 
 This downloads the OJP Server image (approximately 50MB) and starts it with your downloaded drivers mounted. The server starts on port 1059 for gRPC communication and exposes metrics on port 9159 for Prometheus. The `-d` flag runs the container in detached mode, while `--rm` ensures the container is automatically removed when stopped.
@@ -1956,7 +1956,7 @@ version: '3.8'
 
 services:
   ojp-server:
-    image: rrobetti/ojp:1.0.4
+    image: rrobetti/ojp:1.0.6
     ports:
       - "1059:1059"
       - "9159:9159"

@@ -42,6 +42,11 @@ public class Driver implements java.sql.Driver {
     public java.sql.Connection connect(String url, Properties info) throws SQLException {
         log.debug("connect: url={}, info={}", url, info);
 
+        // JDBC contract: return null for URLs owned by other drivers so DriverManager can try them.
+        if (!acceptsURL(url)) {
+            return null;
+        }
+
         // Parse URL to extract dataSource name(s) and clean URL
         UrlParser.UrlParseResult urlParseResult = UrlParser.parseUrlWithDataSource(url);
         String cleanUrl = urlParseResult.cleanUrl;

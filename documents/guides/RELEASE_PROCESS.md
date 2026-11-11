@@ -51,9 +51,20 @@ OJP uses a **single-repo multi-module Maven build** containing the following pub
 | `ojp-xa-pool-commons` | Maven Central | XA pool utilities |
 | `ojp-testcontainers` | Maven Central | Test helpers |
 | `spring-boot-starter-ojp` | Maven Central | Spring Boot auto-config |
-| `ojp-server` | Maven Central + Docker Hub | Executable (shaded) JAR to Maven Central, Docker image to Docker Hub |
+| `ojp-server` | Maven Central + Docker Hub | Executable JAR to Maven Central, Docker image to Docker Hub |
 
 The release workflow lives at `.github/workflows/release.yml`.
+
+The main `ojp-server-<version>.jar` is an executable JAR with its runtime
+dependencies and merged service-provider registrations. JDBC drivers remain
+external in `ojp-libs/`. Before deployment, it must pass
+`scripts/test-server-artifact.py`, which checks its manifest, dependencies and
+service registrations, then starts it using `java -jar` in an isolated
+directory with a 45-second startup timeout.
+
+Version 1.0.4 published a thin main JAR without a `Main-Class`;
+use the `-shaded.jar` artifact for that version. Published Maven Central
+versions cannot be overwritten; the corrected main artifact requires a new release.
 
 ---
 
@@ -166,8 +177,9 @@ That's it — one click.
 checkout → configure Git identity → real branch/tag push preflight
   → validate secrets and Docker credentials → set up Java
   → compute versions → set release version in all poms
-  → build (no tests) → deploy to Maven Central (-Prelease)
-  → build & push Docker image
+  → build JARs → download JDBC drivers → build Docker image locally
+  → smoke-test both executable JARs and the Docker image
+  → deploy to Maven Central (-Prelease) → push the tested Docker image
   → update docs to new release version
   → commit release pom changes → create annotated Git tag on the release commit
   → bump to next SNAPSHOT → commit next-dev version
@@ -176,6 +188,14 @@ checkout → configure Git identity → real branch/tag push preflight
 ```
 
 Detailed steps in the workflow file: `.github/workflows/release.yml`.
+
+Both startup gates run in dry-run mode as well. A build or startup failure stops
+the release before Maven Central deployment or Docker image pushes. The image
+check uses the locally built image without pulling, its default entrypoint and
+bundled drivers, and an isolated container with a randomly assigned localhost
+port. It requires the startup-complete message and a reachable server port within
+60 seconds, reports container logs on failure, and removes the test container.
+The image is not rebuilt between testing and pushing.
 
 For a full release, the first check after checkout and Git identity setup is a
 **real dummy push**, not `git push --dry-run`: it atomically pushes an empty commit
@@ -474,16 +494,16 @@ that enables all three publishing requirements:
 | `waitForPublishing` | `true` | Block the build until publishing completes (required for CI success) |
 | `publishingServerId` | `central` | Must match the `<server><id>` in Maven settings |
 
-### ojp-server: Dual Distribution
+### ojp-server: Distribution
 
-`ojp-server` is distributed in **two forms**:
+`ojp-server` is distributed in two forms:
 
-- **Executable (shaded) JAR → Maven Central** — produced by `maven-shade-plugin` with
-  `shadedArtifactAttached=true`. This is a self-contained, runnable JAR that includes all
+- **Executable JAR → Maven Central** — produced by `maven-shade-plugin` as the main
+  artifact. This is a self-contained, runnable JAR that includes all
   dependencies and sets `org.openjproxy.grpc.server.GrpcServer` as the main class. Users
   can download and run it without Docker:
   ```bash
-  java -jar ojp-server-<version>-shaded.jar
+  java -jar ojp-server-<version>.jar
   ```
 - **Docker image → Docker Hub** — built via a multi-stage `Dockerfile` (jlink custom JRE on Alpine, ~127MB). Open-source JDBC drivers are downloaded into `ojp-libs/` before the build and copied into the image.
 

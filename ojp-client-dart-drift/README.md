@@ -224,7 +224,7 @@ session termination.
 ## Regenerate Protocol Bindings
 
 Generated bindings in `lib/src/generated/` come from
-`ojp-grpc-commons/src/main/proto`. With Maven, Dart, and the Dart protoc plugin
+`ojp-grpc-contract/proto`. With Maven, Dart, and the Dart protoc plugin
 installed, run from the repository root:
 
 ```bash

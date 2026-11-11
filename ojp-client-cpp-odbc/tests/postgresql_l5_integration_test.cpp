@@ -213,7 +213,7 @@ void verify_row(SQLHSTMT statement, const std::string& table, SQLINTEGER id,
 
 void verify_errors(SQLHSTMT statement, const std::string& table) {
     SQLPOINTER token = nullptr;
-    require_state(statement, SQLCancel(statement), SQL_ERROR, "HYC00");
+    require_success(SQLCancel(statement), "SQLCancel(idle)", SQL_HANDLE_STMT, statement);
     require_state(statement, SQLParamData(statement, &token), SQL_ERROR, "HY010");
     require_state(statement, SQLPutData(statement, nullptr, 0), SQL_ERROR, "HY010");
     const std::string insert = "INSERT INTO " + table + " (id, binary_payload) VALUES (99, ?)";
@@ -276,20 +276,20 @@ void verify_errors(SQLHSTMT statement, const std::string& table) {
 }
 
 void verify_binary_pair(SQLHSTMT statement, const std::string& table,
-                        const std::string& small, const std::string& large) {
+                        const std::string& small_payload, const std::string& large_payload) {
     const std::string insert = "INSERT INTO " + table +
         " (id, binary_payload, binary_copy) VALUES (6, ?, ?)";
     require_success(SQLPrepare(statement, sql_text(insert), SQL_NTS), "SQLPrepare(two streams)",
                     SQL_HANDLE_STMT, statement);
     int first_token = 1;
     int second_token = 2;
-    SQLLEN first_length = SQL_LEN_DATA_AT_EXEC(static_cast<SQLLEN>(small.size()));
-    SQLLEN second_length = SQL_LEN_DATA_AT_EXEC(static_cast<SQLLEN>(large.size()));
+    SQLLEN first_length = SQL_LEN_DATA_AT_EXEC(static_cast<SQLLEN>(small_payload.size()));
+    SQLLEN second_length = SQL_LEN_DATA_AT_EXEC(static_cast<SQLLEN>(large_payload.size()));
     bind_lob(statement, 1, SQL_C_BINARY, SQL_LONGVARBINARY, &first_token, 0, &first_length);
     bind_lob(statement, 2, SQL_C_BINARY, SQL_LONGVARBINARY, &second_token, 0, &second_length);
     expect(SQLExecute(statement) == SQL_NEED_DATA, "two-stream write must request data");
-    send_parameter(statement, &first_token, small, 73);
-    send_parameter(statement, &second_token, large, 48 * 1024);
+    send_parameter(statement, &first_token, small_payload, 73);
+    send_parameter(statement, &second_token, large_payload, 48 * 1024);
     SQLPOINTER token = nullptr;
     require_success(SQLParamData(statement, &token), "SQLParamData(two streams)",
                     SQL_HANDLE_STMT, statement);
@@ -297,8 +297,8 @@ void verify_binary_pair(SQLHSTMT statement, const std::string& table,
     reset_statement(statement);
     execute_direct(statement, "SELECT binary_payload, binary_copy FROM " + table + " WHERE id = 6");
     require_success(SQLFetch(statement), "SQLFetch(two streams)", SQL_HANDLE_STMT, statement);
-    verify_column(statement, 1, SQL_C_BINARY, small, false);
-    verify_column(statement, 2, SQL_C_BINARY, large, false);
+    verify_column(statement, 1, SQL_C_BINARY, small_payload, false);
+    verify_column(statement, 2, SQL_C_BINARY, large_payload, false);
     reset_statement(statement);
 }
 
@@ -306,7 +306,11 @@ void verify_small_chunks(SQLHSTMT statement) {
     reset_statement(statement);
     execute_direct(statement, "SELECT CAST('abcdefghij' AS TEXT),"
                               " decode('00010203040506070809', 'hex')");
-    require_state(statement, SQLCancel(statement), SQL_ERROR, "HYC00");
+#ifdef _WIN32
+    // ODBC 3.x: SQLCancel without a running execution keeps the open cursor. unixODBC's Driver
+    // Manager instead treats it as SQLFreeStmt(SQL_CLOSE), so the check only applies on Windows.
+    require_success(SQLCancel(statement), "SQLCancel(open cursor)", SQL_HANDLE_STMT, statement);
+#endif
     require_success(SQLFetch(statement), "SQLFetch(small chunks)", SQL_HANDLE_STMT, statement);
     const std::vector<SQLLEN> expected_lengths = {10, 6, 2};
     char text_buffer[5] = {};

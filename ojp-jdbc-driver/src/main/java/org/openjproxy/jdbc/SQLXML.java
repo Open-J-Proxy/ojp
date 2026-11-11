@@ -36,7 +36,7 @@ import java.sql.SQLException;
  * </ul>
  *
  * <p>When implementing this class, the XML payload will need to be transported over the
- * OJP gRPC protocol. The {@code .proto} contract in {@code ojp-grpc-commons} will likely
+ * OJP gRPC protocol. The {@code .proto} contract in {@code ojp-grpc-contract} will likely
  * need a new field or message type (e.g., a {@code bytes} or {@code string} field) to carry
  * the serialised XML document.
  */

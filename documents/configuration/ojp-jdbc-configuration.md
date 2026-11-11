@@ -8,6 +8,32 @@ To understand what the settings affect, follow [Connect](../designs/CONNECT_FLOW
 
 The OJP JDBC driver supports configurable connection pool settings via an `ojp.properties` file with advanced multi-datasource capabilities. This allows customization of HikariCP connection pool behavior on a per-client basis with support for multiple named datasources for enhanced flexibility.
 
+## Optional Server Priority in JDBC URLs
+
+Use `{priority}` after each server port to prefer a local OJP instance over
+remote fallback nodes:
+
+```text
+jdbc:ojp[localhost:1059{1},remote-a:1059{2},remote-b:1059{2},dr:1059{3}]_postgresql://db:5432/mydb
+```
+
+The JDBC driver selects only healthy servers in the lowest-numbered available
+tier, then uses the existing load-aware selection (or configured round-robin)
+within that tier. Priorities are positive 32-bit integers; gaps are allowed.
+If one endpoint specifies a priority, all must do so. Unannotated URLs are
+unchanged. With named datasources, use `host:port(app){1}` (or
+`host:port{1}(app)`).
+
+Existing sessions and transactions retain affinity. When a preferred server
+recovers, new unbound work returns to it after health validation. Different
+priority tiers disable recovery-triggered connection redistribution, not health
+checking. Non-XA initialization still contacts all nodes; pool sizing and
+coordination remain unchanged. This is strict preference, not spillover when
+the preferred server is busy.
+
+See the [multinode guide](../multinode/README.md#server-priority-tiers) for
+deployment tradeoffs and the integration-test command.
+
 ## Connection Close Behavior
 
 When application code calls `Connection.close()`, the OJP JDBC driver performs session termination **synchronously by default**.

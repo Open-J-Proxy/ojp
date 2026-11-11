@@ -593,10 +593,12 @@ int run_connection(const DatabaseConfig& config,
         }
         SQLWCHAR wide_described_name[32] = {};
         SQLSMALLINT wide_described_name_length = 0;
+        // SQLColAttributeW buffer and string lengths are expressed in bytes.
         require_success(SQLColAttributeW(statement, 2, SQL_DESC_NAME, wide_described_name,
-                                         32, &wide_described_name_length, nullptr),
+                                         sizeof(wide_described_name),
+                                         &wide_described_name_length, nullptr),
                         "SQLColAttributeW", SQL_HANDLE_STMT, statement);
-        if (wide_described_name_length != 4 ||
+        if (wide_described_name_length != static_cast<SQLSMALLINT>(4 * sizeof(SQLWCHAR)) ||
             wide_described_name[0] != static_cast<SQLWCHAR>('n')) {
             throw std::runtime_error("SQLColAttributeW returned unexpected column metadata");
         }

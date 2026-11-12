@@ -544,7 +544,7 @@ When a failed server comes back online, rebalance client-side connections so tha
 
 **Procedure on recovery:**
 
-1. **Reinitialize pools on the recovered server first** (before marking healthy). For every cached `connHash`/`ConnectionDetails` pair, call `connect()` on the recovered server so it pre-warms the connection pool immediately. This closes the NOT_FOUND window between marking the server healthy and the first SQL call reaching it.
+1. **Create pools on the recovered server first** (before marking it healthy). For every cached `connHash`/`ConnectionDetails` pair, call `connect()` on the recovered server so the pool exists before the first SQL call reaches it. Pool creation does not guarantee that all physical connections are ready; connection creation can still take time.
 2. Mark the server healthy (`endpoint.markHealthy()`).
 3. Push the updated cluster health string to all healthy servers (see §3.5).
 4. If redistribution is enabled (`ojp.redistribution.enabled = true`), begin rebalancing:

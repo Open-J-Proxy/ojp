@@ -25,7 +25,7 @@ OJP uses a connection pool abstraction layer that allows switching between diffe
 Add these properties to your `ojp.properties` file (or environment-specific files like `ojp-dev.properties`, `ojp-staging.properties`, `ojp-prod.properties`):
 
 ```properties
-# Connection pool provider (optional, default: hikari)
+# Select Apache Commons DBCP2 instead of the default HikariCP provider
 ojp.datasource.provider=dbcp
 
 # Pool sizing
@@ -72,10 +72,36 @@ jdbc:ojp[localhost:1059(mainApp)]_postgresql://db:5432/mydb
 |----------|-------------|---------|
 | `ojp.connection.pool.maximumPoolSize` | Maximum pool size | 20 |
 | `ojp.connection.pool.minimumIdle` | Minimum idle connections | 5 |
-| `ojp.connection.pool.connectionTimeout` | Semaphore admission timeout budget (ms); pool acquisition is fail-fast | 10000 |
+| `ojp.connection.pool.connectionTimeout` | Admission wait budget (ms); backend pool acquisition is fail-fast | 10000 |
 | `ojp.connection.pool.idleTimeout` | Idle timeout (ms) | 600000 |
 | `ojp.connection.pool.maxLifetime` | Max connection lifetime (ms) | 1800000 |
 | `ojp.connection.pool.defaultTransactionIsolation` | Default transaction isolation level | READ_COMMITTED |
+
+### Predictable-Latency Sizing
+
+For latency-sensitive workloads, set `minimumIdle` equal to `maximumPoolSize`
+when the database connection budget permits:
+
+```properties
+ojp.connection.pool.maximumPoolSize=50
+ojp.connection.pool.minimumIdle=50
+```
+
+OJP applies admission control before borrowing a database connection. After
+admission, pool acquisition is fail-fast. With HikariCP, OJP's internal
+acquisition timeout is effectively 250 ms: OJP sets 1 ms, and HikariCP enforces
+a 250 ms minimum. If `minimumIdle` is lower than `maximumPoolSize`, HikariCP
+may need to create physical connections as demand grows; slow connection
+creation can cause acquisition failures before the configured maximum is
+reached, especially at cold start or during a sudden spike.
+
+Equal sizes encourage the pool to maintain its full capacity. Once connections
+are available, this makes acquisition latency more predictable and reduces
+connection creation during spikes. It does not make all connections ready
+immediately. The trade-off is more idle database connections, higher baseline
+resource use, and potentially slower initialization. In multinode
+deployments, include the per-node pool capacity in the database connection
+budget. This is a workload-specific recommendation, not a universal setting.
 
 ### Transaction Isolation Configuration
 
@@ -128,7 +154,7 @@ The DBCP provider (`ojp-datasource-dbcp`) maps `PoolConfig` to DBCP `BasicDataSo
 | `driverClassName` | `driverClassName` |
 | `maxPoolSize` | `maxTotal` |
 | `minIdle` | `minIdle` |
-| `connectionTimeoutMs` | internal fail-fast timeout (`maxWait` in DBCP / `connectionTimeout` in Hikari) |
+| `connectionTimeoutMs` | internal fail-fast timeout (`maxWait` in DBCP / `connectionTimeout` in Hikari); OJP's server sets this to 1 ms |
 | `idleTimeoutMs` | `minEvictableIdleTimeMillis` |
 | `maxLifetimeMs` | `maxConnLifetimeMillis` |
 | `validationQuery` | `validationQuery` |

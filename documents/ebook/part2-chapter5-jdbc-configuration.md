@@ -275,10 +275,10 @@ Professional configuration guide
 # Maximum pool size - max concurrent connections
 ojp.connection.pool.maximumPoolSize=20
 
-# Minimum idle connections - kept ready for use
+# Minimum idle connections - pool target for connections kept available
 ojp.connection.pool.minimumIdle=5
 
-# Connection timeout - max wait for connection (milliseconds)
+# Admission wait budget (milliseconds); backend pool borrow is fail-fast
 ojp.connection.pool.connectionTimeout=30000
 
 # Idle timeout - close unused connections after this time (milliseconds)
@@ -287,9 +287,6 @@ ojp.connection.pool.idleTimeout=600000
 # Max lifetime - maximum time a connection can exist (milliseconds)
 ojp.connection.pool.maxLifetime=1800000
 
-# Connection test query (optional, auto-detected if not set)
-ojp.connection.pool.connectionTestQuery=SELECT 1
-
 # Leak detection threshold - warn if connection held too long (milliseconds)
 ojp.connection.pool.leakDetectionThreshold=60000
 ```
@@ -297,7 +294,7 @@ ojp.connection.pool.leakDetectionThreshold=60000
 ### Configuration Reference
 
 **[IMAGE PROMPT 6]**: Create a comprehensive configuration reference table:
-Show all HikariCP properties with:
+Show OJP connection pool properties with:
 - Property name
 - Default value
 - Recommended range
@@ -334,7 +331,7 @@ graph TB
 | `ojp.connection.pool.enabled` | boolean | true | Enable/disable connection pooling | 0.2.0-beta |
 | `ojp.connection.pool.maximumPoolSize` | int | 20 | Maximum number of connections in pool | 0.2.0-beta |
 | `ojp.connection.pool.minimumIdle` | int | 5 | Minimum number of idle connections | 0.2.0-beta |
-| `ojp.connection.pool.connectionTimeout` | long | 10000 | Max wait for connection (ms) | 0.2.0-beta |
+| `ojp.connection.pool.connectionTimeout` | long | 10000 | Admission wait budget (ms); backend pool borrow is fail-fast | 0.2.0-beta |
 | `ojp.connection.pool.idleTimeout` | long | 600000 | Max idle time before close (ms) | 0.2.0-beta |
 | `ojp.connection.pool.maxLifetime` | long | 1800000 | Max connection lifetime (ms) | 0.2.0-beta |
 | `ojp.connection.pool.leakDetectionThreshold` | long | 0 | Connection leak detection (ms, 0=off) | 0.2.0-beta |
@@ -365,6 +362,29 @@ Cm = Connection multiplier (1.5-2.0 for most workloads)
 ```
 
 **Important**: These formulas are provided as general guidance only. Real-world pool sizing depends heavily on your specific workload characteristics, query execution times, transaction patterns, database capabilities, and hardware resources. Start with these recommendations, then adjust based on monitoring data, connection wait times, and actual usage patterns. Always load test with your specific workload before deploying to production.
+
+For predictable, low latency, configure the minimum idle connections to match
+the maximum pool size when your database connection budget permits:
+
+```properties
+ojp.connection.pool.maximumPoolSize=50
+ojp.connection.pool.minimumIdle=50
+```
+
+OJP applies admission control before accessing the database pool. HikariCP's
+internal acquisition timeout is effectively 250 ms in OJP's current
+implementation. When `minimumIdle` is lower than `maximumPoolSize`, HikariCP
+may need to create physical connections as demand grows. If creation takes
+longer than 250 ms, a request can fail even though the pool has not reached its
+maximum. This matters most during cold starts and sudden traffic spikes.
+
+Equal sizes encourage the pool to maintain full capacity and make acquisition
+latency more predictable once connections are available, but do not guarantee
+that all connections are ready immediately. They also mean more idle database
+connections, higher baseline resource use, and potentially slower pool
+initialization. Size the pool against the database's total connection budget,
+especially with multiple OJP nodes. This recommendation is for workloads that
+need predictable latency, not every deployment.
 
 **Recommendations by Workload**:
 
@@ -535,13 +555,12 @@ ojp.connection.pool.maxLifetime=1800000
 
 **Production Environment** (`ojp-prod.properties`):
 ```properties
-# Production - Large pools, optimized settings
+# Production - Large pools; choose minimumIdle based on latency and DB capacity
 ojp.connection.pool.maximumPoolSize=50
 ojp.connection.pool.minimumIdle=20
 ojp.connection.pool.connectionTimeout=30000
 ojp.connection.pool.idleTimeout=600000
 ojp.connection.pool.maxLifetime=1800000
-ojp.connection.pool.keepaliveTime=300000
 ```
 
 **Default Fallback** (`ojp.properties`):

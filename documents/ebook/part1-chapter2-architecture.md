@@ -779,22 +779,19 @@ graph TB
 
 ```properties
 # Maximum pool size (most important setting)
-maximumPoolSize=20
+ojp.connection.pool.maximumPoolSize=20
 
-# Minimum idle connections (kept ready)
-minimumIdle=5
+# Minimum idle connections (target)
+ojp.connection.pool.minimumIdle=5
 
-# Connection timeout (wait for available connection)
-connectionTimeout=30000
+# Admission wait budget; backend pool borrow is fail-fast
+ojp.connection.pool.connectionTimeout=30000
 
 # Idle timeout (close unused connections)
-idleTimeout=600000
+ojp.connection.pool.idleTimeout=600000
 
 # Max lifetime (force connection refresh)
-maxLifetime=1800000
-
-# Validation query (test connections)
-connectionTestQuery=SELECT 1
+ojp.connection.pool.maxLifetime=1800000
 ```
 
 **Pool Sizing Guidelines**:

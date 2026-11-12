@@ -292,7 +292,7 @@ grep "PoolStatistics" ojp-server.log | tail -20
 **Solutions**:
 1. **Increase pool size** (if database can handle it):
    ```properties
-   ojp.pool.db1.maxPoolSize=150  # was 100
+   ojp.connection.pool.maximumPoolSize=150  # was 100
    ```
 
 2. **Reduce connection hold time** in application:
@@ -305,7 +305,7 @@ grep "PoolStatistics" ojp-server.log | tail -20
 
 3. **Enable leak detection** to find connection leaks:
    ```properties
-   ojp.pool.db1.leakDetectionThreshold=30000  # 30 seconds
+   ojp.connection.pool.leakDetectionThreshold=30000  # 30 seconds
    ```
 
 ---
@@ -405,7 +405,7 @@ Statement stmt = conn.createStatement(
 ### Optimization Best Practices
 
 **Application-Side Optimizations**:
-1. **Use connection pooling** in application (e.g., HikariCP) to reduce OJP connection churn
+1. **Do not add an application-side connection pool** when using OJP. OJP clients provide virtual connections; OJP manages the physical database connection pool on the server.
 2. **Batch operations** to reduce round-trips: `PreparedStatement.addBatch()`
 3. **Close resources** promptly with try-with-resources
 4. **Set appropriate fetchSize** based on expected result set size
@@ -423,14 +423,18 @@ Statement stmt = conn.createStatement(
    ```
 3. **Configure pool aggressively**:
    ```properties
-   ojp.pool.db1.maxPoolSize=150
-   ojp.pool.db1.connectionTimeout=5000  # 5 seconds
-   ojp.pool.db1.idleTimeout=300000      # 5 minutes
+   ojp.connection.pool.maximumPoolSize=150
+   ojp.connection.pool.minimumIdle=150
+   ojp.connection.pool.connectionTimeout=5000  # Admission wait budget (ms)
+   ojp.connection.pool.idleTimeout=300000      # 5 minutes
    ```
+   Matching minimum and maximum sizes can reduce connection creation during
+   traffic spikes. Use this for latency-sensitive workloads only when the
+   database budget permits; the pool still needs time to create connections.
 4. **Enable housekeeping features**:
    ```properties
-   ojp.pool.db1.leakDetectionThreshold=60000
-   ojp.pool.db1.maxLifetime=1800000  # 30 minutes
+   ojp.connection.pool.leakDetectionThreshold=60000
+   ojp.connection.pool.maxLifetime=1800000  # 30 minutes
    ```
 
 **Network Optimizations**:

@@ -109,13 +109,24 @@ ojp.server.ip-whitelist=10.0.0.0/8,192.168.1.0/24,172.16.0.1
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `ojp.pool.maximum-pool-size` | `10` | Maximum pool size per database |
-| `ojp.pool.minimum-idle` | `5` | Minimum idle connections |
-| `ojp.pool.connection-timeout` | `30000` (30s) | Connection acquisition timeout |
-| `ojp.pool.idle-timeout` | `600000` (10m) | Idle connection timeout |
-| `ojp.pool.max-lifetime` | `1800000` (30m) | Maximum connection lifetime |
-| `ojp.pool.keepalive-time` | `0` | Connection keepalive time (0=disabled) |
-| `ojp.pool.leak-detection-threshold` | `0` | Connection leak detection (0=disabled) |
+| `ojp.connection.pool.maximumPoolSize` | `20` | Maximum pool size |
+| `ojp.connection.pool.minimumIdle` | `5` | Minimum idle connections |
+| `ojp.connection.pool.connectionTimeout` | `10000` (10s) | Admission wait budget; backend pool acquisition is fail-fast |
+| `ojp.connection.pool.idleTimeout` | `600000` (10m) | Idle connection timeout |
+| `ojp.connection.pool.maxLifetime` | `1800000` (30m) | Maximum connection lifetime |
+| `ojp.connection.pool.leakDetectionThreshold` | `0` | Connection leak detection (0=disabled) |
+
+For predictable, low latency, consider setting `minimumIdle` equal to
+`maximumPoolSize` when the database connection budget permits:
+
+```properties
+ojp.connection.pool.maximumPoolSize=50
+ojp.connection.pool.minimumIdle=50
+```
+
+HikariCP's internal acquisition timeout in OJP is effectively 250 ms. Equal
+sizes reduce the risk of connection-creation delays during cold starts and
+traffic spikes, but do not make connections ready immediately.
 
 ### Telemetry Configuration
 
@@ -191,17 +202,15 @@ jdbc:ojp://localhost:9059/mem:testdb?user=sa&password=
 Place `ojp.properties` in your classpath with pool settings:
 
 ```properties
-# HikariCP pool configuration
-maximumPoolSize=20
-minimumIdle=5
-connectionTimeout=30000
-idleTimeout=600000
-maxLifetime=1800000
-leakDetectionThreshold=60000
+# OJP server-side pool configuration
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+ojp.connection.pool.connectionTimeout=30000
+ojp.connection.pool.idleTimeout=600000
+ojp.connection.pool.maxLifetime=1800000
+ojp.connection.pool.leakDetectionThreshold=60000
 
-# Connection validation
-validationTimeout=5000
-connectionTestQuery=SELECT 1
+# HikariCP uses JDBC driver validation by default
 ```
 
 ## Maven Dependencies
@@ -487,7 +496,7 @@ logging.level.io.openjproxy=DEBUG
 
 **Check for connection leaks:**
 ```properties
-ojp.pool.leak-detection-threshold=30000
+ojp.connection.pool.leakDetectionThreshold=30000
 ```
 
 ### Multinode Issues

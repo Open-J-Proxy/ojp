@@ -29,6 +29,25 @@ ojp.connection.pool.minimumIdle=5
 ojp.connection.pool.connectionTimeout=10000
 ```
 
+For predictable, low latency, consider setting `minimumIdle` equal to
+`maximumPoolSize` when database capacity allows. For example:
+
+```properties
+ojp.connection.pool.maximumPoolSize=50
+ojp.connection.pool.minimumIdle=50
+```
+
+OJP waits for admission before accessing the pool, then borrows fail-fast.
+HikariCP's internal acquisition timeout is effectively 250 ms in OJP's current
+implementation. A smaller `minimumIdle` can require new physical connections
+during a traffic spike, and slow connection creation can cause failures before
+the maximum is reached. Equal sizes reduce this risk after pool population but
+do not guarantee immediate readiness. They also use more idle database
+connections and can increase baseline resource use and initialization time.
+Check the total connection budget across OJP nodes before using this setting.
+The 250 ms acquisition floor is specific to HikariCP; DBCP2's internal
+acquisition behavior differs.
+
 ### Switching to DBCP
 
 To use Apache Commons DBCP2 instead of HikariCP:
@@ -56,7 +75,7 @@ ojp.datasource.provider=dbcp
 |----------|-------------|
 | `ojp.connection.pool.maximumPoolSize` | Maximum pool size |
 | `ojp.connection.pool.minimumIdle` | Minimum idle connections |
-| `ojp.connection.pool.connectionTimeout` | Connection timeout (ms) |
+| `ojp.connection.pool.connectionTimeout` | Admission wait budget (ms); backend pool borrow is fail-fast |
 | `ojp.connection.pool.idleTimeout` | Idle timeout (ms) |
 | `ojp.connection.pool.maxLifetime` | Max connection lifetime (ms) |
 | `ojp.datasource.provider` | Provider ID (hikari, dbcp) |

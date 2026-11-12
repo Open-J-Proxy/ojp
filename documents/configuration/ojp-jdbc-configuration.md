@@ -334,6 +334,23 @@ Complete example configuration files for different environments are available:
 
 These examples demonstrate recommended settings for each environment and can be used as starting templates.
 
+For predictable, low latency, set `minimumIdle` equal to `maximumPoolSize`
+when database capacity permits. For example, a pool of 50 connections can use:
+
+```properties
+ojp.connection.pool.maximumPoolSize=50
+ojp.connection.pool.minimumIdle=50
+```
+
+OJP applies admission control before accessing the pool. With HikariCP, the
+internal acquisition timeout is effectively 250 ms; connection creation that
+takes longer can cause failures during cold starts or traffic spikes before
+the maximum is reached. Equal sizes reduce this risk after the pool is
+populated, but do not guarantee immediate readiness. They also use more idle
+connections, increase baseline resource consumption, and can slow pool
+initialization. Size against the database's total connection budget, including
+all OJP nodes. This is a workload-specific recommendation, not a requirement.
+
 ### Connection Pool Properties
 
 | Property                              | Type | Default | Description                                              | Since |
@@ -345,6 +362,10 @@ These examples demonstrate recommended settings for each environment and can be 
 | `ojp.connection.pool.maxLifetime`     | long | 1800000 | Maximum lifetime (ms) of a connection (30 minutes)       | 0.2.0-beta |
 | `ojp.connection.pool.connectionTimeout` | long | 10000   | Semaphore admission wait budget (ms) for non-XA requests; pool acquisition is fail-fast  | 0.2.0-beta |
 | `ojp.connection.pool.defaultTransactionIsolation` | string/int | READ_COMMITTED | Default transaction isolation level (see below) | 0.2.0-beta |
+
+For HikariCP, OJP sets the internal pool acquisition timeout to 1 ms; HikariCP
+clamps it to 250 ms. This is separate from the configured admission wait
+budget. The behavior of other pool providers may differ.
 
 **Note**: These properties can be used with or without a datasource name prefix. For example:
 - `ojp.connection.pool.maximumPoolSize=20` (default datasource)
@@ -579,7 +600,7 @@ When using XA (distributed transaction) connections via `OjpXADataSource` **with
 |----------|------|---------|-------------|-------|
 | `ojp.xa.connection.pool.enabled` | boolean | true | Enable/disable XA connection pooling | 0.2.0-beta |
 | `ojp.xa.connection.pool.maxTotal` | int | 20 | Maximum XA backend sessions per server | 0.2.0-beta |
-| `ojp.xa.connection.pool.minIdle` | int | 5 | Minimum idle XA sessions (pre-warmed) | 0.2.0-beta |
+| `ojp.xa.connection.pool.minIdle` | int | 5 | Minimum idle XA sessions to maintain; initial population may take time | 0.2.0-beta |
 | `ojp.xa.connection.pool.connectionTimeout` | long | 20000 | Semaphore admission wait budget (ms) for XA requests; backend pool borrow is fail-fast | 0.2.0-beta |
 | `ojp.xa.connection.pool.idleTimeout` | long | 600000 | Max idle time (ms) before eviction (10 minutes) | 0.2.0-beta |
 | `ojp.xa.connection.pool.maxLifetime` | long | 1800000 | Max lifetime (ms) of XA session (30 minutes) | 0.2.0-beta |

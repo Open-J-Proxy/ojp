@@ -430,7 +430,7 @@ ojp.connection.pool.idleTimeout=300000
 # Maximum lifetime of any connection (milliseconds)
 ojp.connection.pool.maxLifetime=900000
 
-# Timeout for acquiring a connection from the pool (milliseconds)
+# Admission wait budget (milliseconds); backend pool borrow is fail-fast
 ojp.connection.pool.connectionTimeout=15000
 
 # === Multinode-Specific Configuration ===
@@ -449,6 +449,12 @@ ojp.multinode.retryDelayMs=5000
 # When false, uses legacy round-robin distribution
 ojp.loadaware.selection.enabled=true
 ```
+
+For latency-sensitive workloads, consider setting `minimumIdle` equal to
+`maximumPoolSize` so each server has less connection creation to do during a
+traffic spike. This does not make connections ready immediately. It also
+increases idle connections and baseline database use, so include all OJP
+servers in the database connection budget before choosing the pool size.
 
 ### Server-Side Configuration
 

@@ -413,11 +413,16 @@ Consider a typical scenario where an application executes 10 XA transactions seq
 
 The session reset operation that runs between transactions adds only 10-50ms of overhead, which is negligible compared to typical transaction execution times. This reset operation cleans up transaction state while keeping the physical connection open, ensuring that each transaction starts with a clean slate.
 
-### Pool Pre-Warming
+### Pool Initialization and Resizing
 
-OJP's backend session pool supports pre-warming through the `minIdle` configuration parameter. When the server starts, it immediately creates the configured number of idle sessions, establishing database connections and adding them to the pool. This means the first client requests don't wait for connection establishment—they find ready-to-use sessions waiting in the pool.
+`minIdle` sets the target number of idle XA sessions. Initial pool creation does
+not synchronously create every session, so the first request may still need to
+open a physical database connection. Connection creation can take time.
 
-Pre-warming is particularly valuable in multinode deployments. When a server fails and traffic shifts to the remaining servers, OJP automatically increases the pool size on those servers and pre-warms additional connections. This happens asynchronously, ensuring that the increased load doesn't create a connection establishment bottleneck.
+When an XA pool is resized, OJP attempts to create idle sessions to meet the
+new minimum. This can reduce connection creation after a resize, but it does
+not guarantee that all sessions are ready immediately or remove the need to
+size the database connection budget for all nodes.
 
 ### Two-Phase Commit Overhead
 
@@ -490,7 +495,10 @@ Transaction completed successfully: xid=tx-11111, duration=1234ms, state=COMMITT
 
 Pool exhaustion is the most common issue with XA transactions. The symptom is `PoolExhaustedException` or long wait times when borrowing sessions. The solution depends on the cause:
 
-If you're seeing pool exhaustion during normal load, increase `maxTotal`. A good rule of thumb is to configure `maxTotal` to 1.5-2x your peak concurrent XA transaction count. If pool exhaustion occurs only during traffic spikes, increasing `minIdle` helps by pre-warming more connections.
+If you're seeing pool exhaustion during normal load, increase `maxTotal` only
+when the database has capacity. If exhaustion occurs during traffic spikes,
+increasing `minIdle` can reduce connection creation after the pool reaches the
+new target, but does not make all sessions ready immediately.
 
 If pool exhaustion persists even after increasing limits, you likely have a connection leak. Check that your application always closes `XAConnection` objects in finally blocks or try-with-resources statements:
 

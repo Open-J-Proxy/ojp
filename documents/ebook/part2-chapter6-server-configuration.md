@@ -350,6 +350,11 @@ Timeout settings for acquiring slots provide backpressure when pools are exhaust
 For pooled lazy session allocation, OJP uses admission semaphores as the timeout owner and backend pool borrow is forced to fail fast. This avoids additive waits (admission wait + pool borrow wait) under saturation and keeps behavior consistent across XA and non-XA paths.
 When slow query segregation is enabled, `ojp.server.slowQuerySegregation.fastSlotTimeout` and `ojp.server.slowQuerySegregation.slowSlotTimeout` take precedence for fast/slow lane admission waits.
 
+For the default HikariCP provider, OJP sets its internal acquisition timeout to
+1 ms, which HikariCP clamps to 250 ms. If creating a physical connection takes
+longer, requests may fail during cold starts or traffic spikes before the pool
+reaches `maximumPoolSize`. See Chapter 5 for sizing guidance.
+
 Admission queue depth is also bounded to prevent unbounded waiter buildup under heavy surge traffic. Configure this with `ojp.server.admissionControl.maxQueueDepth` (default `0`, which auto-calculates as `totalSlots × 2` per semaphore, where `totalSlots` is the pool slot count used by admission control). This limit applies to **all** admission-control modes.
 
 ```bash

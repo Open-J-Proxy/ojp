@@ -146,6 +146,21 @@ try {
 | `properties` | Map<String,String> | empty | Additional driver/pool properties |
 | `metricsPrefix` | String | null | Prefix for metrics naming |
 
+When OJP's server creates a pool, it sets the backend borrow timeout to 1 ms so
+the admission semaphore owns the wait budget. HikariCP enforces a 250 ms
+minimum, so its effective internal acquisition timeout is 250 ms. This server
+behavior is distinct from the `PoolConfig` default shown above, which applies
+when creating a provider DataSource directly.
+
+For predictable latency in an OJP server deployment, consider setting
+`ojp.connection.pool.minimumIdle` equal to
+`ojp.connection.pool.maximumPoolSize` when database capacity allows. This
+reduces connection creation during traffic spikes after the pool has
+populated, but does not make connections ready immediately. It also uses more
+idle connections and can slow initialization. The 250 ms acquisition floor
+describes HikariCP; alternative providers such as DBCP2 have their own
+acquisition behavior.
+
 ### Provider-Specific Properties
 
 Pass provider-specific properties using the `properties` map:

@@ -564,6 +564,7 @@ OJP uses a single timeout owner for pooled lazy session allocation: the admissio
 
 - `ojp.connection.pool.connectionTimeout` (non-XA) and `ojp.xa.connection.pool.connectionTimeout` (XA) define the admission wait budget.
 - Backend pool borrow is configured fail-fast after admission.
+- For the default HikariCP provider, OJP sets the internal acquisition timeout to 1 ms; HikariCP clamps it to 250 ms. If new physical connections take longer to create, requests can fail during cold starts or traffic spikes even when the pool has not reached `maximumPoolSize`.
 - This prevents additive latency under contention (admission wait + pool borrow wait), and keeps timeout semantics consistent across XA and non-XA paths.
 - With slow query segregation enabled, operations are routed to fast/slow slot lanes for isolation, and `ojp.server.slowQuerySegregation.fastSlotTimeout` / `ojp.server.slowQuerySegregation.slowSlotTimeout` take precedence for lane admission waits.
 

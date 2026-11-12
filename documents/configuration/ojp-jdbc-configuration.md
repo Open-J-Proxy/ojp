@@ -713,7 +713,7 @@ Add the OJP JDBC driver dependency to your project:
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 ```
 

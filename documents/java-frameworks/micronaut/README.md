@@ -94,7 +94,7 @@ use OJP XA connections (`OjpXADataSource`), add the following dependency:
 <dependency>
     <groupId>jakarta.transaction</groupId>
     <artifactId>jakarta.transaction-api</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 ```
 

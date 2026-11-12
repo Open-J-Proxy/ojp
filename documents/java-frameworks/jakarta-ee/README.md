@@ -39,7 +39,7 @@ OJP can manage all pooling centrally on the proxy server.
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-jdbc-driver</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 ```
 
@@ -304,7 +304,7 @@ public class DeploymentFactory {
 <dependency>
     <groupId>org.glassfish.main.extras</groupId>
     <artifactId>glassfish-embedded-all</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
     <scope>test</scope>
 </dependency>
 
@@ -312,13 +312,13 @@ public class DeploymentFactory {
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-api</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
     <scope>test</scope>
 </dependency>
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-simple</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
     <scope>test</scope>
 </dependency>
 ```
@@ -380,12 +380,12 @@ two options:
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-api</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-simple</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 ```
 
@@ -406,13 +406,13 @@ not supply `slf4j-api` or `jakarta.transaction-api` by default. Add both to your
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-api</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 <!-- SLF4J implementation — Logback is a common choice for Tomcat apps -->
 <dependency>
     <groupId>ch.qos.logback</groupId>
     <artifactId>logback-classic</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 
 <!-- JTA API — required only if using OJP XA connections (OjpXADataSource) -->
@@ -420,7 +420,7 @@ not supply `slf4j-api` or `jakarta.transaction-api` by default. Add both to your
 <dependency>
     <groupId>jakarta.transaction</groupId>
     <artifactId>jakarta.transaction-api</artifactId>
-    <version>1.0.0-RC1</version>
+    <version>1.0.7</version>
 </dependency>
 ```
 

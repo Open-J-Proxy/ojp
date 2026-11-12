@@ -162,15 +162,15 @@ public class CommonsPool2XADataSource {
     
     // Dynamic resizing for failover
     public void setMaxTotal(int maxTotal) { /* Resize pool */ }
-    public void setMinIdle(int minIdle) { /* Pre-warm connections */ }
+    public void setMinIdle(int minIdle) { /* Attempt to grow the idle pool */ }
 }
 ```
 
 ### Pool Configuration
 
-Default values (per server):
+Example sizes per server:
 - `maxTotal`: 11 (maximum active sessions)
-- `minIdle`: 10 (pre-warmed idle sessions)
+- `minIdle`: 10 (target minimum idle sessions; initial population may take time)
 - `maxWait`: 20 seconds (borrow timeout)
 
 Multinode division:
@@ -421,15 +421,15 @@ public XABackendSession connect(ConnectionDetails details) {
 **Scenario**: 2 servers, maxTotal=22, minIdle=20
 
 **Initial State**:
-- Server 1: maxTotal=11, minIdle=10, idle=10
-- Server 2: maxTotal=11, minIdle=10, idle=10
+- Server 1: maxTotal=11, minIdle=10 (idle count can be lower during population)
+- Server 2: maxTotal=11, minIdle=10 (idle count can be lower during population)
 
 **Server 1 Fails**:
 1. Health check detects failure
 2. `processClusterHealth()` called with Server 1=DOWN, Server 2=UP
 3. Server 2 pool resized: maxTotal=22, minIdle=20
-4. `setMinIdle(20)` pre-warms 10 additional connections
-5. Server 2 now handles all traffic with 20 idle + capacity for 2 more active
+4. `setMinIdle(20)` attempts to create 10 additional idle connections
+5. Server 2 now handles all traffic, with up to 20 idle sessions if creation succeeds
 
 **Server 1 Recovers**:
 1. Health check detects recovery (periodic 5-second heartbeat)
@@ -557,10 +557,9 @@ Pre-warmed 10 idle connections successfully
 - ✅ No connection recreation overhead between transactions
 - ✅ Session reset (10-50ms) vs. connection creation (100-500ms)
 
-**Pool Pre-Warming**:
-- ✅ Idle connections pre-created at startup (minIdle)
-- ✅ Zero latency on first borrow (connection already open)
-- ✅ Automatic expansion during failover (setMinIdle pre-warms immediately)
+**Pool Population**:
+- The initial `minIdle` is a target, not a guarantee that every connection is ready at startup.
+- During failover resizing, `setMinIdle` attempts to create additional idle connections; creation can take time or fail.
 
 **Load Distribution**:
 - ✅ SessionTracker provides accurate session counts

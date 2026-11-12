@@ -716,9 +716,9 @@ quarkus.datasource.health.enabled=true
 endpoints.health.jdbc.enabled=true
 ```
 
-Third, configure appropriate timeouts at both the framework level and in your OJP properties file. The framework's datasource timeout should be slightly longer than OJP's connection acquisition timeout to avoid racing error conditions. This ensures OJP's circuit breaker can trip before your framework timeout fires, giving you clearer error messages.
+Third, configure appropriate timeouts at both the framework level and in your OJP properties file. The framework's datasource timeout should exceed OJP's configured admission wait budget, with room for network overhead. This budget does not extend HikariCP's internal backend acquisition timeout, which is effectively 250 ms in OJP's current implementation.
 
-**[IMAGE PROMPT: Create a timing diagram showing timeout coordination. Show three horizontal bars representing different timeout layers from top to bottom: "Framework Datasource Timeout" (90s), "OJP Connection Acquisition" (60s), and "Database Query Timeout" (30s). Use arrows and labels to show cascading timeout behavior: if database times out, OJP catches it; if OJP times out, framework catches it. Style: Technical timing diagram with color-coded layers and clear duration labels.]**
+**[IMAGE PROMPT: Create a timing diagram showing timeout coordination. Show four horizontal bars: "Framework Datasource Timeout" (90s), "OJP Admission Wait Budget" (60s), "HikariCP Backend Acquisition" (250ms), and "Database Query Timeout" (30s). Explain that admission waiting and backend pool acquisition are separate, and database query execution starts after a connection is acquired. Use color-coded layers and clear duration labels.]**
 
 Fourth, leverage your framework's transaction management properly. Use `@Transactional` annotations (or equivalent) to define clear transaction boundaries. OJP tracks transaction state across the virtual connection, ensuring that real database connections are held only for the duration of your transactions, not the entire HTTP request.
 

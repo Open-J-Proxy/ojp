@@ -12,6 +12,7 @@ OJP now puts an **admission gate** in front of pooled database work.
   - **fast lane** for normal queries
   - **slow lane** for queries that learned to be slow over time
 - After a request passes the gate, backend pool borrow is **fail-fast**. The main waiting happens at the admission gate, not deep inside the pool.
+- For the default HikariCP provider, OJP's internal borrow timeout is effectively 250 ms: OJP requests 1 ms and HikariCP enforces its 250 ms minimum.
 
 ```mermaid
 flowchart LR

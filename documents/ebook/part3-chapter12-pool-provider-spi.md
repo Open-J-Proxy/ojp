@@ -49,6 +49,17 @@ HikariCP excels in high-throughput scenarios where connection acquisition latenc
 
 The trade-off? HikariCP prioritizes performance over flexibility. Its configuration is intentionally streamlined—exposing fewer knobs than alternatives because the maintainers believe the defaults are right for 95% of use cases. If you need advanced connection pool behaviors like custom validation logic or complex eviction strategies, HikariCP may feel constraining.
 
+For predictable, low latency, set `ojp.connection.pool.minimumIdle` equal to
+`ojp.connection.pool.maximumPoolSize` when the database connection budget
+allows. OJP applies admission control before borrowing from the pool. Its
+HikariCP acquisition timeout is effectively 250 ms; when the minimum idle
+count is lower than the maximum, connection creation during a cold start or
+traffic spike can take longer and cause failures before the maximum is
+reached. Equal sizes reduce this risk after the pool is populated, but do not
+guarantee immediate readiness. They also keep more database connections idle
+and can slow initialization. This recommendation is workload-specific; the
+250 ms floor applies to HikariCP, not every provider.
+
 ```java
 // HikariCP provider automatically selected (highest priority)
 PoolConfig config = PoolConfig.builder()

@@ -5,6 +5,14 @@ Different databases have unique characteristics, configuration requirements, and
 > **🚨 Important for Version 0.4.0-beta and Later:**  
 > JDBC drivers must be downloaded before running ojp-server. See [Chapter 4: Database Drivers](part2-chapter4-database-drivers.md) for complete setup instructions for both JAR and Docker deployments.
 
+The pool properties below apply to OJP's server-side pool. `connectionTimeout`
+is the admission wait budget, not the physical connection creation timeout.
+With HikariCP, OJP's internal acquisition timeout is effectively 250 ms. For
+predictable, low latency, consider setting `minimumIdle` equal to
+`maximumPoolSize` when the database connection budget permits; this reduces
+connection creation during spikes but does not make connections ready
+immediately.
+
 ## PostgreSQL
 
 PostgreSQL is one of the most popular open-source databases and works exceptionally well with OJP. Its robust connection handling and standards compliance make it a natural fit.
@@ -20,26 +28,22 @@ jdbc:ojp://localhost:9059/postgres?user=myuser&password=mypass
 
 ### Recommended Pool Settings
 
-For PostgreSQL, the following pool settings provide a good starting point:
+For PostgreSQL, the following pool settings provide a resource-conscious starting point:
 
 ```properties
-maximumPoolSize=20
-minimumIdle=5
-connectionTimeout=30000
-idleTimeout=600000
-maxLifetime=1800000
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+ojp.connection.pool.connectionTimeout=30000
+ojp.connection.pool.idleTimeout=600000
+ojp.connection.pool.maxLifetime=1800000
 ```
 
 PostgreSQL handles connections efficiently, so you can be generous with pool sizes. However, remember that each connection consumes about 10MB of memory on the database server.
 
 ### Connection Validation
 
-PostgreSQL's `SELECT 1` is lightweight and recommended for validation:
-
-```properties
-connectionTestQuery=SELECT 1
-validationTimeout=5000
-```
+The default HikariCP provider uses the driver's JDBC4 connection validity
+check; no validation-query property is needed for this example.
 
 ### SSL/TLS Configuration
 
@@ -139,26 +143,22 @@ jdbc:ojp://localhost:9059/mariadb?user=root&password=secret
 
 ### Recommended Pool Settings
 
-MySQL benefits from lower connection timeouts due to its connection handling:
+Use an admission wait budget that fits your workload:
 
 ```properties
-maximumPoolSize=20
-minimumIdle=5
-connectionTimeout=20000
-idleTimeout=300000
-maxLifetime=1200000
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+ojp.connection.pool.connectionTimeout=20000
+ojp.connection.pool.idleTimeout=300000
+ojp.connection.pool.maxLifetime=1200000
 ```
 
 MySQL has a default `wait_timeout` of 8 hours, but connections can become stale. Use a shorter `maxLifetime` to recycle them.
 
 ### Connection Validation
 
-Use `SELECT 1` for validation (both MySQL and MariaDB support it):
-
-```properties
-connectionTestQuery=SELECT 1
-validationTimeout=3000
-```
+The default HikariCP provider uses the driver's JDBC4 connection validity
+check; no validation-query property is needed for this example.
 
 ### SSL/TLS Configuration
 
@@ -275,23 +275,18 @@ jdbc:ojp://localhost:9059/orcl.example.com?user=system&password=oracle
 Oracle connections are heavyweight. Use conservative pool settings:
 
 ```properties
-maximumPoolSize=10
-minimumIdle=3
-connectionTimeout=30000
-idleTimeout=600000
-maxLifetime=1800000
+ojp.connection.pool.maximumPoolSize=10
+ojp.connection.pool.minimumIdle=3
+ojp.connection.pool.connectionTimeout=30000
+ojp.connection.pool.idleTimeout=600000
+ojp.connection.pool.maxLifetime=1800000
 ```
 
 ### Connection Validation
 
-Oracle has special validation queries:
-
-```properties
-connectionTestQuery=SELECT 1 FROM DUAL
-validationTimeout=5000
-```
-
-Better yet, use Oracle's built-in validation:
+The default HikariCP provider uses the Oracle driver's JDBC4 connection
+validity check. For Oracle-specific driver options, use the driver's documented
+properties:
 ```properties
 oracle.jdbc.implicitStatementCacheSize=25
 oracle.net.CONNECT_TIMEOUT=20000
@@ -396,21 +391,17 @@ jdbc:ojp://localhost:9059/master;instanceName=SQLEXPRESS?user=sa&password=YourSt
 SQL Server handles connections efficiently:
 
 ```properties
-maximumPoolSize=20
-minimumIdle=5
-connectionTimeout=30000
-idleTimeout=600000
-maxLifetime=1800000
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.minimumIdle=5
+ojp.connection.pool.connectionTimeout=30000
+ojp.connection.pool.idleTimeout=600000
+ojp.connection.pool.maxLifetime=1800000
 ```
 
 ### Connection Validation
 
-Use SQL Server's validation query:
-
-```properties
-connectionTestQuery=SELECT 1
-validationTimeout=5000
-```
+The default HikariCP provider uses the driver's JDBC4 connection validity
+check; no validation-query property is needed for this example.
 
 ### SSL/TLS Configuration
 
@@ -501,9 +492,9 @@ jdbc:ojp://localhost:9059/~/testdb?user=sa&password=
 H2 is lightweight, use minimal pooling:
 
 ```properties
-maximumPoolSize=5
-minimumIdle=1
-connectionTimeout=10000
+ojp.connection.pool.maximumPoolSize=5
+ojp.connection.pool.minimumIdle=1
+ojp.connection.pool.connectionTimeout=10000
 ```
 
 ### Performance Tips

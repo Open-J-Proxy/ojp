@@ -40,7 +40,7 @@ public static Connection acquireConnection(HikariDataSource dataSource,
 }
 ```
 
-Pool configuration required recalibration for better high-concurrency behavior. The maximum pool size increased from 10 to 20 connections, providing more capacity for concurrent operations. Minimum idle connections decreased from 10 to 5, allowing the pool to scale down during quiet periods while maintaining a ready reserve. Connection timeout shortened from 30 seconds to 10 seconds, providing faster feedback when the pool is exhausted.
+Pool configuration required recalibration for better high-concurrency behavior. The maximum pool size increased from 10 to 20 connections, providing more capacity for concurrent operations. Minimum idle connections decreased from 10 to 5, allowing the pool to scale down during quiet periods; this value is a target, not a guarantee that every connection is ready. The admission wait budget shortened from 30 seconds to 10 seconds, providing faster feedback when capacity is exhausted. HikariCP's internal acquisition timeout remains effectively 250 ms in OJP's current implementation.
 
 Additional reliability improvements addressed related concerns. Leak detection with a 60-second threshold identifies connections that applications fail to close, preventing gradual pool exhaustion. Faster validation timeouts (5 seconds) ensure that broken connections don't waste time. JMX monitoring enables external tools to observe pool health. Unique pool names assist in diagnosing issues when multiple pools coexist.
 

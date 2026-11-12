@@ -148,9 +148,31 @@ Some databases require additional authentication parameters. Oracle might need `
 
 ### Connection Pool Exhaustion
 
-When all connections in OJP's pool are busy, new requests must wait. If they wait too long, connection timeout exceptions occur. This manifests as intermittent failures during peak load—requests succeed initially but start timing out as the pool fills.
+When all pool capacity is in use, requests wait at OJP's admission control up
+to the configured admission budget. After admission, pool acquisition is
+fail-fast. This can cause intermittent failures during peak load.
 
 Check connection pool metrics in Prometheus. `hikaricp_connections_active` shows busy connections, while `hikaricp_connections_idle` shows available connections. If idle connections drop to zero regularly, you've hit pool capacity.
+
+#### Failures During Pool Warm-Up
+
+With HikariCP, OJP's internal acquisition timeout is effectively 250 ms. If
+`minimumIdle` is below `maximumPoolSize`, the pool may need to create physical
+connections as demand grows. Slow creation can cause a request to fail even
+before the maximum is reached, especially during a cold start or sudden spike.
+
+For predictable, low latency, consider keeping the full pool idle when the
+database connection budget allows:
+
+```properties
+ojp.connection.pool.maximumPoolSize=50
+ojp.connection.pool.minimumIdle=50
+```
+
+This reduces connection creation during spikes once the pool is populated, but
+does not make all connections ready immediately. It also uses more idle
+database connections and may slow initialization. Check the database's total
+connection budget across all OJP nodes.
 
 Identify why connections aren't being released. The two most common causes:
 
@@ -172,10 +194,10 @@ Increase pool size if your application legitimately needs more concurrent connec
 
 ```properties
 # Increase maximum pool size
-hikariCP.maximumPoolSize=50
+ojp.connection.pool.maximumPoolSize=50
 
 # Increase minimum idle connections
-hikariCP.minimumIdle=10
+ojp.connection.pool.minimumIdle=10
 ```
 
 Remember that each connection consumes database resources. Don't set pool sizes arbitrarily large—size them based on measured concurrent connection needs.
@@ -216,29 +238,29 @@ When connections time out, you need to determine where the timeout occurs—at t
 JDBC driver timeouts are configured in your connection properties:
 
 ```properties
-# Connection timeout in milliseconds
-ojp.connection.timeout=30000
+# Admission wait budget in milliseconds
+ojp.connection.pool.connectionTimeout=30000
 
 # Query timeout in seconds
 queryTimeout=60
 ```
 
-If connections time out before queries complete, increase `ojp.connection.timeout`. If queries themselves time out, either increase `queryTimeout` or optimize the queries.
+If requests time out while waiting for admission, adjust
+`ojp.connection.pool.connectionTimeout` based on workload needs. If queries
+themselves time out, adjust `queryTimeout` or optimize the queries.
 
-OJP Server has its own timeout settings for backend database connections. Check `ojp-server-config.properties`:
+OJP applies the configured admission wait budget before accessing the backend
+pool. With HikariCP, its internal acquisition timeout is effectively 250 ms:
 
 ```properties
-# Maximum connection lifetime (milliseconds)
-hikariCP.maxLifetime=600000
-
-# Connection timeout to database (milliseconds)  
-hikariCP.connectionTimeout=10000
+# Admission wait budget for non-XA requests
+ojp.connection.pool.connectionTimeout=10000
 ```
 
 Database timeouts require checking database server configuration. PostgreSQL has `statement_timeout` and `idle_in_transaction_session_timeout`. MySQL has `wait_timeout` and `interactive_timeout`. These database-side timeouts can terminate connections or queries even if OJP's timeouts are generous.
 
 Coordinate timeouts across layers. As a general rule:
-- Application query timeout < OJP connection timeout < Database statement timeout
+- Application query timeout < OJP admission wait budget < Database statement timeout
 - This ensures timeouts happen at the application layer where you can handle them gracefully, rather than deeper in the stack where they cause more disruptive failures.
 
 ## G.4 Performance Problems
@@ -283,7 +305,7 @@ High network latency (>10ms) significantly impacts query performance, especially
 Connection pool configuration affects latency. If `minimumIdle` is too low, requests must wait for new connections to be established. Set `minimumIdle` to handle your typical concurrent request load:
 
 ```properties
-hikariCP.minimumIdle=20
+ojp.connection.pool.minimumIdle=20
 ```
 
 Too many concurrent connections can also cause latency. If you're maxing out database connection limits, queries queue waiting for database connections to become available. This is a capacity issue—scale your database or reduce concurrent query load.
@@ -313,7 +335,7 @@ ResultSet rs = stmt.executeQuery(sql);
 Too many concurrent connections multiplied by per-connection memory overhead. Each connection consumes heap space for connection state, buffers, and metadata. Reduce `maximumPoolSize` if memory becomes constrained:
 
 ```properties
-hikariCP.maximumPoolSize=30
+ojp.connection.pool.maximumPoolSize=30
 ```
 
 Tune JVM heap size based on observed usage. Allocate enough heap for peak load plus headroom for garbage collection:
@@ -440,7 +462,7 @@ ALTER DATABASE mydb SET idle_in_transaction_session_timeout = 600000;  -- 10 min
 
 ```properties
 # In ojp.properties
-hikariCP.maxLifetime=540000  -- 9 minutes, less than PostgreSQL timeout
+ojp.connection.pool.maxLifetime=540000  -- 9 minutes, less than PostgreSQL timeout
 ```
 
 PostgreSQL's connection limit is per-database-instance. If you hit `too many connections` errors, either increase PostgreSQL's `max_connections` setting or reduce OJP's connection pool size:
@@ -470,7 +492,7 @@ SET GLOBAL wait_timeout = 28800;     -- 8 hours
 
 ```properties
 # In ojp.properties
-hikariCP.maxLifetime=25200000  -- 7 hours
+ojp.connection.pool.maxLifetime=25200000  -- 7 hours
 ```
 
 Character encoding issues cause garbled data in results. Ensure consistent encoding throughout the stack:
@@ -709,8 +731,8 @@ When network connectivity fails between OJP Server and the database, the impact 
 6. **Monitor pool recovery**: Watch HikariCP metrics for successful connection creation and health checks passing
 
 **Prevention strategies**:
-- Enable HikariCP's connection test query: `hikariCP.connectionTestQuery=SELECT 1`
-- Set aggressive connection timeouts to fail fast: `hikariCP.connectionTimeout=5000`
+- Enable connection validation using the selected provider's supported configuration.
+- Set the admission wait budget to match the workload: `ojp.connection.pool.connectionTimeout=5000`
 - Deploy monitoring that alerts on database connectivity before pools exhaust
 - Use database high-availability solutions (replication, clustering) for automatic failover
 
@@ -782,7 +804,7 @@ When databases experience performance degradation, the effects ripple through OJ
 6. **Monitor recovery**: Watch for connection pool utilization decreasing and query latency returning to normal
 
 **Prevention strategies**:
-- Implement query timeout limits: `hikariCP.connectionTimeout`, `hikariCP.validationTimeout`
+- Implement query timeout limits and configure OJP's admission wait budget: `ojp.connection.pool.connectionTimeout`
 - Enable slow query segregation (Chapter 8) to isolate problematic queries in mixed workloads (for pure OLTP/OLAP, keep it disabled unless monitoring shows benefit)
 - Set application-level timeouts shorter than database timeouts
 - Implement circuit breakers in applications to fail fast
@@ -810,8 +832,8 @@ When one pool exhausts its connections, it can trigger exhaustion in other pools
 5. **Monitor for stability**: Ensure pools remain healthy before fully restoring traffic
 
 **Prevention strategies**:
-- Configure appropriate maximum pool sizes: `hikariCP.maximumPoolSize`
-- Implement connection acquisition timeouts: `hikariCP.connectionTimeout=30000`
+- Configure appropriate maximum pool sizes: `ojp.connection.pool.maximumPoolSize`
+- Configure the admission wait budget: `ojp.connection.pool.connectionTimeout=30000`
 - Use HikariCP's leak detection: `ojp.connection.pool.leakDetectionThreshold=300000` (note: enabling this in OJP may produce false-positive warnings for normal long-lived client sessions, since OJP holds one connection per session by design)
 - Deploy sufficient OJP server capacity with headroom for traffic spikes
 - Implement application-level retry limits to prevent request amplification
@@ -957,7 +979,7 @@ PostgreSQL commonly uses streaming replication with automatic failover tools lik
 **Handling with OJP**:
 1. **Use DNS for database addressing**: Point JDBC URLs to DNS names that update during failover
 2. **Configure read-write split**: Use separate JDBC URLs for read replicas vs. primary
-3. **Set aggressive connection validation**: `hikariCP.connectionTestQuery=SELECT 1`, `hikariCP.validationTimeout=3000`
+3. **Set connection validation** using the provider's supported configuration when needed.
 4. **Implement application retry logic**: Applications should retry failed transactions
 5. **Monitor failover metrics**: Track connection creation failures during failover
 
@@ -972,7 +994,7 @@ MySQL replication with MHA or ProxySQL provides automatic failover. The process 
 
 **Handling with OJP**:
 1. **Configure semi-synchronous replication**: Reduces data loss risk during failover
-2. **Set connection timeouts appropriately**: `hikariCP.connectionTimeout=10000`
+2. **Set the admission wait budget appropriately**: `ojp.connection.pool.connectionTimeout=10000`
 3. **Test failover procedures**: Regular failover drills ensure smooth operation
 
 #### Oracle RAC Failover
@@ -1040,7 +1062,7 @@ jmap -dump:live,format=b,file=heap.hprof <pid>
 **Immediate recovery**:
 1. **Restart server**: Only way to recover from OOME
 2. **Increase heap size temporarily**: Add more RAM if available
-3. **Reduce connection pool sizes**: Lower `hikariCP.maximumPoolSize` to reduce memory footprint
+3. **Reduce connection pool sizes**: Lower `ojp.connection.pool.maximumPoolSize` to reduce memory footprint
 4. **Limit concurrent queries**: Reduce application load while investigating
 
 **Root cause analysis**:
@@ -1087,7 +1109,7 @@ jstack <pid> | grep -A 5 "State: BLOCKED"
 **Prevention**:
 - Configure appropriate thread pool sizes
 - Implement query timeouts at application and database levels
-- Use connection timeouts to fail fast: `hikariCP.connectionTimeout=30000`
+- Set the admission wait budget: `ojp.connection.pool.connectionTimeout=30000`
 - Monitor thread utilization and alert on high usage
 - Implement request rate limiting at application level
 
@@ -1119,7 +1141,7 @@ WARN HikariPool - Connection leak detection triggered for conn123, stack trace f
 1. **Identify leaking code**: Stack traces reveal where connections are acquired but not closed
 2. **Fix resource management**: Ensure try-with-resources or finally blocks close connections
 3. **Increase pool size temporarily**: Provide more connections while fixing leaks
-4. **Enable max lifetime**: `hikariCP.maxLifetime=1800000` (30 minutes) forces connection recycling
+4. **Enable max lifetime**: `ojp.connection.pool.maxLifetime=1800000` (30 minutes) forces connection recycling
 
 **Code pattern fix**:
 ```java
@@ -1204,10 +1226,8 @@ Once identified, poison queries require immediate mitigation to prevent system i
 Query governors limit impact of problematic queries by enforcing execution constraints.
 
 **Statement timeout governor**:
-```properties
-# Set maximum query execution time
-hikariCP.connectionInitSql=SET statement_timeout = '30s'
-```
+Configure the maximum query execution time using the database's supported
+setting, such as a PostgreSQL role-level `statement_timeout`.
 
 **Resource governor** (database-specific):
 ```sql

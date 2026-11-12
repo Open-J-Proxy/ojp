@@ -105,7 +105,7 @@ The network protocol underlying gRPC communication in OJP. HTTP/2's multiplexing
 An operation that produces the same result whether executed once or multiple times. In distributed transactions, idempotent operations are crucial for handling retries and failures safely.
 
 **Idle Connection**  
-A connection in the pool that is not currently being used by a client. OJP maintains a minimum number of idle connections (`minimumIdle`) to ensure quick response times.
+A connection in the pool that is not currently being used by a client. OJP's `minimumIdle` setting guides how many idle connections the pool maintains; new connections can still take time to create, so this does not guarantee they are immediately ready.
 
 ---
 

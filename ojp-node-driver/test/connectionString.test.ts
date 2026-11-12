@@ -32,4 +32,15 @@ describe('parseOjpUrl', () => {
   it('should throw an error when an endpoint has no valid port', () => {
     expect(() => parseOjpUrl('jdbc:ojp[localhost]_postgresql://localhost:5432/mydb')).toThrow();
   });
+
+  it.each(['0', '-1', '1.5', 'Infinity', '65536', '', '1059:extra'])(
+    'rejects invalid endpoint port %s',
+    (port) => {
+      expect(() => parseOjpUrl(`jdbc:ojp[localhost:${port}]_h2:mem:test`)).toThrow();
+    },
+  );
+
+  it.each(['1', '65535'])('accepts valid boundary port %s', (port) => {
+    expect(parseOjpUrl(`jdbc:ojp[localhost:${port}]_h2:mem:test`).endpoints[0].port).toBe(Number(port));
+  });
 });

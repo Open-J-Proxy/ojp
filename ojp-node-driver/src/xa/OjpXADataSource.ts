@@ -7,7 +7,7 @@ import { OjpXAConnection } from './OjpXAConnection';
  * `isXA=true`, ready to be enlisted in a distributed transaction.
  *
  * ```ts
- * const xaDs = new OjpXADataSource('ojp://localhost:1059_h2:mem:testdb', { insecure: true });
+ * const xaDs = new OjpXADataSource('jdbc:ojp[localhost:1059]_h2:mem:testdb', { insecure: true });
  * const xaConn = await xaDs.getXAConnection();
  * const xaRes = xaConn.getXAResource();
  * const conn = xaConn.getConnection();

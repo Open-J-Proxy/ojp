@@ -52,6 +52,9 @@ export function toOjpError(err: unknown): Error {
       if (Buffer.isBuffer(raw)) {
         const decoded = decodeSqlErrorResponse(raw);
         if (decoded) {
+          if (decoded.sqlErrorType === 'SQL_TRANSIENT_CONNECTION_EXCEPTION') {
+            return new OjpConnectionError(decoded.reason || grpcError.message, err);
+          }
           return new OjpSqlError(decoded.reason || grpcError.message, decoded);
         }
       }
@@ -83,7 +86,19 @@ const CONNECTION_LEVEL_MESSAGE_PATTERN = /connection|timeout|unavailable|failed 
  * errors must not, since they'd fail identically against any node.
  */
 export function isConnectionLevelError(err: unknown): boolean {
-  const grpcError = err as { code?: number; message?: string; details?: string } | undefined;
+  const grpcError = err as {
+    code?: number;
+    message?: string;
+    details?: string;
+    metadata?: { get(key: string): unknown[] };
+  } | undefined;
+  const raw = grpcError?.metadata?.get(SQL_ERROR_METADATA_KEY)[0];
+  if (Buffer.isBuffer(raw)) {
+    const decoded = decodeSqlErrorResponse(raw);
+    if (decoded) {
+      return decoded.sqlErrorType === 'SQL_TRANSIENT_CONNECTION_EXCEPTION';
+    }
+  }
   if (!grpcError || typeof grpcError.code !== 'number') {
     return false;
   }

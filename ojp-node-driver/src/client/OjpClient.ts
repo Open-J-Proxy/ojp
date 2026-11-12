@@ -135,6 +135,9 @@ export class OjpClient {
       user: this.options.user ?? '',
       password: this.options.password ?? '',
       clientUUID: this.clientUUID,
+      properties: this.parsedUrl.dataSourceName
+        ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
+        : [],
       serverEndpoints: this.parsedUrl.endpoints.map((e) => `${e.host}:${e.port}`),
       isXA: !!this.options.xa,
     };

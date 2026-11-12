@@ -40,9 +40,10 @@ export function parseOjpUrl(url: string): ParsedOjpUrl {
     : endpointsSection;
 
   const endpoints = endpointsWithoutDataSource.split(',').map((entry) => {
-    const [host, portStr] = entry.trim().split(':');
+    const [host, portStr, ...extra] = entry.trim().split(':');
     const port = Number(portStr);
-    if (!host || Number.isNaN(port)) {
+    if (!host || !portStr || !/^\d+$/.test(portStr) || extra.length
+        || !Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error(`Invalid OJP endpoint: "${entry}" inside "${url}"`);
     }
     return { host, port };

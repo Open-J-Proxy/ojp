@@ -12,7 +12,7 @@
     "build": "tsc",
     "verify-types": "node scripts/verify-proto-types.js",
     "pretest": "node scripts/verify-proto-types.js",
-    "test": "jest test/valueMapper.test.ts test/connectionString.test.ts test/xa.test.ts",
+    "test": "jest --testPathIgnorePatterns=integration",
     "test:integration": "jest test/integration.ojpServer.test.ts",
     "test:lob-h2": "jest test/integration.lob.h2.test.ts",
     "test:sqlserver-ag": "jest test/integration.sqlServerAg.test.ts",

@@ -75,7 +75,7 @@ function loadProtoRoot() {
 function collectReachableTypes(root) {
   const service = root.lookupService('com.openjproxy.grpc.StatementService');
   const reachable = new Map();
-  const queue = [];
+  const queue = [root.lookupType('com.openjproxy.grpc.SqlErrorResponse')];
 
   for (const rpcName of IMPLEMENTED_RPCS) {
     const method = service.methods[rpcName];
@@ -103,9 +103,7 @@ function collectReachableTypes(root) {
   return reachable;
 }
 
-/** Parses types.ts and returns Map<exportedTypeName, Set<propertyName> | null>.
- *  `null` marks a type alias (e.g. a string-literal union modeling a proto enum) — presence
- *  is checked, but it has no properties to cross-check field-by-field. */
+/** Parses the message interfaces and string-literal enum aliases in types.ts. */
 function extractTsTypes(filePath) {
   const sourceText = fs.readFileSync(filePath, 'utf8');
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
@@ -119,9 +117,16 @@ function extractTsTypes(filePath) {
           props.add(member.name.getText(sourceFile));
         }
       }
-      types.set(node.name.text, props);
+      types.set(node.name.text, { kind: 'message', values: props });
     } else if (ts.isTypeAliasDeclaration(node)) {
-      types.set(node.name.text, null);
+      const members = ts.isUnionTypeNode(node.type) ? node.type.types : [node.type];
+      const values = new Set();
+      for (const member of members) {
+        if (ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal)) {
+          values.add(member.literal.text);
+        }
+      }
+      types.set(node.name.text, { kind: 'enum', values });
     }
   });
 
@@ -137,9 +142,9 @@ function main() {
   for (const [fullName, protoType] of reachableProtoTypes) {
     const shortName = fullName.slice(OJP_PACKAGE_PREFIX.length);
     const tsName = TYPE_NAME_OVERRIDES[shortName] || shortName;
-    const tsProps = tsTypes.get(tsName);
+    const tsType = tsTypes.get(tsName);
 
-    if (tsProps === undefined) {
+    if (tsType === undefined) {
       errors.push(
         `Missing TS type for proto message/enum "${shortName}" `
         + `(expected an interface or type named "${tsName}" in ${path.relative(process.cwd(), TYPES_PATH)}).`,
@@ -148,15 +153,22 @@ function main() {
     }
 
     const isMessage = protoType instanceof protobuf.Type;
-    if (isMessage && tsProps !== null) {
-      for (const field of protoType.fieldsArray) {
-        const camelName = toCamelCase(field.name);
-        if (!tsProps.has(camelName)) {
-          errors.push(
-            `Missing field "${camelName}" (proto field "${field.name}") on TS type "${tsName}" `
-            + `for message "${shortName}".`,
-          );
-        }
+    const expectedKind = isMessage ? 'message' : 'enum';
+    if (tsType.kind !== expectedKind) {
+      errors.push(`Expected TS ${expectedKind} for proto ${expectedKind} "${shortName}".`);
+      continue;
+    }
+    const expected = new Set(isMessage
+      ? protoType.fieldsArray.map((field) => toCamelCase(field.name))
+      : Object.keys(protoType.values));
+    for (const value of expected) {
+      if (!tsType.values.has(value)) {
+        errors.push(`Missing ${expectedKind === 'message' ? 'field' : 'enum value'} "${value}" on TS type "${tsName}".`);
+      }
+    }
+    for (const value of tsType.values) {
+      if (!expected.has(value)) {
+        errors.push(`Extra ${expectedKind === 'message' ? 'field' : 'enum value'} "${value}" on TS type "${tsName}".`);
       }
     }
   }

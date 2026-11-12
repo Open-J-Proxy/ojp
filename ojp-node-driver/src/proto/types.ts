@@ -196,11 +196,13 @@ export interface SessionTerminationStatus {
   terminated: boolean;
 }
 
+export type SqlErrorType = 'SQL_EXCEPTION' | 'SQL_DATA_EXCEPTION' | 'SQL_TRANSIENT_CONNECTION_EXCEPTION';
+
 export interface SqlErrorResponse {
   reason: string;
   sqlState: string;
   vendorCode: number;
-  sqlErrorType: 'SQL_EXCEPTION' | 'SQL_DATA_EXCEPTION' | 'SQL_TRANSIENT_CONNECTION_EXCEPTION';
+  sqlErrorType: SqlErrorType;
 }
 
 /** LobType enum from the .proto. */

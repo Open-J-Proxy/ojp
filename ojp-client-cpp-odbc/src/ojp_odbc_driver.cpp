@@ -8533,7 +8533,7 @@ static SQLRETURN get_connection_attribute(SQLHDBC connection, SQLINTEGER attribu
     }
     if (attribute == SQL_ATTR_QUIET_MODE) {
         *static_cast<SQLPOINTER*>(value) = reinterpret_cast<SQLPOINTER>(result_value);
-    } else if (attribute == SQL_ATTR_AUTOCOMMIT || attribute == SQL_ATTR_TXN_ISOLATION ||
+    } else if (attribute == SQL_ATTR_TXN_ISOLATION ||
                attribute == SQL_ATTR_ODBC_CURSORS) {
         *static_cast<SQLULEN*>(value) = result_value;
     } else {
@@ -8541,7 +8541,7 @@ static SQLRETURN get_connection_attribute(SQLHDBC connection, SQLINTEGER attribu
     }
     if (length != nullptr) {
         *length = attribute == SQL_ATTR_QUIET_MODE ? static_cast<SQLINTEGER>(sizeof(SQLPOINTER))
-            : (attribute == SQL_ATTR_AUTOCOMMIT || attribute == SQL_ATTR_TXN_ISOLATION ||
+            : (attribute == SQL_ATTR_TXN_ISOLATION ||
                attribute == SQL_ATTR_ODBC_CURSORS)
                 ? static_cast<SQLINTEGER>(sizeof(SQLULEN))
                 : static_cast<SQLINTEGER>(sizeof(SQLUINTEGER));

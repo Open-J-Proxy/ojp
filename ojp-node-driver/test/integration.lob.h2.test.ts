@@ -1,31 +1,17 @@
 /**
- * Real integration tests against an ojp-server + H2 running for real, focused on
- * `createLob`/`readLob` (BLOB/CLOB support via streaming).
- *
- * H2 is the only backend available in this development environment that reports a
- * genuine `java.sql.Types.CLOB` type (SQL Server always reports `LONGNVARCHAR`/
- * `LONGVARCHAR` and never triggers transparent CLOB dereferencing) — that's why native
- * CLOB read tests can only be validated here.
- *
- * Requires a local ojp-server running with the H2 driver loaded, for example:
- *   cd ojp-server
- *   mvn --% verify -Prun-ojp-server -DskipTests -Dgpg.skip=true ^
- *       -Dojp.server.port=1065 -Duser.timezone=UTC -Dojp.libs.path=ojp-server/ojp-libs
- *
- * Only runs when OJP_ENABLE_LOB_H2_TESTS=true, so it doesn't break the default
- * `npm test` in environments without this server running.
+ * Real OJP server and H2 LOB integration, enabled by OJP_ENABLE_LOB_H2_TESTS=true.
+ * Every CSV connection row runs the full suite.
  */
 import { OjpClient } from '../src/client/OjpClient';
+import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_LOB_H2_TESTS === 'true';
 const describeIfEnabled = enabled ? describe : describe.skip;
 
-const OJP_URL = process.env.OJP_TEST_H2_URL
-  ?? `jdbc:ojp[localhost:1065]_h2:mem:lobtest_${Date.now()};DB_CLOSE_DELAY=-1`;
-const OJP_USER = process.env.OJP_TEST_H2_USER ?? 'sa';
-const OJP_PASSWORD = process.env.OJP_TEST_H2_PASSWORD ?? '';
+const connections = readConnectionFixtures('h2_connections.csv', process.env.OJP_TEST_H2_CSV);
 
-describeIfEnabled('OjpClient - createLob/readLob (ojp-server + H2)', () => {
+describeIfEnabled.each(connections)('OjpClient - H2 LOBs: %s', (jdbcUrl, OJP_USER, OJP_PASSWORD) => {
+  const OJP_URL = ojpUrl(process.env.OJP_TEST_H2_ADDR ?? 'localhost:1059', jdbcUrl);
   const tableName = `ojp_lob_h2_test_${Date.now()}`;
 
   let client: OjpClient;

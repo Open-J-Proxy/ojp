@@ -1,12 +1,6 @@
 /**
- * Real XA (distributed transaction) integration tests against an ojp-server + PostgreSQL
- * running for real (not mocked). Requires the same environment as
- * `integration.ojpServer.test.ts`:
- *   - ojp-server listening on localhost:1065, with the PostgreSQL driver loaded
- *   - PostgreSQL reachable at OJP_TEST_BACKEND_URL (default: localhost:5442/ojptest)
- *
- * Only runs when OJP_ENABLE_XA_TESTS=true, so it doesn't break the default `npm test`
- * (unit tests, no external infrastructure) or the other integration suites.
+ * Real OJP server and PostgreSQL XA integration, enabled by OJP_ENABLE_XA_TESTS=true.
+ * PostgreSQL must have max_prepared_transactions enabled.
  */
 import { randomBytes } from 'crypto';
 import { OjpClient } from '../src/client/OjpClient';
@@ -15,13 +9,12 @@ import { OjpXAConnection } from '../src/xa/OjpXAConnection';
 import { OjpXaError } from '../src/xa/OjpXaError';
 import { Xid } from '../src/xa/xid';
 import * as XA from '../src/xa/xaConstants';
+import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_XA_TESTS === 'true';
 const describeIfEnabled = enabled ? describe : describe.skip;
 
-const OJP_URL = process.env.OJP_TEST_URL ?? 'jdbc:ojp[localhost:1065]_postgresql://localhost:5442/ojptest';
-const OJP_USER = process.env.OJP_TEST_USER ?? 'ojptest';
-const OJP_PASSWORD = process.env.OJP_TEST_PASSWORD;
+const connections = readConnectionFixtures('postgresql_connections.csv', process.env.OJP_TEST_POSTGRES_CSV);
 
 /** Generates a fresh, unique Xid for each test — formatId is an arbitrary value only meaningful within this test suite. */
 function newXid(): Xid {
@@ -32,7 +25,9 @@ function newXid(): Xid {
   };
 }
 
-describeIfEnabled('OjpXAResource - real integration (ojp-server + PostgreSQL)', () => {
+describeIfEnabled.each(connections)('OjpXAResource - PostgreSQL: %s', (jdbcUrl, OJP_USER, fixturePassword) => {
+  const OJP_URL = ojpUrl(process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059', jdbcUrl);
+  const OJP_PASSWORD = process.env.OJP_TEST_PASSWORD ?? fixturePassword;
   const tableName = `ojp_node_driver_xa_test_${Date.now()}`;
   const dataSource = new OjpXADataSource(OJP_URL, { user: OJP_USER, password: OJP_PASSWORD });
 

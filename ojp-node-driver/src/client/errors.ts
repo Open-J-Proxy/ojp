@@ -38,10 +38,11 @@ export class OjpConnectionError extends Error {
  *
  * If there's no structured metadata, the gRPC status code is checked next
  * (`isConnectionLevelError`) BEFORE falling back to the plain-text `details` field:
- * transport-level failures (unreachable server, connection refused/reset, cancelled
- * call) also populate `details` with a human-readable message (e.g. "No connection
+ * transport-level failures (unreachable server, connection refused/reset) also
+ * populate `details` with a human-readable message (e.g. "No connection
  * established. Last error: connect ECONNREFUSED ..."), which is NOT a SQL error — it
  * must be classified as OjpConnectionError so multinode failover can react to it.
+ * Cancellation is surfaced without marking the endpoint unhealthy or failing over.
  */
 export function toOjpError(err: unknown): Error {
   if (err instanceof Error) {
@@ -60,6 +61,9 @@ export function toOjpError(err: unknown): Error {
       }
     }
     if (isConnectionLevelError(grpcError)) {
+      return new OjpConnectionError(grpcError.message, err);
+    }
+    if (grpcError.code === grpc.status.CANCELLED) {
       return new OjpConnectionError(grpcError.message, err);
     }
     if (grpcError.details) {
@@ -105,13 +109,6 @@ export function isConnectionLevelError(err: unknown): boolean {
   if (
     grpcError.code === grpc.status.UNAVAILABLE
     || grpcError.code === grpc.status.DEADLINE_EXCEEDED
-    // CANCELLED shows up when the underlying HTTP/2 stream/channel is torn down by the
-    // transport itself (e.g. a node that just restarted and hasn't finished bringing its
-    // gRPC service up yet) rather than by an explicit client-side call.cancel(). Calls we
-    // deliberately cancel ourselves (early iteration break in streamOpResults) already
-    // have their CANCELLED error swallowed before it ever reaches this function, so
-    // treating it as connection-level here is safe and matches its real-world causes.
-    || grpcError.code === grpc.status.CANCELLED
   ) {
     return true;
   }

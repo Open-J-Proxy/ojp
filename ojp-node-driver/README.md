@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Targeted cumulative level | **L1** for H2 |
+| Cumulative level | **L1** for H2 |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -21,7 +21,7 @@ through a real server using the CSV fixture `testdata/h2_connections.csv`.
 
 | Level | Status | Notes |
 |---|---|---|
-| **L1** | H2 target | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts`. |
+| **L1** | H2 | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts`. |
 | **L2** | ⚠️ Partial | Broad typed-parameter coverage (`ParameterTypeProto` — null, boolean, numeric, string, bytes, timestamp, `BigDecimal`, plus explicit type hints for dialect shims) is unit-tested extensively. There is **no** distinct PreparedStatement/Statement variant, **no** generated-keys retrieval, and **no** result-set metadata API. |
 | **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 and cursor lifecycle are incomplete. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
@@ -62,8 +62,7 @@ NestJS).
   optional properties, a custom `TimestampWithZone` shape). `scripts/verify-proto-types.js`
   guards it against silent drift: it walks every message/enum reachable from the RPCs this
   driver implements and fails (`npm run verify-types`, wired into `prebuild`/`pretest`) if
-  a field or type is missing from `types.ts`. It does not generate code — just fails loudly
-  when the hand-written file falls behind the contract.
+  message fields or enum values differ in either direction. It does not generate code.
 
 ## Connection string format
 
@@ -179,11 +178,7 @@ unchanged.
 
 ## SQL Server integration
 
-The driver has been tested end-to-end against a real cluster: 3 independent
-`ojp-server` instances (multinode) pointing at a SQL Server 2022 in an Availability
-Group (2 replicas), using the URL in the format
-`jdbc:ojp[host1:port1,host2:port2,host3:port3(name)]_sqlserver://...`.
-Validated coverage (see `test/integration.sqlServerAg.test.ts`):
+The real-server suite `test/integration.sqlServerAg.test.ts` covers SQL Server:
 
 - CRUD with native SQL Server types (`NVARCHAR`, `DECIMAL`, `BIT`, `DATETIME2`).
 - Transactions (`commit`/`rollback`) and `MONEY` columns.
@@ -194,8 +189,9 @@ Validated coverage (see `test/integration.sqlServerAg.test.ts`):
   `executeQueryStream`.
 - Real pagination (multiple blocks of 100+ rows) via `executeQueryStream`.
 
-Run locally with an OJP server and SQL Server configured through
-`OJP_TEST_SQLSERVER_URL`, `OJP_TEST_SQLSERVER_USER` and `OJP_TEST_SQLSERVER_PASSWORD`:
+Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
+connection fixture if the default does not match your database, and provide
+`OJP_TEST_SQLSERVER_PASSWORD`:
 
 ```powershell
 $env:OJP_ENABLE_SQLSERVER_AG_TESTS = 'true'
@@ -204,8 +200,7 @@ npm run test:sqlserver-ag
 
 **Known observations/limitations:**
 
-- Multinode failover/round-robin is implemented (see the dedicated section below);
-  this AG cluster is also used as the real infrastructure for those tests. Note that
+- Multinode failover/round-robin is implemented (see the dedicated section below). Note that
   without a stable *listener* in front of the AG, a **database-level** failover behind
   a fixed hostname (i.e. the SQL Server primary itself changing) is not detected by
   OJP — this driver's failover only reacts to an `ojp-server` node becoming
@@ -293,8 +288,8 @@ await client.connect();
 console.log(client.boundEndpoint); // { host: 'host2', port: 1059 } (whichever accepted first)
 ```
 
-Validated end-to-end (`test/integration.multinode.test.ts`, using the same 3-node
-`ojp-server` + SQL Server AG cluster as the section above, with real `docker kill`/
+The suite `test/integration.multinode.test.ts` uses three dedicated OJP nodes
+and SQL Server, with real `docker kill`/
 `docker start` orchestration to simulate a node going down):
 
 - `connect()` succeeds by failing over to a healthy endpoint when one node is down.
@@ -303,9 +298,10 @@ Validated end-to-end (`test/integration.multinode.test.ts`, using the same 3-nod
   bound node goes down mid-session.
 - Repeated `connect()` calls round-robin across all healthy endpoints.
 
-Run locally with three dedicated OJP containers on ports 1059–1061 and a Docker CLI.
-Set `OJP_TEST_NODE_CONTAINERS` to their comma-separated names; these containers will
-be stopped and started by the test. Do not point it at shared or production servers.
+Run locally with three dedicated OJP containers and a Docker CLI. Set
+`OJP_TEST_NODE_CONTAINERS` to their comma-separated names and, if not using ports
+1059–1061, set `OJP_TEST_NODE_PORTS`. These containers will be stopped and started by
+the test. Do not point it at shared or production servers.
 
 ```powershell
 $env:OJP_ENABLE_MULTINODE_FAILOVER_TESTS = 'true'
@@ -487,8 +483,11 @@ server with the H2 JDBC driver and run:
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npx jest --runInBand test/integration.h2.l1.test.ts
 ```
 
-The CSV fixture may contain multiple JDBC URL, username and password rows; the L1
-scenario runs once for each row.
+Each suite reads every JDBC URL, username and password row from its CSV fixture.
+Override fixture paths with `OJP_TEST_H2_CSV`, `OJP_TEST_POSTGRES_CSV` or
+`OJP_TEST_SQLSERVER_CSV`. Set `OJP_TEST_SERVER_ENDPOINT` for PostgreSQL and
+SQL Server, and `OJP_TEST_H2_ADDR` for H2. Database passwords can be supplied via
+`OJP_TEST_PASSWORD` (PostgreSQL) and `OJP_TEST_SQLSERVER_PASSWORD`.
 
 ```bash
 cd ../ojp-server

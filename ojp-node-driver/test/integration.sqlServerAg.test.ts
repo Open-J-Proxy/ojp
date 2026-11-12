@@ -1,32 +1,18 @@
 /**
- * Real integration tests against an ojp-server cluster (multinode) pointing at a
- * SQL Server in an Always On Availability Group (AG) running for real in Docker.
- *
- * Expected environment (see ~/dev/arch/pocs):
- *   - sqlserver-ag: 2 SQL Server nodes (sql-primary/sql-secondary) in an AG, Docker
- *     network "sqlserver-ag_sqlnet".
- *   - ojp-sqlserver-ag-multinode: 3 independent ojp-server instances (ports 1059/1060/1061),
- *     all connecting to the SAME primary via the internal Docker network hostname
- *     (sql-primary:1433).
- *
- * Only runs when OJP_ENABLE_SQLSERVER_AG_TESTS=true, so it doesn't break the default
- * `npm test` in environments without this infrastructure running.
+ * Real OJP server and SQL Server integration, enabled by
+ * OJP_ENABLE_SQLSERVER_AG_TESTS=true. Every CSV connection row runs the full suite.
  */
 import { OjpClient } from '../src/client/OjpClient';
+import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_AG_TESTS === 'true';
 const describeIfEnabled = enabled ? describe : describe.skip;
 
-// Multinode: all 3 ojp-server instances point at the same SQL Server AG (via the
-// internal Docker network hostname). The driver's round-robin failover picks among
-// all 3 endpoints (see connect() in OjpClient); since they all reach the same primary,
-// every attempt should succeed regardless of which endpoint is selected first.
-const OJP_URL = process.env.OJP_TEST_SQLSERVER_URL
-  ?? 'jdbc:ojp[localhost:1059,localhost:1060,localhost:1061(ag_db)]_sqlserver://sql-primary:1433;databaseName=AdventureWorks;encrypt=true;trustServerCertificate=true;';
-const OJP_USER = process.env.OJP_TEST_SQLSERVER_USER ?? 'sa';
-const OJP_PASSWORD = process.env.OJP_TEST_SQLSERVER_PASSWORD;
+const connections = readConnectionFixtures('sqlserver_connections.csv', process.env.OJP_TEST_SQLSERVER_CSV);
 
-describeIfEnabled('OjpClient - real integration (ojp-server multinode + SQL Server AG)', () => {
+describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_USER, fixturePassword) => {
+  const OJP_URL = ojpUrl(process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059', jdbcUrl);
+  const OJP_PASSWORD = process.env.OJP_TEST_SQLSERVER_PASSWORD ?? fixturePassword;
   const tableName = `ojp_node_driver_ag_test_${Date.now()}`;
 
   const newClient = async (): Promise<OjpClient> => {

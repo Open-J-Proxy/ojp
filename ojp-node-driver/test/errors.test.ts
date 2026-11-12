@@ -26,4 +26,13 @@ describe('SQL error metadata', () => {
     expect(toOjpError(raw)).toBeInstanceOf(OjpSqlError);
     expect(isConnectionLevelError(raw)).toBe(false);
   });
+
+  it('does not mark a cancelled RPC as an endpoint failure', () => {
+    const raw = Object.assign(new Error('cancelled'), {
+      code: grpc.status.CANCELLED,
+      details: 'Cancelled on client',
+    });
+    expect(toOjpError(raw)).toBeInstanceOf(OjpConnectionError);
+    expect(isConnectionLevelError(raw)).toBe(false);
+  });
 });

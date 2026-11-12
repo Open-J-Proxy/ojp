@@ -1,1 +1,2 @@
 jdbc:h2:mem:ojp_node_l1;DB_CLOSE_DELAY=-1,sa,
+jdbc:h2:mem:ojp_node_l1_second;DB_CLOSE_DELAY=-1,sa,

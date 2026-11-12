@@ -1,48 +1,35 @@
 /**
- * Real integration tests for multinode failover / round-robin endpoint selection,
- * against the same 3-node ojp-server cluster used by `integration.sqlServerAg.test.ts`
- * (ports 1059/1060/1061, all pointing at the same SQL Server AG primary).
- *
- * Unlike the other integration suites, these tests actively stop/start real Docker
- * containers (`ojp-server-1`/`ojp-server-2`/`ojp-server-3`) to simulate a node going
- * down, mirroring how the reference JDBC driver's `MultinodeFailoverTest` is
- * orchestrated in CI (see `.github/workflows/main.yml` in the main OJP repo). Because
- * this is more invasive/slow than the rest of the suite, it is gated behind its own
- * flag: only runs when OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true.
- *
- * Requires:
- *   - Docker CLI available on PATH, with permission to control the named containers.
- *   - The 3-node cluster + SQL Server AG primary already running (see
- *     integration.sqlServerAg.test.ts header comment for the expected topology).
+ * Real multinode failover tests. OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true requires
+ * OJP_TEST_NODE_CONTAINERS to name three dedicated containers that can be stopped and
+ * started. OJP_TEST_NODE_PORTS optionally supplies their three host ports.
  */
 import { execFileSync } from 'node:child_process';
 import * as net from 'node:net';
 import { OjpClient } from '../src/client/OjpClient';
 import { resetEndpointHealthForTests } from '../src/client/endpointHealth';
+import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_MULTINODE_FAILOVER_TESTS === 'true';
 const describeIfEnabled = enabled ? describe : describe.skip;
 
-const BACKEND_URL = process.env.OJP_TEST_SQLSERVER_BACKEND_URL
-  ?? 'sqlserver://sql-primary:1433;databaseName=AdventureWorks;encrypt=true;trustServerCertificate=true;';
-const OJP_USER = process.env.OJP_TEST_SQLSERVER_USER ?? 'sa';
-const OJP_PASSWORD = process.env.OJP_TEST_SQLSERVER_PASSWORD;
+const connections = readConnectionFixtures('sqlserver_connections.csv', process.env.OJP_TEST_SQLSERVER_CSV);
 const containers = (process.env.OJP_TEST_NODE_CONTAINERS ?? '').split(',');
-if (enabled && (containers.length !== 3 || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
+const ports = (process.env.OJP_TEST_NODE_PORTS ?? '1059,1060,1061').split(',').map(Number);
+if (enabled && (containers.length !== 3 || new Set(containers).size !== 3
+    || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
   throw new Error('OJP_TEST_NODE_CONTAINERS must name the three dedicated test containers');
+}
+if (enabled && (ports.length !== 3 || new Set(ports).size !== 3
+    || ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535))) {
+  throw new Error('OJP_TEST_NODE_PORTS must contain three distinct TCP ports');
 }
 
 /** Maps each ojp-server endpoint (as seen from the host) to its Docker container name. */
 const NODES = [
-  { port: 1059, container: containers[0] },
-  { port: 1060, container: containers[1] },
-  { port: 1061, container: containers[2] },
+  { port: ports[0], container: containers[0] },
+  { port: ports[1], container: containers[1] },
+  { port: ports[2], container: containers[2] },
 ] as const;
-
-const allEndpointsUrl = (): string =>
-  `jdbc:ojp[${NODES.map((n) => `localhost:${n.port}`).join(',')}]_${BACKEND_URL}`;
-
-const singleEndpointUrl = (port: number): string => `jdbc:ojp[localhost:${port}]_${BACKEND_URL}`;
 
 /** Uses `docker kill` (SIGKILL) instead of `docker stop` so the port closes immediately,
  * without waiting for the default `docker stop` SIGTERM grace period. */
@@ -78,7 +65,10 @@ async function waitForPortOpen(port: number, timeoutMs: number): Promise<void> {
   throw new Error(`Port ${port} did not open within ${timeoutMs}ms: ${String(lastError)}`);
 }
 
-describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', () => {
+describeIfEnabled.each(connections)('OjpClient - multinode failover: %s', (jdbcUrl, OJP_USER, fixturePassword) => {
+  const OJP_PASSWORD = process.env.OJP_TEST_SQLSERVER_PASSWORD ?? fixturePassword;
+  const allEndpointsUrl = (): string => ojpUrl(NODES.map((n) => `localhost:${n.port}`).join(','), jdbcUrl);
+  const singleEndpointUrl = (port: number): string => ojpUrl(`localhost:${port}`, jdbcUrl);
   beforeEach(() => {
     resetEndpointHealthForTests();
   });
@@ -98,7 +88,7 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
 
   it('connects successfully by failing over to a healthy endpoint when one node is down', async () => {
     killNode(NODES[0].container);
-    await waitForNodeToStopAcceptingConnections(1059);
+    await waitForNodeToStopAcceptingConnections(NODES[0].port);
 
     const client = new OjpClient(allEndpointsUrl(), {
       user: OJP_USER,
@@ -107,8 +97,8 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
     });
     try {
       await client.connect();
-      expect(client.boundEndpoint?.port).not.toBe(1059);
-      expect([1060, 1061]).toContain(client.boundEndpoint?.port);
+      expect(client.boundEndpoint?.port).not.toBe(NODES[0].port);
+      expect([NODES[1].port, NODES[2].port]).toContain(client.boundEndpoint?.port);
     } finally {
       await client.close();
     }
@@ -116,35 +106,35 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
 
   it('marks the down endpoint unhealthy so a subsequent connect() also avoids it', async () => {
     killNode(NODES[1].container);
-    await waitForNodeToStopAcceptingConnections(1060);
+    await waitForNodeToStopAcceptingConnections(NODES[1].port);
 
     const clientOptions = { user: OJP_USER, password: OJP_PASSWORD, callTimeoutMs: 10_000 };
 
     const first = new OjpClient(allEndpointsUrl(), clientOptions);
     await first.connect();
-    expect(first.boundEndpoint?.port).not.toBe(1060);
+    expect(first.boundEndpoint?.port).not.toBe(NODES[1].port);
     await first.close();
 
     const second = new OjpClient(allEndpointsUrl(), clientOptions);
     try {
       await second.connect();
-      expect(second.boundEndpoint?.port).not.toBe(1060);
+      expect(second.boundEndpoint?.port).not.toBe(NODES[1].port);
     } finally {
       await second.close();
     }
   }, 30_000);
 
   it('fails with a clear connection-level error (no silent recovery) when the bound node goes down mid-session', async () => {
-    const client = new OjpClient(singleEndpointUrl(1061), {
+    const client = new OjpClient(singleEndpointUrl(NODES[2].port), {
       user: OJP_USER,
       password: OJP_PASSWORD,
       callTimeoutMs: 8_000,
     });
     await client.connect();
-    expect(client.boundEndpoint?.port).toBe(1061);
+    expect(client.boundEndpoint?.port).toBe(NODES[2].port);
 
     killNode(NODES[2].container);
-    await waitForNodeToStopAcceptingConnections(1061);
+    await waitForNodeToStopAcceptingConnections(NODES[2].port);
 
     await expect(client.executeUpdate('SELECT 1')).rejects.toThrow(/no longer usable/i);
 

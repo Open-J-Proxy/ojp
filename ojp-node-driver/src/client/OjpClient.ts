@@ -75,6 +75,7 @@ const LOB_CHUNK_SIZE = 65536;
  * to fetch the LOB size beforehand.
  */
 const READ_LOB_MAX_LENGTH = 2147483647;
+const CLIENT_UUID = randomUUID();
 
 interface StreamedRow {
   columns: string[];
@@ -97,11 +98,13 @@ export class OjpClient {
   private session?: SessionInfo;
   private readonly parsedUrl: ParsedOjpUrl;
   private readonly clientUUID: string;
+  private connecting = false;
+  private closed = false;
 
   constructor(ojpUrl: string, private readonly options: OjpClientOptions = {}) {
     this.parsedUrl = parseOjpUrl(ojpUrl);
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
-    this.clientUUID = randomUUID();
+    this.clientUUID = CLIENT_UUID;
     this.credentials = options.insecure === false
       ? grpc.credentials.createSsl()
       : grpc.credentials.createInsecure();
@@ -171,6 +174,21 @@ export class OjpClient {
    * transaction cannot be preserved across a node failure.
    */
   async connect(): Promise<SessionInfo> {
+    if (this.closed) {
+      throw new OjpConnectionError('This client is closed. Create a new client to connect.');
+    }
+    if (this.connecting || this.session) {
+      throw new OjpConnectionError('This client is already connected or connecting.');
+    }
+    this.connecting = true;
+    try {
+      return await this.connectToAvailableEndpoint();
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  private async connectToAvailableEndpoint(): Promise<SessionInfo> {
     const candidates = orderEndpointsForAttempt(this.parsedUrl.endpoints);
     let lastError: Error | undefined;
 
@@ -697,6 +715,10 @@ export class OjpClient {
 
   /** Terminates the session on the ojp-server and closes the gRPC channel. Idempotent. */
   async close(): Promise<void> {
+    if (this.connecting) {
+      throw new OjpConnectionError('Cannot close while connecting. Wait for connect() to finish.');
+    }
+    this.closed = true;
     const session = this.session;
     const client = this.grpcClient;
     this.session = undefined;

@@ -1,17 +1,10 @@
 import { randomBytes } from 'crypto';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { parse } from 'csv-parse/sync';
 import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
+import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_TEST_H2 === 'true';
 const endpoint = process.env.OJP_TEST_H2_ADDR;
-const records: string[][] = parse(readFileSync(join(__dirname, '../testdata/h2_connections.csv')), {
-  skip_empty_lines: true,
-});
-if (records.length === 0 || records.some((row) => row.length !== 3 || !row[0].startsWith('jdbc:'))) {
-  throw new Error('Expected one or more CSV rows with JDBC URL, username, and password');
-}
+const records = readConnectionFixtures('h2_connections.csv', process.env.OJP_TEST_H2_CSV);
 if (enabled && !endpoint) {
   throw new Error('OJP_TEST_H2_ADDR is required when OJP_TEST_H2=true');
 }
@@ -19,13 +12,14 @@ if (enabled && !endpoint) {
 (enabled ? describe : describe.skip).each(records)(
   'H2 L1 for %s',
   (jdbcUrl: string, user: string, password: string) => {
-    const url = `jdbc:ojp[${endpoint}]_${jdbcUrl.slice('jdbc:'.length)}`;
+    const url = ojpUrl(endpoint ?? '', jdbcUrl);
 
     it('supports CRUD, SQL errors, and connection lifecycle', async () => {
       const client = new OjpClient(url, { user, password });
       const table = `ojp_node_l1_${randomBytes(6).toString('hex')}`;
       await client.connect();
       try {
+        await expect(client.connect()).rejects.toBeInstanceOf(OjpConnectionError);
         expect((await client.executeQuery('SELECT 1')).rows).toHaveLength(1);
         await client.executeUpdate(`CREATE TABLE ${table} (id INT PRIMARY KEY, name VARCHAR(100) NOT NULL)`);
         try {
@@ -50,6 +44,7 @@ if (enabled && !endpoint) {
       }
       await client.close();
       await expect(client.executeQuery('SELECT 1')).rejects.toBeInstanceOf(OjpConnectionError);
+      await expect(client.connect()).rejects.toBeInstanceOf(OjpConnectionError);
     }, 60_000);
 
     it('forwards a named datasource to the server', async () => {
@@ -62,6 +57,7 @@ if (enabled && !endpoint) {
         const defaultSession = await defaultClient.connect();
         const namedSession = await namedClient.connect();
         expect(namedSession.connHash).not.toBe(defaultSession.connHash);
+        expect(namedSession.clientUUID).toBe(defaultSession.clientUUID);
         expect((await namedClient.executeQuery('SELECT 1')).rows).toHaveLength(1);
       } finally {
         await defaultClient.close();

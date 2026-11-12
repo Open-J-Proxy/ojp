@@ -111,16 +111,10 @@ jobs:
           OJP_TEST_H2: 'true'
           OJP_TEST_H2_ADDR: localhost:1059
           OJP_ENABLE_LOB_H2_TESTS: 'true'
-          OJP_TEST_H2_URL: 'jdbc:ojp[localhost:1059]_h2:mem:node_lob;DB_CLOSE_DELAY=-1'
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
           OJP_ENABLE_XA_TESTS: 'true'
-          OJP_TEST_URL: 'jdbc:ojp[localhost:1059]_postgresql://localhost:5432/node_test'
-          OJP_TEST_USER: nodeuser
           OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
           OJP_ENABLE_MULTINODE_FAILOVER_TESTS: 'true'
-          OJP_TEST_SQLSERVER_URL: 'jdbc:ojp[localhost:1059]_sqlserver://localhost:1433;databaseName=node_test;encrypt=true;trustServerCertificate=true;'
-          OJP_TEST_SQLSERVER_BACKEND_URL: 'sqlserver://localhost:1433;databaseName=node_test;encrypt=true;trustServerCertificate=true;'
-          OJP_TEST_SQLSERVER_USER: sa
         run: |
           npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/node-integration.json"
           node -e "const r=require(process.argv[1]); const count=require('fs').readdirSync('test').filter(f => /^integration\..*\.test\.ts$/.test(f)).length; if (!count || r.numPendingTests || r.numRuntimeErrorTestSuites || r.numFailedTests || r.numPassedTestSuites !== count) process.exit(1)" "$RUNNER_TEMP/node-integration.json"

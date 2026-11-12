@@ -1,22 +1,14 @@
 /**
- * Real integration tests against an ojp-server + PostgreSQL running for real
- * (not mocked). Requires:
- *   - ojp-server listening on localhost:1065, with the PostgreSQL driver loaded in
- *     ojp-libs/ (see README.md, "Testing locally" section)
- *   - PostgreSQL reachable at the URL defined in OJP_TEST_BACKEND_URL
- *
- * Only runs when OJP_ENABLE_INTEGRATION_TESTS=true, so it doesn't break the default
- * `npm test` (unit tests, no external infrastructure) in environments without the
- * server running.
+ * Real OJP server and PostgreSQL integration, enabled by
+ * OJP_ENABLE_INTEGRATION_TESTS=true. Every CSV connection row runs the full suite.
  */
 import { OjpClient } from '../src/client/OjpClient';
+import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_INTEGRATION_TESTS === 'true';
 const describeIfEnabled = enabled ? describe : describe.skip;
 
-const OJP_URL = process.env.OJP_TEST_URL ?? 'jdbc:ojp[localhost:1065]_postgresql://localhost:5442/ojptest';
-const OJP_USER = process.env.OJP_TEST_USER ?? 'ojptest';
-const OJP_PASSWORD = process.env.OJP_TEST_PASSWORD;
+const connections = readConnectionFixtures('postgresql_connections.csv', process.env.OJP_TEST_POSTGRES_CSV);
 
 /**
  * IMPORTANT — transaction/autocommit semantics:
@@ -26,13 +18,14 @@ const OJP_PASSWORD = process.env.OJP_TEST_PASSWORD;
  * autocommit on the physical connection right after `commit()`/`rollback()` return (see
  * `OjpClient.restoreAutoCommit()`), because every `startTransaction()`/`commit()`/
  * `rollback()` pair here is meant to be a self-contained unit of work — matching the
- * plain autocommit session semantics TypeORM/`@ojp/typeorm-driver` assume between
- * transactions. Each test below still uses its **own connection**
+ * plain autocommit session semantics between transactions. Each test below still uses its **own connection**
  * (`beforeEach`/`afterEach`) to keep transactional state fully isolated between tests,
  * which remains the recommended pattern for real applications (one connection per unit
  * of work).
  */
-describeIfEnabled('OjpClient - real integration (ojp-server + PostgreSQL)', () => {
+describeIfEnabled.each(connections)('OjpClient - PostgreSQL: %s', (jdbcUrl, OJP_USER, fixturePassword) => {
+  const OJP_URL = ojpUrl(process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059', jdbcUrl);
+  const OJP_PASSWORD = process.env.OJP_TEST_PASSWORD ?? fixturePassword;
   const tableName = `ojp_node_driver_test_${Date.now()}`;
 
   const newClient = async (): Promise<OjpClient> => {

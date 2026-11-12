@@ -43,6 +43,7 @@ export interface StatementServiceClient extends grpc.Client {
   createLob(): grpc.ClientDuplexStream<LobDataBlock, LobReference>;
   readLob(request: ReadLobRequest): grpc.ClientReadableStream<LobDataBlock>;
   terminateSession(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionTerminationStatus) => void): void;
+  terminateSession(request: SessionInfo, options: grpc.CallOptions, callback: (err: grpc.ServiceError | null, response: SessionTerminationStatus) => void): void;
   startTransaction(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionInfo) => void): void;
   commitTransaction(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionInfo) => void): void;
   rollbackTransaction(request: SessionInfo, callback: (err: grpc.ServiceError | null, response: SessionInfo) => void): void;

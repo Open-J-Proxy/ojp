@@ -15,7 +15,7 @@
  *   - The 3-node cluster + SQL Server AG primary already running (see
  *     integration.sqlServerAg.test.ts header comment for the expected topology).
  */
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as net from 'node:net';
 import { OjpClient } from '../src/client/OjpClient';
 import { resetEndpointHealthForTests } from '../src/client/endpointHealth';
@@ -27,12 +27,16 @@ const BACKEND_URL = process.env.OJP_TEST_SQLSERVER_BACKEND_URL
   ?? 'sqlserver://sql-primary:1433;databaseName=AdventureWorks;encrypt=true;trustServerCertificate=true;';
 const OJP_USER = process.env.OJP_TEST_SQLSERVER_USER ?? 'sa';
 const OJP_PASSWORD = process.env.OJP_TEST_SQLSERVER_PASSWORD;
+const containers = (process.env.OJP_TEST_NODE_CONTAINERS ?? '').split(',');
+if (enabled && (containers.length !== 3 || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
+  throw new Error('OJP_TEST_NODE_CONTAINERS must name the three dedicated test containers');
+}
 
 /** Maps each ojp-server endpoint (as seen from the host) to its Docker container name. */
 const NODES = [
-  { port: 1059, container: 'ojp-server-1' },
-  { port: 1060, container: 'ojp-server-2' },
-  { port: 1061, container: 'ojp-server-3' },
+  { port: 1059, container: containers[0] },
+  { port: 1060, container: containers[1] },
+  { port: 1061, container: containers[2] },
 ] as const;
 
 const allEndpointsUrl = (): string =>
@@ -43,11 +47,11 @@ const singleEndpointUrl = (port: number): string => `jdbc:ojp[localhost:${port}]
 /** Uses `docker kill` (SIGKILL) instead of `docker stop` so the port closes immediately,
  * without waiting for the default `docker stop` SIGTERM grace period. */
 function killNode(container: string): void {
-  execSync(`docker kill ${container}`, { stdio: 'ignore' });
+  execFileSync('docker', ['kill', container], { stdio: 'ignore' });
 }
 
 function startNode(container: string): void {
-  execSync(`docker start ${container}`, { stdio: 'ignore' });
+  execFileSync('docker', ['start', container], { stdio: 'ignore' });
 }
 
 /** Polls a TCP port until it accepts connections (or the timeout elapses). Used after
@@ -84,12 +88,7 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
   // from inheriting a partially-down cluster if an assertion throws mid-test.
   afterEach(async () => {
     for (const node of NODES) {
-      try {
-        startNode(node.container);
-      } catch {
-        // Ignore: container may already be running ("start" on a running container
-        // is a harmless no-op error from the Docker CLI's point of view here).
-      }
+      startNode(node.container);
     }
     for (const node of NODES) {
       await waitForPortOpen(node.port, 60_000);
@@ -98,7 +97,7 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
   }, 90_000);
 
   it('connects successfully by failing over to a healthy endpoint when one node is down', async () => {
-    killNode('ojp-server-1');
+    killNode(NODES[0].container);
     await waitForNodeToStopAcceptingConnections(1059);
 
     const client = new OjpClient(allEndpointsUrl(), {
@@ -116,7 +115,7 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
   }, 30_000);
 
   it('marks the down endpoint unhealthy so a subsequent connect() also avoids it', async () => {
-    killNode('ojp-server-2');
+    killNode(NODES[1].container);
     await waitForNodeToStopAcceptingConnections(1060);
 
     const clientOptions = { user: OJP_USER, password: OJP_PASSWORD, callTimeoutMs: 10_000 };
@@ -144,7 +143,7 @@ describeIfEnabled('OjpClient - multinode failover (real ojp-server cluster)', ()
     await client.connect();
     expect(client.boundEndpoint?.port).toBe(1061);
 
-    killNode('ojp-server-3');
+    killNode(NODES[2].container);
     await waitForNodeToStopAcceptingConnections(1061);
 
     await expect(client.executeUpdate('SELECT 1')).rejects.toThrow(/no longer usable/i);
@@ -191,4 +190,5 @@ async function waitForNodeToStopAcceptingConnections(port: number): Promise<void
     }
     await new Promise((r) => setTimeout(r, 200));
   }
+  throw new Error(`Port ${port} did not close within 5000ms`);
 }

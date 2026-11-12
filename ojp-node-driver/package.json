@@ -13,6 +13,7 @@
     "verify-types": "node scripts/verify-proto-types.js",
     "pretest": "node scripts/verify-proto-types.js",
     "test": "jest --testPathIgnorePatterns=integration",
+    "test:integration:all": "jest --runInBand test/integration",
     "test:integration": "jest test/integration.ojpServer.test.ts",
     "test:lob-h2": "jest test/integration.lob.h2.test.ts",
     "test:sqlserver-ag": "jest test/integration.sqlServerAg.test.ts",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@types/jest": "29.5.12",
     "@types/node": "20.14.10",
+    "csv-parse": "5.6.0",
     "jest": "29.7.0",
     "ts-jest": "29.1.5",
     "typescript": "5.5.3"

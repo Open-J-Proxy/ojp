@@ -1,0 +1,134 @@
+name: Node client integration
+
+on:
+  push:
+    branches: [main, 'lts/**']
+  pull_request:
+    branches: [main, 'lts/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ojp-node-driver/package-lock.json
+
+      - name: Install, build and run unit tests
+        working-directory: ojp-node-driver
+        run: |
+          npm ci
+          npm run build
+          npm test -- --runInBand
+
+      - name: Build OJP server
+        run: ./mvnw -q -pl ojp-server -am install -DskipTests -Dgpg.skip=true
+
+      - name: Download JDBC drivers
+        run: |
+          mkdir -p ojp-libs
+          curl -fsSL https://repo.maven.apache.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar -o ojp-libs/h2.jar
+          curl -fsSL https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.8/postgresql-42.7.8.jar -o ojp-libs/postgresql.jar
+          curl -fsSL https://repo.maven.apache.org/maven2/com/microsoft/sqlserver/mssql-jdbc/12.8.2.jre11/mssql-jdbc-12.8.2.jre11.jar -o ojp-libs/mssql-jdbc.jar
+
+      - name: Start databases
+        run: |
+          password="NodeTest!$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          prefix="ojp-node-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "OJP_TEST_PASSWORD=$password"
+            echo "OJP_TEST_SQLSERVER_PASSWORD=$password"
+            echo "NODE_TEST_PREFIX=$prefix"
+          } >> "$GITHUB_ENV"
+          docker run -d --name "$prefix-postgres" --network host \
+            -e POSTGRES_USER=nodeuser -e POSTGRES_DB=node_test \
+            -e POSTGRES_PASSWORD="$password" postgres:17 -c max_prepared_transactions=100
+          docker run -d --name "$prefix-sqlserver" --network host \
+            -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" mcr.microsoft.com/mssql/server:2022-latest
+          for i in $(seq 1 90); do
+            if docker exec "$prefix-postgres" pg_isready -U nodeuser -d node_test >/dev/null 2>&1 &&
+               docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
+                 -S localhost -U sa -P "$password" -C -b -Q 'SELECT 1' >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$i" -eq 90 ]; then
+              docker logs "$prefix-postgres"
+              docker logs "$prefix-sqlserver"
+              exit 1
+            fi
+            sleep 2
+          done
+          docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$password" -C -b -Q 'CREATE DATABASE node_test'
+
+      - name: Start OJP servers
+        run: |
+          jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          test -n "$jar"
+          for index in 1 2 3; do
+            port=$((1058 + index))
+            metrics=$((9158 + index))
+            docker run -d --name "$NODE_TEST_PREFIX-$index" --network host \
+              -v "$jar:/opt/ojp/server.jar:ro" -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
+              eclipse-temurin:25-jre java -Duser.timezone=UTC \
+              -Dojp.server.port="$port" -Dojp.prometheus.port="$metrics" \
+              -Dojp.libs.path=/opt/ojp-libs -jar /opt/ojp/server.jar
+          done
+          for index in 1 2 3; do
+            for attempt in $(seq 1 60); do
+              if docker logs "$NODE_TEST_PREFIX-$index" 2>&1 | grep -q 'OJP gRPC Server started'; then
+                break
+              fi
+              if [ "$attempt" -eq 60 ]; then
+                docker logs "$NODE_TEST_PREFIX-$index"
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+          echo "OJP_TEST_NODE_CONTAINERS=$NODE_TEST_PREFIX-1,$NODE_TEST_PREFIX-2,$NODE_TEST_PREFIX-3" >> "$GITHUB_ENV"
+
+      - name: Run every client integration suite
+        working-directory: ojp-node-driver
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+          OJP_ENABLE_LOB_H2_TESTS: 'true'
+          OJP_TEST_H2_URL: 'jdbc:ojp[localhost:1059]_h2:mem:node_lob;DB_CLOSE_DELAY=-1'
+          OJP_ENABLE_INTEGRATION_TESTS: 'true'
+          OJP_ENABLE_XA_TESTS: 'true'
+          OJP_TEST_URL: 'jdbc:ojp[localhost:1059]_postgresql://localhost:5432/node_test'
+          OJP_TEST_USER: nodeuser
+          OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
+          OJP_ENABLE_MULTINODE_FAILOVER_TESTS: 'true'
+          OJP_TEST_SQLSERVER_URL: 'jdbc:ojp[localhost:1059]_sqlserver://localhost:1433;databaseName=node_test;encrypt=true;trustServerCertificate=true;'
+          OJP_TEST_SQLSERVER_BACKEND_URL: 'sqlserver://localhost:1433;databaseName=node_test;encrypt=true;trustServerCertificate=true;'
+          OJP_TEST_SQLSERVER_USER: sa
+        run: |
+          npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/node-integration.json"
+          node -e "const r=require(process.argv[1]); const count=require('fs').readdirSync('test').filter(f => /^integration\..*\.test\.ts$/.test(f)).length; if (!count || r.numPendingTests || r.numRuntimeErrorTestSuites || r.numFailedTests || r.numPassedTestSuites !== count) process.exit(1)" "$RUNNER_TEMP/node-integration.json"
+
+      - name: Show logs and clean up test containers
+        if: always() && env.NODE_TEST_PREFIX != ''
+        run: |
+          for name in "$NODE_TEST_PREFIX-1" "$NODE_TEST_PREFIX-2" "$NODE_TEST_PREFIX-3" "$NODE_TEST_PREFIX-postgres" "$NODE_TEST_PREFIX-sqlserver"; do
+            docker logs "$name" 2>&1 || true
+            docker rm -f "$name" || true
+          done

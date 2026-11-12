@@ -136,20 +136,22 @@ describeIfEnabled('OjpClient - real integration (ojp-server multinode + SQL Serv
     await expect(txClient.executeQuery('SELECT * FROM table_that_does_not_exist')).rejects.toThrow();
   }, 15_000);
 
-  it('should read real AdventureWorks columns (Production.Product) including DECIMAL/MONEY', async () => {
-    const { columns, rows } = await client.executeQuery(
-      'SELECT TOP 5 ProductID, Name, ListPrice FROM Production.Product ORDER BY ProductID',
-    );
-    // SQL Server preserves the original column case (PascalCase), unlike Postgres
-    // (which normalizes to lowercase when there's no quoted alias).
-    expect(columns).toEqual(['ProductID', 'Name', 'ListPrice']);
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) {
-      expect(typeof row.ProductID).toBe('number');
-      expect(typeof row.Name).toBe('string');
-      // ListPrice is MONEY in AdventureWorks -> decoded as a decimal string.
-      expect(typeof row.ListPrice).toBe('string');
-      expect(Number.isNaN(Number(row.ListPrice))).toBe(false);
+  it('should read MONEY columns without an external sample database', async () => {
+    const moneyTable = `${tableName}_money`;
+    await client.executeUpdate(`CREATE TABLE ${moneyTable} (ProductID INT, Name NVARCHAR(100), ListPrice MONEY)`);
+    try {
+      await client.executeUpdate(`INSERT INTO ${moneyTable} VALUES (1, 'product', 123.45)`);
+      const { columns, rows } = await client.executeQuery(
+        `SELECT ProductID, Name, ListPrice FROM ${moneyTable} ORDER BY ProductID`,
+      );
+      expect(columns).toEqual(['ProductID', 'Name', 'ListPrice']);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].ProductID).toBe(1);
+      expect(rows[0].Name).toBe('product');
+      expect(typeof rows[0].ListPrice).toBe('string');
+      expect(Number(rows[0].ListPrice)).toBe(123.45);
+    } finally {
+      await client.executeUpdate(`DROP TABLE IF EXISTS ${moneyTable}`);
     }
   }, 15_000);
 

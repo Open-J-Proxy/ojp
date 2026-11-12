@@ -104,8 +104,7 @@ function collectReachableTypes(root) {
 }
 
 /** Parses the message interfaces and string-literal enum aliases in types.ts. */
-function extractTsTypes(filePath) {
-  const sourceText = fs.readFileSync(filePath, 'utf8');
+function extractTsTypes(filePath, sourceText = fs.readFileSync(filePath, 'utf8')) {
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
   const types = new Map();
 
@@ -133,10 +132,7 @@ function extractTsTypes(filePath) {
   return types;
 }
 
-function main() {
-  const root = loadProtoRoot();
-  const reachableProtoTypes = collectReachableTypes(root);
-  const tsTypes = extractTsTypes(TYPES_PATH);
+function findTypeErrors(reachableProtoTypes, tsTypes) {
   const errors = [];
 
   for (const [fullName, protoType] of reachableProtoTypes) {
@@ -173,6 +169,15 @@ function main() {
     }
   }
 
+  return errors;
+}
+
+function main() {
+  const root = loadProtoRoot();
+  const reachableProtoTypes = collectReachableTypes(root);
+  const tsTypes = extractTsTypes(TYPES_PATH);
+  const errors = findTypeErrors(reachableProtoTypes, tsTypes);
+
   if (errors.length > 0) {
     console.error(`Proto/TypeScript drift detected between StatementService.proto and ${path.relative(process.cwd(), TYPES_PATH)}:\n`);
     for (const error of errors) {
@@ -193,4 +198,8 @@ function main() {
   );
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { extractTsTypes, findTypeErrors };

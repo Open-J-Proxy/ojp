@@ -12,36 +12,29 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Highest level with complete, no-gap coverage | **L3** |
-| Highest level with partial/documented evidence beyond L3 | **L9** (PostgreSQL XA only — see gaps below) |
+| Targeted cumulative level | **L1** for H2 |
+| Higher-level features | Partial; not a cumulative level claim |
 
-The level model is cumulative by definition (each level assumes every lower level is
-fully closed). This early implementation does **not** follow that clean progression: it
-already has real, tested capability at L5/L6/L9 while still missing pieces of L2 and L4.
-Reporting it level-by-level, honestly, instead of a single number:
+Levels are cumulative: partial support for a higher level does not make it achieved.
+The H2 L1 suite exercises CRUD, errors, datasource selection and session lifecycle
+through a real server using the CSV fixture `testdata/h2_connections.csv`.
 
 | Level | Status | Notes |
 |---|---|---|
-| **L1** | ✅ Achieved | `connect`/`close`, CRUD (insert/read/update/delete), tested against PostgreSQL and SQL Server. |
+| **L1** | H2 target | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts`. |
 | **L2** | ⚠️ Partial | Broad typed-parameter coverage (`ParameterTypeProto` — null, boolean, numeric, string, bytes, timestamp, `BigDecimal`, plus explicit type hints for dialect shims) is unit-tested extensively. There is **no** distinct PreparedStatement/Statement variant, **no** generated-keys retrieval, and **no** result-set metadata API. |
-| **L3** | ✅ Achieved | `executeQueryStream` (server-streaming, on-demand `fetchNextRows` pagination), including SQL Server "row-by-row" mode and early-cancellation behavior. |
+| **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 and cursor lifecycle are incomplete. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
-| **L5** | ✅ H2 & SQL Server / ❌ PostgreSQL | `createLob` + transparent LOB reads tested for H2 (CLOB/BLOB) and SQL Server (multi-chunk BLOB, regression-tested). Not supported for PostgreSQL because `pgjdbc` itself doesn't implement `createBlob`/`createClob` — a backend driver limitation, not a gap in this client. |
-| **L6** | ✅ Achieved | Dedicated real-cluster test proves the client fails clearly instead of silently rerouting a bound session when its node goes down mid-session. |
+| **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
+| **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
 | **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
 | **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
-| **L9** | ✅ PostgreSQL only | Full two-phase and one-phase XA lifecycle, `recover()`, `isSameRM()`, and error-code mapping, tested end-to-end. Not exercised against SQL Server/H2/other backends in this driver. |
+| **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
-**Honest summary:** taken strictly (every lower level fully closed before claiming the
-next), the ceiling today is **L3** — closing L4 (savepoints + isolation control) is the
-next concrete step to unlock an uncontested L4/L5/L6 claim. That said, this PR already
-delivers tested, real capability further up the scale in specific slices (session
-affinity, PostgreSQL XA) that a strictly-linear read of the table would otherwise hide.
-Recommended next steps, roughly in priority order: (1) savepoints + transaction isolation
-control to close L4, (2) result-set metadata / generated keys to close L2, (3) extend the
-existing multinode test matrix to a least-connections strategy and SQL Server/H2 XA
-coverage.
+No cumulative level is claimed for PostgreSQL or SQL Server until their required
+level-specific coverage is run in CI. L2 needs statement variants, generated keys,
+metadata and result-producing DML before L3 or higher can be claimed.
 
 ## Why this driver exists
 
@@ -63,7 +56,7 @@ NestJS).
 - The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
   versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
   and `ojp-server` (see that package's README for its versioning policy and how it's kept
-  in sync with the upstream `ojp-grpc-commons` source of truth).
+  in sync with the centralized contract).
 - `src/proto/types.ts` is a **hand-written** mirror of the `.proto` messages (more ergonomic
   than a generic generator's output — e.g. `int64` as `string`, `oneof` members as plain
   optional properties, a custom `TimestampWithZone` shape). `scripts/verify-proto-types.js`
@@ -155,8 +148,7 @@ equivalent of `setAutoCommit(true)` afterward: `commit()` and `rollback()` both
 restore autocommit on the physical connection themselves before returning (via the
 generic `callResource` RPC, the same mechanism the JDBC driver uses for
 `setAutoCommit(true)`), so every `startTransaction()` / `commit()`/`rollback()` pair is
-a **self-contained unit of work** — matching the plain autocommit session semantics
-`@ojp/typeorm-driver`/TypeORM assume between transactions.
+a **self-contained unit of work**.
 
 This was fixed after discovering that plain statements issued right after a committed
 or rolled-back transaction were silently swallowed on connection close, because the
@@ -166,9 +158,8 @@ restored after both `commit()` and `rollback()`, verified via a fresh reconnect)
 
 Recommendations:
 
-- Treat each `OjpClient` as a **unit of work** (the "one connection per
-  transaction/request" pattern) for clarity, even though it's no longer strictly
-  required for correctness after a `commit()`/`rollback()`.
+- Open a fresh `OjpClient` for each independent operation or explicit transaction,
+  and close it promptly. Do not pool client-side virtual connections.
 - If an error occurs during a transaction, always call `rollback()` before continuing
   to use the same connection — statements issued after a failed statement, but before
   `rollback()`, will still fail (Postgres aborts the whole transaction until rolled
@@ -186,7 +177,7 @@ loss that would occur when converting to `number` (JS uses a 64-bit double). If 
 buffer doesn't match the expected layout, the raw value (`Buffer`) is returned
 unchanged.
 
-## Validated against a real SQL Server Always On Availability Group (AG)
+## SQL Server integration
 
 The driver has been tested end-to-end against a real cluster: 3 independent
 `ojp-server` instances (multinode) pointing at a SQL Server 2022 in an Availability
@@ -195,8 +186,7 @@ Group (2 replicas), using the URL in the format
 Validated coverage (see `test/integration.sqlServerAg.test.ts`):
 
 - CRUD with native SQL Server types (`NVARCHAR`, `DECIMAL`, `BIT`, `DATETIME2`).
-- Transactions (`commit`/`rollback`) and reading real data from `AdventureWorks`
-  (including `MONEY` columns, e.g. `Production.Product.ListPrice`).
+- Transactions (`commit`/`rollback`) and `MONEY` columns.
 - **"Row-by-row" mode (`fetchNextRows`)**: validated for the first time against a
   real database — `VARBINARY(MAX)` columns force SQL Server into this mode
   (signaled via `OpResult.flag == RESULT_SET_ROW_BY_ROW_MODE`), and the driver
@@ -204,16 +194,13 @@ Validated coverage (see `test/integration.sqlServerAg.test.ts`):
   `executeQueryStream`.
 - Real pagination (multiple blocks of 100+ rows) via `executeQueryStream`.
 
-Run locally (requires the AG Docker infrastructure already running):
+Run locally with an OJP server and SQL Server configured through
+`OJP_TEST_SQLSERVER_URL`, `OJP_TEST_SQLSERVER_USER` and `OJP_TEST_SQLSERVER_PASSWORD`:
 
 ```powershell
 $env:OJP_ENABLE_SQLSERVER_AG_TESTS = 'true'
 npm run test:sqlserver-ag
 ```
-
-Optional environment variables: `OJP_TEST_SQLSERVER_URL`, `OJP_TEST_SQLSERVER_USER`,
-`OJP_TEST_SQLSERVER_PASSWORD` (defaults point at the local `sql-primary` topology
-used in this validation).
 
 **Known observations/limitations:**
 
@@ -316,11 +303,13 @@ Validated end-to-end (`test/integration.multinode.test.ts`, using the same 3-nod
   bound node goes down mid-session.
 - Repeated `connect()` calls round-robin across all healthy endpoints.
 
-Run locally (requires the same AG Docker infrastructure as above, plus a Docker CLI
-with permission to stop/start the `ojp-server-1/2/3` containers):
+Run locally with three dedicated OJP containers on ports 1059–1061 and a Docker CLI.
+Set `OJP_TEST_NODE_CONTAINERS` to their comma-separated names; these containers will
+be stopped and started by the test. Do not point it at shared or production servers.
 
 ```powershell
 $env:OJP_ENABLE_MULTINODE_FAILOVER_TESTS = 'true'
+$env:OJP_TEST_NODE_CONTAINERS = 'node-test-1,node-test-2,node-test-3'
 npm run test:multinode-failover
 ```
 
@@ -471,8 +460,7 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
       `OjpXAResource`, validated end-to-end against a real `ojp-server` + PostgreSQL
       (two-phase commit, rollback, one-phase optimization, `recover`, `isSameRM`); see
       the dedicated section above for known scope reductions vs. the JDBC reference.
-- [x] TypeORM adapter (`@ojp/typeorm-driver`) for direct use in NestJS — see the
-      dedicated package, validated against PostgreSQL and a live SQL Server database.
+- [ ] Framework adapters are outside this module.
 
 ## Scripts
 
@@ -482,13 +470,25 @@ npm run verify-types # fails if src/proto/types.ts drifted from StatementService
 npm run build        # compiles TypeScript to dist/
 npm test             # unit tests (parser, type mapping) — no external infrastructure needed
 npm run test:integration  # integration against ojp-server + PostgreSQL (requires OJP_ENABLE_INTEGRATION_TESTS=true)
+npm run test:integration:all # all integration suites; configure all test infrastructure and flags
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)
-npm run test:sqlserver-ag # integration against a real SQL Server Always On AG (requires OJP_ENABLE_SQLSERVER_AG_TESTS=true)
+npm run test:sqlserver-ag # SQL Server integration (requires OJP_ENABLE_SQLSERVER_AG_TESTS=true)
 npm run test:multinode-failover # multinode failover, orchestrates real Docker containers (requires OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true)
 npm run test:xa           # XA (distributed transaction) integration against ojp-server + PostgreSQL (requires OJP_ENABLE_XA_TESTS=true)
 ```
 
 ## Testing locally against ojp-server
+
+The Node client workflow configures H2, PostgreSQL, SQL Server and three dedicated
+OJP nodes and runs every integration suite. For the H2 L1 suite alone, start an OJP
+server with the H2 JDBC driver and run:
+
+```bash
+OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npx jest --runInBand test/integration.h2.l1.test.ts
+```
+
+The CSV fixture may contain multiple JDBC URL, username and password rows; the L1
+scenario runs once for each row.
 
 ```bash
 cd ../ojp-server

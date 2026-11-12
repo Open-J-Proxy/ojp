@@ -78,7 +78,7 @@ const READ_LOB_MAX_LENGTH = 2147483647;
 
 interface StreamedRow {
   columns: string[];
-  row: Record<string, unknown>;
+  row?: Record<string, unknown>;
 }
 
 /**
@@ -362,6 +362,7 @@ export class OjpClient {
       }
       if (queryResult.labels?.length) {
         columns = queryResult.labels;
+        yield { columns };
       }
       for (const row of queryResult.rows ?? []) {
         const record: Record<string, unknown> = {};
@@ -392,7 +393,9 @@ export class OjpClient {
    */
   async *executeQueryStream(sql: string, params: unknown[] = []): AsyncGenerator<Record<string, unknown>, void, undefined> {
     for await (const { row } of this.queryRows(sql, params)) {
-      yield row;
+      if (row) {
+        yield row;
+      }
     }
   }
 
@@ -405,7 +408,9 @@ export class OjpClient {
     const rows: Record<string, unknown>[] = [];
     for await (const item of this.queryRows(sql, params)) {
       columns = item.columns;
-      rows.push(item.row);
+      if (item.row) {
+        rows.push(item.row);
+      }
     }
     return { columns, rows };
   }
@@ -692,16 +697,25 @@ export class OjpClient {
 
   /** Terminates the session on the ojp-server and closes the gRPC channel. Idempotent. */
   async close(): Promise<void> {
-    if (this.session && this.grpcClient) {
-      const client = this.grpcClient;
-      await new Promise<void>((resolve) => {
-        client.terminateSession(this.session as SessionInfo, () => {
-          // Ignores termination failures: the channel will be closed regardless.
-          resolve();
+    const session = this.session;
+    const client = this.grpcClient;
+    this.session = undefined;
+    this.grpcClient = undefined;
+    this.boundServerEndpoint = undefined;
+    try {
+      if (session && client) {
+        await new Promise<void>((resolve, reject) => {
+          client.terminateSession(session, { deadline: this.deadline() }, (err) => {
+            if (err) {
+              reject(toOjpError(err));
+            } else {
+              resolve();
+            }
+          });
         });
-      });
-      this.session = undefined;
+      }
+    } finally {
+      client?.close();
     }
-    this.grpcClient?.close();
   }
 }

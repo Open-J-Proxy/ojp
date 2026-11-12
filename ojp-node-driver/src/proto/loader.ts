@@ -33,4 +33,3 @@ export function loadStatementServiceProto(): protoLoader.PackageDefinition {
 export function loadStatementServiceGrpcObject(): grpc.GrpcObject {
   return grpc.loadPackageDefinition(loadStatementServiceProto());
 }
-

@@ -19,4 +19,3 @@ export { OjpXAResource } from './xa/OjpXAResource';
 export { OjpXaError } from './xa/OjpXaError';
 export { Xid, xidEquals, xidToString } from './xa/xid';
 export * as xaConstants from './xa/xaConstants';
-

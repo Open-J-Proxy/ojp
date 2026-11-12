@@ -2,8 +2,10 @@ package org.openjproxy.grpc.server.action.connection;
 
 import com.openjproxy.grpc.ConnectionDetails;
 import com.openjproxy.grpc.SessionInfo;
+import com.zaxxer.hikari.HikariDataSource;
 import io.grpc.stub.StreamObserver;
 import org.junit.jupiter.api.Test;
+import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.CircuitBreakerRegistry;
 import org.openjproxy.grpc.server.ClusterHealthTracker;
 import org.openjproxy.grpc.server.MultinodeXaCoordinator;
@@ -16,6 +18,7 @@ import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 
 import javax.sql.DataSource;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -71,12 +74,17 @@ class ConnectActionConcurrencyTest {
                 null,
                 null);
 
+        Map<String, Object> poolProperties = new HashMap<>();
+        poolProperties.put("ojp.connection.pool.preWarm", "true");
+        poolProperties.put("ojp.connection.pool.maximumPoolSize", "4");
+        poolProperties.put("ojp.connection.pool.minimumIdle", "4");
         // Use H2 in-memory database so the pool can actually be created without an external DB
         ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
                 .setUrl("jdbc:h2:mem:concurrency_test;DB_CLOSE_DELAY=-1")
                 .setUser("sa")
                 .setPassword("")
                 .setClientUUID("client-uuid")
+                .addAllProperties(ProtoConverter.propertiesToProto(poolProperties))
                 .build();
 
         int threadCount = CONCURRENT_THREAD_COUNT;
@@ -117,6 +125,58 @@ class ConnectActionConcurrencyTest {
                 "Exactly one connection pool should be created even with "
                 + threadCount + " concurrent connect attempts, but "
                 + datasourceMap.size() + " pools were created");
+        HikariDataSource dataSource = (HikariDataSource) datasourceMap.values().iterator().next();
+        assertEquals(4, dataSource.getHikariPoolMXBean().getIdleConnections(),
+                "Concurrent first connections must observe the pool only after pre-warming completes");
+        dataSource.close();
+    }
+
+    @Test
+    void testPrewarmCompletesBeforeDatasourceIsPublished() {
+        Map<String, DataSource> datasourceMap = new ConcurrentHashMap<>();
+        ServerConfiguration serverConfiguration = new ServerConfiguration();
+        SessionManager sessionManager = mock(SessionManager.class);
+        ActionContext context = new ActionContext(
+                datasourceMap,
+                new ConcurrentHashMap<>(),
+                new ConcurrentHashMap<>(),
+                new ConcurrentHashMap<>(),
+                new ConcurrentHashMap<>(),
+                new ConcurrentHashMap<>(),
+                new ConcurrentHashMap<>(),
+                new ReadWriteDataSourceRegistry(),
+                mock(XAConnectionPoolProvider.class),
+                new MultinodeXaCoordinator(),
+                new ClusterHealthTracker(),
+                sessionManager,
+                new CircuitBreakerRegistry(serverConfiguration.getCircuitBreakerTimeout(),
+                        serverConfiguration.getCircuitBreakerThreshold()),
+                serverConfiguration,
+                null,
+                null);
+
+        Map<String, Object> properties = new HashMap<>();
+        properties.put("ojp.connection.pool.preWarm", "true");
+        properties.put("ojp.connection.pool.maximumPoolSize", "3");
+        properties.put("ojp.connection.pool.minimumIdle", "3");
+        ConnectionDetails connectionDetails = ConnectionDetails.newBuilder()
+                .setUrl("jdbc:h2:mem:prewarm_test;DB_CLOSE_DELAY=-1")
+                .setUser("sa")
+                .setPassword("")
+                .setClientUUID("prewarm-client")
+                .addAllProperties(ProtoConverter.propertiesToProto(properties))
+                .build();
+
+        ConnectAction.getInstance().execute(context, connectionDetails, mock(StreamObserver.class));
+
+        assertEquals(1, datasourceMap.size());
+        DataSource dataSource = datasourceMap.values().iterator().next();
+        assertTrue(dataSource instanceof HikariDataSource);
+        assertEquals(3, ((HikariDataSource) dataSource).getHikariPoolMXBean().getIdleConnections(),
+                "minimumIdle == maximumPoolSize must be ready before ConnectAction publishes the datasource");
+        assertEquals(1, context.getAdmissionControlManagers().size());
+        assertTrue(context.getAdmissionControlManagers().values().iterator().next().isEnabled());
+        ((HikariDataSource) dataSource).close();
     }
 
     /**

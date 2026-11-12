@@ -58,7 +58,7 @@ public final class PoolConfig {
     // Default values
     public static final int DEFAULT_MAX_POOL_SIZE = 10;
     public static final int DEFAULT_MIN_IDLE = 2;
-    public static final long DEFAULT_CONNECTION_TIMEOUT_MS = 30000L;
+    public static final long DEFAULT_CONNECTION_TIMEOUT_MS = 5000L;
     public static final long DEFAULT_IDLE_TIMEOUT_MS = 600000L;
     public static final long DEFAULT_MAX_LIFETIME_MS = 1800000L;
     public static final boolean DEFAULT_AUTO_COMMIT = true;

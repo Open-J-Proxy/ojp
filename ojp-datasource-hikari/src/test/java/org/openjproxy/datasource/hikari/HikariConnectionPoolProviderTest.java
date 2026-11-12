@@ -118,7 +118,7 @@ class HikariConnectionPoolProviderTest {
                 .url("jdbc:h2:mem:timeouttest;DB_CLOSE_DELAY=-1")
                 .username("sa")
                 .password("")
-                .connectionTimeoutMs(10000)
+                .connectionTimeoutMs(5000)
                 .idleTimeoutMs(300000)
                 .maxLifetimeMs(600000)
                 .build();
@@ -126,9 +126,24 @@ class HikariConnectionPoolProviderTest {
         createdDataSource = provider.createDataSource(config);
         HikariDataSource hikariDs = (HikariDataSource) createdDataSource;
 
-        assertEquals(10000, hikariDs.getConnectionTimeout());
+        assertEquals(5000, hikariDs.getConnectionTimeout());
         assertEquals(300000, hikariDs.getIdleTimeout());
         assertEquals(600000, hikariDs.getMaxLifetime());
+    }
+
+    @Test
+    @DisplayName("HikariCP enforces its 250ms minimum acquisition timeout")
+    void testMinimumAcquisitionTimeoutIsClamped() throws SQLException {
+        PoolConfig config = PoolConfig.builder()
+                .url("jdbc:h2:mem:timeoutminimum;DB_CLOSE_DELAY=-1")
+                .username("sa")
+                .password("")
+                .connectionTimeoutMs(1)
+                .build();
+
+        createdDataSource = provider.createDataSource(config);
+
+        assertEquals(250, ((HikariDataSource) createdDataSource).getConnectionTimeout());
     }
 
     @Test

@@ -9,7 +9,6 @@ import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.datasource.ConnectionPoolProviderRegistry;
 import org.openjproxy.datasource.ConnectionPoolProvider;
 import org.openjproxy.datasource.PoolConfig;
-import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.MultinodeXaCoordinator;
 import org.openjproxy.grpc.server.AdmissionControlManager;
@@ -18,6 +17,7 @@ import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 import org.openjproxy.grpc.server.pool.ConnectionPoolConfigurer;
+import org.openjproxy.grpc.server.pool.ConnectionPoolWarmup;
 import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 import org.openjproxy.grpc.server.pool.DataSourceConfigurationManager;
 import org.openjproxy.grpc.server.pool.PreparedStatementCachePropertyTranslator;
@@ -230,7 +230,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 .password(connectionDetails.getPassword())
                                 .maxPoolSize(maxPoolSize)
                                 .minIdle(minIdle)
-                                .connectionTimeoutMs(CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS)
+                                .connectionTimeoutMs(dsConfig.getAcquisitionTimeout())
                                 .idleTimeoutMs(dsConfig.getIdleTimeout())
                                 .maxLifetimeMs(dsConfig.getMaxLifetime())
                                 .leakDetectionThresholdMs(dsConfig.getLeakDetectionThreshold())
@@ -239,11 +239,16 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 .metricsPrefix("OJP-Pool-" + dsConfig.getDataSourceName())
                                 .build();
 
-                        log.info("Connection timeout model for {}: admissionTimeout={}ms, backendPoolTimeout={}ms (fail-fast, provider clamped if needed)",
-                                connHash, dsConfig.getConnectionTimeout(), CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS);
+                        log.info("Connection timeout model for {}: admissionTimeout={}ms, backendPoolTimeout={}ms",
+                                connHash, dsConfig.getAdmissionTimeout(), dsConfig.getAcquisitionTimeout());
 
                         // Create DataSource with properly configured transaction isolation
                         ds = poolProvider.createDataSource(poolConfig);
+                        if (dsConfig.isPreWarmEnabled()) {
+                            log.info("Pre-warming datasource '{}' with {} connections before publication",
+                                    dsConfig.getDataSourceName(), minIdle);
+                            ConnectionPoolWarmup.warmUp(ds, minIdle, dsConfig.getAcquisitionTimeout());
+                        }
                         DataSource createdDataSource = ds;
                         ConnectionPoolProvider selectedPoolProvider = poolProvider;
                         DatabaseConnectionBudgetManager.Registration attachedRegistration = budgetRegistration;
@@ -262,7 +267,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
                         // Create a slow query segregation manager for this datasource
                         CreateSlowQuerySegregationManagerAction.getInstance()
-                                .execute(context, connHash, maxPoolSize, dsConfig.getConnectionTimeout());
+                                .execute(context, connHash, maxPoolSize, dsConfig.getAdmissionTimeout());
 
                         log.info("Created new DataSource for dataSource '{}' with connHash: {} using provider: {}, maxPoolSize={}, minIdle={}",
                                 dsConfig.getDataSourceName(), connHash,

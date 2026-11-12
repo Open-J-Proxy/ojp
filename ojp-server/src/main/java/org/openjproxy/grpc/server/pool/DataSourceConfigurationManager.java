@@ -28,7 +28,9 @@ public class DataSourceConfigurationManager {
         private final int minimumIdle;
         private final long idleTimeout;
         private final long maxLifetime;
-        private final long connectionTimeout;
+        private final long admissionTimeout;
+        private final long acquisitionTimeout;
+        private final boolean preWarmEnabled;
         private final boolean poolEnabled;
         private final Integer defaultTransactionIsolation;
         private final long leakDetectionThreshold;
@@ -39,7 +41,12 @@ public class DataSourceConfigurationManager {
             this.minimumIdle = getIntProperty(properties, CommonConstants.MINIMUM_IDLE_PROPERTY, CommonConstants.DEFAULT_MINIMUM_IDLE);
             this.idleTimeout = getLongProperty(properties, CommonConstants.IDLE_TIMEOUT_PROPERTY, CommonConstants.DEFAULT_IDLE_TIMEOUT);
             this.maxLifetime = getLongProperty(properties, CommonConstants.MAX_LIFETIME_PROPERTY, CommonConstants.DEFAULT_MAX_LIFETIME);
-            this.connectionTimeout = getLongProperty(properties, CommonConstants.CONNECTION_TIMEOUT_PROPERTY, CommonConstants.DEFAULT_CONNECTION_TIMEOUT);
+            long[] timeouts = getTimeouts(properties, CommonConstants.ADMISSION_TIMEOUT_PROPERTY,
+                    CommonConstants.ACQUISITION_TIMEOUT_PROPERTY, CommonConstants.CONNECTION_TIMEOUT_PROPERTY);
+            this.admissionTimeout = timeouts[0];
+            this.acquisitionTimeout = timeouts[1];
+            this.preWarmEnabled = getBooleanProperty(properties, CommonConstants.PREWARM_PROPERTY,
+                    CommonConstants.DEFAULT_POOL_PREWARM_ENABLED);
             this.poolEnabled = getBooleanProperty(properties, CommonConstants.POOL_ENABLED_PROPERTY, true);
             this.defaultTransactionIsolation = getTransactionIsolationProperty(properties, CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY);
             this.leakDetectionThreshold = getLongProperty(properties, CommonConstants.LEAK_DETECTION_THRESHOLD_PROPERTY, CommonConstants.DEFAULT_LEAK_DETECTION_THRESHOLD);
@@ -51,7 +58,12 @@ public class DataSourceConfigurationManager {
         public int getMinimumIdle() { return minimumIdle; }
         public long getIdleTimeout() { return idleTimeout; }
         public long getMaxLifetime() { return maxLifetime; }
-        public long getConnectionTimeout() { return connectionTimeout; }
+        public long getAdmissionTimeout() { return admissionTimeout; }
+        public long getAcquisitionTimeout() { return acquisitionTimeout; }
+        public boolean isPreWarmEnabled() { return preWarmEnabled; }
+        /** @deprecated Use {@link #getAdmissionTimeout()} or {@link #getAcquisitionTimeout()}. */
+        @Deprecated
+        public long getConnectionTimeout() { return admissionTimeout + acquisitionTimeout; }
         public boolean isPoolEnabled() { return poolEnabled; }
         public Integer getDefaultTransactionIsolation() { return defaultTransactionIsolation; }
         public long getLeakDetectionThreshold() { return leakDetectionThreshold; }
@@ -59,7 +71,7 @@ public class DataSourceConfigurationManager {
         @Override
         public String toString() {
             return String.format("DataSourceConfiguration[%s: maxPool=%d, minIdle=%d, timeout=%d, poolEnabled=%b, txIsolation=%s, leakDetectionThreshold=%d]",
-                    dataSourceName, maximumPoolSize, minimumIdle, connectionTimeout, poolEnabled,
+                    dataSourceName, maximumPoolSize, minimumIdle, getConnectionTimeout(), poolEnabled,
                     defaultTransactionIsolation != null ? defaultTransactionIsolation : "auto-detect", leakDetectionThreshold);
         }
     }
@@ -73,7 +85,8 @@ public class DataSourceConfigurationManager {
         private final int minimumIdle;
         private final long idleTimeout;
         private final long maxLifetime;
-        private final long connectionTimeout;
+        private final long admissionTimeout;
+        private final long acquisitionTimeout;
         private final boolean poolEnabled;
         private final long timeBetweenEvictionRuns;
         private final int numTestsPerEvictionRun;
@@ -91,8 +104,10 @@ public class DataSourceConfigurationManager {
                     CommonConstants.DEFAULT_IDLE_TIMEOUT);
             this.maxLifetime = getLongProperty(properties, CommonConstants.XA_MAX_LIFETIME_PROPERTY,
                     CommonConstants.DEFAULT_MAX_LIFETIME);
-            this.connectionTimeout = getLongProperty(properties, CommonConstants.XA_CONNECTION_TIMEOUT_PROPERTY,
-                    CommonConstants.DEFAULT_CONNECTION_TIMEOUT);
+            long[] timeouts = getTimeouts(properties, CommonConstants.XA_ADMISSION_TIMEOUT_PROPERTY,
+                    CommonConstants.XA_ACQUISITION_TIMEOUT_PROPERTY, CommonConstants.XA_CONNECTION_TIMEOUT_PROPERTY);
+            this.admissionTimeout = timeouts[0];
+            this.acquisitionTimeout = timeouts[1];
             this.poolEnabled = getBooleanProperty(properties, CommonConstants.XA_POOL_ENABLED_PROPERTY, true);
 
             // Evictor configuration (XA-specific only, no fallback to non-XA)
@@ -112,7 +127,11 @@ public class DataSourceConfigurationManager {
         public int getMinimumIdle() { return minimumIdle; }
         public long getIdleTimeout() { return idleTimeout; }
         public long getMaxLifetime() { return maxLifetime; }
-        public long getConnectionTimeout() { return connectionTimeout; }
+        public long getAdmissionTimeout() { return admissionTimeout; }
+        public long getAcquisitionTimeout() { return acquisitionTimeout; }
+        /** @deprecated Use {@link #getAdmissionTimeout()} or {@link #getAcquisitionTimeout()}. */
+        @Deprecated
+        public long getConnectionTimeout() { return admissionTimeout + acquisitionTimeout; }
         public boolean isPoolEnabled() { return poolEnabled; }
         public long getTimeBetweenEvictionRuns() { return timeBetweenEvictionRuns; }
         public int getNumTestsPerEvictionRun() { return numTestsPerEvictionRun; }
@@ -122,7 +141,7 @@ public class DataSourceConfigurationManager {
         @Override
         public String toString() {
             return String.format("XADataSourceConfiguration[%s: maxPool=%d, minIdle=%d, timeout=%d, poolEnabled=%b, evictionRuns=%d, testsPerRun=%d, softMinEvictable=%d, txIsolation=%s]",
-                    dataSourceName, maximumPoolSize, minimumIdle, connectionTimeout, poolEnabled,
+                    dataSourceName, maximumPoolSize, minimumIdle, getConnectionTimeout(), poolEnabled,
                     timeBetweenEvictionRuns, numTestsPerEvictionRun, softMinEvictableIdleTime,
                     defaultTransactionIsolation != null ? defaultTransactionIsolation : "auto-detect");
         }
@@ -194,6 +213,8 @@ public class DataSourceConfigurationManager {
                     CommonConstants.XA_IDLE_TIMEOUT_PROPERTY,
                     CommonConstants.XA_MAX_LIFETIME_PROPERTY,
                     CommonConstants.XA_CONNECTION_TIMEOUT_PROPERTY,
+                    CommonConstants.XA_ADMISSION_TIMEOUT_PROPERTY,
+                    CommonConstants.XA_ACQUISITION_TIMEOUT_PROPERTY,
                     CommonConstants.XA_POOL_ENABLED_PROPERTY,
                     CommonConstants.XA_TIME_BETWEEN_EVICTION_RUNS_PROPERTY,
                     CommonConstants.XA_NUM_TESTS_PER_EVICTION_RUN_PROPERTY,
@@ -207,6 +228,9 @@ public class DataSourceConfigurationManager {
                     CommonConstants.IDLE_TIMEOUT_PROPERTY,
                     CommonConstants.MAX_LIFETIME_PROPERTY,
                     CommonConstants.CONNECTION_TIMEOUT_PROPERTY,
+                    CommonConstants.ADMISSION_TIMEOUT_PROPERTY,
+                    CommonConstants.ACQUISITION_TIMEOUT_PROPERTY,
+                    CommonConstants.PREWARM_PROPERTY,
                     CommonConstants.POOL_ENABLED_PROPERTY,
                     CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY,
                     CommonConstants.LEAK_DETECTION_THRESHOLD_PROPERTY
@@ -249,6 +273,51 @@ public class DataSourceConfigurationManager {
             log.warn("Invalid long value for property '{}': {}, using default: {}", key, properties.getProperty(key), defaultValue);
             return defaultValue;
         }
+    }
+
+    private static long[] getTimeouts(Properties properties, String admissionKey, String acquisitionKey,
+                                      String legacyKey) {
+        boolean hasAdmission = properties != null && properties.containsKey(admissionKey);
+        boolean hasAcquisition = properties != null && properties.containsKey(acquisitionKey);
+        if (!hasAdmission && !hasAcquisition) {
+            long legacyTimeout = getPositiveLongProperty(properties, legacyKey,
+                    CommonConstants.DEFAULT_CONNECTION_TIMEOUT);
+            if (properties == null || !properties.containsKey(legacyKey)) {
+                return new long[] {
+                        CommonConstants.DEFAULT_ADMISSION_TIMEOUT,
+                        CommonConstants.DEFAULT_ACQUISITION_TIMEOUT
+                };
+            }
+            long admissionTimeout = legacyTimeout / 2;
+            return new long[] {admissionTimeout, legacyTimeout - admissionTimeout};
+        }
+
+        long admissionTimeout = hasAdmission
+                ? getPositiveLongProperty(properties, admissionKey, CommonConstants.DEFAULT_ADMISSION_TIMEOUT)
+                : CommonConstants.DEFAULT_ADMISSION_TIMEOUT;
+        long acquisitionTimeout = hasAcquisition
+                ? getPositiveLongProperty(properties, acquisitionKey, CommonConstants.DEFAULT_ACQUISITION_TIMEOUT)
+                : CommonConstants.DEFAULT_ACQUISITION_TIMEOUT;
+        return new long[] {admissionTimeout, acquisitionTimeout};
+    }
+
+    private static long getPositiveLongProperty(Properties properties, String key, long defaultValue) {
+        if (properties == null || !properties.containsKey(key)) {
+            return defaultValue;
+        }
+        try {
+            long value = Long.parseLong(properties.getProperty(key));
+            if (value > 0) {
+                return value;
+            }
+        } catch (NumberFormatException e) {
+            log.warn("Invalid positive timeout for property '{}': {}, using default: {}",
+                    key, properties.getProperty(key), defaultValue);
+            return defaultValue;
+        }
+        log.warn("Invalid non-positive timeout for property '{}': {}, using default: {}",
+                key, properties.getProperty(key), defaultValue);
+        return defaultValue;
     }
 
     /**

@@ -7,6 +7,7 @@ import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 
 import java.sql.SQLException;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -57,6 +58,32 @@ class CommonsPool2XAProviderTest {
             assertEquals(2, pooledDataSource.getMaxTotal());
             assertEquals(2, pooledDataSource.getMaxIdle());
             assertEquals(0, pooledDataSource.getMinIdle());
+        } finally {
+            pooledDataSource.close();
+        }
+    }
+
+    @Test
+    void shouldHonorConfiguredAcquisitionTimeoutWhenPoolIsExhausted() throws Exception {
+        JdbcDataSource vendorDataSource = new JdbcDataSource();
+        vendorDataSource.setURL("jdbc:h2:mem:xa-acquisition-timeout;DB_CLOSE_DELAY=-1");
+        CommonsPool2XADataSource pooledDataSource = new CommonsPool2XADataSource(vendorDataSource, Map.of(
+                "xa.maxPoolSize", "1",
+                "xa.minIdle", "0",
+                "xa.connectionTimeoutMs", "75",
+                "xa.timeBetweenEvictionRunsMs", "0"));
+
+        try {
+            var borrowed = pooledDataSource.borrowSession();
+            long start = System.nanoTime();
+
+            SQLException error = assertThrows(SQLException.class, pooledDataSource::borrowSession);
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+            assertTrue(error.getMessage().contains("timeout=75ms"));
+            assertTrue(elapsedMs >= 40 && elapsedMs < 1000,
+                    "Commons Pool 2 should wait for its configured acquisition timeout");
+            pooledDataSource.returnSession(borrowed);
         } finally {
             pooledDataSource.close();
         }

@@ -96,35 +96,6 @@ public class ConnectionAcquisitionManager {
                 connectionHash, dataSource.getClass().getSimpleName());
         }
 
-        if (dataSource instanceof HikariDataSource) {
-            HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
-            try {
-                int activeConnections = hikariDataSource.getHikariPoolMXBean().getActiveConnections();
-                int idleConnections = hikariDataSource.getHikariPoolMXBean().getIdleConnections();
-                int totalConnections = hikariDataSource.getHikariPoolMXBean().getTotalConnections();
-                int maxPoolSize = hikariDataSource.getMaximumPoolSize();
-                int waitingThreads = hikariDataSource.getHikariPoolMXBean().getThreadsAwaitingConnection();
-                long configuredTimeoutMs = hikariDataSource.getConnectionTimeout();
-
-                if (idleConnections == 0 && totalConnections >= maxPoolSize && activeConnections > 0) {
-                    String message = String.format(
-                            "Connection acquisition pre-check failed for hash: %s. Pool exhausted (idle=0, total=%d, max=%d, active=%d, waiting=%d, poolTimeoutMs=%d). Request will not wait at pool level.",
-                            connectionHash, totalConnections, maxPoolSize, activeConnections, waitingThreads, configuredTimeoutMs);
-                    poolMetrics.recordPoolExhaustion(poolName + "|phase=admission_gate");
-                    log.error(message);
-                    throw new SQLTransientConnectionException(message, SQLSTATE_CONNECTION_FAILURE);
-                }
-            } catch (SQLException e) {
-                throw e;
-            } catch (Exception e) {
-                String message = String.format(
-                        "Cannot evaluate pool state for hash: %s (phase=pool_precheck). Refusing borrow attempt due to pre-check failure to avoid hidden blocking path.",
-                        connectionHash);
-                log.error(message, e);
-                throw new SQLException(message, e);
-            }
-        }
-
         long acquisitionStart = System.nanoTime();
         try {
             // Use pool's built-in connection timeout - this prevents indefinite blocking

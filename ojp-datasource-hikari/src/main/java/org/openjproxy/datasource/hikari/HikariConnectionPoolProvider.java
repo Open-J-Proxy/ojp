@@ -123,7 +123,7 @@ public class HikariConnectionPoolProvider implements ConnectionPoolProvider {
         // Additional HikariCP-specific settings for production use
         hikariConfig.setLeakDetectionThreshold(config.getLeakDetectionThresholdMs()); // 0 = disabled (default)
         hikariConfig.setValidationTimeout(5000);       // 5 seconds
-        hikariConfig.setInitializationFailTimeout(10000); // 10 seconds
+        hikariConfig.setInitializationFailTimeout(-1); // Let bounded pool acquisition (or pre-warm) report availability
         hikariConfig.setRegisterMbeans(true);
 
         // Configure OpenTelemetry metrics if enabled

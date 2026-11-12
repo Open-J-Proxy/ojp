@@ -57,6 +57,66 @@ class DataSourceConfigurationManagerTest {
         // Should use defaults for properties not specified
         assertEquals(CommonConstants.DEFAULT_IDLE_TIMEOUT, config.getIdleTimeout());
         assertEquals(CommonConstants.DEFAULT_MAX_LIFETIME, config.getMaxLifetime());
+        assertEquals(7500, config.getAdmissionTimeout());
+        assertEquals(7500, config.getAcquisitionTimeout());
+    }
+
+    @Test
+    void testLegacyTimeoutIsSplitWithoutLosingOddMillisecond() {
+        Properties props = new Properties();
+        props.setProperty(CommonConstants.CONNECTION_TIMEOUT_PROPERTY, "15001");
+
+        DataSourceConfigurationManager.DataSourceConfiguration config =
+                DataSourceConfigurationManager.getConfiguration(props);
+
+        assertEquals(7500, config.getAdmissionTimeout());
+        assertEquals(7501, config.getAcquisitionTimeout());
+        assertEquals(15001, config.getConnectionTimeout());
+    }
+
+    @Test
+    void testIndependentTimeoutsOverrideLegacyIndividually() {
+        Properties props = new Properties();
+        props.setProperty(CommonConstants.CONNECTION_TIMEOUT_PROPERTY, "20000");
+        props.setProperty(CommonConstants.ADMISSION_TIMEOUT_PROPERTY, "1250");
+
+        DataSourceConfigurationManager.DataSourceConfiguration config =
+                DataSourceConfigurationManager.getConfiguration(props);
+
+        assertEquals(1250, config.getAdmissionTimeout());
+        assertEquals(CommonConstants.DEFAULT_ACQUISITION_TIMEOUT, config.getAcquisitionTimeout());
+
+        props.setProperty(CommonConstants.ACQUISITION_TIMEOUT_PROPERTY, "2750");
+        DataSourceConfigurationManager.clearCache();
+        config = DataSourceConfigurationManager.getConfiguration(props);
+        assertEquals(1250, config.getAdmissionTimeout());
+        assertEquals(2750, config.getAcquisitionTimeout());
+    }
+
+    @Test
+    void testInvalidAndNonPositiveTimeoutsUseBoundedDefaults() {
+        Properties props = new Properties();
+        props.setProperty(CommonConstants.ADMISSION_TIMEOUT_PROPERTY, "0");
+        props.setProperty(CommonConstants.ACQUISITION_TIMEOUT_PROPERTY, "invalid");
+
+        DataSourceConfigurationManager.DataSourceConfiguration config =
+                DataSourceConfigurationManager.getConfiguration(props);
+
+        assertEquals(CommonConstants.DEFAULT_ADMISSION_TIMEOUT, config.getAdmissionTimeout());
+        assertEquals(CommonConstants.DEFAULT_ACQUISITION_TIMEOUT, config.getAcquisitionTimeout());
+    }
+
+    @Test
+    void testXaTimeoutsUseSameCompatibilityRules() {
+        Properties props = new Properties();
+        props.setProperty(CommonConstants.XA_CONNECTION_TIMEOUT_PROPERTY, "12001");
+
+        DataSourceConfigurationManager.XADataSourceConfiguration config =
+                DataSourceConfigurationManager.getXAConfiguration(props);
+
+        assertEquals(6000, config.getAdmissionTimeout());
+        assertEquals(6001, config.getAcquisitionTimeout());
+        assertEquals(12001, config.getConnectionTimeout());
     }
 
     @Test

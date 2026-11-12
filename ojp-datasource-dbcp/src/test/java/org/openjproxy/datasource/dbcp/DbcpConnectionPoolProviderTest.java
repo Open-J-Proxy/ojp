@@ -145,7 +145,7 @@ class DbcpConnectionPoolProviderTest {
                 .url("jdbc:h2:mem:timeouttest;DB_CLOSE_DELAY=-1")
                 .username("sa")
                 .password("")
-                .connectionTimeoutMs(10000)
+                .connectionTimeoutMs(5000)
                 .idleTimeoutMs(300000)
                 .maxLifetimeMs(600000)
                 .build();
@@ -153,7 +153,7 @@ class DbcpConnectionPoolProviderTest {
         createdDataSource = provider.createDataSource(config);
         BasicDataSource basicDs = (BasicDataSource) createdDataSource;
 
-        assertEquals(10000, basicDs.getMaxWaitDuration().toMillis());
+        assertEquals(5000, basicDs.getMaxWaitDuration().toMillis());
         assertEquals(300000, basicDs.getMinEvictableIdleDuration().toMillis());
         assertEquals(600000, basicDs.getMaxConnDuration().toMillis());
     }

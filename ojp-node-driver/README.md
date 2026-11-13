@@ -33,7 +33,9 @@ through a real server using the CSV fixture `testdata/h2_connections.csv`.
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
 No cumulative level is claimed for PostgreSQL or SQL Server until their required
-level-specific coverage is run in CI. L2 needs statement variants, generated keys,
+level-specific coverage is run in CI. SQL Server's L1 scenarios are now explicit in
+`test/integration.sqlServerAg.test.ts` and have passed locally; the cumulative claim
+remains pending the CI integration run. L2 needs statement variants, generated keys,
 metadata and result-producing DML before L3 or higher can be claimed.
 
 ## Why this driver exists
@@ -190,6 +192,8 @@ unchanged.
 
 The real-server suite `test/integration.sqlServerAg.test.ts` covers SQL Server:
 
+- L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
+  rejection of operations after close.
 - CRUD with native SQL Server types (`NVARCHAR`, `DECIMAL`, `BIT`, `DATETIME2`).
 - Transactions (`commit`/`rollback`) and `MONEY` columns.
 - **"Row-by-row" mode (`fetchNextRows`)**: validated for the first time against a

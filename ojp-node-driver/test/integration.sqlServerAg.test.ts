@@ -2,7 +2,7 @@
  * Real OJP server and SQL Server integration, enabled by
  * OJP_ENABLE_SQLSERVER_AG_TESTS=true. Every CSV connection row runs the full suite.
  */
-import { OjpClient } from '../src/client/OjpClient';
+import { OjpClient, OjpConnectionError, OjpSqlError, withOjpClient } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_AG_TESTS === 'true';
@@ -119,7 +119,37 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
 
   it('should throw OjpSqlError for invalid SQL', async () => {
     txClient = await newClient();
-    await expect(txClient.executeQuery('SELECT * FROM table_that_does_not_exist')).rejects.toThrow();
+    await expect(txClient.executeQuery('SELECT * FROM table_that_does_not_exist'))
+      .rejects.toBeInstanceOf(OjpSqlError);
+  }, 15_000);
+
+  it('should satisfy L1 connection lifecycle and release a scoped client', async () => {
+    const scopedClient = await withOjpClient(OJP_URL, async (connectedClient) => {
+      expect((await connectedClient.executeQuery('SELECT 1')).rows).toHaveLength(1);
+      expect(await connectedClient.executeUpdate(
+        `INSERT INTO ${tableName} (id, label) VALUES (?, ?)`,
+        [40, 'scoped client'],
+      )).toBe(1);
+      expect((await connectedClient.executeQuery(
+        `SELECT label FROM ${tableName} WHERE id = ?`,
+        [40],
+      )).rows[0].label).toBe('scoped client');
+      expect(await connectedClient.executeUpdate(
+        `DELETE FROM ${tableName} WHERE id = ?`,
+        [40],
+      )).toBe(1);
+      return connectedClient;
+    }, { user: OJP_USER, password: OJP_PASSWORD });
+
+    await expect(scopedClient.executeQuery('SELECT 1')).rejects.toBeInstanceOf(OjpConnectionError);
+    await expect(scopedClient.connect()).rejects.toBeInstanceOf(OjpConnectionError);
+    expect((await client.executeQuery('SELECT 1')).rows).toHaveLength(1);
+  }, 15_000);
+
+  it('should return empty result metadata for a query with no matching rows', async () => {
+    const empty = await client.executeQuery(`SELECT id, label FROM ${tableName} WHERE id = ?`, [-1]);
+    expect(empty.rows).toHaveLength(0);
+    expect(empty.columns.map((column) => column.toLowerCase())).toEqual(['id', 'label']);
   }, 15_000);
 
   it('should read MONEY columns without an external sample database', async () => {

@@ -741,3 +741,21 @@ export class OjpClient {
     }
   }
 }
+
+/**
+ * Runs work in a connected client and always terminates its server-side session.
+ * Each call creates a fresh client; this is a lifecycle helper, not a connection pool.
+ */
+export async function withOjpClient<T>(
+  ojpUrl: string,
+  operation: (client: OjpClient) => T | Promise<T>,
+  options: OjpClientOptions = {},
+): Promise<T> {
+  const client = new OjpClient(ojpUrl, options);
+  try {
+    await client.connect();
+    return await operation(client);
+  } finally {
+    await client.close();
+  }
+}

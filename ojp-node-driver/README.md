@@ -53,6 +53,16 @@ NestJS).
 
 - There is no connection pool on the Node client side — the real pool lives in `ojp-server`.
 - Each `OjpClient` represents a logical session (equivalent to a `java.sql.Connection`).
+- `OjpClient` owns and refreshes the protocol `SessionInfo`; callers never pass session
+  state to individual operations. Use `withOjpClient(url, work, options)` to have the
+  client connect before `work` and terminate its session in `finally`. Each call creates
+  a fresh client; this helper does not pool or reuse virtual connections.
+
+```ts
+const result = await withOjpClient(ojpUrl, async (db) => {
+  return db.executeQuery('SELECT name FROM customers WHERE id = ?', [customerId]);
+}, { user, password });
+```
 - The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
   versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
   and `ojp-server` (see that package's README for its versioning policy and how it's kept

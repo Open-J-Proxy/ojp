@@ -150,7 +150,64 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     const empty = await client.executeQuery(`SELECT id, label FROM ${tableName} WHERE id = ?`, [-1]);
     expect(empty.rows).toHaveLength(0);
     expect(empty.columns.map((column) => column.toLowerCase())).toEqual(['id', 'label']);
+    expect(empty.metadata).toEqual({
+      columnCount: 2,
+      columns: [
+        { index: 1, label: empty.columns[0] },
+        { index: 2, label: empty.columns[1] },
+      ],
+    });
   }, 15_000);
+
+  it('should support L2 plain/prepared statements, SQL Server OUTPUT, batches and generated keys', async () => {
+    const id = Date.now() % 100_000_000;
+    const output = await client.createStatement().executeQuery(
+      `INSERT INTO ${tableName} (id, label) OUTPUT inserted.id, inserted.label VALUES (?, ?)`,
+      [id, 'plain output'],
+    );
+    expect(output.columns.map((column) => column.toLowerCase())).toEqual(['id', 'label']);
+    expect(output.rows).toEqual([{ id, label: 'plain output' }]);
+
+    const preparedOutput = client.prepareStatement(
+      `UPDATE ${tableName} SET label = ? OUTPUT inserted.id WHERE id = ?`,
+    );
+    try {
+      const result = await preparedOutput.executeQuery(['prepared output', id]);
+      expect(result.rows).toEqual([{ id }]);
+      expect(result.metadata.columnCount).toBe(1);
+    } finally {
+      await preparedOutput.close();
+    }
+
+    const batch = client.prepareStatement(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`);
+    try {
+      await batch.addBatch([id + 1, 'batch one']);
+      await batch.addBatch([id + 2, 'batch two']);
+      expect(await batch.executeBatch()).toEqual([1, 1]);
+    } finally {
+      await batch.close();
+    }
+
+    const keyTable = `${tableName}_keys`;
+    await client.executeUpdate(
+      `CREATE TABLE ${keyTable} (id INT IDENTITY(1,1) PRIMARY KEY, label NVARCHAR(100))`,
+    );
+    const generated = client.prepareStatement(
+      `INSERT INTO ${keyTable} (label) VALUES (?)`,
+      { generatedKeys: true },
+    );
+    try {
+      expect(await generated.executeUpdate(['generated'])).toBe(1);
+      const keys = await generated.getGeneratedKeys();
+      expect(keys.columns.length).toBeGreaterThan(0);
+      expect(keys.rows).toHaveLength(1);
+      expect(keys.rows[0].id).toBe(1);
+    } finally {
+      await generated.close();
+      await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
+      await client.executeUpdate(`DELETE FROM ${tableName} WHERE id BETWEEN ? AND ?`, [id, id + 2]);
+    }
+  }, 30_000);
 
   it('should read MONEY columns without an external sample database', async () => {
     const moneyTable = `${tableName}_money`;

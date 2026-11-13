@@ -3,17 +3,23 @@ import { randomUUID } from 'crypto';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
 import { toOjpError, OjpConnectionError, isConnectionLevelError } from './errors';
-import { fromParameterValue, OjpLobRef, toParameterProtos } from './valueMapper';
+import { fromParameterValue, OjpLobRef, OjpNullParam, toParameterProtos } from './valueMapper';
 import { markEndpointUnhealthy, orderEndpointsForAttempt } from './endpointHealth';
 import { StatementServiceClient } from './statementServiceClient';
 import { OjpXAResource } from '../xa/OjpXAResource';
+import { looksLikeQuery, returnsRowsFromDml } from './sqlStatementClassifier';
+import { OjpPreparedStatement, OjpStatement } from './statement';
 import {
+  CallType,
   CallResourceRequest,
+  CallResourceResponse,
   ConnectionDetails,
   LobDataBlock,
   LobReference,
   OpResult,
+  PropertyEntry,
   ReadLobRequest,
+  ResourceType,
   ResultSetFetchRequest,
   SessionInfo,
   SessionTerminationStatus,
@@ -21,6 +27,22 @@ import {
 } from '../proto/types';
 
 export { OjpLobRef, OjpTypedParam } from './valueMapper';
+export { OjpNullParam } from './valueMapper';
+
+export interface OjpClientStatementOptions {
+  /** Request generated keys from an update, where the database supports them. */
+  generatedKeys?: boolean;
+}
+
+export interface QueryColumnMetadata {
+  index: number;
+  label: string;
+}
+
+export interface QueryResultMetadata {
+  columnCount: number;
+  columns: QueryColumnMetadata[];
+}
 
 export interface OjpClientOptions {
   /** Target database user (passed through to the ojp-server). */
@@ -45,6 +67,8 @@ export interface QueryResult {
   columns: string[];
   /** Rows already converted to native JS values. */
   rows: Record<string, unknown>[];
+  /** Basic result metadata available in the OJP streaming contract. */
+  metadata: QueryResultMetadata;
 }
 
 /**
@@ -257,17 +281,58 @@ export class OjpClient {
     return mapped;
   }
 
+  /** Creates a plain Statement-style wrapper over this session. */
+  createStatement(): OjpStatement {
+    return new OjpStatement(this);
+  }
+
+  /** Creates a reusable PreparedStatement-style wrapper over this session. */
+  prepareStatement(sql: string, options: OjpClientStatementOptions = {}): OjpPreparedStatement {
+    return new OjpPreparedStatement(this, sql, options);
+  }
+
   /** Executes INSERT/UPDATE/DELETE/DDL. Returns the number of affected rows. */
   async executeUpdate(sql: string, params: unknown[] = []): Promise<number> {
+    return (await this.sendUpdate(sql, params)).intValue ?? 0;
+  }
+
+  /** @internal Runs an update for a statement wrapper and preserves server statement handles. */
+  async executeStatementUpdate(
+    sql: string,
+    params: unknown[],
+    options: OjpClientStatementOptions,
+  ): Promise<{ affectedRows: number; statementUUID?: string }> {
+    const result = await this.sendUpdate(sql, params, options);
+    return { affectedRows: result.intValue ?? 0, statementUUID: result.uuid };
+  }
+
+  /** @internal Executes a prepared update and returns any handle registered by the server. */
+  async executePreparedUpdate(
+    sql: string,
+    params: unknown[],
+    options: OjpClientStatementOptions,
+    statementUUID?: string,
+  ): Promise<{ affectedRows: number; statementUUID?: string }> {
+    const result = await this.sendUpdate(sql, params, options, statementUUID);
+    return { affectedRows: result.intValue ?? 0, statementUUID: result.uuid };
+  }
+
+  private async sendUpdate(
+    sql: string,
+    params: unknown[],
+    options: OjpClientStatementOptions = {},
+    statementUUID = '',
+    additionalProperties: PropertyEntry[] = [],
+  ): Promise<OpResult> {
     const request: StatementRequest = {
       session: this.requireSession(),
       sql,
       parameters: toParameterProtos(params),
-      // Empty statementUUID: each call creates/prepares its own statement on the
-      // server (stateless usage). A UUID should only be sent when referencing a
-      // previously registered statement (PreparedStatement reuse), which is not
-      // yet supported at this stage of the driver.
-      statementUUID: '',
+      statementUUID,
+      properties: [
+        ...additionalProperties,
+        ...(options.generatedKeys ? [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }] : []),
+      ],
     };
 
     return new Promise((resolve, reject) => {
@@ -277,9 +342,189 @@ export class OjpClient {
           return;
         }
         this.updateSessionFrom(response);
-        resolve(response.intValue ?? 0);
+        resolve(response);
       });
     });
+  }
+
+  /** @internal Adds one parameter set to a prepared statement's server-side batch. */
+  async addPreparedBatch(
+    sql: string,
+    params: unknown[],
+    statementUUID: string | undefined,
+    options: OjpClientStatementOptions,
+  ): Promise<string> {
+    const result = await this.sendUpdate(
+      sql,
+      params,
+      options,
+      statementUUID,
+      [{ key: 'PREPARED_STATEMENT_ADD_BATCH_FLAG', boolValue: true }],
+    );
+    const uuid = result.uuidValue || result.uuid || statementUUID;
+    if (!uuid) {
+      throw new OjpConnectionError('The server did not return a prepared statement handle for the batch.');
+    }
+    return uuid;
+  }
+
+  /** @internal Executes and clears a prepared statement's server-side batch. */
+  async executePreparedBatch(statementUUID: string): Promise<number[]> {
+    const response = await this.invokeCallResource({
+      resourceType: 'RES_PREPARED_STATEMENT',
+      resourceUUID: statementUUID,
+      callType: 'CALL_EXECUTE',
+      resourceName: 'Batch',
+    });
+    const value = response.values?.[0];
+    if (value?.intArrayValue) {
+      return value.intArrayValue.values;
+    }
+    throw new OjpConnectionError('The server returned an invalid response for prepared statement batch execution.');
+  }
+
+  /** @internal Retrieves generated keys from a server-registered statement. */
+  async getGeneratedKeys(statementUUID: string): Promise<QueryResult> {
+    const response = await this.invokeCallResource({
+      resourceType: 'RES_PREPARED_STATEMENT',
+      resourceUUID: statementUUID,
+      callType: 'CALL_GET',
+      resourceName: 'GeneratedKeys',
+    });
+    const resultSetUUID = fromParameterValue(response.values?.[0]);
+    if (typeof resultSetUUID !== 'string' || resultSetUUID.length === 0) {
+      return this.toQueryResult([], []);
+    }
+    return this.fetchResultSet(resultSetUUID);
+  }
+
+  /** @internal Closes a server-registered prepared statement. */
+  async closePreparedStatement(statementUUID: string): Promise<void> {
+    await this.invokeCallResource({
+      resourceType: 'RES_PREPARED_STATEMENT',
+      resourceUUID: statementUUID,
+      callType: 'CALL_CLOSE',
+      resourceName: '',
+    });
+  }
+
+  /** @internal Used by Statement.execute() to select the protocol operation. */
+  isQuery(sql: string): boolean {
+    return looksLikeQuery(sql);
+  }
+
+  /** @internal Identifies DML statements whose result rows arrive through executeUpdate. */
+  isDmlReturning(sql: string): boolean {
+    return returnsRowsFromDml(sql);
+  }
+
+  private invokeCallResource(target: {
+    resourceType: ResourceType;
+    resourceUUID?: string;
+    callType: CallType;
+    resourceName: string;
+    params?: unknown[];
+  }): Promise<CallResourceResponse> {
+    const request: CallResourceRequest = {
+      session: this.requireSession(),
+      resourceType: target.resourceType,
+      resourceUUID: target.resourceUUID,
+      target: {
+        callType: target.callType,
+        resourceName: target.resourceName,
+        params: (target.params ?? []).map((value) => toParameterProtos([value])[0].values[0]),
+      },
+    };
+    return new Promise((resolve, reject) => {
+      this.requireClient().callResource(request, (err, response) => {
+        if (err) {
+          reject(this.toClientError(err));
+          return;
+        }
+        this.updateSessionFrom(response);
+        resolve(response);
+      });
+    });
+  }
+
+  private async fetchResultSet(resultSetUUID: string): Promise<QueryResult> {
+    let columns: string[] = [];
+    const rows: Record<string, unknown>[] = [];
+    try {
+      for (;;) {
+        const result = await this.fetchNextRows(resultSetUUID, 100);
+        const query = result.queryResult;
+        if (!query) {
+          break;
+        }
+        if (query.labels?.length) {
+          columns = query.labels;
+        }
+        for (const row of query.rows ?? []) {
+          const record: Record<string, unknown> = {};
+          row.columns.forEach((value, index) => {
+            record[columns[index] ?? `col${index}`] = fromParameterValue(value);
+          });
+          rows.push(record);
+        }
+        if (!query.rows?.length || result.flag?.includes('RESULT_SET_LAST_BLOCK')) {
+          break;
+        }
+      }
+    } finally {
+      await this.invokeCallResource({
+        resourceType: 'RES_RESULT_SET',
+        resourceUUID: resultSetUUID,
+        callType: 'CALL_CLOSE',
+        resourceName: '',
+      });
+    }
+    return this.toQueryResult(columns, rows);
+  }
+
+  private toQueryResult(columns: string[], rows: Record<string, unknown>[]): QueryResult {
+    return {
+      columns,
+      rows,
+      metadata: {
+        columnCount: columns.length,
+        columns: columns.map((label, index) => ({ index: index + 1, label })),
+      },
+    };
+  }
+
+  private async fetchNextRows(resultSetUUID: string, size: number): Promise<OpResult> {
+    const request: ResultSetFetchRequest = {
+      session: this.requireSession(),
+      resultSetUUID,
+      size,
+    };
+    return new Promise((resolve, reject) => {
+      this.requireClient().fetchNextRows(request, (err, response) => {
+        if (err) {
+          reject(this.toClientError(err));
+          return;
+        }
+        this.updateSessionFrom(response);
+        resolve(response);
+      });
+    });
+  }
+
+  /** Executes an update and returns its result set (for SQL Server OUTPUT / RETURNING). */
+  private async executeDmlReturning(sql: string, params: unknown[]): Promise<QueryResult> {
+    const result = await this.sendUpdate(sql, params, {}, '', [
+      { key: 'STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY', boolValue: true },
+    ]);
+    if (result.flag !== 'UPDATE_RESULT_SET' || !result.uuid) {
+      throw new OjpConnectionError('The DML statement did not return a result set.');
+    }
+    return this.fetchResultSet(result.uuid);
+  }
+
+  /** @internal Executes a prepared update and returns rows when it has OUTPUT/RETURNING. */
+  async executeDmlReturningQuery(sql: string, params: unknown[]): Promise<QueryResult> {
+    return this.executeDmlReturning(sql, params);
   }
 
   /**
@@ -364,12 +609,16 @@ export class OjpClient {
   }
 
   /** Maps `OpResult` blocks into rows already converted to JS values, with the currently active columns. */
-  private async *queryRows(sql: string, params: unknown[]): AsyncGenerator<StreamedRow, void, undefined> {
+  private async *queryRows(
+    sql: string,
+    params: unknown[],
+    statementUUID = '',
+  ): AsyncGenerator<StreamedRow, void, undefined> {
     const request: StatementRequest = {
       session: this.requireSession(),
       sql,
       parameters: toParameterProtos(params),
-      statementUUID: '',
+      statementUUID,
     };
 
     let columns: string[] = [];
@@ -410,6 +659,11 @@ export class OjpClient {
    * ```
    */
   async *executeQueryStream(sql: string, params: unknown[] = []): AsyncGenerator<Record<string, unknown>, void, undefined> {
+    if (returnsRowsFromDml(sql)) {
+      const { rows } = await this.executeDmlReturning(sql, params);
+      yield* rows;
+      return;
+    }
     for await (const { row } of this.queryRows(sql, params)) {
       if (row) {
         yield row;
@@ -422,18 +676,30 @@ export class OjpClient {
    * result sets, prefer `executeQueryStream`, which consumes the gRPC stream on demand.
    */
   async executeQuery(sql: string, params: unknown[] = []): Promise<QueryResult> {
+    return this.runQuery(sql, params, '');
+  }
+
+  /** @internal Executes a prepared query without exposing statement IDs to application code. */
+  async executePreparedQuery(sql: string, params: unknown[], statementUUID?: string): Promise<QueryResult> {
+    return this.runQuery(sql, params, statementUUID ?? '');
+  }
+
+  private async runQuery(sql: string, params: unknown[], statementUUID: string): Promise<QueryResult> {
+    if (returnsRowsFromDml(sql)) {
+      return this.executeDmlReturning(sql, params);
+    }
     let columns: string[] = [];
     const rows: Record<string, unknown>[] = [];
-    for await (const item of this.queryRows(sql, params)) {
+    for await (const item of this.queryRows(sql, params, statementUUID)) {
       columns = item.columns;
       if (item.row) {
         rows.push(item.row);
       }
     }
-    return { columns, rows };
+    return this.toQueryResult(columns, rows);
   }
 
-  private updateSessionFrom(response: OpResult | SessionInfo | LobReference | LobDataBlock): void {
+  private updateSessionFrom(response: OpResult | SessionInfo | CallResourceResponse | LobReference | LobDataBlock): void {
     const session = 'session' in response ? response.session : response;
     if (session) {
       this.session = session;

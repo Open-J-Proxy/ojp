@@ -24,7 +24,7 @@ The H2 suite also covers datasource selection using `testdata/h2_connections.csv
 | Level | Status | Notes |
 |---|---|---|
 | **L1** | H2, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts` and `test/integration.sqlServerAg.test.ts`. |
-| **L2** | ⚠️ Partial | Broad typed-parameter coverage (`ParameterTypeProto` — null, boolean, numeric, string, bytes, timestamp, `BigDecimal`, plus explicit type hints for dialect shims) is unit-tested extensively. There is **no** distinct PreparedStatement/Statement variant, **no** generated-keys retrieval, and **no** result-set metadata API. |
+| **L2** | Implemented; certification pending | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Existing broad parameter-mapping unit coverage remains; the SQL Server real-server L2 suite must pass before L2 is claimed. |
 | **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 and cursor lifecycle are incomplete. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
 | **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
@@ -35,10 +35,10 @@ The H2 suite also covers datasource selection using `testdata/h2_connections.csv
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
 No cumulative level is claimed for PostgreSQL until its required level-specific
-coverage is run in CI. SQL Server's L1 cumulative claim is limited to the passing
-integration run above; SQL Server L2 and higher are not claimed. L2 needs statement
-variants, generated keys, metadata and result-producing DML before L3 or higher can be
-claimed.
+coverage is run in CI. SQL Server's tested cumulative claim remains L1 until its L2
+integration scenarios pass in CI. The Node metadata shape intentionally reports the
+stream protocol's column labels; it does not expose JDBC's full vendor-specific
+`ResultSetMetaData` surface.
 
 ## Why this driver exists
 
@@ -116,6 +116,34 @@ await client.commit();
 
 await client.close();
 ```
+
+### Statements, prepared parameters, batches, and generated keys
+
+The statement wrappers reuse the owning `OjpClient`; callers do not pass or update
+`SessionInfo` themselves. Prepared parameter indexes are 1-based, and values can be
+rebound between executions:
+
+```ts
+const statement = client.prepareStatement(
+  'UPDATE inventory SET label = ? OUTPUT inserted.id WHERE id = ?',
+);
+statement.setParameter(1, 'updated');
+statement.setParameter(2, 42);
+const returnedRows = await statement.executeQuery();
+await statement.close();
+
+const insert = client.prepareStatement(
+  'INSERT INTO inventory (label) VALUES (?)',
+  { generatedKeys: true },
+);
+await insert.executeUpdate(['new item']);
+const generatedKeys = await insert.getGeneratedKeys();
+await insert.close();
+```
+
+For prepared batches, call `addBatch(values)` for each parameter set and then
+`executeBatch()`. Close prepared wrappers when finished; closing the owning client also
+terminates the OJP session and releases its server-side resources.
 
 ## Real pagination for large result sets (`executeQueryStream`)
 

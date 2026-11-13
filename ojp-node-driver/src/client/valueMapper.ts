@@ -20,6 +20,11 @@ export class OjpLobRef {
   constructor(public readonly uuid: string, public readonly lobKind: 'BLOB' | 'CLOB') {}
 }
 
+/** An explicitly typed SQL NULL parameter using a java.sql.Types numeric code. */
+export class OjpNullParam {
+  constructor(public readonly sqlType: number) {}
+}
+
 /**
  * java.sql.Types.NULL code (0). For null parameters, the ojp-server expects a
  * ParameterValue with intValue containing the SQL type code (see PreparedStatement.setNull
@@ -61,6 +66,10 @@ export class OjpTypedParam {
 }
 
 export function toParameterProto(index: number, value: unknown): ParameterProto {
+  if (value instanceof OjpNullParam) {
+    return { index, type: 'PT_NULL', values: [{ intValue: value.sqlType }] };
+  }
+
   if (value === null || value === undefined) {
     return { index, type: 'PT_NULL', values: [{ intValue: JAVA_SQL_TYPES_NULL }] };
   }

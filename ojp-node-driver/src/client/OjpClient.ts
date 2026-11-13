@@ -741,3 +741,45 @@ export class OjpClient {
     }
   }
 }
+
+/**
+ * Use this for a short, self-contained task, such as running a query or transaction.
+ * The client manages its `SessionInfo`; callers do not need to pass session state.
+ *
+ * ```ts
+ * const result = await withOjpClient(url, (client) =>
+ *   client.executeQuery('SELECT name FROM customers'),
+ * );
+ * ```
+ *
+ * The callback must finish before the client is closed. Do not use this helper when
+ * you need to keep a session open after the callback, or return the client for later
+ * use. Manage that client directly instead:
+ *
+ * ```ts
+ * const client = new OjpClient(url);
+ * await client.connect();
+ * try {
+ *   await client.executeQuery('SELECT name FROM customers');
+ *   // Run more work while this session is needed.
+ * } finally {
+ *   await client.close();
+ * }
+ * ```
+ *
+ * Every call creates a fresh client and closes it when the callback finishes,
+ * including when the callback fails. This helper does not pool or reuse clients.
+ */
+export async function withOjpClient<T>(
+  ojpUrl: string,
+  operation: (client: OjpClient) => T | Promise<T>,
+  options: OjpClientOptions = {},
+): Promise<T> {
+  const client = new OjpClient(ojpUrl, options);
+  try {
+    await client.connect();
+    return await operation(client);
+  } finally {
+    await client.close();
+  }
+}

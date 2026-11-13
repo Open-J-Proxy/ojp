@@ -115,7 +115,8 @@ jobs:
               - '!**/*.md'
             unknown:
               - '**'
-              - '!{documents,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons,ojp-jdbc-driver,ojp-testcontainers,spring-boot-starter-ojp,ojp-client-dotnet-ado-net,ojp-client-ruby-dbi,ojp-client-python-dbapi,ojp-client-cpp-odbc,ojp-client-dart-drift,ojp-client-go-database-sql,ojp-client-php-pdo}/**'
+              - '!{documents,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons,ojp-jdbc-driver,ojp-testcontainers,spring-boot-starter-ojp,ojp-node-driver,ojp-client-dotnet-ado-net,ojp-client-ruby-dbi,ojp-client-python-dbapi,ojp-client-cpp-odbc,ojp-client-dart-drift,ojp-client-go-database-sql,ojp-client-php-pdo}/**'
+              - '!.github/workflows/ci-test-selection.yml'
               - '!**/*.md'
               - '!{LICENSE,LICENSE.*,NOTICE,NOTICE.*}'
 

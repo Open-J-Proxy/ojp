@@ -12,16 +12,18 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2 |
+| Cumulative level | **L1** for H2 and SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
-The H2 L1 suite exercises CRUD, errors, datasource selection and session lifecycle
-through a real server using the CSV fixture `testdata/h2_connections.csv`.
+The H2 and SQL Server L1 suites exercise CRUD, errors, and session lifecycle through
+a real OJP server and database. SQL Server L1 passed in the
+[Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512).
+The H2 suite also covers datasource selection using `testdata/h2_connections.csv`.
 
 | Level | Status | Notes |
 |---|---|---|
-| **L1** | H2 | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts`. |
+| **L1** | H2, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts` and `test/integration.sqlServerAg.test.ts`. |
 | **L2** | ⚠️ Partial | Broad typed-parameter coverage (`ParameterTypeProto` — null, boolean, numeric, string, bytes, timestamp, `BigDecimal`, plus explicit type hints for dialect shims) is unit-tested extensively. There is **no** distinct PreparedStatement/Statement variant, **no** generated-keys retrieval, and **no** result-set metadata API. |
 | **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 and cursor lifecycle are incomplete. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
@@ -32,9 +34,11 @@ through a real server using the CSV fixture `testdata/h2_connections.csv`.
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
-No cumulative level is claimed for PostgreSQL or SQL Server until their required
-level-specific coverage is run in CI. L2 needs statement variants, generated keys,
-metadata and result-producing DML before L3 or higher can be claimed.
+No cumulative level is claimed for PostgreSQL until its required level-specific
+coverage is run in CI. SQL Server's L1 cumulative claim is limited to the passing
+integration run above; SQL Server L2 and higher are not claimed. L2 needs statement
+variants, generated keys, metadata and result-producing DML before L3 or higher can be
+claimed.
 
 ## Why this driver exists
 
@@ -53,6 +57,16 @@ NestJS).
 
 - There is no connection pool on the Node client side — the real pool lives in `ojp-server`.
 - Each `OjpClient` represents a logical session (equivalent to a `java.sql.Connection`).
+- `OjpClient` owns and refreshes the protocol `SessionInfo`; callers never pass session
+  state to individual operations. Use `withOjpClient(url, work, options)` to have the
+  client connect before `work` and terminate its session in `finally`. Each call creates
+  a fresh client; this helper does not pool or reuse virtual connections.
+
+```ts
+const result = await withOjpClient(ojpUrl, async (db) => {
+  return db.executeQuery('SELECT name FROM customers WHERE id = ?', [customerId]);
+}, { user, password });
+```
 - The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
   versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
   and `ojp-server` (see that package's README for its versioning policy and how it's kept
@@ -180,6 +194,8 @@ unchanged.
 
 The real-server suite `test/integration.sqlServerAg.test.ts` covers SQL Server:
 
+- L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
+  rejection of operations after close.
 - CRUD with native SQL Server types (`NVARCHAR`, `DECIMAL`, `BIT`, `DATETIME2`).
 - Transactions (`commit`/`rollback`) and `MONEY` columns.
 - **"Row-by-row" mode (`fetchNextRows`)**: validated for the first time against a

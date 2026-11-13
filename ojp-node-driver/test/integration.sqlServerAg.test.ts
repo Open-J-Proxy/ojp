@@ -210,7 +210,7 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
       const keys = await generated.getGeneratedKeys();
       expect(keys.columns.length).toBeGreaterThan(0);
       expect(keys.rows).toHaveLength(1);
-      expect(Object.values(keys.rows[0])[0]).toBe(1);
+      expect(Number(Object.values(keys.rows[0])[0])).toBe(1);
     } finally {
       await generated.close();
       await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);

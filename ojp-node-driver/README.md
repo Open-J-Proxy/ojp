@@ -24,8 +24,8 @@ The H2 suite also covers datasource selection using `testdata/h2_connections.csv
 | Level | Status | Notes |
 |---|---|---|
 | **L1** | H2, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts` and `test/integration.sqlServerAg.test.ts`. |
-| **L2** | Implemented; certification pending | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Existing broad parameter-mapping unit coverage remains; the SQL Server real-server L2 suite must pass before L2 is claimed. |
-| **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 and cursor lifecycle are incomplete. |
+| **L2** | Implemented with declared type omissions; certification pending | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, plain/prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. The SQL Server real-server L2 suite must pass before L2 is claimed. |
+| **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 certification and cursor lifecycle remain incomplete. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
 | **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
 | **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
@@ -39,6 +39,11 @@ coverage is run in CI. SQL Server's tested cumulative claim remains L1 until its
 integration scenarios pass in CI. The Node metadata shape intentionally reports the
 stream protocol's column labels; it does not expose JDBC's full vendor-specific
 `ResultSetMetaData` surface.
+
+Explicit `OjpTypedParam` mappings cover scalar, decimal, date/time, text/binary stream
+payloads, URL, row ID, and LOB-reference values. `PT_ARRAY` and `PT_REF` are not currently
+representable through this API, and `PT_OBJECT` is limited to scalar values; structured
+object transport is an explicit L2 gap rather than a silent type fallback.
 
 ## Why this driver exists
 

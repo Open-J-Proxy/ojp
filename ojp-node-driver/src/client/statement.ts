@@ -8,6 +8,7 @@ export type OjpExecutionResult =
 /** Plain statement API. The owning client supplies the session for every operation. */
 export class OjpStatement {
   private closed = false;
+  private statementUUID?: string;
   private generatedKeysStatementUUID?: string;
 
   constructor(private readonly client: OjpClient) {}
@@ -23,8 +24,12 @@ export class OjpStatement {
     options: OjpClientStatementOptions = {},
   ): Promise<number> {
     this.assertOpen();
+    if (this.generatedKeysStatementUUID) {
+      await this.client.closePreparedStatement(this.generatedKeysStatementUUID);
+      this.generatedKeysStatementUUID = undefined;
+    }
     const result = await this.client.executeStatementUpdate(sql, params, options);
-    this.generatedKeysStatementUUID = result.statementUUID;
+    this.generatedKeysStatementUUID = options.generatedKeys ? result.statementUUID : undefined;
     return result.affectedRows;
   }
 
@@ -44,8 +49,37 @@ export class OjpStatement {
     return this.client.getGeneratedKeys(this.generatedKeysStatementUUID);
   }
 
-  close(): void {
+  async addBatch(sql: string): Promise<void> {
+    this.assertOpen();
+    this.statementUUID = await this.client.addStatementBatch(sql, this.statementUUID);
+  }
+
+  async executeBatch(): Promise<number[]> {
+    this.assertOpen();
+    if (!this.statementUUID) {
+      return [];
+    }
+    return this.client.executeStatementBatch(this.statementUUID);
+  }
+
+  async clearBatch(): Promise<void> {
+    this.assertOpen();
+    if (this.statementUUID) {
+      await this.client.clearStatementBatch(this.statementUUID, false);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
+    if (this.statementUUID) {
+      await this.client.closeStatement(this.statementUUID);
+    }
+    if (this.generatedKeysStatementUUID && this.generatedKeysStatementUUID !== this.statementUUID) {
+      await this.client.closePreparedStatement(this.generatedKeysStatementUUID);
+    }
   }
 
   private assertOpen(): void {
@@ -95,7 +129,7 @@ export class OjpPreparedStatement {
     if (this.client.isDmlReturning(this.sql)) {
       return this.client.executeDmlReturningQuery(this.sql, values);
     }
-    return this.client.executePreparedQuery(this.sql, values, this.statementUUID);
+    return this.client.executePreparedQuery(this.sql, values);
   }
 
   async executeUpdate(params?: unknown[]): Promise<number> {
@@ -107,7 +141,9 @@ export class OjpPreparedStatement {
       this.statementUUID,
     );
     this.statementUUID = result.statementUUID ?? this.statementUUID;
-    this.generatedKeysStatementUUID = this.options.generatedKeys ? result.statementUUID : undefined;
+    this.generatedKeysStatementUUID = this.options.generatedKeys
+      ? result.statementUUID ?? this.statementUUID
+      : undefined;
     return result.affectedRows;
   }
 
@@ -136,6 +172,13 @@ export class OjpPreparedStatement {
       return [];
     }
     return this.client.executePreparedBatch(this.statementUUID);
+  }
+
+  async clearBatch(): Promise<void> {
+    this.assertOpen();
+    if (this.statementUUID) {
+      await this.client.clearStatementBatch(this.statementUUID, true);
+    }
   }
 
   async getGeneratedKeys(): Promise<QueryResult> {

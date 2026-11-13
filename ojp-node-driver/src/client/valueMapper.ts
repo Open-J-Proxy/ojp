@@ -139,8 +139,8 @@ export function toParameterProto(index: number, value: unknown): ParameterProto 
 
 /**
  * Builds a ParameterProto honoring an explicit `OjpTypedParam` type hint instead of
- * inferring the wire type from the raw JS value. Types not handled explicitly here fall
- * back to `toParameterProto`'s inference (covers less common hints such as PT_URL/PT_OBJECT).
+ * inferring the wire type from the raw JS value. Unsupported type hints fail explicitly
+ * instead of silently sending a different protocol type.
  */
 function toTypedParameterProto(
   index: number,
@@ -218,10 +218,57 @@ function toTypedParameterProto(
         ],
       };
     }
+    case 'PT_ASCII_STREAM':
+    case 'PT_UNICODE_STREAM':
+    case 'PT_CHARACTER_READER':
+    case 'PT_N_CHARACTER_STREAM':
+    case 'PT_SQL_XML':
+      if (typeof rawValue !== 'string') {
+        throw new TypeError(`${type} requires a string value in the Node client.`);
+      }
+      return { index, type, values: [{ stringValue: rawValue }] };
+    case 'PT_BINARY_STREAM':
+      if (!Buffer.isBuffer(rawValue)) {
+        throw new TypeError('PT_BINARY_STREAM requires a Buffer value in the Node client.');
+      }
+      return { index, type, values: [{ bytesValue: rawValue }] };
+    case 'PT_URL':
+      return {
+        index,
+        type,
+        values: [{ urlValue: rawValue instanceof URL ? rawValue.toString() : String(rawValue) }],
+      };
+    case 'PT_ROW_ID': {
+      const bytes = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(String(rawValue));
+      return { index, type, values: [{ rowidValue: bytes.toString('base64') }] };
+    }
+    case 'PT_BLOB':
+    case 'PT_CLOB':
+    case 'PT_N_CLOB':
+      if (rawValue instanceof OjpLobRef) {
+        const expectedKind = type === 'PT_BLOB' ? 'BLOB' : 'CLOB';
+        if (rawValue.lobKind !== expectedKind) {
+          throw new TypeError(`${type} requires a ${expectedKind} reference.`);
+        }
+        return { index, type, values: [{ stringValue: rawValue.uuid }] };
+      }
+      if (typeof rawValue !== 'string') {
+        throw new TypeError(`${type} requires an OjpLobRef or server-side LOB UUID.`);
+      }
+      return { index, type, values: [{ stringValue: rawValue }] };
+    case 'PT_OBJECT': {
+      if (typeof rawValue === 'object' && rawValue !== null) {
+        throw new TypeError('PT_OBJECT supports scalar Node values only; structured objects need transport serialization.');
+      }
+      const scalar = toParameterProto(index, rawValue);
+      return { ...scalar, type };
+    }
+    case 'PT_ARRAY':
+      throw new TypeError('PT_ARRAY requires an OJP server-side array reference and is not supported by this client API.');
+    case 'PT_REF':
+      throw new TypeError('PT_REF cannot be represented by the Node client.');
     default:
-      // Less common hints (PT_URL, PT_OBJECT, PT_ROW_ID, ...) fall back to plain
-      // value-based inference; the hint is effectively a no-op for those.
-      return toParameterProto(index, rawValue);
+      throw new TypeError(`Unsupported explicit parameter type: ${type}`);
   }
 }
 

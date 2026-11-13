@@ -2,7 +2,7 @@
  * Real OJP server and SQL Server integration, enabled by
  * OJP_ENABLE_SQLSERVER_AG_TESTS=true. Every CSV connection row runs the full suite.
  */
-import { OjpClient, OjpConnectionError, OjpSqlError, withOjpClient } from '../src';
+import { OjpClient, OjpConnectionError, OjpSqlError, OjpTypedParam, withOjpClient } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_AG_TESTS === 'true';
@@ -188,6 +188,15 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
       await batch.close();
     }
 
+    const plainBatch = client.createStatement();
+    try {
+      await plainBatch.addBatch(`INSERT INTO ${tableName} (id, label) VALUES (${id + 3}, 'plain batch')`);
+      await plainBatch.addBatch(`INSERT INTO ${tableName} (id, label) VALUES (${id + 4}, 'plain batch')`);
+      expect(await plainBatch.executeBatch()).toEqual([1, 1]);
+    } finally {
+      await plainBatch.close();
+    }
+
     const keyTable = `${tableName}_keys`;
     await client.executeUpdate(
       `CREATE TABLE ${keyTable} (id INT IDENTITY(1,1) PRIMARY KEY, label NVARCHAR(100))`,
@@ -205,9 +214,33 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     } finally {
       await generated.close();
       await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
-      await client.executeUpdate(`DELETE FROM ${tableName} WHERE id BETWEEN ? AND ?`, [id, id + 2]);
+      await client.executeUpdate(`DELETE FROM ${tableName} WHERE id BETWEEN ? AND ?`, [id, id + 4]);
     }
   }, 30_000);
+
+  it('should bind typed SQL Server values and NULL type codes through a prepared statement', async () => {
+    const id = 1_000_000_000 + (Date.now() % 100_000_000);
+    const statement = client.prepareStatement(
+      `INSERT INTO ${tableName} (id, label, price, active, created_at) VALUES (?, ?, ?, ?, ?)`,
+    );
+    try {
+      statement.setParameter(1, id);
+      statement.setParameter(2, new OjpTypedParam('typed NVARCHAR', 'PT_N_STRING'));
+      statement.setParameter(3, new OjpTypedParam('1234.56', 'PT_BIG_DECIMAL'));
+      statement.setNull(4, -7);
+      statement.setParameter(5, new Date('2026-03-10T12:00:00.000Z'));
+
+      expect(await statement.executeUpdate()).toBe(1);
+      const { rows } = await client.executeQuery(
+        `SELECT label, price, active FROM ${tableName} WHERE id = ?`,
+        [id],
+      );
+      expect(rows).toEqual([{ label: 'typed NVARCHAR', price: '1234.56', active: null }]);
+    } finally {
+      await statement.close();
+      await client.executeUpdate(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+    }
+  }, 15_000);
 
   it('should read MONEY columns without an external sample database', async () => {
     const moneyTable = `${tableName}_money`;

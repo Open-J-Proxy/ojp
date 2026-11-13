@@ -370,8 +370,33 @@ export class OjpClient {
 
   /** @internal Executes and clears a prepared statement's server-side batch. */
   async executePreparedBatch(statementUUID: string): Promise<number[]> {
+    return this.executeBatch('RES_PREPARED_STATEMENT', statementUUID);
+  }
+
+  /** @internal Adds an SQL string to a plain statement's server-side batch. */
+  async addStatementBatch(sql: string, statementUUID?: string): Promise<string> {
     const response = await this.invokeCallResource({
-      resourceType: 'RES_PREPARED_STATEMENT',
+      resourceType: 'RES_STATEMENT',
+      resourceUUID: statementUUID,
+      callType: 'CALL_ADD',
+      resourceName: 'Batch',
+      params: [sql],
+    });
+    const uuid = response.resourceUUID || statementUUID;
+    if (!uuid) {
+      throw new OjpConnectionError('The server did not return a statement handle for the batch.');
+    }
+    return uuid;
+  }
+
+  /** @internal Executes and clears a plain or prepared statement's batch. */
+  async executeStatementBatch(statementUUID: string): Promise<number[]> {
+    return this.executeBatch('RES_STATEMENT', statementUUID);
+  }
+
+  private async executeBatch(resourceType: ResourceType, statementUUID: string): Promise<number[]> {
+    const response = await this.invokeCallResource({
+      resourceType,
       resourceUUID: statementUUID,
       callType: 'CALL_EXECUTE',
       resourceName: 'Batch',
@@ -380,7 +405,27 @@ export class OjpClient {
     if (value?.intArrayValue) {
       return value.intArrayValue.values;
     }
-    throw new OjpConnectionError('The server returned an invalid response for prepared statement batch execution.');
+    throw new OjpConnectionError('The server returned an invalid response for batch execution.');
+  }
+
+  /** @internal Clears a plain or prepared statement's pending batch. */
+  async clearStatementBatch(statementUUID: string, prepared: boolean): Promise<void> {
+    await this.invokeCallResource({
+      resourceType: prepared ? 'RES_PREPARED_STATEMENT' : 'RES_STATEMENT',
+      resourceUUID: statementUUID,
+      callType: 'CALL_CLEAR',
+      resourceName: 'Batch',
+    });
+  }
+
+  /** @internal Closes a server-registered plain statement. */
+  async closeStatement(statementUUID: string): Promise<void> {
+    await this.invokeCallResource({
+      resourceType: 'RES_STATEMENT',
+      resourceUUID: statementUUID,
+      callType: 'CALL_CLOSE',
+      resourceName: '',
+    });
   }
 
   /** @internal Retrieves generated keys from a server-registered statement. */
@@ -522,6 +567,50 @@ export class OjpClient {
     return this.fetchResultSet(result.uuid);
   }
 
+  private async *streamDmlReturningRows(
+    sql: string,
+    params: unknown[],
+  ): AsyncGenerator<Record<string, unknown>, void, undefined> {
+    const result = await this.sendUpdate(sql, params, {}, '', [
+      { key: 'STATEMENT_EXECUTE_UPDATE_RESULT_SET_KEY', boolValue: true },
+    ]);
+    if (result.flag !== 'UPDATE_RESULT_SET' || !result.uuid) {
+      throw new OjpConnectionError('The DML statement did not return a result set.');
+    }
+
+    try {
+      for (;;) {
+        const page = await this.fetchNextRows(result.uuid, 100);
+        const query = page.queryResult;
+        if (!query || !query.rows?.length) {
+          break;
+        }
+        const columns = query.labels ?? [];
+        for (const row of query.rows) {
+          const record: Record<string, unknown> = {};
+          for (let index = 0; index < row.columns.length; index++) {
+            const value = fromParameterValue(row.columns[index]);
+            record[columns[index] ?? `col${index}`] =
+              typeof value === 'string' && value.startsWith(CLOB_PLACEHOLDER_PREFIX)
+                ? await this.readLobAsString(value.slice(CLOB_PLACEHOLDER_PREFIX.length))
+                : value;
+          }
+          yield record;
+        }
+        if (page.flag?.includes('RESULT_SET_LAST_BLOCK')) {
+          break;
+        }
+      }
+    } finally {
+      await this.invokeCallResource({
+        resourceType: 'RES_RESULT_SET',
+        resourceUUID: result.uuid,
+        callType: 'CALL_CLOSE',
+        resourceName: '',
+      });
+    }
+  }
+
   /** @internal Executes a prepared update and returns rows when it has OUTPUT/RETURNING. */
   async executeDmlReturningQuery(sql: string, params: unknown[]): Promise<QueryResult> {
     return this.executeDmlReturning(sql, params);
@@ -660,8 +749,7 @@ export class OjpClient {
    */
   async *executeQueryStream(sql: string, params: unknown[] = []): AsyncGenerator<Record<string, unknown>, void, undefined> {
     if (returnsRowsFromDml(sql)) {
-      const { rows } = await this.executeDmlReturning(sql, params);
-      yield* rows;
+      yield* this.streamDmlReturningRows(sql, params);
       return;
     }
     for await (const { row } of this.queryRows(sql, params)) {
@@ -680,8 +768,8 @@ export class OjpClient {
   }
 
   /** @internal Executes a prepared query without exposing statement IDs to application code. */
-  async executePreparedQuery(sql: string, params: unknown[], statementUUID?: string): Promise<QueryResult> {
-    return this.runQuery(sql, params, statementUUID ?? '');
+  async executePreparedQuery(sql: string, params: unknown[]): Promise<QueryResult> {
+    return this.runQuery(sql, params, '');
   }
 
   private async runQuery(sql: string, params: unknown[], statementUUID: string): Promise<QueryResult> {

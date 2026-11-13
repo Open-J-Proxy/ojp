@@ -1,4 +1,10 @@
-import { fromParameterValue, OjpTypedParam, toParameterProto, encodeBigDecimalWire as realEncodeBigDecimalWire } from '../src/client/valueMapper';
+import {
+  fromParameterValue,
+  OjpLobRef,
+  OjpTypedParam,
+  toParameterProto,
+  encodeBigDecimalWire as realEncodeBigDecimalWire,
+} from '../src/client/valueMapper';
 
 describe('valueMapper', () => {
   it('should convert null to PT_NULL (with the java.sql.Types.NULL code)', () => {
@@ -156,11 +162,40 @@ describe('valueMapper', () => {
       expect(fromParameterValue(proto.values[0])).toBe('1234.56');
     });
 
-    it('should fall back to value-based inference for hints without dedicated handling (e.g. PT_URL)', () => {
+    it('should encode PT_URL using the URL wrapper field', () => {
       const proto = toParameterProto(1, new OjpTypedParam('hello', 'PT_URL'));
-      // PT_URL has no dedicated encoder above; falls back to plain string inference (PT_STRING).
-      expect(proto.type).toBe('PT_STRING');
-      expect(fromParameterValue(proto.values[0])).toBe('hello');
+      expect(proto.type).toBe('PT_URL');
+      expect(proto.values[0].urlValue).toBe('hello');
+    });
+
+    it('should preserve explicitly requested stream, row-id, SQLXML, and LOB types', () => {
+      expect(toParameterProto(1, new OjpTypedParam('text', 'PT_ASCII_STREAM'))).toMatchObject({
+        type: 'PT_ASCII_STREAM',
+        values: [{ stringValue: 'text' }],
+      });
+      expect(toParameterProto(1, new OjpTypedParam(Buffer.from('bytes'), 'PT_BINARY_STREAM'))).toMatchObject({
+        type: 'PT_BINARY_STREAM',
+        values: [{ bytesValue: Buffer.from('bytes') }],
+      });
+      expect(toParameterProto(1, new OjpTypedParam(Buffer.from([0, 1]), 'PT_ROW_ID')).values[0].rowidValue)
+        .toBe(Buffer.from([0, 1]).toString('base64'));
+      expect(toParameterProto(1, new OjpTypedParam('<x/>', 'PT_SQL_XML')).values[0].stringValue).toBe('<x/>');
+      expect(toParameterProto(1, new OjpTypedParam('lob-id', 'PT_CLOB')).values[0].stringValue).toBe('lob-id');
+      expect(() => toParameterProto(1, new OjpTypedParam(new OjpLobRef('blob-id', 'BLOB'), 'PT_CLOB')))
+        .toThrow(/requires a CLOB reference/);
+    });
+
+    it('should preserve PT_OBJECT for scalar values while rejecting structured objects', () => {
+      expect(toParameterProto(1, new OjpTypedParam(42, 'PT_OBJECT'))).toMatchObject({
+        type: 'PT_OBJECT',
+        values: [{ intValue: 42 }],
+      });
+      expect(() => toParameterProto(1, new OjpTypedParam({ key: 'value' }, 'PT_OBJECT'))).toThrow(/scalar/);
+    });
+
+    it('should reject explicitly requested types that cannot be represented without server resource setup', () => {
+      expect(() => toParameterProto(1, new OjpTypedParam([], 'PT_ARRAY'))).toThrow(/PT_ARRAY/);
+      expect(() => toParameterProto(1, new OjpTypedParam({}, 'PT_REF'))).toThrow(/PT_REF/);
     });
   });
 

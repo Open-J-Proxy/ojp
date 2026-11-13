@@ -11,6 +11,7 @@ describe('L2 statement API', () => {
       rows: [{ value: 1 }],
       metadata: { columnCount: 1, columns: [{ index: 1, label: 'value' }] },
     });
+
     const update = jest.spyOn(client, 'executeStatementUpdate').mockResolvedValue({ affectedRows: 1 });
 
     const statement = client.createStatement();
@@ -20,6 +21,21 @@ describe('L2 statement API', () => {
 
     expect(query).toHaveBeenCalledWith('SELECT 1', []);
     expect(update).toHaveBeenCalledWith('UPDATE t SET value = ?', [1], {});
+  });
+
+  it('supports plain statement batches without exposing server handles', async () => {
+    const client = new OjpClient(url);
+    const add = jest.spyOn(client, 'addStatementBatch').mockResolvedValue('statement-id');
+    const execute = jest.spyOn(client, 'executeStatementBatch').mockResolvedValue([1, 1]);
+    const statement = client.createStatement();
+
+    await statement.addBatch('INSERT INTO t(id) VALUES (1)');
+    await statement.addBatch('INSERT INTO t(id) VALUES (2)');
+    await expect(statement.executeBatch()).resolves.toEqual([1, 1]);
+
+    expect(add).toHaveBeenNthCalledWith(1, 'INSERT INTO t(id) VALUES (1)', undefined);
+    expect(add).toHaveBeenNthCalledWith(2, 'INSERT INTO t(id) VALUES (2)', 'statement-id');
+    expect(execute).toHaveBeenCalledWith('statement-id');
   });
 
   it('keeps 1-based bindings, supports rebinding, and rejects an unset parameter slot', async () => {
@@ -69,17 +85,23 @@ describe('L2 statement API', () => {
 
   it('returns generated-key rows through the prepared statement API', async () => {
     const client = new OjpClient(url);
-    jest.spyOn(client, 'executePreparedUpdate').mockResolvedValue({
-      affectedRows: 1,
-      statementUUID: 'prepared-id',
-    });
+    const update = jest.spyOn(client, 'executePreparedUpdate')
+      .mockResolvedValueOnce({ affectedRows: 1, statementUUID: 'prepared-id' })
+      .mockResolvedValueOnce({ affectedRows: 1 });
     const keys = { columns: ['id'], rows: [{ id: 7 }], metadata: { columnCount: 1, columns: [] } };
     const getKeys = jest.spyOn(client, 'getGeneratedKeys').mockResolvedValue(keys);
     const statement = client.prepareStatement('INSERT INTO t(value) VALUES (?)', { generatedKeys: true });
 
     await statement.executeUpdate(['value']);
+    await statement.executeUpdate(['second value']);
     await expect(statement.getGeneratedKeys()).resolves.toBe(keys);
     expect(getKeys).toHaveBeenCalledWith('prepared-id');
+    expect(update).toHaveBeenLastCalledWith(
+      'INSERT INTO t(value) VALUES (?)',
+      ['second value'],
+      { generatedKeys: true },
+      'prepared-id',
+    );
   });
 
   it('adds bound values to a server-side batch and returns its update counts', async () => {

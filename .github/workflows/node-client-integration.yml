@@ -83,6 +83,8 @@ jobs:
           done
           docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
             -S localhost -U sa -P "$password" -C -b -Q 'CREATE DATABASE node_test'
+          docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$password" -C -b -d master -Q 'EXEC sp_sqljdbc_xa_install;'
 
       - name: Start OJP servers
         run: |
@@ -126,7 +128,7 @@ jobs:
           test_store_password=ojp-test-only
           for index in 1 2; do
             port=$((10590 + index))
-            metrics=$((9160 + index))
+            metrics=$((9162 + index))
             docker run -d --name "$NODE_TEST_PREFIX-mtls-$index" --network host \
               -v "$jar:/opt/ojp/server.jar:ro" -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
               -v "$cert_dir:/etc/ojp/mtls:ro" \

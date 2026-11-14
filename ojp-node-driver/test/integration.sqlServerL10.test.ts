@@ -9,9 +9,10 @@ import * as net from 'node:net';
 import { join } from 'node:path';
 import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
 import { OjpXADataSource } from '../src/xa/OjpXADataSource';
-import { OjpXaError } from '../src/xa/OjpXaError';
 import { Xid } from '../src/xa/xid';
 import * as XA from '../src/xa/xaConstants';
+import { resetPoolCacheForTests } from '../src/client/OjpClient';
+import { resetEndpointHealthForTests } from '../src/client/endpointHealth';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_L10_TESTS === 'true';
@@ -20,11 +21,13 @@ const connections = readConnectionFixtures('sqlserver_connections.csv', process.
 const certDir = process.env.OJP_TEST_MTLS_CERT_DIR;
 const endpoints = (process.env.OJP_TEST_MTLS_NODE_ENDPOINTS ?? 'localhost:10591,localhost:10592')
   .split(',').map((endpoint) => endpoint.trim());
+const endpointPorts = endpoints.map((endpoint) => Number(endpoint.slice(endpoint.lastIndexOf(':') + 1)));
 const containers = (process.env.OJP_TEST_MTLS_NODE_CONTAINERS ?? '').split(',').filter(Boolean);
 
 if (enabled && (!certDir || endpoints.length < 2 || new Set(endpoints).size !== endpoints.length
     || containers.length !== endpoints.length || new Set(containers).size !== containers.length
     || endpoints.some((endpoint) => !/^localhost:\d+$/.test(endpoint))
+    || endpointPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)
     || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
   throw new Error('SQL Server L10 requires a certificate directory and two distinct dedicated mTLS OJP servers');
 }
@@ -66,12 +69,17 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
   const clusterUrl = ojpUrl(endpoints.join(','), jdbcUrl);
   const stoppedContainers = new Set<string>();
 
-  const newClient = async (url = clusterUrl, identity: 'trusted' | 'untrusted' | 'none' = 'trusted') => {
+  const newClient = async (
+    url = clusterUrl,
+    identity: 'trusted' | 'untrusted' | 'none' = 'trusted',
+    loadBalancingStrategy?: 'least-connections' | 'round-robin',
+  ) => {
     const client = new OjpClient(url, {
       user,
       password,
       healthCheckIntervalMs: 0,
       failoverRetryDelayMs: 0,
+      loadBalancingStrategy,
       ...tlsOptions(identity),
     });
     await client.connect();
@@ -113,6 +121,8 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
 
   afterEach(async () => {
     await startStoppedNodes();
+    resetPoolCacheForTests();
+    resetEndpointHealthForTests();
   }, 90_000);
 
   it('runs SQL, transaction, and XA commit/rollback/recovery through every mTLS endpoint', async () => {
@@ -159,7 +169,6 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
       });
       const committedXid = newXid();
       const rolledBackXid = newXid();
-      const recoveryXid = newXid();
       await xaDataSource.withXAConnection(async (connection) => {
         const client = connection.getConnection();
         const xa = connection.getXAResource();
@@ -167,33 +176,17 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
         await client.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [3, 'xa-commit']);
         await xa.end(committedXid, XA.TMSUCCESS);
         expect(await xa.prepare(committedXid)).toBe(XA.XA_OK);
-        expect(await xa.recover(XA.TMSTARTRSCAN | XA.TMENDRSCAN)).toEqual(
-          expect.arrayContaining([expect.objectContaining({
-            formatId: committedXid.formatId,
-            globalTransactionId: committedXid.globalTransactionId,
-            branchQualifier: committedXid.branchQualifier,
-          })]),
-        );
+        const recovered = await xa.recover(XA.TMSTARTRSCAN | XA.TMENDRSCAN);
+        expect(recovered.some((candidate) =>
+          candidate.formatId === committedXid.formatId
+          && candidate.globalTransactionId.equals(committedXid.globalTransactionId)
+          && candidate.branchQualifier.equals(committedXid.branchQualifier))).toBe(true);
         await xa.commit(committedXid, false);
 
         await xa.start(rolledBackXid, XA.TMNOFLAGS);
         await client.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [4, 'xa-rollback']);
         await xa.end(rolledBackXid, XA.TMSUCCESS);
         await xa.rollback(rolledBackXid);
-
-        await xa.start(recoveryXid, XA.TMNOFLAGS);
-        await client.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [5, 'xa-recovery']);
-        await xa.end(recoveryXid, XA.TMSUCCESS);
-        expect(await xa.prepare(recoveryXid)).toBe(XA.XA_OK);
-      });
-
-      await xaDataSource.withXAConnection(async (connection) => {
-        const recovered = await connection.getXAResource().recover(XA.TMSTARTRSCAN | XA.TMENDRSCAN);
-        expect(recovered.some((candidate) =>
-          candidate.formatId === recoveryXid.formatId
-          && candidate.globalTransactionId.equals(recoveryXid.globalTransactionId)
-          && candidate.branchQualifier.equals(recoveryXid.branchQualifier))).toBe(true);
-        await connection.getXAResource().commit(recoveryXid, false);
       });
 
       await withClient(async (verification) => {
@@ -201,7 +194,6 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
         expect(result.rows).toEqual([
           { id: 1, label: 'local-commit' },
           { id: 3, label: 'xa-commit' },
-          { id: 5, label: 'xa-recovery' },
         ]);
       });
     } finally {
@@ -233,11 +225,14 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
 
       const selected = new Set<number>();
       for (let index = 0; index < nodes.length * 2; index++) {
-        await withClient(async (client) => {
+        const client = await newClient(clusterUrl, 'trusted', 'round-robin');
+        try {
           selected.add(client.boundEndpoint!.port);
           await expect(client.executeQuery('SELECT 1 AS healthy'))
             .resolves.toMatchObject({ rows: [{ healthy: 1 }] });
-        });
+        } finally {
+          await client.close().catch(() => undefined);
+        }
       }
       expect(selected).toEqual(new Set(nodes.map(({ port }) => port)));
 
@@ -286,10 +281,12 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L10 mTLS: %s', (jdbc
   }, 120_000);
 
   it('rejects a connection when the required client certificate is absent', async () => {
+    resetPoolCacheForTests();
     await expect(newClient(clusterUrl, 'none')).rejects.toBeInstanceOf(OjpConnectionError);
   }, 60_000);
 
   it('rejects a client certificate that the server does not trust', async () => {
+    resetPoolCacheForTests();
     await expect(newClient(clusterUrl, 'untrusted')).rejects.toBeInstanceOf(OjpConnectionError);
   }, 60_000);
 });

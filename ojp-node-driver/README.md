@@ -263,7 +263,7 @@ unchanged.
 ## SQL Server integration
 
 The real-server suites `test/integration.sqlServerAg.test.ts`,
-`test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`, and
+`test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`,
 `test/integration.sqlServerL5.test.ts`, and `test/integration.sqlServerL6.test.ts`
 cover SQL Server:
 
@@ -304,6 +304,10 @@ npm run test:sqlserver-l4
 npm run test:sqlserver-l5
 npm run test:sqlserver-l6
 ```
+
+The L6 bound-node-loss case runs when `OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true` and
+`OJP_TEST_NODE_CONTAINERS` names the three dedicated OJP test containers; the Node
+client integration workflow configures both.
 
 **Known observations/limitations:**
 

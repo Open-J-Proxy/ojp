@@ -139,7 +139,7 @@ try {
 | `maxPoolSize` | int | 10 | Maximum pool size |
 | `minIdle` | int | 2 | Minimum idle connections |
 | `connectionTimeoutMs` | long | 30000 | Connection acquisition timeout (ms) |
-| `connectionCreationGracePeriodMs` | long | 5000 | Extra HikariCP borrow wait after a timeout below maximum capacity (ms); 0 disables it |
+| `connectionCreationGracePeriodMs` | long | 5000 | Retry failed pool borrows for this additional period (ms); 0 disables it |
 | `idleTimeoutMs` | long | 600000 | Idle connection timeout (ms) |
 | `maxLifetimeMs` | long | 1800000 | Maximum connection lifetime (ms) |
 | `validationQuery` | String | null | SQL query to validate connections |
@@ -149,9 +149,10 @@ try {
 
 Prefer `minIdle=maxPoolSize` to reduce cold-start and expansion timeouts once
 warmed up. Smaller minimums are discouraged for latency-sensitive workloads.
-HikariCP's creation grace permits one extra wait without changing shared pool
-timeouts or limits; DBCP and XA behavior is unchanged. For client property names
-and per-datasource examples, see the [configuration reference](configuration.md#cold-startup-and-pool-growth).
+The creation grace retries failed borrows for regular pools, including custom
+SPI-loaded providers, without changing shared pool timeouts or limits. XA behavior
+is unchanged. For client property names and per-datasource examples, see the
+[configuration reference](configuration.md#cold-startup-and-pool-growth).
 
 ### Provider-Specific Properties
 

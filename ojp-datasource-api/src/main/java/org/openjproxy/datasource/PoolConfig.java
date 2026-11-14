@@ -187,7 +187,7 @@ public final class PoolConfig {
     }
 
     /**
-     * Returns the extra HikariCP borrow wait after a timeout below maximum capacity.
+     * Returns the additional retry period after a pool borrow fails.
      *
      * @return the grace period in milliseconds; zero disables it
      */
@@ -456,7 +456,7 @@ public final class PoolConfig {
         }
 
         /**
-         * Sets the extra HikariCP borrow wait after a timeout below maximum capacity.
+         * Sets the additional retry period after a pool borrow fails.
          *
          * @param connectionCreationGracePeriodMs grace period in milliseconds; zero disables it
          * @return this builder

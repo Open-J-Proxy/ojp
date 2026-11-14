@@ -291,11 +291,11 @@ ojp.connection.pool.maximumPoolSize=20
 ojp.connection.pool.connectionCreationGracePeriod=5000
 ```
 
-For HikariCP, the creation grace allows one additional wait after a normal borrow
-timeout below the current maximum capacity. It defaults to 5 seconds, can be
-configured per datasource with a name prefix, and `0` disables it. It does not
-extend full-pool waits, raise pool limits, or bound synchronous JDBC connection
-creation. DBCP and XA behavior is unchanged.
+The creation grace retries failed regular-pool borrows for up to 5 seconds by
+default. It can be configured per datasource with a name prefix, and `0` disables
+it. It does not raise pool limits or bound synchronous JDBC connection creation.
+This applies to built-in and SPI-loaded pool providers; XA and unpooled behavior
+is unchanged.
 
 Too many concurrent connections can also cause latency. If you're maxing out database connection limits, queries queue waiting for database connections to become available. This is a capacity issue—scale your database or reduce concurrent query load.
 

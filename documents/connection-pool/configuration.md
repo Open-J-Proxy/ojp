@@ -74,7 +74,7 @@ jdbc:ojp[localhost:1059(mainApp)]_postgresql://db:5432/mydb
 | `ojp.connection.pool.maximumPoolSize` | Maximum pool size | 20 |
 | `ojp.connection.pool.minimumIdle` | Minimum idle connections | 5 |
 | `ojp.connection.pool.connectionTimeout` | Semaphore admission timeout budget (ms); backend borrow is normally fail-fast | 10000 |
-| `ojp.connection.pool.connectionCreationGracePeriod` | Extra HikariCP borrow wait after a timeout below maximum capacity (ms); 0 disables it | 5000 |
+| `ojp.connection.pool.connectionCreationGracePeriod` | Retry failed pool borrows for this additional period (ms); 0 disables it | 5000 |
 | `ojp.connection.pool.idleTimeout` | Idle timeout (ms) | 600000 |
 | `ojp.connection.pool.maxLifetime` | Max connection lifetime (ms) | 1800000 |
 | `ojp.connection.pool.defaultTransactionIsolation` | Default transaction isolation level | READ_COMMITTED |
@@ -87,19 +87,18 @@ created, despite unused pool capacity. A fixed-size pool reduces this risk once
 warmed up but does not make startup instantaneous. Unequal-size examples describe
 elastic configuration, not the recommended production sizing.
 
-For the default HikariCP provider, `connectionCreationGracePeriod` allows one
-additional borrow wait only after a normal borrow timeout with total connections
-below the current maximum. It defaults to **5000ms**, accepts non-negative values,
-and `0` disables it. It does not change the pool's shared timeout, admission
-ownership, or maximum size. No grace is granted if the pool is already full at
-the timeout; an existing grace wait may continue if the pool fills later.
+For regular pools, `connectionCreationGracePeriod` retries failed borrows until
+the configured additional period expires. It defaults to **5000ms**, accepts
+non-negative values, and `0` disables it. This applies to built-in and SPI-loaded
+pool providers without changing their shared timeout, admission ownership, or
+maximum size. Each borrow attempt still uses the provider's normal timeout.
 
 Use `mainApp.ojp.connection.pool.connectionCreationGracePeriod=5000` for a named
 datasource, alongside its other client pool properties. Read replicas use
-`{replica}.ojp.pool.connectionCreationGracePeriod=5000`. This is an extra wait on
-top of admission and the initial backend borrow, not a JDBC connect/login timeout
-or an end-to-end deadline. DBCP, XA, custom providers, and unpooled connections are
-unchanged; configure driver-level timeouts for synchronous connection creation.
+`{replica}.ojp.pool.connectionCreationGracePeriod=5000`. This is additional to
+admission and backend borrow attempts, not a JDBC connect/login timeout or an
+end-to-end deadline. XA and unpooled connections are unchanged; configure
+driver-level timeouts for synchronous connection creation.
 
 ### Transaction Isolation Configuration
 

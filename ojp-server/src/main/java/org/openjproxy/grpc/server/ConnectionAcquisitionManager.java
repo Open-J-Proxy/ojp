@@ -9,6 +9,10 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Manages connection acquisition with enhanced monitoring capabilities.
@@ -29,6 +33,20 @@ import java.sql.SQLTransientConnectionException;
 public class ConnectionAcquisitionManager {
     private static final String SQLSTATE_CONNECTION_CLASS = "08";
     private static final String SQLSTATE_CONNECTION_FAILURE = "08001";
+    private static final Map<DataSource, Long> CREATION_GRACE_PERIODS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    /**
+     * Registers the additional acquisition time for a datasource.
+     *
+     * @param dataSource the datasource
+     * @param gracePeriodMs additional acquisition time in milliseconds
+     */
+    public static void registerCreationGracePeriod(DataSource dataSource, long gracePeriodMs) {
+        if (dataSource != null && gracePeriodMs > 0) {
+            CREATION_GRACE_PERIODS.put(dataSource, gracePeriodMs);
+        }
+    }
 
     /**
      * Acquires a connection from the given datasource with enhanced error reporting.
@@ -64,6 +82,7 @@ public class ConnectionAcquisitionManager {
         if (dataSource == null) {
             throw new SQLException("DataSource is null for connection hash: " + connectionHash);
         }
+        long creationGracePeriodMs = CREATION_GRACE_PERIODS.getOrDefault(dataSource, 0L);
 
         // Capture pool state and queue depth before attempting acquisition (HikariCP-specific).
         // JMX bean calls acquire a brief lock on the pool; only invoke them when debug logging
@@ -106,7 +125,8 @@ public class ConnectionAcquisitionManager {
                 int waitingThreads = hikariDataSource.getHikariPoolMXBean().getThreadsAwaitingConnection();
                 long configuredTimeoutMs = hikariDataSource.getConnectionTimeout();
 
-                if (idleConnections == 0 && totalConnections >= maxPoolSize && activeConnections > 0) {
+                if (creationGracePeriodMs == 0 && idleConnections == 0
+                        && totalConnections >= maxPoolSize && activeConnections > 0) {
                     String message = String.format(
                             "Connection acquisition pre-check failed for hash: %s. Pool exhausted (idle=0, total=%d, max=%d, active=%d, waiting=%d, poolTimeoutMs=%d). Request will not wait at pool level.",
                             connectionHash, totalConnections, maxPoolSize, activeConnections, waitingThreads, configuredTimeoutMs);
@@ -128,7 +148,7 @@ public class ConnectionAcquisitionManager {
         long acquisitionStart = System.nanoTime();
         try {
             // Use pool's built-in connection timeout - this prevents indefinite blocking
-            Connection connection = dataSource.getConnection();
+            Connection connection = acquireWithGracePeriod(dataSource, creationGracePeriodMs);
             long acquisitionTimeMs = (System.nanoTime() - acquisitionStart) / 1_000_000L;
 
             log.debug("Successfully acquired connection for hash: {} in thread: {} (waited {}ms)",
@@ -176,6 +196,39 @@ public class ConnectionAcquisitionManager {
                 sqlState = SQLSTATE_CONNECTION_FAILURE;
             }
             throw new SQLTransientConnectionException(enhancedMessage, sqlState, 0, e);
+        }
+    }
+
+    private static Connection acquireWithGracePeriod(DataSource dataSource, long gracePeriodMs)
+            throws SQLException {
+        long gracePeriodNanos = TimeUnit.MILLISECONDS.toNanos(gracePeriodMs);
+        long graceStart = 0;
+        boolean graceStarted = false;
+        SQLException lastFailure;
+        while (true) {
+            try {
+                return dataSource.getConnection();
+            } catch (SQLException e) {
+                lastFailure = e;
+                if (gracePeriodMs == 0) {
+                    throw e;
+                }
+                if (!graceStarted) {
+                    graceStart = System.nanoTime();
+                    graceStarted = true;
+                }
+                long remainingNanos = gracePeriodNanos - (System.nanoTime() - graceStart);
+                if (remainingNanos <= 0 || Thread.currentThread().isInterrupted()) {
+                    throw lastFailure;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.sleep(Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(10)));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    lastFailure.addSuppressed(interrupted);
+                    throw lastFailure;
+                }
+            }
         }
     }
 }

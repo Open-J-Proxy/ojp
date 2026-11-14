@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.datasource.ConnectionPoolProvider;
 import org.openjproxy.datasource.ConnectionPoolProviderRegistry;
 import org.openjproxy.datasource.PoolConfig;
+import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.pool.DatabaseConnectionBudgetManager;
 
 import javax.sql.DataSource;
@@ -200,6 +201,7 @@ public class ReadWriteDataSourceManager {
                     .build();
 
             dataSource = poolProvider.createDataSource(poolConfig);
+            ConnectionAcquisitionManager.registerCreationGracePeriod(dataSource, connectionCreationGracePeriod);
             DataSource createdDataSource = dataSource;
             ConnectionPoolProvider selectedPoolProvider = poolProvider;
             budgetManager.attachPool(budgetRegistration, (newMaximum, newMinimum) ->

@@ -19,12 +19,12 @@ if (enabled && (containers.length < 2 || new Set(containers).size !== containers
     || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
   throw new Error('OJP_TEST_NODE_CONTAINERS must name at least two dedicated test containers');
 }
-if (enabled && (ports.length < 2 || new Set(ports).size !== ports.length
+if (enabled && (ports.length < containers.length || ports.length < 2 || new Set(ports).size !== ports.length
     || ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535))) {
-  throw new Error('OJP_TEST_NODE_PORTS must contain at least two distinct TCP ports');
+  throw new Error('OJP_TEST_NODE_PORTS must contain a distinct TCP port for every configured test container');
 }
 
-const nodes = ports.map((port, index) => ({ port, container: containers[index] }));
+const nodes = containers.map((container, index) => ({ port: ports[index], container }));
 
 describeIfEnabled.each(connections)('OjpClient - SQL Server L8: %s', (jdbcUrl, user, fixturePassword) => {
   const password = process.env.OJP_TEST_SQLSERVER_PASSWORD ?? fixturePassword;

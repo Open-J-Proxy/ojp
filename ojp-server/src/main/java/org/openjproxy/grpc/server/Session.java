@@ -236,7 +236,7 @@ public class Session {
         // Lazy acquisition for dual-datasource sessions
         if (primaryConnection == null && primaryDataSource != null) {
             try {
-                primaryConnection = primaryDataSource.getConnection();
+                primaryConnection = ConnectionAcquisitionManager.acquireConnection(primaryDataSource, connectionHash);
                 log.debug("Lazily acquired primary connection for session {}", sessionUUID);
             } catch (SQLException e) {
                 throw new RuntimeException("Failed to acquire primary connection for session " + sessionUUID, e);
@@ -277,7 +277,7 @@ public class Session {
         if (replicaConnection == null) {
             DataSource ds = (replicaDataSource != null) ? replicaDataSource : fallbackReplicaDs;
             if (ds != null) {
-                replicaConnection = ds.getConnection();
+                replicaConnection = ConnectionAcquisitionManager.acquireConnection(ds, connectionHash);
                 log.debug("[RW-SPLIT] getOrCreateReplicaConnection: CREATED new replica connection from {} datasource for session={}",
                         (replicaDataSource != null) ? "instance" : "fallback", sessionUUID);
             } else {

@@ -143,6 +143,18 @@ public class AdmissionControlManager {
      * @throws Exception if the operation fails or slot acquisition times out
      */
     public <T> T executeWithSegregation(String operationHash, String sql, SegregatedOperation<T> operation) throws Exception {
+        boolean isSlowOperation = enabled && !admissionControlOnly
+                && performanceMonitor.isSlowOperation(operationHash);
+        long timeoutMs = isSlowOperation ? slowSlotTimeoutMs : fastSlotTimeoutMs;
+        try (ConnectionAcquisitionManager.DeadlineScope ignored =
+                     ConnectionAcquisitionManager.beginAcquisitionDeadline(timeoutMs)) {
+            return executeWithSegregationWithinDeadline(operationHash, sql, operation, isSlowOperation);
+        }
+    }
+
+    private <T> T executeWithSegregationWithinDeadline(String operationHash, String sql,
+                                                       SegregatedOperation<T> operation,
+                                                       boolean isSlowOperation) throws Exception {
         if (!enabled) {
             // If admission control is disabled, just execute and monitor performance
             return executeAndMonitor(operationHash, sql, operation);
@@ -169,9 +181,6 @@ public class AdmissionControlManager {
                 threadHeldSlot.remove();
             }
         }
-
-        // Determine if this is a slow or fast operation
-        boolean isSlowOperation = performanceMonitor.isSlowOperation(operationHash);
 
         // Acquire appropriate slot
         boolean slotAcquired = false;
@@ -284,7 +293,10 @@ public class AdmissionControlManager {
      * @throws Exception if the operation fails
      */
     public <T> T executeWithMonitoringOnly(String operationHash, String sql, SegregatedOperation<T> operation) throws Exception {
-        return executeAndMonitor(operationHash, sql, operation);
+        try (ConnectionAcquisitionManager.DeadlineScope ignored =
+                     ConnectionAcquisitionManager.beginAcquisitionDeadline(fastSlotTimeoutMs)) {
+            return executeAndMonitor(operationHash, sql, operation);
+        }
     }
 
     /**
@@ -395,7 +407,7 @@ public class AdmissionControlManager {
     /**
      * Gets configured fast-slot timeout (for testing/diagnostics).
      */
-    long getFastSlotTimeoutMs() {
+    public long getFastSlotTimeoutMs() {
         return fastSlotTimeoutMs;
     }
 

@@ -27,6 +27,7 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -166,58 +167,110 @@ public class CommonsPool2XADataSource implements XADataSource, AutoCloseable {
      * @throws Exception if session cannot be borrowed for other reasons
      */
     public XABackendSession borrowSession() throws Exception {
-        log.debug("[XA-POOL-BORROW] Attempting to borrow session (state BEFORE: active={}, idle={}, maxTotal={}, maxIdle={}, minIdle={})",
-                pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal(), pool.getMaxIdle(), pool.getMinIdle());
+        return borrowSession(Long.MAX_VALUE);
+    }
 
+    public XABackendSession borrowSession(long remainingTimeoutMs) throws Exception {
+        boolean bounded = remainingTimeoutMs != Long.MAX_VALUE;
         long startTime = System.nanoTime();
+        long deadlineNanos = bounded
+                ? startTime + TimeUnit.MILLISECONDS.toNanos(Math.max(0L, remainingTimeoutMs))
+                : Long.MAX_VALUE;
+        int attempts = 0;
 
-        try {
-            XABackendSession session = pool.borrowObject();
-
-            // Track borrow for leak detection
-            if (housekeepingConfig.isLeakDetectionEnabled()) {
-                boolean captureStackTrace = housekeepingConfig.isEnhancedLeakReport();
-                if (session instanceof BackendSessionImpl) {
-                    ((BackendSessionImpl) session).onBorrow(captureStackTrace);
-                }
-                borrowedSessions.put(session, new BorrowInfo(
-                    System.nanoTime(),
-                    Thread.currentThread(),
-                    captureStackTrace ? Thread.currentThread().getStackTrace() : null
-                ));
+        while (true) {
+            attempts++;
+            long remainingNanos = bounded ? deadlineNanos - System.nanoTime() : Long.MAX_VALUE;
+            if (bounded && remainingNanos <= 0L) {
+                throw poolExhaustedException(new NoSuchElementException("Acquisition deadline expired"));
             }
 
-            // Record acquisition time
-            long duration = (System.nanoTime() - startTime) / 1_000_000L;
-            poolMetrics.recordConnectionAcquisitionTime(poolName, duration);
+            try {
+                XABackendSession session;
+                if (bounded) {
+                    long maxWaitMs = Math.max(1L,
+                            getLongConfig(config, "xa.connectionTimeoutMs", 30000L));
+                    long callWaitMs = Math.max(1L, Math.min(maxWaitMs,
+                            TimeUnit.NANOSECONDS.toMillis(remainingNanos) + 1L));
+                    session = pool.borrowObject(Duration.ofMillis(callWaitMs));
+                } else {
+                    session = pool.borrowObject();
+                }
 
-            // Update pool state metrics
-            updatePoolMetrics();
+                if (bounded && deadlineNanos - System.nanoTime() <= 0L) {
+                    returnLateSession(session);
+                    throw poolExhaustedException(new NoSuchElementException("Acquisition deadline expired"));
+                }
 
-            log.debug("[XA-POOL-BORROW] Session borrowed successfully (state AFTER: active={}, idle={}, maxTotal={})",
-                    pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal());
+                trackBorrow(session);
+                poolMetrics.recordConnectionAcquisitionTime(
+                        poolName, (System.nanoTime() - startTime) / 1_000_000L);
+                updatePoolMetrics();
+                log.debug("[XA-POOL-BORROW] Session borrowed successfully after {} attempt(s) "
+                                + "(active={}, idle={}, maxTotal={})",
+                        attempts, pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal());
+                return session;
+            } catch (NoSuchElementException e) {
+                remainingNanos = bounded ? deadlineNanos - System.nanoTime() : 0L;
+                boolean canGrow = pool.getNumIdle() > 0
+                        || (pool.getMaxTotal() > 0
+                        && pool.getNumActive() + pool.getNumIdle() < pool.getMaxTotal());
+                if (!bounded || remainingNanos <= 0L || pool.isClosed() || !canGrow) {
+                    throw poolExhaustedException(e);
+                }
 
-            return session;
+                long delayMs = ThreadLocalRandom.current().nextLong(20L, 51L);
+                long sleepNanos = Math.min(TimeUnit.MILLISECONDS.toNanos(delayMs), remainingNanos);
+                try {
+                    TimeUnit.NANOSECONDS.sleep(sleepNanos);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw new SQLException("Interrupted while waiting to retry XA session acquisition",
+                            interruptedException);
+                }
+            } catch (Exception e) {
+                log.error("[XA-POOL-BORROW] Failed to borrow session from pool "
+                                + "(active={}, idle={}, maxTotal={})",
+                        pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal(), e);
+                throw e;
+            }
+        }
+    }
 
-        } catch (java.util.NoSuchElementException e) {
-            // Pool exhausted and maxWait timeout expired
-            long maxWaitMs = getLongConfig(config, "xa.connectionTimeoutMs", 30000L);
-            String errorMsg = String.format(
-                "[XA-POOL-BORROW] POOL EXHAUSTED: maxTotal=%d, active=%d, idle=%d, timeout=%dms. " +
-                "Increase pool size or reduce concurrent XA transactions.",
+    private void trackBorrow(XABackendSession session) {
+        if (housekeepingConfig.isLeakDetectionEnabled()) {
+            boolean captureStackTrace = housekeepingConfig.isEnhancedLeakReport();
+            if (session instanceof BackendSessionImpl) {
+                ((BackendSessionImpl) session).onBorrow(captureStackTrace);
+            }
+            borrowedSessions.put(session, new BorrowInfo(
+                    System.nanoTime(),
+                    Thread.currentThread(),
+                    captureStackTrace ? Thread.currentThread().getStackTrace() : null));
+        }
+    }
+
+    private SQLException poolExhaustedException(NoSuchElementException cause) {
+        long maxWaitMs = getLongConfig(config, "xa.connectionTimeoutMs", 30000L);
+        String errorMsg = String.format(
+                "[XA-POOL-BORROW] POOL EXHAUSTED: maxTotal=%d, active=%d, idle=%d, timeout=%dms.",
                 pool.getMaxTotal(), pool.getNumActive(), pool.getNumIdle(), maxWaitMs);
+        poolMetrics.recordPoolExhaustion(poolName);
+        updatePoolMetrics();
+        log.error(errorMsg);
+        return new SQLException(errorMsg, "08001", cause);
+    }
 
-            // Record pool exhaustion event
-            poolMetrics.recordPoolExhaustion(poolName);
-            updatePoolMetrics();
-
-            log.error(errorMsg);
-            throw new SQLException(errorMsg, "08001", e);
-
-        } catch (Exception e) {
-            log.error("[XA-POOL-BORROW] Failed to borrow session from pool (active={}, idle={}, maxTotal={})",
-                    pool.getNumActive(), pool.getNumIdle(), pool.getMaxTotal(), e);
-            throw e;
+    private void returnLateSession(XABackendSession session) throws Exception {
+        try {
+            pool.returnObject(session);
+        } catch (Exception returnFailure) {
+            try {
+                pool.invalidateObject(session);
+            } catch (Exception invalidateFailure) {
+                returnFailure.addSuppressed(invalidateFailure);
+            }
+            throw returnFailure;
         }
     }
 

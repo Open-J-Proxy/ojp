@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.database.DatabaseUtils;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.server.AdmissionControlManager;
+import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.Session;
 import org.openjproxy.grpc.server.action.ActionContext;
@@ -355,8 +356,19 @@ public class HandleXAConnectionWithPoolingAction {
         // XA applications expect getConnection() to work immediately, before xaStart()
         XABackendSession backendSession = null;
         try {
-            backendSession =
-                    (XABackendSession) context.getXaPoolProvider().borrowSession(registry.getPooledXADataSource());
+            try (ConnectionAcquisitionManager.DeadlineScope ignored =
+                         ConnectionAcquisitionManager.beginAcquisitionDeadline(xaStartTimeoutMillis)) {
+                backendSession = context.getXaPoolProvider().borrowSession(
+                        registry.getPooledXADataSource(),
+                        ConnectionAcquisitionManager.remainingAcquisitionTimeoutMs());
+                if (ConnectionAcquisitionManager.isAcquisitionCancelledOrExpired()) {
+                    context.getXaPoolProvider().returnSession(registry.getPooledXADataSource(), backendSession);
+                    backendSession = null;
+                    throw new SQLException(
+                            "XA session acquired after deadline or request cancellation for connection hash: "
+                                    + connHash);
+                }
+            }
 
             XAConnection xaConnection = backendSession.getXAConnection();
             Connection connection = backendSession.getConnection();

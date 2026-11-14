@@ -218,47 +218,52 @@ public class SessionConnectionHelper {
                         // conn remains null — caller must resolve the connection from the session
                     } else {
                         // Primary path: eager acquisition with admission control
-                        AdmissionControlManager.SessionPermit sessionPermit = null;
-                        try {
-                            AdmissionControlManager admissionControlManager =
-                                    context.getAdmissionControlManagers().get(connHash);
-                            if (startSessionIfNone && admissionControlManager != null) {
-                                sessionPermit = admissionControlManager.claimCurrentThreadPermitForSession();
-                                if (sessionPermit == null) {
-                                    sessionPermit = admissionControlManager.acquireSessionPermit(connHash);
-                                }
-                            }
-
-                            // Use enhanced connection acquisition with timeout protection
-                            conn = ConnectionAcquisitionManager.acquireConnection(primaryDataSource, connHash);
-                            log.debug("Successfully acquired connection from pool for hash: {}", connHash);
-
-                            if (startSessionIfNone) {
-                                SessionInfo updatedSession = sessionManager.createSession(
-                                        sessionInfo.getClientUUID(), sessionInfo.getConnHash(), conn);
-                                if (sessionPermit != null) {
-                                    Session createdSession = sessionManager.getSession(updatedSession);
-                                    if (createdSession != null) {
-                                        AdmissionControlManager.SessionPermit permitForHook = sessionPermit;
-                                        createdSession.setConnectionPermitReleaseHook(permitForHook::release);
-                                        sessionPermit = null;
-                                    } else {
-                                        sessionPermit.release();
-                                        sessionPermit = null;
+                        AdmissionControlManager admissionControlManager =
+                                context.getAdmissionControlManagers().get(connHash);
+                        try (ConnectionAcquisitionManager.DeadlineScope ignored =
+                                     admissionControlManager == null ? null
+                                             : ConnectionAcquisitionManager.beginAcquisitionDeadline(
+                                                     admissionControlManager.getFastSlotTimeoutMs())) {
+                            AdmissionControlManager.SessionPermit sessionPermit = null;
+                            try {
+                                if (startSessionIfNone && admissionControlManager != null) {
+                                    sessionPermit = admissionControlManager.claimCurrentThreadPermitForSession();
+                                    if (sessionPermit == null) {
+                                        sessionPermit = admissionControlManager.acquireSessionPermit(connHash);
                                     }
                                 }
-                                dtoBuilder.session(updatedSession);
-                                sessionCreated = true;
-                            }
-                        } catch (SQLException e) {
-                            if (sessionPermit != null) {
-                                sessionPermit.release();
-                            }
-                            log.error("Failed to acquire connection from pool for hash: {}. Error: {}",
-                                    connHash, e.getMessage());
 
-                            // Re-throw the enhanced exception from ConnectionAcquisitionManager
-                            throw e;
+                                // Use enhanced connection acquisition with timeout protection
+                                conn = ConnectionAcquisitionManager.acquireConnection(primaryDataSource, connHash);
+                                log.debug("Successfully acquired connection from pool for hash: {}", connHash);
+
+                                if (startSessionIfNone) {
+                                    SessionInfo updatedSession = sessionManager.createSession(
+                                            sessionInfo.getClientUUID(), sessionInfo.getConnHash(), conn);
+                                    if (sessionPermit != null) {
+                                        Session createdSession = sessionManager.getSession(updatedSession);
+                                        if (createdSession != null) {
+                                            AdmissionControlManager.SessionPermit permitForHook = sessionPermit;
+                                            createdSession.setConnectionPermitReleaseHook(permitForHook::release);
+                                            sessionPermit = null;
+                                        } else {
+                                            sessionPermit.release();
+                                            sessionPermit = null;
+                                        }
+                                    }
+                                    dtoBuilder.session(updatedSession);
+                                    sessionCreated = true;
+                                }
+                            } catch (SQLException e) {
+                                if (sessionPermit != null) {
+                                    sessionPermit.release();
+                                }
+                                log.error("Failed to acquire connection from pool for hash: {}. Error: {}",
+                                        connHash, e.getMessage());
+
+                                // Re-throw the enhanced exception from ConnectionAcquisitionManager
+                                throw e;
+                            }
                         }
                     }
                 }

@@ -216,6 +216,18 @@ public class CommonsPool2XAProvider implements XAConnectionPoolProvider {
     }
 
     @Override
+    public XABackendSession borrowSession(Object xaDataSource, long remainingTimeoutMs) throws Exception {
+        if (!(xaDataSource instanceof CommonsPool2XADataSource)) {
+            throw new IllegalArgumentException(
+                    "xaDataSource must be CommonsPool2XADataSource, got: " +
+                    (xaDataSource != null ? xaDataSource.getClass().getName() : "null"));
+        }
+
+        CommonsPool2XADataSource pooled = (CommonsPool2XADataSource) xaDataSource;
+        return pooled.borrowSession(remainingTimeoutMs);
+    }
+
+    @Override
     public void returnSession(Object xaDataSource, XABackendSession session) throws Exception {
         if (!(xaDataSource instanceof CommonsPool2XADataSource)) {
             throw new IllegalArgumentException(

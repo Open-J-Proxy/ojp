@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L5** for SQL Server, with a ranged LOB-read limitation |
+| Cumulative level | **L1** for H2; **L6** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -31,7 +31,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L3** | SQL Server (certified) | Covers streamed query results, `fetchNextRows` pagination, result-set metadata and EOF, concurrent independent cursors, and cleanup after early close. See `test/integration.sqlServerL3.test.ts`. |
 | **L4** | SQL Server (certified) | `startTransaction`/`commit`/`rollback`, autocommit state, transaction-isolation get/set, named/unnamed savepoints, rollback-to-savepoint, release, transaction completion invalidation, batch rollback, and error recovery. See `test/integration.sqlServerL4.test.ts`. |
 | **L5** | SQL Server (documented JDBC limitation) | Multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references. SQL Server's JDBC driver rejects ranged BLOB/CLOB reads; the L5 suite asserts that error, while `test/integration.lob.stream.h2.test.ts` verifies exact stream contents and sizes on H2. |
-| **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
+| **L6** | SQL Server (certified) | Local temporary-table state is preserved across calls and transactions; the client keeps each session bound to its OJP endpoint and surfaces bound-node loss without silently rerouting. See `test/integration.sqlServerL6.test.ts`. |
 | **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
 | **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
@@ -263,8 +263,8 @@ unchanged.
 ## SQL Server integration
 
 The real-server suites `test/integration.sqlServerAg.test.ts`,
-`test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`, and
-`test/integration.sqlServerL5.test.ts`
+`test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`,
+`test/integration.sqlServerL5.test.ts`, and `test/integration.sqlServerL6.test.ts`
 cover SQL Server:
 
 - L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
@@ -286,6 +286,9 @@ cover SQL Server:
 - L5 LOB behavior: >64KB BLOB/CLOB uploads, Unicode, update, NULL versus empty values,
   reusable references, and Node `Readable` input. SQL Server ranged LOB reads are
   asserted as unsupported; successful exact-size BLOB/CLOB stream reads are covered on H2.
+- L6 session affinity: local temporary-table operations across calls and transaction
+  boundaries, plus sticky-session failure when a bound OJP node is stopped in the
+  multinode integration cluster.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide
@@ -295,10 +298,16 @@ connection fixture if the default does not match your database, and provide
 $env:OJP_ENABLE_SQLSERVER_AG_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L4_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L5_TESTS = 'true'
+$env:OJP_ENABLE_SQLSERVER_L6_TESTS = 'true'
 npm run test:sqlserver-ag
 npm run test:sqlserver-l4
 npm run test:sqlserver-l5
+npm run test:sqlserver-l6
 ```
+
+The L6 bound-node-loss case runs when `OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true` and
+`OJP_TEST_NODE_CONTAINERS` names the three dedicated OJP test containers; the Node
+client integration workflow configures both.
 
 **Known observations/limitations:**
 

@@ -13,6 +13,7 @@ import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.MultinodeXaCoordinator;
 import org.openjproxy.grpc.server.AdmissionControlManager;
+import org.openjproxy.grpc.server.ConnectionAcquisitionManager;
 import org.openjproxy.grpc.server.UnpooledConnectionDetails;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
@@ -231,6 +232,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 .maxPoolSize(maxPoolSize)
                                 .minIdle(minIdle)
                                 .connectionTimeoutMs(CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS)
+                                .connectionCreationGracePeriodMs(dsConfig.getConnectionCreationGracePeriod())
                                 .idleTimeoutMs(dsConfig.getIdleTimeout())
                                 .maxLifetimeMs(dsConfig.getMaxLifetime())
                                 .leakDetectionThresholdMs(dsConfig.getLeakDetectionThreshold())
@@ -244,6 +246,8 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
                         // Create DataSource with properly configured transaction isolation
                         ds = poolProvider.createDataSource(poolConfig);
+                        ConnectionAcquisitionManager.registerCreationGracePeriod(
+                                ds, dsConfig.getConnectionCreationGracePeriod());
                         DataSource createdDataSource = ds;
                         ConnectionPoolProvider selectedPoolProvider = poolProvider;
                         DatabaseConnectionBudgetManager.Registration attachedRegistration = budgetRegistration;

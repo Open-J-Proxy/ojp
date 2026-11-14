@@ -54,6 +54,34 @@ class DatasourcePropertiesLoaderSystemPropertyTest {
         assertEquals("false", poolEnabled, "System property should set pool enabled to 'false'");
     }
 
+    @Test
+    void shouldResolveCreationGraceIndependentlyForNamedDatasources() {
+        String mainKey = "mainApp.ojp.connection.pool.connectionCreationGracePeriod";
+        String batchKey = "batch.ojp.connection.pool.connectionCreationGracePeriod";
+        String previousMain = System.setProperty(mainKey, "7500");
+        String previousBatch = System.setProperty(batchKey, "0");
+        try {
+            Properties main = DatasourcePropertiesLoader.loadOjpPropertiesForDataSource("mainApp");
+            Properties batch = DatasourcePropertiesLoader.loadOjpPropertiesForDataSource("batch");
+
+            assertNotNull(main);
+            assertNotNull(batch);
+            assertEquals("7500", main.getProperty("ojp.connection.pool.connectionCreationGracePeriod"));
+            assertEquals("0", batch.getProperty("ojp.connection.pool.connectionCreationGracePeriod"));
+        } finally {
+            if (previousMain == null) {
+                System.clearProperty(mainKey);
+            } else {
+                System.setProperty(mainKey, previousMain);
+            }
+            if (previousBatch == null) {
+                System.clearProperty(batchKey);
+            } else {
+                System.setProperty(batchKey, previousBatch);
+            }
+        }
+    }
+
     /**
      * Test for environment variable support.
      * <p>

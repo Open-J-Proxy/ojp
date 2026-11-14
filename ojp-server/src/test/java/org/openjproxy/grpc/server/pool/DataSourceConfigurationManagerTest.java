@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Test for DataSourceConfigurationManager functionality.
@@ -45,6 +46,7 @@ class DataSourceConfigurationManagerTest {
         props.setProperty(CommonConstants.MAXIMUM_POOL_SIZE_PROPERTY, "50");
         props.setProperty(CommonConstants.MINIMUM_IDLE_PROPERTY, "10");
         props.setProperty(CommonConstants.CONNECTION_TIMEOUT_PROPERTY, "15000");
+        props.setProperty(CommonConstants.CONNECTION_CREATION_GRACE_PERIOD_PROPERTY, "7500");
 
         DataSourceConfigurationManager.DataSourceConfiguration config =
                 DataSourceConfigurationManager.getConfiguration(props);
@@ -53,10 +55,28 @@ class DataSourceConfigurationManagerTest {
         assertEquals(50, config.getMaximumPoolSize());
         assertEquals(10, config.getMinimumIdle());
         assertEquals(15000, config.getConnectionTimeout());
+        assertEquals(7500, config.getConnectionCreationGracePeriod());
 
         // Should use defaults for properties not specified
         assertEquals(CommonConstants.DEFAULT_IDLE_TIMEOUT, config.getIdleTimeout());
         assertEquals(CommonConstants.DEFAULT_MAX_LIFETIME, config.getMaxLifetime());
+    }
+
+    @Test
+    void shouldCacheCreationGraceSeparatelyAndAllowDisablingIt() {
+        Properties props = new Properties();
+        props.setProperty(CommonConstants.DATASOURCE_NAME_PROPERTY, "mainApp");
+        var defaults = DataSourceConfigurationManager.getConfiguration(props);
+        assertEquals(5000, defaults.getConnectionCreationGracePeriod());
+
+        props.setProperty(CommonConstants.CONNECTION_CREATION_GRACE_PERIOD_PROPERTY, "0");
+        var disabled = DataSourceConfigurationManager.getConfiguration(props);
+        assertNotSame(defaults, disabled);
+        assertEquals(0, disabled.getConnectionCreationGracePeriod());
+
+        props.setProperty(CommonConstants.CONNECTION_CREATION_GRACE_PERIOD_PROPERTY, "-1");
+        assertThrows(IllegalArgumentException.class,
+                () -> DataSourceConfigurationManager.getConfiguration(props));
     }
 
     @Test

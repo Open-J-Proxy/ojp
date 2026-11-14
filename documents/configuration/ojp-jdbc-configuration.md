@@ -343,12 +343,42 @@ These examples demonstrate recommended settings for each environment and can be 
 | `ojp.connection.pool.minimumIdle`     | int  | 5       | Minimum number of idle connections maintained            | 0.2.0-beta |
 | `ojp.connection.pool.idleTimeout`     | long | 600000  | Maximum time (ms) a connection can sit idle (10 minutes) | 0.2.0-beta |
 | `ojp.connection.pool.maxLifetime`     | long | 1800000 | Maximum lifetime (ms) of a connection (30 minutes)       | 0.2.0-beta |
-| `ojp.connection.pool.connectionTimeout` | long | 10000   | Semaphore admission wait budget (ms) for non-XA requests; pool acquisition is fail-fast  | 0.2.0-beta |
+| `ojp.connection.pool.connectionTimeout` | long | 10000   | Semaphore admission wait budget (ms) for non-XA requests; backend borrow is normally fail-fast | 0.2.0-beta |
+| `ojp.connection.pool.connectionCreationGracePeriod` | long | 5000 | Retry failed regular-pool borrows for this additional period (ms); 0 disables it | 1.1.0 |
 | `ojp.connection.pool.defaultTransactionIsolation` | string/int | READ_COMMITTED | Default transaction isolation level (see below) | 0.2.0-beta |
 
 **Note**: These properties can be used with or without a datasource name prefix. For example:
 - `ojp.connection.pool.maximumPoolSize=20` (default datasource)
 - `myApp.ojp.connection.pool.maximumPoolSize=50` (myApp datasource)
+
+**Avoid elastic pools for latency-sensitive workloads:** set `minimumIdle` equal to
+`maximumPoolSize`. A smaller minimum is discouraged because cold startup and later
+pool expansion require physical connections to be created on the request path,
+which can cause acquisition timeouts even with unused capacity. Fixed-size pools
+reduce this risk after warming up; they do not guarantee that startup is complete.
+Examples with unequal sizes illustrate elastic configurations, not the recommended
+production sizing.
+
+Regular pools retry failed borrow attempts for up to the configured additional
+period (5 seconds by default). This can allow background connection creation to
+finish; it does not increase pool capacity or reset the admission budget. It is
+supported with built-in and SPI-loaded pool providers. Each attempt uses the
+provider's configured timeout, so this is not a hard end-to-end deadline.
+
+```properties
+mainApp.ojp.connection.pool.maximumPoolSize=20
+mainApp.ojp.connection.pool.minimumIdle=20
+mainApp.ojp.connection.pool.connectionTimeout=10000
+mainApp.ojp.connection.pool.connectionCreationGracePeriod=5000
+```
+
+The grace period is non-negative, in milliseconds, and can also be supplied through
+JDBC `Properties` like the other pool settings. It is additional to admission and
+backend borrow attempts, not a physical JDBC connect/login timeout or an end-to-end
+request deadline. It applies to primary and lazy/read-replica regular-pool
+acquisitions. Replicas use `{replica}.ojp.pool.connectionCreationGracePeriod`
+(default `5000`). XA and unpooled connections are unchanged; synchronous physical
+connection creation needs driver-specific connect/login timeout settings.
 
 ### JDBC Client Properties
 
@@ -933,6 +963,7 @@ Use the format `{replicaName}.ojp.*` to configure each replica:
 | `{replica}.ojp.pool.maxPoolSize` | `10` | Maximum connections in the replica pool |
 | `{replica}.ojp.pool.minIdle` | `2` | Minimum idle connections |
 | `{replica}.ojp.pool.connectionTimeout` | `30000` | Connection acquire timeout (ms) |
+| `{replica}.ojp.pool.connectionCreationGracePeriod` | `5000` | Retry failed regular-pool borrows for this additional period (ms); 0 disables it |
 | `{replica}.ojp.pool.idleTimeout` | `600000` | Idle connection timeout (ms) |
 | `{replica}.ojp.pool.maxLifetime` | `1800000` | Maximum connection lifetime (ms) |
 

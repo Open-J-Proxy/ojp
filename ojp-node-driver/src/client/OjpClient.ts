@@ -1,11 +1,20 @@
 import * as grpc from '@grpc/grpc-js';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { PassThrough, Readable } from 'stream';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
 import { toOjpError, OjpConnectionError, OjpTransactionError, isConnectionLevelError } from './errors';
 import { fromParameterValue, OjpLobRef, OjpNullParam, toParameterProtos } from './valueMapper';
-import { markEndpointUnhealthy, orderEndpointsForAttempt } from './endpointHealth';
+import {
+  clusterHealth,
+  isEndpointHealthy,
+  markEndpointHealthy,
+  markEndpointUnhealthy,
+  orderEndpointsForAttempt,
+  registerEndpointSession,
+  shouldProbeEndpoints,
+  unregisterEndpointSession,
+} from './endpointHealth';
 import { StatementServiceClient } from './statementServiceClient';
 import { OjpXAResource } from '../xa/OjpXAResource';
 import { looksLikeQuery, returnsRowsFromDml } from './sqlStatementClassifier';
@@ -54,6 +63,10 @@ export interface OjpClientOptions {
   callTimeoutMs?: number;
   /** Use an insecure gRPC channel (no TLS). Default: true (local/dev MVP). */
   insecure?: boolean;
+  /** Endpoint selection policy in multinode mode. Default: least-connections. */
+  loadBalancingStrategy?: 'least-connections' | 'round-robin';
+  /** Interval between shared multinode health probes, in milliseconds. Default: 5000. */
+  healthCheckIntervalMs?: number;
   /**
    * Opens this session as an XA (distributed transaction) resource. When `true`,
    * transaction demarcation must go through `createXAResource()` — `startTransaction`/
@@ -152,6 +165,41 @@ const LOB_CHUNK_SIZE = 65536;
 const READ_LOB_MAX_LENGTH = 2147483647;
 const CLIENT_UUID = randomUUID();
 
+interface CachedPool {
+  connHash: string;
+  connectionDetails: ConnectionDetails;
+  initializedEndpoints: Set<string>;
+  clusterHealth: string;
+}
+
+const poolCache = new Map<string, CachedPool>();
+
+function endpointKey(endpoint: OjpServerEndpoint): string {
+  return `${endpoint.host}:${endpoint.port}`;
+}
+
+function connectionKey(details: ConnectionDetails): string {
+  const identity = JSON.stringify([
+    details.url,
+    details.user,
+    details.password,
+    details.properties ?? [],
+    details.isXA ?? false,
+  ]);
+  return createHash('sha256').update(identity).digest('hex');
+}
+
+function isPoolNotFound(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null || !('code' in err)
+      || (err as { code?: number }).code !== grpc.status.NOT_FOUND) {
+    return false;
+  }
+  const message = 'details' in err && typeof err.details === 'string'
+    ? err.details
+    : 'message' in err && typeof err.message === 'string' ? err.message : '';
+  return /no pool found for connection hash/i.test(message);
+}
+
 type LobInput = Buffer | string | AsyncIterable<Buffer | string>;
 
 async function* singleLobChunk(input: Buffer | string): AsyncGenerator<Buffer | string, void, undefined> {
@@ -207,6 +255,9 @@ export class OjpClient {
   private session?: SessionInfo;
   private readonly parsedUrl: ParsedOjpUrl;
   private readonly clientUUID: string;
+  private readonly poolKey: string;
+  private endpointRegistered = false;
+  private healthCheckTimer?: NodeJS.Timeout;
   private connecting = false;
   private closed = false;
   private autoCommit = true;
@@ -222,6 +273,7 @@ export class OjpClient {
     this.credentials = options.insecure === false
       ? grpc.credentials.createSsl()
       : grpc.credentials.createInsecure();
+    this.poolKey = connectionKey(this.buildConnectionDetails());
   }
 
   /** The ojp-server endpoint this session is currently bound to (undefined before a successful `connect()`). */
@@ -239,11 +291,14 @@ export class OjpClient {
     ) as unknown as StatementServiceClient;
   }
 
-  private deadline(): grpc.Deadline {
-    return Date.now() + this.callTimeoutMs;
+  private deadline(timeoutMs = this.callTimeoutMs): grpc.Deadline {
+    return Date.now() + timeoutMs;
   }
 
   private buildConnectionDetails(): ConnectionDetails {
+    const properties = this.parsedUrl.dataSourceName
+      ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
+      : [];
     return {
       // The ojp-server passes this URL to its JDBC connection pool provider, which
       // requires the "jdbc:" prefix (e.g. jdbc:postgresql://host/db). The OJP connection
@@ -252,17 +307,16 @@ export class OjpClient {
       user: this.options.user ?? '',
       password: this.options.password ?? '',
       clientUUID: this.clientUUID,
-      properties: this.parsedUrl.dataSourceName
-        ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
-        : [],
+      properties,
       serverEndpoints: this.parsedUrl.endpoints.map((e) => `${e.host}:${e.port}`),
       isXA: !!this.options.xa,
+      clusterHealth: clusterHealth(this.parsedUrl.endpoints),
     };
   }
 
-  private rpcConnect(client: StatementServiceClient): Promise<SessionInfo> {
+  private rpcConnect(client: StatementServiceClient, details = this.buildConnectionDetails()): Promise<SessionInfo> {
     return new Promise((resolve, reject) => {
-      client.connect(this.buildConnectionDetails(), { deadline: this.deadline() }, (err, response) => {
+      client.connect(details, { deadline: this.deadline() }, (err, response) => {
         if (err) {
           reject(toOjpError(err));
           return;
@@ -303,16 +357,49 @@ export class OjpClient {
   }
 
   private async connectToAvailableEndpoint(): Promise<SessionInfo> {
-    const candidates = orderEndpointsForAttempt(this.parsedUrl.endpoints);
+    await this.probeEndpointsIfDue();
+    const candidates = orderEndpointsForAttempt(
+      this.parsedUrl.endpoints,
+      this.options.loadBalancingStrategy ?? 'least-connections',
+    );
     let lastError: Error | undefined;
 
     for (const endpoint of candidates) {
       const client = this.buildGrpcClient(endpoint);
       try {
-        const session = await this.rpcConnect(client);
+        const cachedPool = this.options.xa ? undefined : poolCache.get(this.poolKey);
+        let session: SessionInfo;
+        if (cachedPool) {
+          await this.ensurePoolOnHealthyEndpoints(cachedPool);
+          session = {
+            connHash: cachedPool.connHash,
+            clientUUID: this.clientUUID,
+            sessionUUID: '',
+            sessionStatus: 'SESSION_ACTIVE',
+            isXA: false,
+            clusterHealth: clusterHealth(this.parsedUrl.endpoints),
+          };
+        } else {
+          session = await this.rpcConnect(client);
+          if (!this.options.xa && session.connHash) {
+            const health = clusterHealth(this.parsedUrl.endpoints);
+            const pool: CachedPool = {
+              connHash: session.connHash,
+              connectionDetails: this.buildConnectionDetails(),
+              initializedEndpoints: new Set([endpointKey(endpoint)]),
+              clusterHealth: health,
+            };
+            poolCache.set(this.poolKey, pool);
+            await this.ensurePoolOnHealthyEndpoints(pool, endpoint);
+          }
+        }
+        session.clusterHealth = clusterHealth(this.parsedUrl.endpoints);
         this.grpcClient = client;
         this.boundServerEndpoint = endpoint;
         this.session = session;
+        registerEndpointSession(endpoint);
+        this.endpointRegistered = true;
+        this.startHealthMonitor();
         return session;
       } catch (err) {
         client.close();
@@ -329,6 +416,96 @@ export class OjpClient {
     throw lastError ?? new OjpConnectionError(
       `No healthy ojp-server endpoints available (tried: ${candidates.map((e) => `${e.host}:${e.port}`).join(', ')}).`,
     );
+  }
+
+  private async probeEndpointsIfDue(): Promise<void> {
+    if (this.parsedUrl.endpoints.length < 2
+        || !shouldProbeEndpoints(this.options.healthCheckIntervalMs ?? 5_000)) {
+      return;
+    }
+
+    await Promise.all(this.parsedUrl.endpoints.map(async (endpoint) => {
+      const client = this.buildGrpcClient(endpoint);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          client.connect(
+            { url: '', user: '', password: '', clientUUID: this.clientUUID },
+            { deadline: this.deadline(Math.min(this.callTimeoutMs, 5_000)) },
+            (err) => err ? reject(err) : resolve(),
+          );
+        });
+        markEndpointHealthy(endpoint);
+      } catch {
+        markEndpointUnhealthy(endpoint);
+      } finally {
+        client.close();
+      }
+    }));
+  }
+
+  private startHealthMonitor(): void {
+    const intervalMs = this.options.healthCheckIntervalMs ?? 5_000;
+    if (this.parsedUrl.endpoints.length < 2 || intervalMs <= 0 || this.healthCheckTimer) {
+      return;
+    }
+
+    this.healthCheckTimer = setInterval(() => {
+      void this.refreshEndpointHealth().catch((err: unknown) => {
+        process.emitWarning(`OJP multinode health refresh failed: ${String(err)}`);
+      });
+    }, intervalMs);
+    this.healthCheckTimer.unref();
+  }
+
+  private async refreshEndpointHealth(): Promise<void> {
+    const before = clusterHealth(this.parsedUrl.endpoints);
+    await this.probeEndpointsIfDue();
+    const currentHealth = clusterHealth(this.parsedUrl.endpoints);
+    if (before !== currentHealth) {
+      if (this.session) {
+        this.session = { ...this.session, clusterHealth: currentHealth };
+      }
+      const pool = poolCache.get(this.poolKey);
+      if (pool) {
+        await this.ensurePoolOnHealthyEndpoints(pool);
+      }
+    }
+  }
+
+  private async ensurePoolOnHealthyEndpoints(pool: CachedPool, alreadyConnected?: OjpServerEndpoint): Promise<void> {
+    const health = clusterHealth(this.parsedUrl.endpoints);
+    const healthChanged = health !== pool.clusterHealth;
+    const targets = this.parsedUrl.endpoints.filter((endpoint) =>
+      endpoint !== alreadyConnected
+      && isEndpointHealthy(endpoint)
+      && (!pool.initializedEndpoints.has(endpointKey(endpoint)) || healthChanged));
+
+    for (const endpoint of targets) {
+      if (!isEndpointHealthy(endpoint)) {
+        continue;
+      }
+      const client = this.buildGrpcClient(endpoint);
+      try {
+        const details = {
+          ...pool.connectionDetails,
+          clusterHealth: health,
+        };
+        const session = await this.rpcConnect(client, details);
+        await new Promise<void>((resolve, reject) => {
+          client.terminateSession(session, { deadline: this.deadline() }, (err) => err ? reject(err) : resolve());
+        });
+        pool.initializedEndpoints.add(endpointKey(endpoint));
+      } catch (err) {
+        if (isConnectionLevelError(err)) {
+          markEndpointUnhealthy(endpoint);
+          continue;
+        }
+        throw err;
+      } finally {
+        client.close();
+      }
+    }
+    pool.clusterHealth = health;
   }
 
   private requireSession(): SessionInfo {
@@ -414,27 +591,64 @@ export class OjpClient {
     statementUUID = '',
     additionalProperties: PropertyEntry[] = [],
   ): Promise<OpResult> {
-    const request: StatementRequest = {
-      session: this.requireSession(),
-      sql,
-      parameters: toParameterProtos(params),
-      statementUUID,
-      properties: [
-        ...additionalProperties,
-        ...(options.generatedKeys ? [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }] : []),
-      ],
+    const invoke = (): Promise<OpResult> => {
+      const request: StatementRequest = {
+        session: this.requireSession(),
+        sql,
+        parameters: toParameterProtos(params),
+        statementUUID,
+        properties: [
+          ...additionalProperties,
+          ...(options.generatedKeys ? [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }] : []),
+        ],
+      };
+
+      return new Promise((resolve, reject) => {
+        this.requireClient().executeUpdate(request, (err, response) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          this.updateSessionFrom(response);
+          resolve(response);
+        });
+      });
     };
 
-    return new Promise((resolve, reject) => {
-      this.requireClient().executeUpdate(request, (err, response) => {
-        if (err) {
-          reject(this.toClientError(err));
-          return;
-        }
-        this.updateSessionFrom(response);
-        resolve(response);
-      });
-    });
+    try {
+      return await invoke();
+    } catch (err) {
+      if (!isPoolNotFound(err) || this.session?.sessionUUID || this.transactionActive || this.options.xa) {
+        throw this.toClientError(err);
+      }
+
+      await this.reconnectAfterPoolNotFound();
+      try {
+        return await invoke();
+      } catch (retryError) {
+        throw this.toClientError(retryError);
+      }
+    }
+  }
+
+  private async reconnectAfterPoolNotFound(): Promise<void> {
+    const previousClient = this.grpcClient;
+    const previousEndpoint = this.boundServerEndpoint;
+    if (this.endpointRegistered && previousEndpoint) {
+      unregisterEndpointSession(previousEndpoint);
+      this.endpointRegistered = false;
+    }
+    this.session = undefined;
+    this.grpcClient = undefined;
+    this.boundServerEndpoint = undefined;
+    previousClient?.close();
+    poolCache.delete(this.poolKey);
+
+    try {
+      await this.connectToAvailableEndpoint();
+    } catch (err) {
+      throw this.toClientError(err);
+    }
   }
 
   /** @internal Adds one parameter set to a prepared statement's server-side batch. */
@@ -739,7 +953,10 @@ export class OjpClient {
    *
    * Exhausting or interrupting the iteration closes the server-side result set.
    */
-  private async *streamOpResults(request: StatementRequest): AsyncGenerator<OpResult, void, undefined> {
+  private async *streamOpResults(
+    request: StatementRequest,
+    poolRetryAllowed = true,
+  ): AsyncGenerator<OpResult, void, undefined> {
     const stream = this.requireClient().executeQuery(request);
     // Prevents an error emitted after explicit cancellation (e.g. "Cancelled on
     // client") from becoming an unhandled exception in the process — the real
@@ -765,6 +982,12 @@ export class OjpClient {
           yield opResult;
         }
       } catch (err) {
+        if (poolRetryAllowed && firstBlock && !this.session?.sessionUUID
+            && !this.transactionActive && !this.options.xa && isPoolNotFound(err)) {
+          await this.reconnectAfterPoolNotFound();
+          yield* this.streamOpResults({ ...request, session: this.requireSession() }, false);
+          return;
+        }
         throw this.toClientError(err);
       }
 
@@ -887,7 +1110,10 @@ export class OjpClient {
   private updateSessionFrom(response: OpResult | SessionInfo | CallResourceResponse | LobReference | LobDataBlock): void {
     const session = 'session' in response ? response.session : response;
     if (session) {
-      this.session = session;
+      this.session = {
+        ...session,
+        clusterHealth: session.clusterHealth ?? this.session?.clusterHealth,
+      };
     }
   }
 
@@ -1346,6 +1572,11 @@ export class OjpClient {
     this.autoCommit = true;
     const session = this.session;
     const client = this.grpcClient;
+    const endpoint = this.boundServerEndpoint;
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = undefined;
+    }
     this.session = undefined;
     this.grpcClient = undefined;
     this.boundServerEndpoint = undefined;
@@ -1362,9 +1593,18 @@ export class OjpClient {
         });
       }
     } finally {
+      if (this.endpointRegistered && endpoint) {
+        unregisterEndpointSession(endpoint);
+        this.endpointRegistered = false;
+      }
       client?.close();
     }
   }
+}
+
+/** @internal Test isolation for the process-wide pool identity cache. */
+export function resetPoolCacheForTests(): void {
+  poolCache.clear();
 }
 
 /**

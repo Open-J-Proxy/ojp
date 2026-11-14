@@ -43,10 +43,10 @@ stream protocol's column labels; it does not expose JDBC's full vendor-specific
 `ResultSetMetaData` surface.
 
 Explicit `OjpTypedParam` mappings cover scalar, decimal, date/time, text/binary stream
-payloads, URL, row ID, and LOB-reference values. Use the exported `ParameterType` constants
-(for example, `ParameterType.PT_N_STRING`) for explicit type hints. The `OjpTypedParam` type
-requires an enum member rather than a raw string. `PT_ARRAY` and
-`PT_REF` are not currently representable through this API, and `PT_OBJECT` is limited to scalar
+payloads, URL, row ID, and LOB-reference values. Use the exported `ParameterType` enum
+(for example, `ParameterType.N_STRING`) for explicit type hints. The `OjpTypedParam` type
+requires an enum member rather than a raw string. `ARRAY` and
+`REF` are not currently representable through this API, and `OBJECT` is limited to scalar
 values. These declared omissions fail explicitly rather than silently falling back to another
 parameter type.
 

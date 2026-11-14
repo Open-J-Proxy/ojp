@@ -109,39 +109,39 @@ describe('valueMapper', () => {
 
   describe('OjpTypedParam (explicit type hints, used by dialect shims such as the SQL Server adapter)', () => {
     it('should accept enum-style parameter type constants', () => {
-      const proto = toParameterProto(1, new OjpTypedParam('nvarchar text', ParameterType.PT_N_STRING));
+      const proto = toParameterProto(1, new OjpTypedParam('nvarchar text', ParameterType.N_STRING));
       expect(proto.type).toBe('PT_N_STRING');
-      expect(ParameterType.PT_N_STRING).toBe('PT_N_STRING');
+      expect(ParameterType.N_STRING).toBe('N_STRING');
 
       const createTypedParam = (type: ParameterType): OjpTypedParam => new OjpTypedParam('value', type);
       // @ts-expect-error Raw string literals are not valid explicit parameter types.
-      createTypedParam('PT_N_STRING');
+      createTypedParam('N_STRING');
     });
 
     it('should fall back to PT_NULL regardless of the hinted type when the value is null', () => {
-      const proto = toParameterProto(1, new OjpTypedParam(null, ParameterType.PT_BIG_DECIMAL));
+      const proto = toParameterProto(1, new OjpTypedParam(null, ParameterType.BIG_DECIMAL));
       expect(proto.type).toBe('PT_NULL');
       expect(proto.values[0].intValue).toBe(0);
     });
 
     it('should honor PT_LONG for a JS number outside the 32-bit range', () => {
-      const proto = toParameterProto(1, new OjpTypedParam(5000000000, ParameterType.PT_LONG));
+      const proto = toParameterProto(1, new OjpTypedParam(5000000000, ParameterType.LONG));
       expect(proto.type).toBe('PT_LONG');
       expect(fromParameterValue(proto.values[0])).toBe(5000000000n);
     });
 
     it('should honor PT_SHORT and PT_BYTE by encoding as intValue', () => {
-      const shortProto = toParameterProto(1, new OjpTypedParam(300, ParameterType.PT_SHORT));
+      const shortProto = toParameterProto(1, new OjpTypedParam(300, ParameterType.SHORT));
       expect(shortProto.type).toBe('PT_SHORT');
       expect(shortProto.values[0].intValue).toBe(300);
 
-      const byteProto = toParameterProto(1, new OjpTypedParam(7, ParameterType.PT_BYTE));
+      const byteProto = toParameterProto(1, new OjpTypedParam(7, ParameterType.BYTE));
       expect(byteProto.type).toBe('PT_BYTE');
       expect(byteProto.values[0].intValue).toBe(7);
     });
 
     it('should honor PT_N_STRING (SQL Server NVARCHAR) as stringValue', () => {
-      const proto = toParameterProto(1, new OjpTypedParam('nvarchar text', ParameterType.PT_N_STRING));
+      const proto = toParameterProto(1, new OjpTypedParam('nvarchar text', ParameterType.N_STRING));
       expect(proto.type).toBe('PT_N_STRING');
       expect(fromParameterValue(proto.values[0])).toBe('nvarchar text');
     });
@@ -149,7 +149,7 @@ describe('valueMapper', () => {
     it('should honor PT_DATE (date-only) instead of the default PT_TIMESTAMP inference for a Date value', () => {
       const proto = toParameterProto(
         1,
-        new OjpTypedParam(new Date('2026-03-10T00:00:00.000Z'), ParameterType.PT_DATE),
+        new OjpTypedParam(new Date('2026-03-10T00:00:00.000Z'), ParameterType.DATE),
       );
       expect(proto.type).toBe('PT_DATE');
       expect(proto.values[0].dateValue).toEqual({ year: 2026, month: 3, day: 10 });
@@ -158,7 +158,7 @@ describe('valueMapper', () => {
     it('should honor PT_TIME (time-only) for a Date value', () => {
       const proto = toParameterProto(
         1,
-        new OjpTypedParam(new Date('1970-01-01T13:45:30.000Z'), ParameterType.PT_TIME),
+        new OjpTypedParam(new Date('1970-01-01T13:45:30.000Z'), ParameterType.TIME),
       );
       expect(proto.type).toBe('PT_TIME');
       expect(proto.values[0].timeValue).toEqual({ hours: 13, minutes: 45, seconds: 30, nanos: 0 });
@@ -168,7 +168,7 @@ describe('valueMapper', () => {
       const date = new Date('2026-01-15T10:30:00.000Z');
       const proto = toParameterProto(
         1,
-        new OjpTypedParam(date, ParameterType.PT_TIMESTAMP, 'TEMPORAL_TYPE_OFFSET_DATE_TIME'),
+        new OjpTypedParam(date, ParameterType.TIMESTAMP, 'TEMPORAL_TYPE_OFFSET_DATE_TIME'),
       );
       expect(proto.type).toBe('PT_TIMESTAMP');
       expect(proto.values[0].timestampValue?.originalType).toBe('TEMPORAL_TYPE_OFFSET_DATE_TIME');
@@ -177,48 +177,48 @@ describe('valueMapper', () => {
     });
 
     it('should honor PT_BIG_DECIMAL preserving exact precision (unlike plain-number PT_DOUBLE inference)', () => {
-      const proto = toParameterProto(1, new OjpTypedParam('1234.56', ParameterType.PT_BIG_DECIMAL));
+      const proto = toParameterProto(1, new OjpTypedParam('1234.56', ParameterType.BIG_DECIMAL));
       expect(proto.type).toBe('PT_BIG_DECIMAL');
       expect(fromParameterValue(proto.values[0])).toBe('1234.56');
     });
 
     it('should encode PT_URL using the URL wrapper field', () => {
-      const proto = toParameterProto(1, new OjpTypedParam('hello', ParameterType.PT_URL));
+      const proto = toParameterProto(1, new OjpTypedParam('hello', ParameterType.URL));
       expect(proto.type).toBe('PT_URL');
       expect(proto.values[0].urlValue).toBe('hello');
     });
 
     it('should preserve explicitly requested stream, row-id, SQLXML, and LOB types', () => {
-      expect(toParameterProto(1, new OjpTypedParam('text', ParameterType.PT_ASCII_STREAM))).toMatchObject({
+      expect(toParameterProto(1, new OjpTypedParam('text', ParameterType.ASCII_STREAM))).toMatchObject({
         type: 'PT_ASCII_STREAM',
         values: [{ stringValue: 'text' }],
       });
-      expect(toParameterProto(1, new OjpTypedParam(Buffer.from('bytes'), ParameterType.PT_BINARY_STREAM))).toMatchObject({
+      expect(toParameterProto(1, new OjpTypedParam(Buffer.from('bytes'), ParameterType.BINARY_STREAM))).toMatchObject({
         type: 'PT_BINARY_STREAM',
         values: [{ bytesValue: Buffer.from('bytes') }],
       });
-      expect(toParameterProto(1, new OjpTypedParam(Buffer.from([0, 1]), ParameterType.PT_ROW_ID)).values[0].rowidValue)
+      expect(toParameterProto(1, new OjpTypedParam(Buffer.from([0, 1]), ParameterType.ROW_ID)).values[0].rowidValue)
         .toBe(Buffer.from([0, 1]).toString('base64'));
-      expect(toParameterProto(1, new OjpTypedParam('<x/>', ParameterType.PT_SQL_XML)).values[0].stringValue).toBe('<x/>');
-      expect(toParameterProto(1, new OjpTypedParam('lob-id', ParameterType.PT_CLOB)).values[0].stringValue).toBe('lob-id');
+      expect(toParameterProto(1, new OjpTypedParam('<x/>', ParameterType.SQL_XML)).values[0].stringValue).toBe('<x/>');
+      expect(toParameterProto(1, new OjpTypedParam('lob-id', ParameterType.CLOB)).values[0].stringValue).toBe('lob-id');
       expect(() => toParameterProto(
         1,
-        new OjpTypedParam(new OjpLobRef('blob-id', 'BLOB'), ParameterType.PT_CLOB),
+        new OjpTypedParam(new OjpLobRef('blob-id', 'BLOB'), ParameterType.CLOB),
       ))
         .toThrow(/requires a CLOB reference/);
     });
 
     it('should preserve PT_OBJECT for scalar values while rejecting structured objects', () => {
-      expect(toParameterProto(1, new OjpTypedParam(42, ParameterType.PT_OBJECT))).toMatchObject({
+      expect(toParameterProto(1, new OjpTypedParam(42, ParameterType.OBJECT))).toMatchObject({
         type: 'PT_OBJECT',
         values: [{ intValue: 42 }],
       });
-      expect(() => toParameterProto(1, new OjpTypedParam({ key: 'value' }, ParameterType.PT_OBJECT))).toThrow(/scalar/);
+      expect(() => toParameterProto(1, new OjpTypedParam({ key: 'value' }, ParameterType.OBJECT))).toThrow(/scalar/);
     });
 
     it('should reject explicitly requested types that cannot be represented without server resource setup', () => {
-      expect(() => toParameterProto(1, new OjpTypedParam([], ParameterType.PT_ARRAY))).toThrow(/PT_ARRAY/);
-      expect(() => toParameterProto(1, new OjpTypedParam({}, ParameterType.PT_REF))).toThrow(/PT_REF/);
+      expect(() => toParameterProto(1, new OjpTypedParam([], ParameterType.ARRAY))).toThrow(/ARRAY/);
+      expect(() => toParameterProto(1, new OjpTypedParam({}, ParameterType.REF))).toThrow(/REF/);
     });
   });
 

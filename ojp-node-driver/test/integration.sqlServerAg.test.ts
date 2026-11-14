@@ -259,8 +259,8 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     );
     try {
       statement.setParameter(1, id);
-      statement.setParameter(2, new OjpTypedParam('typed NVARCHAR', ParameterType.PT_N_STRING));
-      statement.setParameter(3, new OjpTypedParam('1234.56', ParameterType.PT_BIG_DECIMAL));
+      statement.setParameter(2, new OjpTypedParam('typed NVARCHAR', ParameterType.N_STRING));
+      statement.setParameter(3, new OjpTypedParam('1234.56', ParameterType.BIG_DECIMAL));
       statement.setNull(4, -7);
       statement.setParameter(5, new Date('2026-03-10T12:00:00.000Z'));
 

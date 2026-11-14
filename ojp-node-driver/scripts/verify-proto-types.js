@@ -38,7 +38,7 @@ const IMPLEMENTED_RPCS = [
 
 // Proto message/enum name -> TS type name, listed only where they intentionally differ.
 const TYPE_NAME_OVERRIDES = {
-  ParameterTypeProto: 'ParameterType',
+  ParameterTypeProto: 'ParameterTypeProto',
   LobType: 'LobTypeProto',
 };
 

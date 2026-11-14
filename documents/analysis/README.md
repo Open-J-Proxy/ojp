@@ -6,18 +6,17 @@ This directory contains technical analysis documents for various OJP features an
 
 ### Capacity-Aware Connection Acquisition
 
-**Question:** Can OJP avoid a short connection acquisition timeout when a cold
-pool still has capacity to grow, across HikariCP, DBCP2, and Commons Pool 2?
+**Question:** Can OJP keep trying to acquire a connection when a pool may
+still grow, without waiting indefinitely?
 
-**Quick Answer:** Use bounded, capacity-aware acquisition grace after admission,
-without changing shared pool timeouts or increasing pool maxima. Hikari's 250 ms
-floor can interrupt background growth; DBCP/XA synchronous creation can already
-outlast their borrow wait timeout. Statistics are hints, not growth reservations.
+**Quick Answer:** Use one end-to-end timeout for admission and acquisition.
+Time spent waiting for admission reduces the remaining pool-acquisition time.
+Retry capacity-related failures only while the pool may grow, and pace retries
+to avoid a busy loop. Keep pool limits and shared timeouts unchanged.
 
 **Document:** [CAPACITY_AWARE_CONNECTION_ACQUISITION_ANALYSIS.md](./CAPACITY_AWARE_CONNECTION_ACQUISITION_ANALYSIS.md)
-- Provider-specific feasibility, alternatives, deadline and lifecycle constraints
-- Existing SPI limitations and a compatible optional acquisition capability
-- Proposed implementation phases and acceptance scenarios; analysis only
+- Provider differences, retry/deadline rules, SPI impact, and focused checks
+- Analysis only; no runtime or SPI changes
 
 ---
 

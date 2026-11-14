@@ -128,7 +128,7 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L6: %s', (jdbcUrl, u
         execFileSync('docker', ['start', boundNode.container], { stdio: 'ignore' });
         await waitForPortOpen(boundNode.port, 60_000);
       }
-      await boundClient.close();
+      await boundClient.close().catch(() => undefined);
       resetEndpointHealthForTests();
     }
   }, 90_000);

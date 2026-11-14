@@ -5,6 +5,7 @@ import {
   toParameterProto,
   encodeBigDecimalWire as realEncodeBigDecimalWire,
 } from '../src/client/valueMapper';
+import { ParameterType } from '../src/proto/types';
 
 describe('valueMapper', () => {
   it('should convert null to PT_NULL (with the java.sql.Types.NULL code)', () => {
@@ -107,6 +108,12 @@ describe('valueMapper', () => {
   });
 
   describe('OjpTypedParam (explicit type hints, used by dialect shims such as the SQL Server adapter)', () => {
+    it('should accept enum-style parameter type constants', () => {
+      const proto = toParameterProto(1, new OjpTypedParam('nvarchar text', ParameterType.PT_N_STRING));
+      expect(proto.type).toBe('PT_N_STRING');
+      expect(ParameterType.PT_N_STRING).toBe('PT_N_STRING');
+    });
+
     it('should fall back to PT_NULL regardless of the hinted type when the value is null', () => {
       const proto = toParameterProto(1, new OjpTypedParam(null, 'PT_BIG_DECIMAL'));
       expect(proto.type).toBe('PT_NULL');

@@ -1,5 +1,5 @@
 import { Readable } from 'stream';
-import { OjpClient } from '../src';
+import { OjpClient, OjpConnectionError } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_L5_TESTS === 'true';
@@ -104,8 +104,13 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
 
   it('round-trips a multi-chunk Unicode CLOB as text', async () => {
     const content = 'SQL Server CLOB: äöü ñ 中文 🚀 — '.repeat(5_000);
-    const ref = await client.createLob(content, 'CLOB');
+    const ref = await client.createLob(Readable.from([content]), 'CLOB');
+    const chunks: Buffer[] = [];
+    for await (const chunk of client.readLobStream(ref)) {
+      chunks.push(Buffer.from(chunk));
+    }
 
+    expect(Buffer.concat(chunks).toString('utf8')).toBe(content);
     expect(await client.executeUpdate(`INSERT INTO ${table} (id, body) VALUES (?, ?)`, [4, ref])).toBe(1);
     const result = await client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [4]);
 
@@ -157,5 +162,13 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     expect((await client.executeQuery(`SELECT payload FROM ${table} WHERE id = ?`, [9])).rows[0].payload)
       .toEqual(content);
     expect((await client.executeQuery('SELECT 1 AS value')).rows).toEqual([{ value: 1 }]);
+  }, 30_000);
+
+  it('rejects reading a LOB reference after its client session has closed', async () => {
+    const scoped = await newClient();
+    const ref = await scoped.createLob(Buffer.from('session-bound LOB'), 'BLOB');
+    await scoped.close();
+
+    expect(() => scoped.readLobStream(ref)).toThrow(OjpConnectionError);
   }, 30_000);
 });

@@ -165,6 +165,9 @@ public class ReadWriteDataSourceManager {
         int maxPoolSize = getIntProperty(props, replicaPrefix + "pool.maxPoolSize", 10);
         int minIdle = getIntProperty(props, replicaPrefix + "pool.minIdle", 2);
         long connectionTimeout = getLongProperty(props, replicaPrefix + "pool.connectionTimeout", 30000);
+        long connectionCreationGracePeriod = getLongProperty(props,
+                replicaPrefix + "pool.connectionCreationGracePeriod",
+                PoolConfig.DEFAULT_CONNECTION_CREATION_GRACE_PERIOD_MS);
         long idleTimeout = getLongProperty(props, replicaPrefix + "pool.idleTimeout", 600000);
         long maxLifetime = getLongProperty(props, replicaPrefix + "pool.maxLifetime", 1800000);
 
@@ -189,6 +192,7 @@ public class ReadWriteDataSourceManager {
                     .maxPoolSize(maxPoolSize)
                     .minIdle(minIdle)
                     .connectionTimeoutMs(connectionTimeout)
+                    .connectionCreationGracePeriodMs(connectionCreationGracePeriod)
                     .idleTimeoutMs(idleTimeout)
                     .maxLifetimeMs(maxLifetime)
                     .defaultTransactionIsolation(java.sql.Connection.TRANSACTION_READ_COMMITTED)

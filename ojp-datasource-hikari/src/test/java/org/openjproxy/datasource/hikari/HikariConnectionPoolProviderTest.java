@@ -78,6 +78,7 @@ class HikariConnectionPoolProviderTest {
 
         assertNotNull(createdDataSource);
         assertInstanceOf(HikariDataSource.class, createdDataSource);
+        assertInstanceOf(CreationGraceHikariDataSource.class, createdDataSource);
 
         // Verify we can get a connection
         try (Connection conn = createdDataSource.getConnection()) {

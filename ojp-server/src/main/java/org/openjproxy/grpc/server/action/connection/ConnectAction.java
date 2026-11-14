@@ -231,6 +231,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                                 .maxPoolSize(maxPoolSize)
                                 .minIdle(minIdle)
                                 .connectionTimeoutMs(CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS)
+                                .connectionCreationGracePeriodMs(dsConfig.getConnectionCreationGracePeriod())
                                 .idleTimeoutMs(dsConfig.getIdleTimeout())
                                 .maxLifetimeMs(dsConfig.getMaxLifetime())
                                 .leakDetectionThresholdMs(dsConfig.getLeakDetectionThreshold())

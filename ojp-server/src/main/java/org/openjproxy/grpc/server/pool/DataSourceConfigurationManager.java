@@ -29,6 +29,7 @@ public class DataSourceConfigurationManager {
         private final long idleTimeout;
         private final long maxLifetime;
         private final long connectionTimeout;
+        private final long connectionCreationGracePeriod;
         private final boolean poolEnabled;
         private final Integer defaultTransactionIsolation;
         private final long leakDetectionThreshold;
@@ -40,6 +41,12 @@ public class DataSourceConfigurationManager {
             this.idleTimeout = getLongProperty(properties, CommonConstants.IDLE_TIMEOUT_PROPERTY, CommonConstants.DEFAULT_IDLE_TIMEOUT);
             this.maxLifetime = getLongProperty(properties, CommonConstants.MAX_LIFETIME_PROPERTY, CommonConstants.DEFAULT_MAX_LIFETIME);
             this.connectionTimeout = getLongProperty(properties, CommonConstants.CONNECTION_TIMEOUT_PROPERTY, CommonConstants.DEFAULT_CONNECTION_TIMEOUT);
+            this.connectionCreationGracePeriod = getLongProperty(properties,
+                    CommonConstants.CONNECTION_CREATION_GRACE_PERIOD_PROPERTY,
+                    CommonConstants.DEFAULT_CONNECTION_CREATION_GRACE_PERIOD);
+            if (connectionCreationGracePeriod < 0) {
+                throw new IllegalArgumentException("connectionCreationGracePeriod cannot be negative");
+            }
             this.poolEnabled = getBooleanProperty(properties, CommonConstants.POOL_ENABLED_PROPERTY, true);
             this.defaultTransactionIsolation = getTransactionIsolationProperty(properties, CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY);
             this.leakDetectionThreshold = getLongProperty(properties, CommonConstants.LEAK_DETECTION_THRESHOLD_PROPERTY, CommonConstants.DEFAULT_LEAK_DETECTION_THRESHOLD);
@@ -52,6 +59,7 @@ public class DataSourceConfigurationManager {
         public long getIdleTimeout() { return idleTimeout; }
         public long getMaxLifetime() { return maxLifetime; }
         public long getConnectionTimeout() { return connectionTimeout; }
+        public long getConnectionCreationGracePeriod() { return connectionCreationGracePeriod; }
         public boolean isPoolEnabled() { return poolEnabled; }
         public Integer getDefaultTransactionIsolation() { return defaultTransactionIsolation; }
         public long getLeakDetectionThreshold() { return leakDetectionThreshold; }
@@ -207,6 +215,7 @@ public class DataSourceConfigurationManager {
                     CommonConstants.IDLE_TIMEOUT_PROPERTY,
                     CommonConstants.MAX_LIFETIME_PROPERTY,
                     CommonConstants.CONNECTION_TIMEOUT_PROPERTY,
+                    CommonConstants.CONNECTION_CREATION_GRACE_PERIOD_PROPERTY,
                     CommonConstants.POOL_ENABLED_PROPERTY,
                     CommonConstants.DEFAULT_TRANSACTION_ISOLATION_PROPERTY,
                     CommonConstants.LEAK_DETECTION_THRESHOLD_PROPERTY

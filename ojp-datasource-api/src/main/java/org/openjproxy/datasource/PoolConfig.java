@@ -40,6 +40,7 @@ public final class PoolConfig {
 
     // Timeout settings (in milliseconds)
     private final long connectionTimeoutMs;
+    private final long connectionCreationGracePeriodMs;
     private final long idleTimeoutMs;
     private final long maxLifetimeMs;
     private final long leakDetectionThresholdMs;
@@ -59,6 +60,7 @@ public final class PoolConfig {
     public static final int DEFAULT_MAX_POOL_SIZE = 10;
     public static final int DEFAULT_MIN_IDLE = 2;
     public static final long DEFAULT_CONNECTION_TIMEOUT_MS = 30000L;
+    public static final long DEFAULT_CONNECTION_CREATION_GRACE_PERIOD_MS = 5000L;
     public static final long DEFAULT_IDLE_TIMEOUT_MS = 600000L;
     public static final long DEFAULT_MAX_LIFETIME_MS = 1800000L;
     public static final boolean DEFAULT_AUTO_COMMIT = true;
@@ -76,6 +78,7 @@ public final class PoolConfig {
         this.maxPoolSize = builder.maxPoolSize;
         this.minIdle = builder.minIdle;
         this.connectionTimeoutMs = builder.connectionTimeoutMs;
+        this.connectionCreationGracePeriodMs = builder.connectionCreationGracePeriodMs;
         this.idleTimeoutMs = builder.idleTimeoutMs;
         this.maxLifetimeMs = builder.maxLifetimeMs;
         this.leakDetectionThresholdMs = builder.leakDetectionThresholdMs;
@@ -184,6 +187,15 @@ public final class PoolConfig {
     }
 
     /**
+     * Returns the extra HikariCP borrow wait after a timeout below maximum capacity.
+     *
+     * @return the grace period in milliseconds; zero disables it
+     */
+    public long getConnectionCreationGracePeriodMs() {
+        return connectionCreationGracePeriodMs;
+    }
+
+    /**
      * Gets the idle timeout in milliseconds.
      * Connections idle longer than this will be eligible for removal.
      *
@@ -287,6 +299,7 @@ public final class PoolConfig {
                 ", maxPoolSize=" + maxPoolSize +
                 ", minIdle=" + minIdle +
                 ", connectionTimeoutMs=" + connectionTimeoutMs +
+                ", connectionCreationGracePeriodMs=" + connectionCreationGracePeriodMs +
                 ", idleTimeoutMs=" + idleTimeoutMs +
                 ", maxLifetimeMs=" + maxLifetimeMs +
                 ", leakDetectionThresholdMs=" + leakDetectionThresholdMs +
@@ -310,6 +323,7 @@ public final class PoolConfig {
         private int maxPoolSize = DEFAULT_MAX_POOL_SIZE;
         private int minIdle = DEFAULT_MIN_IDLE;
         private long connectionTimeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS;
+        private long connectionCreationGracePeriodMs = DEFAULT_CONNECTION_CREATION_GRACE_PERIOD_MS;
         private long idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS;
         private long maxLifetimeMs = DEFAULT_MAX_LIFETIME_MS;
         private long leakDetectionThresholdMs = DEFAULT_LEAK_DETECTION_THRESHOLD_MS;
@@ -438,6 +452,21 @@ public final class PoolConfig {
                 throw new IllegalArgumentException("connectionTimeoutMs cannot be negative");
             }
             this.connectionTimeoutMs = connectionTimeoutMs;
+            return this;
+        }
+
+        /**
+         * Sets the extra HikariCP borrow wait after a timeout below maximum capacity.
+         *
+         * @param connectionCreationGracePeriodMs grace period in milliseconds; zero disables it
+         * @return this builder
+         * @throws IllegalArgumentException if the grace period is negative
+         */
+        public Builder connectionCreationGracePeriodMs(long connectionCreationGracePeriodMs) {
+            if (connectionCreationGracePeriodMs < 0) {
+                throw new IllegalArgumentException("connectionCreationGracePeriodMs cannot be negative");
+            }
+            this.connectionCreationGracePeriodMs = connectionCreationGracePeriodMs;
             return this;
         }
 

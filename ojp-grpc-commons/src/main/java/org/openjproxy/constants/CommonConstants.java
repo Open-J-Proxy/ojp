@@ -37,6 +37,7 @@ public class CommonConstants {
     public static final String IDLE_TIMEOUT_PROPERTY = "ojp.connection.pool.idleTimeout";
     public static final String MAX_LIFETIME_PROPERTY = "ojp.connection.pool.maxLifetime";
     public static final String CONNECTION_TIMEOUT_PROPERTY = "ojp.connection.pool.connectionTimeout";
+    public static final String CONNECTION_CREATION_GRACE_PERIOD_PROPERTY = "ojp.connection.pool.connectionCreationGracePeriod";
     public static final String POOL_ENABLED_PROPERTY = "ojp.connection.pool.enabled";
     public static final String LEAK_DETECTION_THRESHOLD_PROPERTY = "ojp.connection.pool.leakDetectionThreshold";
 
@@ -85,6 +86,7 @@ public class CommonConstants {
     public static final long DEFAULT_IDLE_TIMEOUT = 600000;  // 10 minutes
     public static final long DEFAULT_MAX_LIFETIME = 1800000; // 30 minutes
     public static final long DEFAULT_CONNECTION_TIMEOUT = 10000; // Reduced from 30s to 10s for faster failure
+    public static final long DEFAULT_CONNECTION_CREATION_GRACE_PERIOD = 5000;
     public static final long FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS = 1L; // HikariCP clamps this to 250ms minimum; semaphore gatekeeper enforces the wait budget
     // OJP intentionally holds one physical connection per client session for the session's whole
     // lifetime (that is the point of the proxy), which can legitimately exceed HikariCP's typical

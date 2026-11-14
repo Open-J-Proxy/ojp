@@ -153,7 +153,7 @@ public class HikariConnectionPoolProvider implements ConnectionPoolProvider {
                 hikariConfig.getMinimumIdle(), hikariConfig.getConnectionTimeout());
 
         try {
-            return new HikariDataSource(hikariConfig);
+            return new CreationGraceHikariDataSource(hikariConfig, config.getConnectionCreationGracePeriodMs());
         } catch (Exception e) {
             log.error("Failed to create HikariCP DataSource: {}", e.getMessage(), e);
             throw new SQLException("Failed to create HikariCP DataSource: " + e.getMessage(), e);

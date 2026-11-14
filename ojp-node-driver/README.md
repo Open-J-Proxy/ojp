@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L6** for SQL Server |
+| Cumulative level | **L1** for H2; **L7** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -32,7 +32,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L4** | SQL Server (certified) | `startTransaction`/`commit`/`rollback`, autocommit state, transaction-isolation get/set, named/unnamed savepoints, rollback-to-savepoint, release, transaction completion invalidation, batch rollback, and error recovery. See `test/integration.sqlServerL4.test.ts`. |
 | **L5** | SQL Server (documented JDBC limitation) | Multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references. SQL Server's JDBC driver rejects ranged BLOB/CLOB reads; the L5 suite asserts that error, while `test/integration.lob.stream.h2.test.ts` verifies exact stream contents and sizes on H2. |
 | **L6** | SQL Server (certified) | Local temporary-table state is preserved across calls and transactions; the client keeps each session bound to its OJP endpoint and surfaces bound-node loss without silently rerouting. See `test/integration.sqlServerL6.test.ts`. |
-| **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
+| **L7** | SQL Server (certified) | Least-connections selection with round-robin tie-breaking, active endpoint health probes, cluster-health pool propagation, cached `connHash` reuse, and one safe retry after `NOT_FOUND` only for stateless sessions. See `test/integration.sqlServerL7.test.ts` and `test/multinodeClient.test.ts`. |
 | **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
@@ -80,6 +80,22 @@ const result = await withOjpClient(ojpUrl, async (db) => {
   return db.executeQuery('SELECT name FROM customers WHERE id = ?', [customerId]);
 }, { user, password });
 ```
+
+### Multinode routing
+
+When the OJP URL contains multiple endpoints, the client chooses the healthy endpoint
+with the fewest active logical sessions; round-robin breaks ties. It probes endpoint
+reachability before subsequent connections (5 seconds by default), propagates the
+cluster-health view when creating or refreshing server pools, and caches the pool
+`connHash` internally. A lost pool is reconnected and retried once only when the session
+has not become sticky; transactions and sessions with server affinity are never rerouted.
+These behaviors are automatic and do not require callers to pass `SessionInfo`,
+`sessionUUID`, or `connHash`.
+
+The policy can be tuned per client with `loadBalancingStrategy` (`'least-connections'`
+or `'round-robin'`) and `healthCheckIntervalMs`. The Node API intentionally remains a direct
+gRPC-contract client rather than emulating JDBC; use `withOjpClient()` and
+`withTransaction()` to avoid connect/close and transaction-cleanup boilerplate.
 - The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
   versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
   and `ojp-server` (see that package's README for its versioning policy and how it's kept

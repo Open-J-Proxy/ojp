@@ -252,6 +252,22 @@ public class SessionManagerImpl implements SessionManager {
     }
 
     @Override
+    public void releaseLobs(SessionInfo sessionInfo, Collection<String> lobUuids) {
+        if (sessionInfo == null || lobUuids == null || lobUuids.isEmpty()) {
+            return;
+        }
+        Session session = this.sessionMap.get(sessionInfo.getSessionUUID());
+        if (session == null) {
+            return;
+        }
+        for (String uuid : lobUuids) {
+            if (session.releaseLob(uuid)) {
+                log.debug("Released LOB {} from session {}", uuid, sessionInfo.getSessionUUID());
+            }
+        }
+    }
+
+    @Override
     public void terminateSession(SessionInfo sessionInfo) throws SQLException {
         log.debug("Terminating session -> {}", sessionInfo.getSessionUUID());
         Session targetSession = this.sessionMap.remove(sessionInfo.getSessionUUID());

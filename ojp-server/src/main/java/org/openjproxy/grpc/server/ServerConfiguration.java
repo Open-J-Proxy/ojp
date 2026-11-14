@@ -80,6 +80,9 @@ public class ServerConfiguration {
     private static final String SESSION_TIMEOUT_MINUTES_KEY = "ojp.server.sessionCleanup.timeoutMinutes";
     private static final String SESSION_CLEANUP_INTERVAL_MINUTES_KEY = "ojp.server.sessionCleanup.intervalMinutes";
 
+    // LOB retention configuration keys
+    private static final String LOB_KEEP_UNTIL_SESSION_END_KEY = "ojp.server.lob.keepUntilSessionEnd";
+
     // Tracing configuration keys
     private static final String TRACING_ENABLED_KEY = "ojp.tracing.enabled";
     private static final String TRACING_ENDPOINT_KEY = "ojp.tracing.endpoint";
@@ -165,6 +168,11 @@ public class ServerConfiguration {
     public static final boolean DEFAULT_SESSION_CLEANUP_ENABLED = true; // Enable session cleanup by default
     public static final long DEFAULT_SESSION_TIMEOUT_MINUTES = 30; // 30 minutes session timeout
     public static final long DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES = 5; // Run cleanup every 5 minutes
+
+    // LOB retention default values
+    // true keeps LOBs created by the client until the session ends (historical behaviour);
+    // false releases them right after the statement that consumed them is executed.
+    public static final boolean DEFAULT_LOB_KEEP_UNTIL_SESSION_END = true;
 
     // Tracing default values
     public static final boolean DEFAULT_TRACING_ENABLED = false; // Disabled by default, opt-in
@@ -258,6 +266,9 @@ public class ServerConfiguration {
     private final boolean sessionCleanupEnabled;
     private final long sessionTimeoutMinutes;
     private final long sessionCleanupIntervalMinutes;
+
+    // LOB retention configuration
+    private final boolean lobKeepUntilSessionEnd;
 
     // Tracing configuration
     private final boolean tracingEnabled;
@@ -357,6 +368,9 @@ public class ServerConfiguration {
         this.sessionCleanupEnabled = getBooleanProperty(SESSION_CLEANUP_ENABLED_KEY, DEFAULT_SESSION_CLEANUP_ENABLED);
         this.sessionTimeoutMinutes = getLongProperty(SESSION_TIMEOUT_MINUTES_KEY, DEFAULT_SESSION_TIMEOUT_MINUTES);
         this.sessionCleanupIntervalMinutes = getLongProperty(SESSION_CLEANUP_INTERVAL_MINUTES_KEY, DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES);
+
+        // LOB retention configuration
+        this.lobKeepUntilSessionEnd = getBooleanProperty(LOB_KEEP_UNTIL_SESSION_END_KEY, DEFAULT_LOB_KEEP_UNTIL_SESSION_END);
 
         // TLS configuration
         this.tlsEnabled = getBooleanProperty(TLS_ENABLED_KEY, DEFAULT_TLS_ENABLED);
@@ -608,6 +622,8 @@ public class ServerConfiguration {
         logger.info("  Session Cleanup Enabled: {}", sessionCleanupEnabled);
         logger.info("  Session Timeout: {} minutes", sessionTimeoutMinutes);
         logger.info("  Cleanup Interval: {} minutes", sessionCleanupIntervalMinutes);
+        logger.info("LOB Retention Configuration:");
+        logger.info("  Keep LOBs Until Session End: {}", lobKeepUntilSessionEnd);
         logger.info("TLS Configuration:");
         logger.info("  TLS Enabled: {}", tlsEnabled);
         if (tlsEnabled) {
@@ -885,6 +901,10 @@ public class ServerConfiguration {
 
     public long getSessionCleanupIntervalMinutes() {
         return sessionCleanupIntervalMinutes;
+    }
+
+    public boolean isLobKeepUntilSessionEnd() {
+        return lobKeepUntilSessionEnd;
     }
 
     public boolean isTlsEnabled() {

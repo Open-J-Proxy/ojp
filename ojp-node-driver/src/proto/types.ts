@@ -49,44 +49,38 @@ export interface SessionInfo {
 }
 
 /** ParameterTypeProto enum from the .proto, used to type each ParameterProto. */
-export const ParameterType = {
-  PT_NULL: 'PT_NULL',
-  PT_BOOLEAN: 'PT_BOOLEAN',
-  PT_BYTE: 'PT_BYTE',
-  PT_SHORT: 'PT_SHORT',
-  PT_INT: 'PT_INT',
-  PT_LONG: 'PT_LONG',
-  PT_FLOAT: 'PT_FLOAT',
-  PT_DOUBLE: 'PT_DOUBLE',
-  PT_BIG_DECIMAL: 'PT_BIG_DECIMAL',
-  PT_STRING: 'PT_STRING',
-  PT_BYTES: 'PT_BYTES',
-  PT_DATE: 'PT_DATE',
-  PT_TIME: 'PT_TIME',
-  PT_TIMESTAMP: 'PT_TIMESTAMP',
-  PT_ASCII_STREAM: 'PT_ASCII_STREAM',
-  PT_UNICODE_STREAM: 'PT_UNICODE_STREAM',
-  PT_BINARY_STREAM: 'PT_BINARY_STREAM',
-  PT_OBJECT: 'PT_OBJECT',
-  PT_CHARACTER_READER: 'PT_CHARACTER_READER',
-  PT_REF: 'PT_REF',
-  PT_BLOB: 'PT_BLOB',
-  PT_CLOB: 'PT_CLOB',
-  PT_ARRAY: 'PT_ARRAY',
-  PT_URL: 'PT_URL',
-  PT_ROW_ID: 'PT_ROW_ID',
-  PT_N_STRING: 'PT_N_STRING',
-  PT_N_CHARACTER_STREAM: 'PT_N_CHARACTER_STREAM',
-  PT_N_CLOB: 'PT_N_CLOB',
-  PT_SQL_XML: 'PT_SQL_XML',
-} as const;
-export type ParameterType =
-  | 'PT_NULL' | 'PT_BOOLEAN' | 'PT_BYTE' | 'PT_SHORT' | 'PT_INT' | 'PT_LONG'
-  | 'PT_FLOAT' | 'PT_DOUBLE' | 'PT_BIG_DECIMAL' | 'PT_STRING' | 'PT_BYTES'
-  | 'PT_DATE' | 'PT_TIME' | 'PT_TIMESTAMP' | 'PT_ASCII_STREAM' | 'PT_UNICODE_STREAM'
-  | 'PT_BINARY_STREAM' | 'PT_OBJECT' | 'PT_CHARACTER_READER' | 'PT_REF' | 'PT_BLOB'
-  | 'PT_CLOB' | 'PT_ARRAY' | 'PT_URL' | 'PT_ROW_ID' | 'PT_N_STRING'
-  | 'PT_N_CHARACTER_STREAM' | 'PT_N_CLOB' | 'PT_SQL_XML';
+export enum ParameterType {
+  PT_NULL = 'PT_NULL',
+  PT_BOOLEAN = 'PT_BOOLEAN',
+  PT_BYTE = 'PT_BYTE',
+  PT_SHORT = 'PT_SHORT',
+  PT_INT = 'PT_INT',
+  PT_LONG = 'PT_LONG',
+  PT_FLOAT = 'PT_FLOAT',
+  PT_DOUBLE = 'PT_DOUBLE',
+  PT_BIG_DECIMAL = 'PT_BIG_DECIMAL',
+  PT_STRING = 'PT_STRING',
+  PT_BYTES = 'PT_BYTES',
+  PT_DATE = 'PT_DATE',
+  PT_TIME = 'PT_TIME',
+  PT_TIMESTAMP = 'PT_TIMESTAMP',
+  PT_ASCII_STREAM = 'PT_ASCII_STREAM',
+  PT_UNICODE_STREAM = 'PT_UNICODE_STREAM',
+  PT_BINARY_STREAM = 'PT_BINARY_STREAM',
+  PT_OBJECT = 'PT_OBJECT',
+  PT_CHARACTER_READER = 'PT_CHARACTER_READER',
+  PT_REF = 'PT_REF',
+  PT_BLOB = 'PT_BLOB',
+  PT_CLOB = 'PT_CLOB',
+  PT_ARRAY = 'PT_ARRAY',
+  PT_URL = 'PT_URL',
+  PT_ROW_ID = 'PT_ROW_ID',
+  PT_N_STRING = 'PT_N_STRING',
+  PT_N_CHARACTER_STREAM = 'PT_N_CHARACTER_STREAM',
+  PT_N_CLOB = 'PT_N_CLOB',
+  PT_SQL_XML = 'PT_SQL_XML',
+}
+export type ParameterTypeValue = `${ParameterType}`;
 
 export type TemporalType =
   | 'TEMPORAL_TYPE_UNSPECIFIED' | 'TEMPORAL_TYPE_TIMESTAMP' | 'TEMPORAL_TYPE_CALENDAR'
@@ -138,7 +132,7 @@ export interface ParameterValue {
 
 export interface ParameterProto {
   index: number;
-  type: ParameterType;
+  type: ParameterTypeValue;
   values: ParameterValue[];
 }
 

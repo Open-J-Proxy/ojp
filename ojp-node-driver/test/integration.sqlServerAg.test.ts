@@ -2,7 +2,7 @@
  * Real OJP server and SQL Server integration, enabled by
  * OJP_ENABLE_SQLSERVER_AG_TESTS=true. Every CSV connection row runs the full suite.
  */
-import { OjpClient, OjpConnectionError, OjpSqlError, OjpTypedParam, withOjpClient } from '../src';
+import { OjpClient, OjpConnectionError, OjpSqlError, OjpTypedParam, ParameterType, withOjpClient } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_AG_TESTS === 'true';
@@ -225,8 +225,8 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     );
     try {
       statement.setParameter(1, id);
-      statement.setParameter(2, new OjpTypedParam('typed NVARCHAR', 'PT_N_STRING'));
-      statement.setParameter(3, new OjpTypedParam('1234.56', 'PT_BIG_DECIMAL'));
+      statement.setParameter(2, new OjpTypedParam('typed NVARCHAR', ParameterType.PT_N_STRING));
+      statement.setParameter(3, new OjpTypedParam('1234.56', ParameterType.PT_BIG_DECIMAL));
       statement.setNull(4, -7);
       statement.setParameter(5, new Date('2026-03-10T12:00:00.000Z'));
 

@@ -1,4 +1,4 @@
-import { ParameterProto, ParameterType, ParameterValue, TemporalType } from '../proto/types';
+import { ParameterProto, ParameterType, ParameterTypeValue, ParameterValue, TemporalType } from '../proto/types';
 
 /**
  * Conversion of JS values to ParameterValue/ParameterProto (parameter binding in
@@ -39,7 +39,7 @@ const JAVA_SQL_TYPES_NULL = 0;
  * the SQL type the target column/parameter actually has — most commonly:
  *  - DECIMAL/NUMERIC/MONEY columns: a plain JS `number` bound as PT_DOUBLE loses precision
  *    (IEEE 754 double, not the exact fixed-point value the database stores). Wrapping the
- *    value as `new OjpTypedParam(value, 'PT_BIG_DECIMAL')` sends it using the same exact
+ *    value as `new OjpTypedParam(value, ParameterType.PT_BIG_DECIMAL)` sends it using the same exact
  *    wire format (`BigDecimalWire`) the reference JDBC driver uses for `setBigDecimal`.
  *    Passing a decimal STRING (e.g. "19.99") instead of a computed `number` avoids float
  *    rounding entirely and is the recommended way to get full precision.
@@ -48,7 +48,7 @@ const JAVA_SQL_TYPES_NULL = 0;
  *  - DATE-only / TIME-only columns: a JS `Date` is inferred as PT_TIMESTAMP by default;
  *    binding a date-only or time-only column may require PT_DATE/PT_TIME instead.
  *
- * `temporalType` is only meaningful for `type: 'PT_TIMESTAMP'` and lets callers select a
+ * `temporalType` is only meaningful for `type: ParameterType.PT_TIMESTAMP` and lets callers select a
  * variant such as `'TEMPORAL_TYPE_OFFSET_DATE_TIME'` (e.g. SQL Server's DATETIMEOFFSET);
  * it defaults to `'TEMPORAL_TYPE_TIMESTAMP'` when omitted.
  *
@@ -153,28 +153,28 @@ function toTypedParameterProto(
   }
 
   switch (type) {
-    case 'PT_BOOLEAN':
+    case ParameterType.PT_BOOLEAN:
       return { index, type, values: [{ boolValue: Boolean(rawValue) }] };
-    case 'PT_BYTE':
-    case 'PT_SHORT':
-    case 'PT_INT':
+    case ParameterType.PT_BYTE:
+    case ParameterType.PT_SHORT:
+    case ParameterType.PT_INT:
       return { index, type, values: [{ intValue: Number(rawValue) }] };
-    case 'PT_LONG':
+    case ParameterType.PT_LONG:
       return { index, type, values: [{ longValue: typeof rawValue === 'bigint' ? rawValue.toString() : String(rawValue) }] };
-    case 'PT_FLOAT':
+    case ParameterType.PT_FLOAT:
       return { index, type, values: [{ floatValue: Number(rawValue) }] };
-    case 'PT_DOUBLE':
+    case ParameterType.PT_DOUBLE:
       return { index, type, values: [{ doubleValue: Number(rawValue) }] };
-    case 'PT_BIG_DECIMAL':
+    case ParameterType.PT_BIG_DECIMAL:
       return { index, type, values: [{ bytesValue: encodeBigDecimalWire(rawValue) }] };
-    case 'PT_STRING':
-    case 'PT_N_STRING':
+    case ParameterType.PT_STRING:
+    case ParameterType.PT_N_STRING:
       return { index, type, values: [{ stringValue: String(rawValue) }] };
-    case 'PT_BYTES': {
+    case ParameterType.PT_BYTES: {
       const bytes = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(String(rawValue));
       return { index, type, values: [{ bytesValue: bytes }] };
     }
-    case 'PT_DATE': {
+    case ParameterType.PT_DATE: {
       const asDate = rawValue instanceof Date ? rawValue : new Date(rawValue as string | number);
       return {
         index,
@@ -182,7 +182,7 @@ function toTypedParameterProto(
         values: [{ dateValue: { year: asDate.getUTCFullYear(), month: asDate.getUTCMonth() + 1, day: asDate.getUTCDate() } }],
       };
     }
-    case 'PT_TIME': {
+    case ParameterType.PT_TIME: {
       const asDate = rawValue instanceof Date ? rawValue : new Date(`1970-01-01T${rawValue}Z`);
       return {
         index,
@@ -199,7 +199,7 @@ function toTypedParameterProto(
         ],
       };
     }
-    case 'PT_TIMESTAMP': {
+    case ParameterType.PT_TIMESTAMP: {
       const asDate = rawValue instanceof Date ? rawValue : new Date(rawValue as string | number);
       return {
         index,
@@ -218,35 +218,35 @@ function toTypedParameterProto(
         ],
       };
     }
-    case 'PT_ASCII_STREAM':
-    case 'PT_UNICODE_STREAM':
-    case 'PT_CHARACTER_READER':
-    case 'PT_N_CHARACTER_STREAM':
-    case 'PT_SQL_XML':
+    case ParameterType.PT_ASCII_STREAM:
+    case ParameterType.PT_UNICODE_STREAM:
+    case ParameterType.PT_CHARACTER_READER:
+    case ParameterType.PT_N_CHARACTER_STREAM:
+    case ParameterType.PT_SQL_XML:
       if (typeof rawValue !== 'string') {
         throw new TypeError(`${type} requires a string value in the Node client.`);
       }
       return { index, type, values: [{ stringValue: rawValue }] };
-    case 'PT_BINARY_STREAM':
+    case ParameterType.PT_BINARY_STREAM:
       if (!Buffer.isBuffer(rawValue)) {
         throw new TypeError('PT_BINARY_STREAM requires a Buffer value in the Node client.');
       }
       return { index, type, values: [{ bytesValue: rawValue }] };
-    case 'PT_URL':
+    case ParameterType.PT_URL:
       return {
         index,
         type,
         values: [{ urlValue: rawValue instanceof URL ? rawValue.toString() : String(rawValue) }],
       };
-    case 'PT_ROW_ID': {
+    case ParameterType.PT_ROW_ID: {
       const bytes = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(String(rawValue));
       return { index, type, values: [{ rowidValue: bytes.toString('base64') }] };
     }
-    case 'PT_BLOB':
-    case 'PT_CLOB':
-    case 'PT_N_CLOB':
+    case ParameterType.PT_BLOB:
+    case ParameterType.PT_CLOB:
+    case ParameterType.PT_N_CLOB:
       if (rawValue instanceof OjpLobRef) {
-        const expectedKind = type === 'PT_BLOB' ? 'BLOB' : 'CLOB';
+        const expectedKind = type === ParameterType.PT_BLOB ? 'BLOB' : 'CLOB';
         if (rawValue.lobKind !== expectedKind) {
           throw new TypeError(`${type} requires a ${expectedKind} reference.`);
         }
@@ -256,16 +256,16 @@ function toTypedParameterProto(
         throw new TypeError(`${type} requires an OjpLobRef or server-side LOB UUID.`);
       }
       return { index, type, values: [{ stringValue: rawValue }] };
-    case 'PT_OBJECT': {
+    case ParameterType.PT_OBJECT: {
       if (typeof rawValue === 'object' && rawValue !== null) {
         throw new TypeError('PT_OBJECT supports scalar Node values only; structured objects need transport serialization.');
       }
       const scalar = toParameterProto(index, rawValue);
       return { ...scalar, type };
     }
-    case 'PT_ARRAY':
+    case ParameterType.PT_ARRAY:
       throw new TypeError('PT_ARRAY requires an OJP server-side array reference and is not supported by this client API.');
-    case 'PT_REF':
+    case ParameterType.PT_REF:
       throw new TypeError('PT_REF cannot be represented by the Node client.');
     default:
       throw new TypeError(`Unsupported explicit parameter type: ${type}`);
@@ -431,6 +431,6 @@ export function fromParameterValue(value: ParameterValue | undefined): unknown {
   return null;
 }
 
-export function inferParameterType(value: unknown): ParameterType {
+export function inferParameterType(value: unknown): ParameterTypeValue {
   return toParameterProto(0, value).type;
 }

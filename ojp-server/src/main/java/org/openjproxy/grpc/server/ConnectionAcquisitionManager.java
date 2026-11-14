@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 import java.util.Collections;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.WeakHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -222,7 +223,8 @@ public class ConnectionAcquisitionManager {
                     throw lastFailure;
                 }
                 try {
-                    TimeUnit.NANOSECONDS.sleep(Math.min(remainingNanos, TimeUnit.MILLISECONDS.toNanos(10)));
+                    long retryDelayNanos = ThreadLocalRandom.current().nextLong(remainingNanos) + 1;
+                    TimeUnit.NANOSECONDS.sleep(retryDelayNanos);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     lastFailure.addSuppressed(interrupted);

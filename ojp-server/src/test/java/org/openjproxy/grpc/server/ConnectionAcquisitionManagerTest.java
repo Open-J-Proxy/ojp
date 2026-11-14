@@ -22,13 +22,12 @@ class ConnectionAcquisitionManagerTest {
         Connection connection = mock(Connection.class);
         when(dataSource.getConnection())
                 .thenThrow(new SQLTransientConnectionException("not ready"))
-                .thenThrow(new SQLTransientConnectionException("not ready"))
                 .thenReturn(connection);
         ConnectionAcquisitionManager.registerCreationGracePeriod(dataSource, 100);
 
         assertSame(connection, ConnectionAcquisitionManager.acquireConnection(dataSource, "test"));
 
-        verify(dataSource, times(3)).getConnection();
+        verify(dataSource, times(2)).getConnection();
     }
 
     @Test

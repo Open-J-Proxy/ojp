@@ -4,7 +4,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import * as net from 'node:net';
-import { OjpClient } from '../src';
+import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
 import { resetPoolCacheForTests } from '../src/client/OjpClient';
 import { resetEndpointHealthForTests } from '../src/client/endpointHealth';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
@@ -29,8 +29,16 @@ const nodes = ports.map((port, index) => ({ port, container: containers[index] }
 describeIfEnabled.each(connections)('OjpClient - SQL Server L8: %s', (jdbcUrl, user, fixturePassword) => {
   const password = process.env.OJP_TEST_SQLSERVER_PASSWORD ?? fixturePassword;
   const clusterUrl = (): string => ojpUrl(nodes.map(({ port }) => `localhost:${port}`).join(','), jdbcUrl);
-  const newClient = async (): Promise<OjpClient> => {
-    const client = new OjpClient(clusterUrl(), { user, password, healthCheckIntervalMs: 0 });
+  const newClient = async (
+    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin' } = {},
+  ): Promise<OjpClient> => {
+    const client = new OjpClient(clusterUrl(), {
+      user,
+      password,
+      healthCheckIntervalMs: 0,
+      failoverRetryDelayMs: 0,
+      ...options,
+    });
     await client.connect();
     return client;
   };
@@ -77,6 +85,97 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L8: %s', (jdbcUrl, u
       }
     }
   }, 120_000);
+
+  it('retries a query stream before delivering its first result block', async () => {
+    const client = await newClient();
+    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
+    execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
+    stoppedContainers.add(bound.container);
+    await waitForPortClosed(bound.port);
+
+    try {
+      await expect(client.executeQuery('SELECT 9 AS recovered')).resolves.toMatchObject({
+        rows: [{ recovered: 9 }],
+      });
+      expect(client.boundEndpoint?.port).not.toBe(bound.port);
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  }, 120_000);
+
+  it('surfaces sticky-session loss without rerouting its operation', async () => {
+    const client = await newClient();
+    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
+    await client.executeUpdate('CREATE TABLE #ojp_l8_sticky (id INT PRIMARY KEY)');
+    execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
+    stoppedContainers.add(bound.container);
+    await waitForPortClosed(bound.port);
+
+    try {
+      await expect(client.executeUpdate('INSERT INTO #ojp_l8_sticky VALUES (1)'))
+        .rejects.toBeInstanceOf(OjpConnectionError);
+      expect(client.boundEndpoint?.port).toBe(bound.port);
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  }, 90_000);
+
+  it('does not retry or reroute an operation from an active transaction', async () => {
+    const client = await newClient();
+    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
+    await client.startTransaction();
+    execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
+    stoppedContainers.add(bound.container);
+    await waitForPortClosed(bound.port);
+
+    try {
+      await expect(client.executeUpdate('CREATE TABLE #ojp_l8_transaction (id INT)'))
+        .rejects.toBeInstanceOf(OjpConnectionError);
+      expect(client.boundEndpoint?.port).toBe(bound.port);
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  }, 90_000);
+
+  it('does not fail over for a SQL error and remains usable on the same endpoint', async () => {
+    const client = await newClient();
+    const bound = client.boundEndpoint?.port;
+    try {
+      await expect(client.executeUpdate('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
+      expect(client.boundEndpoint?.port).toBe(bound);
+      await expect(client.executeQuery('SELECT 1 AS usable')).resolves.toMatchObject({
+        rows: [{ usable: 1 }],
+      });
+      expect(client.boundEndpoint?.port).toBe(bound);
+    } finally {
+      await client.close();
+    }
+  }, 60_000);
+
+  it('avoids a failed node for new sessions and redistributes sessions after recovery', async () => {
+    const seed = await newClient();
+    const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
+    await seed.close();
+    execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
+    stoppedContainers.add(down.container);
+    await waitForPortClosed(down.port);
+
+    const duringOutage = await newClient();
+    expect(duringOutage.boundEndpoint?.port).not.toBe(down.port);
+    await duringOutage.close();
+
+    execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
+    stoppedContainers.delete(down.container);
+    await waitForPortOpen(down.port, 60_000);
+
+    const selected = new Set<number>();
+    for (let index = 0; index < nodes.length * 3; index++) {
+      const client = await newClient({ loadBalancingStrategy: 'round-robin' });
+      selected.add(client.boundEndpoint!.port);
+      await client.close();
+    }
+    expect(selected).toEqual(new Set(nodes.map(({ port }) => port)));
+  }, 150_000);
 });
 
 async function waitForPortClosed(port: number): Promise<void> {

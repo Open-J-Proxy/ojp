@@ -106,10 +106,18 @@ export function isConnectionLevelError(err: unknown): boolean {
     details?: string;
     metadata?: { get(key: string): unknown[] };
   } | undefined;
+  const rawMessage = `${grpcError?.message ?? ''} ${grpcError?.details ?? ''}`;
+  if (grpcError?.code === grpc.status.RESOURCE_EXHAUSTED
+      || /pool.{0,30}exhaust|exhaust.{0,30}pool/i.test(rawMessage)) {
+    return false;
+  }
   const raw = grpcError?.metadata?.get(SQL_ERROR_METADATA_KEY)[0];
   if (Buffer.isBuffer(raw)) {
     const decoded = decodeSqlErrorResponse(raw);
     if (decoded) {
+      if (/pool.{0,30}exhaust|exhaust.{0,30}pool/i.test(decoded.reason)) {
+        return false;
+      }
       return decoded.sqlErrorType === 'SQL_TRANSIENT_CONNECTION_EXCEPTION';
     }
   }
@@ -119,6 +127,7 @@ export function isConnectionLevelError(err: unknown): boolean {
   if (
     grpcError.code === grpc.status.UNAVAILABLE
     || grpcError.code === grpc.status.DEADLINE_EXCEEDED
+    || grpcError.code === grpc.status.INTERNAL
   ) {
     return true;
   }

@@ -67,6 +67,10 @@ export interface OjpClientOptions {
   loadBalancingStrategy?: 'least-connections' | 'round-robin';
   /** Interval between shared multinode health probes, in milliseconds. Default: 5000. */
   healthCheckIntervalMs?: number;
+  /** Maximum transport-failure retries for stateless operations. Default: 3. */
+  maxFailoverAttempts?: number;
+  /** Delay between stateless operation failover attempts, in milliseconds. Default: 100. */
+  failoverRetryDelayMs?: number;
   /**
    * Opens this session as an XA (distributed transaction) resource. When `true`,
    * transaction demarcation must go through `createXAResource()` — `startTransaction`/
@@ -164,6 +168,8 @@ const LOB_CHUNK_SIZE = 65536;
  */
 const READ_LOB_MAX_LENGTH = 2147483647;
 const CLIENT_UUID = randomUUID();
+const DEFAULT_MAX_FAILOVER_ATTEMPTS = 3;
+const DEFAULT_FAILOVER_RETRY_DELAY_MS = 100;
 
 interface CachedPool {
   connHash: string;
@@ -270,6 +276,14 @@ export class OjpClient {
   constructor(ojpUrl: string, private readonly options: OjpClientOptions = {}) {
     this.parsedUrl = parseOjpUrl(ojpUrl);
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
+    if (!Number.isSafeInteger(options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS)
+        || (options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS) < 0) {
+      throw new RangeError('maxFailoverAttempts must be a non-negative integer.');
+    }
+    if (!Number.isFinite(options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS)
+        || (options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS) < 0) {
+      throw new RangeError('failoverRetryDelayMs must be a non-negative number.');
+    }
     this.clientUUID = CLIENT_UUID;
     this.credentials = options.insecure === false
       ? grpc.credentials.createSsl()
@@ -336,11 +350,9 @@ export class OjpClient {
    * connection. Only connection-level failures (unreachable server, timeout — see
    * `isConnectionLevelError`) advance to the next candidate; a database/SQL-level failure
    * (e.g. bad credentials, invalid backend URL) fails fast without trying other nodes,
-   * since it would fail identically everywhere. Once a session is established, it stays
-   * bound to that single endpoint for its entire lifetime — mirroring the reference JDBC
-   * driver, this driver does NOT transparently move an existing session/transaction to
-   * another node if its endpoint later goes down (see `toClientError()` below); ACID
-   * guarantees for an in-flight transaction cannot be preserved across a node failure.
+   * since it would fail identically everywhere. Stateless operations may be retried on
+   * a healthy endpoint after a transport failure. Server-side sessions and transactions
+   * remain bound to their endpoint and are never transparently rerouted.
    */
   async connect(): Promise<SessionInfo> {
     if (this.closed) {
@@ -357,12 +369,12 @@ export class OjpClient {
     }
   }
 
-  private async connectToAvailableEndpoint(): Promise<SessionInfo> {
+  private async connectToAvailableEndpoint(excludedEndpoints: Set<string> = new Set()): Promise<SessionInfo> {
     await this.probeEndpointsIfDue();
     const candidates = orderEndpointsForAttempt(
       this.parsedUrl.endpoints,
       this.options.loadBalancingStrategy ?? 'least-connections',
-    );
+    ).filter((endpoint) => !excludedEndpoints.has(endpointKey(endpoint)));
     let lastError: Error | undefined;
 
     for (const endpoint of candidates) {
@@ -544,14 +556,7 @@ export class OjpClient {
     return this.grpcClient;
   }
 
-  /**
-   * Maps a raw gRPC/driver error into the driver's typed error hierarchy and, if it's a
-   * connection-level failure (see `isConnectionLevelError`), marks this session's bound
-   * endpoint unhealthy for future connection attempts. A connection-level failure on an
-   * established session is NOT transparently recovered — mirroring the reference JDBC
-   * driver, the session/transaction is considered lost; the caller must create a new
-   * `OjpClient` (new session) to retry.
-   */
+  /** Maps errors and marks the bound endpoint unhealthy for connection-level failures. */
   private toClientError(err: unknown): Error {
     const mapped = toOjpError(err);
     if (mapped instanceof OjpConnectionError && this.boundServerEndpoint && isConnectionLevelError(mapped.cause)) {
@@ -564,6 +569,60 @@ export class OjpClient {
       );
     }
     return mapped;
+  }
+
+  private canRetryStatelessOperation(statementUUID = ''): boolean {
+    return !this.session?.sessionUUID
+      && !statementUUID
+      && !this.transactionActive
+      && !this.options.xa
+      && this.parsedUrl.endpoints.length > 1;
+  }
+
+  private async reconnectAfterConnectionFailure(attemptedEndpoints: Set<string>): Promise<void> {
+    const failedEndpoint = this.boundServerEndpoint;
+    if (failedEndpoint) {
+      attemptedEndpoints.add(endpointKey(failedEndpoint));
+      markEndpointUnhealthy(failedEndpoint);
+    }
+
+    const previousClient = this.grpcClient;
+    if (this.endpointRegistered && failedEndpoint) {
+      unregisterEndpointSession(failedEndpoint);
+      this.endpointRegistered = false;
+    }
+    this.session = undefined;
+    this.grpcClient = undefined;
+    this.boundServerEndpoint = undefined;
+    previousClient?.close();
+
+    const delayMs = this.options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS;
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    await this.connectToAvailableEndpoint(attemptedEndpoints);
+  }
+
+  private async retryStatelessOperation<T>(
+    operation: () => Promise<T>,
+    firstError: unknown,
+    statementUUID = '',
+    attemptedEndpoints = new Set<string>(),
+  ): Promise<T> {
+    let failure = firstError;
+    const maxAttempts = this.options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!isConnectionLevelError(failure) || !this.canRetryStatelessOperation(statementUUID)) {
+        throw this.toClientError(failure);
+      }
+      try {
+        await this.reconnectAfterConnectionFailure(attemptedEndpoints);
+        return await operation();
+      } catch (retryError) {
+        failure = retryError;
+      }
+    }
+    throw this.toClientError(failure);
   }
 
   /** Creates a plain Statement-style wrapper over this session. */
@@ -636,17 +695,22 @@ export class OjpClient {
     try {
       return await invoke();
     } catch (err) {
-      if (!isPoolNotFound(err) || this.session?.sessionUUID || statementUUID
-          || this.transactionActive || this.options.xa) {
-        throw this.toClientError(err);
+      if (isPoolNotFound(err) && !this.session?.sessionUUID && !statementUUID
+          && !this.transactionActive && !this.options.xa) {
+        await this.reconnectAfterPoolNotFound();
+        try {
+          return await invoke();
+        } catch (retryError) {
+          if (isConnectionLevelError(retryError) && this.canRetryStatelessOperation(statementUUID)) {
+            return this.retryStatelessOperation(invoke, retryError, statementUUID);
+          }
+          throw this.toClientError(retryError);
+        }
       }
-
-      await this.reconnectAfterPoolNotFound();
-      try {
-        return await invoke();
-      } catch (retryError) {
-        throw this.toClientError(retryError);
+      if (isConnectionLevelError(err) && this.canRetryStatelessOperation(statementUUID)) {
+        return this.retryStatelessOperation(invoke, err, statementUUID);
       }
+      throw this.toClientError(err);
     }
   }
 
@@ -975,6 +1039,8 @@ export class OjpClient {
   private async *streamOpResults(
     request: StatementRequest,
     poolRetryAllowed = true,
+    failoverAttemptsRemaining = this.options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS,
+    attemptedEndpoints = new Set<string>(),
   ): AsyncGenerator<OpResult, void, undefined> {
     const stream = this.requireClient().executeQuery(request);
     // Prevents an error emitted after explicit cancellation (e.g. "Cancelled on
@@ -1005,6 +1071,18 @@ export class OjpClient {
             && !this.transactionActive && !this.options.xa && isPoolNotFound(err)) {
           await this.reconnectAfterPoolNotFound();
           yield* this.streamOpResults({ ...request, session: this.requireSession() }, false);
+          return;
+        }
+        if (firstBlock && failoverAttemptsRemaining > 0
+            && this.canRetryStatelessOperation(request.statementUUID)
+            && isConnectionLevelError(err)) {
+          await this.reconnectAfterConnectionFailure(attemptedEndpoints);
+          yield* this.streamOpResults(
+            { ...request, session: this.requireSession() },
+            poolRetryAllowed,
+            failoverAttemptsRemaining - 1,
+            attemptedEndpoints,
+          );
           return;
         }
         throw this.toClientError(err);

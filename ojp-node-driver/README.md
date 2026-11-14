@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L7** for SQL Server |
+| Cumulative level | **L1** for H2; **L8** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -33,7 +33,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L5** | SQL Server (documented JDBC limitation) | Multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references. SQL Server's JDBC driver rejects ranged BLOB/CLOB reads; the L5 suite asserts that error, while `test/integration.lob.stream.h2.test.ts` verifies exact stream contents and sizes on H2. |
 | **L6** | SQL Server (certified) | Local temporary-table state is preserved across calls and transactions; the client keeps each session bound to its OJP endpoint and surfaces bound-node loss without silently rerouting. See `test/integration.sqlServerL6.test.ts`. |
 | **L7** | SQL Server (certified) | Least-connections selection with round-robin tie-breaking, active endpoint health probes, cluster-health pool propagation, cached `connHash` reuse, and one safe retry after `NOT_FOUND` only for stateless sessions. See `test/integration.sqlServerL7.test.ts` and `test/multinodeClient.test.ts`. |
-| **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
+| **L8** | SQL Server (certified) | Bounded retries for stateless operations after transport failures, unhealthy-node avoidance, recovered-node reuse and redistribution. Sticky sessions, active transactions, SQL errors, and pool exhaustion are surfaced without failover or replay. See `test/integration.sqlServerL8.test.ts`, `test/multinodeClient.test.ts`, and `test/errors.test.ts`. |
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
@@ -93,7 +93,10 @@ These behaviors are automatic and do not require callers to pass `SessionInfo`,
 `sessionUUID`, or `connHash`.
 
 The policy can be tuned per client with `loadBalancingStrategy` (`'least-connections'`
-or `'round-robin'`) and `healthCheckIntervalMs`. The Node API intentionally remains a direct
+or `'round-robin'`), `healthCheckIntervalMs`, `maxFailoverAttempts` (default `3`), and
+`failoverRetryDelayMs` (default `100`). Stateless queries and updates are retried after
+transport failures; partially streamed results, server-bound sessions, active transactions,
+SQL errors, and pool exhaustion are never replayed. The Node API intentionally remains a direct
 gRPC-contract client rather than emulating JDBC; use `withOjpClient()` and
 `withTransaction()` to avoid connect/close and transaction-cleanup boilerplate.
 - The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
@@ -280,7 +283,8 @@ unchanged.
 
 The real-server suites `test/integration.sqlServerAg.test.ts`,
 `test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`,
-`test/integration.sqlServerL5.test.ts`, and `test/integration.sqlServerL6.test.ts`
+`test/integration.sqlServerL5.test.ts`, `test/integration.sqlServerL6.test.ts`,
+`test/integration.sqlServerL7.test.ts`, and `test/integration.sqlServerL8.test.ts`
 cover SQL Server:
 
 - L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
@@ -305,6 +309,9 @@ cover SQL Server:
 - L6 session affinity: local temporary-table operations across calls and transaction
   boundaries, plus sticky-session failure when a bound OJP node is stopped in the
   multinode integration cluster.
+- L7/L8 multinode operations and recovery: health and pool propagation, safe stateless
+  `NOT_FOUND` recovery, bounded transport-failure retry, sticky-session and transaction
+  fail-fast behavior, SQL-error classification, and recovered-node redistribution.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide
@@ -315,15 +322,19 @@ $env:OJP_ENABLE_SQLSERVER_AG_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L4_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L5_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L6_TESTS = 'true'
+$env:OJP_ENABLE_SQLSERVER_L7_TESTS = 'true'
+$env:OJP_ENABLE_SQLSERVER_L8_TESTS = 'true'
 npm run test:sqlserver-ag
 npm run test:sqlserver-l4
 npm run test:sqlserver-l5
 npm run test:sqlserver-l6
+npm run test:sqlserver-l7
+npm run test:sqlserver-l8
 ```
 
-The L6 bound-node-loss case runs when `OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true` and
-`OJP_TEST_NODE_CONTAINERS` names the three dedicated OJP test containers; the Node
-client integration workflow configures both.
+The L6-L8 multinode cases require `OJP_TEST_NODE_CONTAINERS` to name at least two
+dedicated OJP containers; the L8 suite stops and restarts the bound node. The
+Node client integration workflow configures these containers.
 
 **Known observations/limitations:**
 
@@ -609,6 +620,7 @@ npm run test:integration  # integration against ojp-server + PostgreSQL (require
 npm run test:integration:all # all integration suites; configure all test infrastructure and flags
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)
 npm run test:sqlserver-ag # SQL Server integration (requires OJP_ENABLE_SQLSERVER_AG_TESTS=true)
+npm run test:sqlserver-l8 # SQL Server L8 multinode failover/recovery integration
 npm run test:multinode-failover # multinode failover, orchestrates real Docker containers (requires OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true)
 npm run test:xa           # XA (distributed transaction) integration against ojp-server + PostgreSQL (requires OJP_ENABLE_XA_TESTS=true)
 ```

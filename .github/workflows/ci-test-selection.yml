@@ -29,6 +29,8 @@ on:
         value: ${{ jobs.select.outputs.go }}
       php:
         value: ${{ jobs.select.outputs.php }}
+      node:
+        value: ${{ jobs.select.outputs.node }}
       framework:
         value: ${{ jobs.select.outputs.framework }}
 
@@ -50,6 +52,7 @@ jobs:
       dart: ${{ steps.select.outputs.dart }}
       go: ${{ steps.select.outputs.go }}
       php: ${{ steps.select.outputs.php }}
+      node: ${{ steps.select.outputs.node }}
       framework: ${{ steps.select.outputs.framework }}
     steps:
       - uses: actions/checkout@v5
@@ -113,9 +116,14 @@ jobs:
             php:
               - 'ojp-client-php-pdo/**'
               - '!**/*.md'
+            node:
+              - 'ojp-node-driver/**'
+              - '.github/workflows/node-client-integration.yml'
+              - '!**/*.md'
             unknown:
               - '**'
               - '!{documents,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons,ojp-jdbc-driver,ojp-testcontainers,spring-boot-starter-ojp,ojp-node-driver,ojp-client-dotnet-ado-net,ojp-client-ruby-dbi,ojp-client-python-dbapi,ojp-client-cpp-odbc,ojp-client-dart-drift,ojp-client-go-database-sql,ojp-client-php-pdo}/**'
+              - '!.github/workflows/node-client-integration.yml'
               - '!.github/workflows/ci-test-selection.yml'
               - '!**/*.md'
               - '!{LICENSE,LICENSE.*,NOTICE,NOTICE.*}'
@@ -133,7 +141,7 @@ jobs:
           const paths = JSON.parse(process.env.FILTERS);
           const changed = key => paths[key] === 'true';
           const classified = ['shared', 'unknown', 'jdbc', 'testcontainers', 'starter',
-            'dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php']
+            'dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php', 'node']
             .every(key => ['true', 'false'].includes(paths[key]));
           const full = process.env.EVENT !== 'pull_request' ||
             process.env.FORCE_FULL === 'true' ||
@@ -149,7 +157,7 @@ jobs:
                changed('starter') && 'spring-boot-starter-ojp'].filter(Boolean);
           const selected = {full, java, java_build: javaBuild,
             java_modules: modules.join(','), framework: java || changed('starter')};
-          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php']) {
+          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php', 'node']) {
             selected[suite] = full || changed(suite);
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT,

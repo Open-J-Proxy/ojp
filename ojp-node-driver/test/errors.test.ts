@@ -35,4 +35,38 @@ describe('SQL error metadata', () => {
     expect(toOjpError(raw)).toBeInstanceOf(OjpConnectionError);
     expect(isConnectionLevelError(raw)).toBe(false);
   });
+
+  it('does not classify pool exhaustion as a transport failure', () => {
+    const raw = Object.assign(new Error('connection pool exhausted'), {
+      code: grpc.status.RESOURCE_EXHAUSTED,
+      details: 'connection pool exhausted',
+    });
+    expect(isConnectionLevelError(raw)).toBe(false);
+  });
+
+  it('classifies unstructured INTERNAL transport failures but not SQL trailers', () => {
+    const raw = Object.assign(new Error('server internal failure'), { code: grpc.status.INTERNAL });
+    expect(isConnectionLevelError(raw)).toBe(true);
+
+    const sql = sqlError(0);
+    expect(isConnectionLevelError(sql)).toBe(false);
+  });
+
+  it('does not classify a lost server-session binding as a transport failure', () => {
+    const raw = Object.assign(new Error('Session abc binding was lost'), {
+      code: grpc.status.INTERNAL,
+      details: 'Session abc binding was lost',
+    });
+    expect(isConnectionLevelError(raw)).toBe(false);
+  });
+
+  it('does not classify pool exhaustion carried by a transient SQL trailer as transport failure', () => {
+    const metadata = new grpc.Metadata();
+    metadata.set(
+      SQL_ERROR_METADATA_KEY,
+      Buffer.from(protobuf.Writer.create().uint32(10).string('connection pool exhausted').uint32(32).int32(2).finish()),
+    );
+    const raw = Object.assign(new Error('RPC failed'), { code: grpc.status.INTERNAL, metadata });
+    expect(isConnectionLevelError(raw)).toBe(false);
+  });
 });

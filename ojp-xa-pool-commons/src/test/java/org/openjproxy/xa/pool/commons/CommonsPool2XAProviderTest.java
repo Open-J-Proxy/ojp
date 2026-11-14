@@ -2,6 +2,7 @@ package org.openjproxy.xa.pool.commons;
 
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
+import org.openjproxy.xa.pool.XABackendSession;
 import org.openjproxy.xa.pool.XATransactionRegistry;
 import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 
@@ -57,6 +58,27 @@ class CommonsPool2XAProviderTest {
             assertEquals(2, pooledDataSource.getMaxTotal());
             assertEquals(2, pooledDataSource.getMaxIdle());
             assertEquals(0, pooledDataSource.getMinIdle());
+        } finally {
+            pooledDataSource.close();
+        }
+    }
+
+    @Test
+    void shouldHonorPerCallAcquisitionBudgetWithoutExceedingPoolMaximum() throws Exception {
+        JdbcDataSource vendorDataSource = new JdbcDataSource();
+        vendorDataSource.setURL("jdbc:h2:mem:xa-acquisition;DB_CLOSE_DELAY=-1");
+        CommonsPool2XADataSource pooledDataSource = new CommonsPool2XADataSource(vendorDataSource, Map.of(
+                "xa.maxPoolSize", "1",
+                "xa.minIdle", "0",
+                "xa.connectionTimeoutMs", "1",
+                "xa.timeBetweenEvictionRunsMs", "0"));
+        CommonsPool2XAProvider provider = new CommonsPool2XAProvider();
+
+        try {
+            XABackendSession firstSession = provider.borrowSession(pooledDataSource);
+            assertThrows(SQLException.class, () -> provider.borrowSession(pooledDataSource, 100L));
+            assertEquals(1, pooledDataSource.getMaxTotal());
+            provider.returnSession(pooledDataSource, firstSession);
         } finally {
             pooledDataSource.close();
         }

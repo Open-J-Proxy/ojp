@@ -9,14 +9,14 @@ This directory contains technical analysis documents for various OJP features an
 **Question:** Can OJP keep trying to acquire a connection when a pool may
 still grow, without waiting indefinitely?
 
-**Quick Answer:** Use one end-to-end timeout for admission and acquisition.
-Time spent waiting for admission reduces the remaining pool-acquisition time.
-Retry capacity-related failures only while the pool may grow, and pace retries
-to avoid a busy loop. Keep pool limits and shared timeouts unchanged.
+**Quick Answer:** OJP uses one end-to-end timeout for admission and pool
+acquisition. Time spent waiting for admission reduces the remaining
+acquisition time. Capacity-related failures retry only while the pool may
+grow, with paced retries and unchanged pool limits/shared timeouts.
 
 **Document:** [CAPACITY_AWARE_CONNECTION_ACQUISITION_ANALYSIS.md](./CAPACITY_AWARE_CONNECTION_ACQUISITION_ANALYSIS.md)
-- Provider differences, retry/deadline rules, SPI impact, and focused checks
-- Analysis only; no runtime or SPI changes
+- Provider differences, implemented retry/deadline rules, SPI impact, and tests
+- Built-in HikariCP, DBCP2, and Commons Pool 2 XA support
 
 ---
 

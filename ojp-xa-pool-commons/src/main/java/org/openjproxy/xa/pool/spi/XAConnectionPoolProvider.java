@@ -269,6 +269,19 @@ public interface XAConnectionPoolProvider {
     XABackendSession borrowSession(Object xaDataSource) throws Exception;
 
     /**
+     * Borrows a backend session with an optional remaining acquisition budget.
+     * Providers that do not support per-call budgets retain their existing behavior.
+     *
+     * @param xaDataSource the XADataSource (pool) to borrow from
+     * @param remainingTimeoutMs remaining time for acquisition in milliseconds
+     * @return a backend session wrapping a pooled XAConnection, never null
+     * @throws Exception if session cannot be borrowed
+     */
+    default XABackendSession borrowSession(Object xaDataSource, long remainingTimeoutMs) throws Exception {
+        return borrowSession(xaDataSource);
+    }
+
+    /**
      * Returns a backend session to the pool after transaction completion.
      *
      * <p>This method is called after successful commit or rollback. The session

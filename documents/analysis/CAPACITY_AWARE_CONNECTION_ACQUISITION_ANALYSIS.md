@@ -1,28 +1,29 @@
 # Capacity-Aware Connection Acquisition
 
-**Date:** 2026-11-14 | **Status:** Analysis only; no runtime, configuration, or SPI changes
+**Date:** 2026-11-14 | **Status:** Implemented for built-in pooled acquisitions
 **Source baseline:** OJP `003a6f90411fc62d2f8031705bb716b94009ea3c`
 
 ## Summary
 
-OJP can avoid failing a request just because a pool is still creating
-connections. After a capacity-related borrow timeout, retry only while the
-pool may still provide a connection and the request's original deadline has
-time left. Keep the pool in charge of creating connections and enforcing its
-maximum; do not extend a shared pool timeout or retry forever.
+OJP now retries a recognized capacity-related borrow timeout while the pool
+may still provide a connection and the request's original deadline has time
+left. The pool remains responsible for creating connections and enforcing its
+maximum; shared pool timeouts are not changed.
 
 Use one end-to-end timeout for admission and acquisition. For example, with a
-5-second connection timeout, if admission takes 1 second, pool acquisition
-has at most 4 seconds left. Retries and their pauses use that remaining time;
-they do not start a fresh timeout.
+5-second admission timeout, if admission takes 1 second, pool acquisition has
+at most 4 seconds left. Retries and their pauses use that remaining time; they
+do not start a fresh timeout. With slow-query segregation enabled, the existing
+fast- or slow-lane timeout remains in effect.
 
 **Provider differences matter:** Hikari's configured 1 ms timeout is clamped
 to 250 ms by OJP. DBCP2 and Commons Pool 2 may create a connection
 synchronously, so creation can outlast their borrow wait setting.
 
-**Recommendation:** A built-in-only change can use the current provider
-interfaces. For portable custom-provider support, add an optional typed
-acquisition capability rather than changing existing SPI requirements.
+**Implementation:** Built-in HikariCP, DBCP2, and Commons Pool 2 XA acquisitions
+use bounded retries. Existing custom XA providers remain compatible through a
+default SPI method; providers without supported pool statistics retain their
+legacy non-XA behavior.
 
 **Confidence:** High for the source-level behavior; medium for the right retry
 budget and latency, which depend on database drivers and need measurement.
@@ -34,8 +35,8 @@ budget and latency, which depend on database drivers and need measurement.
 | Timeout setup | [`ConnectAction`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/connection/ConnectAction.java#L227-L265) passes 1 ms to `PoolConfig` and uses the configured connection timeout for admission. |
 | Hikari | [`HikariConnectionPoolProvider`](../../ojp-datasource-hikari/src/main/java/org/openjproxy/datasource/hikari/HikariConnectionPoolProvider.java#L85-L99) clamps the timeout to 250 ms. HikariCP 7.0.2's default is 30 seconds; 250 ms is its usual minimum. |
 | DBCP2 | [`DbcpConnectionPoolProvider`](../../ojp-datasource-dbcp/src/main/java/org/openjproxy/datasource/dbcp/DbcpConnectionPoolProvider.java#L69-L77) passes the configured wait to DBCP2. Commons Pool 2 can create synchronously before waiting, so connection creation is not bounded by that wait. |
-| Non-XA manager | [`ConnectionAcquisitionManager`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/ConnectionAcquisitionManager.java#L97-L181) makes one borrow attempt and wraps caught SQL exceptions as transient connection failures. |
-| Other paths | [`Session`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/Session.java#L228-L290) also borrows primary and replica connections directly. XA borrows eagerly through [`HandleXAConnectionWithPoolingAction`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/connection/HandleXAConnectionWithPoolingAction.java#L321-L409), without the non-XA session-permit transfer. |
+| Non-XA manager | [`ConnectionAcquisitionManager`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/ConnectionAcquisitionManager.java) retries recognized capacity timeouts only when provider statistics show idle capacity or room to grow. |
+| Other paths | Lazy primary and replica borrows in [`Session`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/Session.java#L228-L290) now use the same acquisition manager. XA borrows eagerly through [`HandleXAConnectionWithPoolingAction`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/action/connection/HandleXAConnectionWithPoolingAction.java#L321-L409), without the non-XA session-permit transfer. |
 | Admission | [`AdmissionControlManager`](../../ojp-server/src/main/java/org/openjproxy/grpc/server/AdmissionControlManager.java#L222-L266) limits logical work; a permit does not reserve a physical connection. |
 
 Pool statistics are snapshots, not reservations. `total < max` means a retry
@@ -61,33 +62,32 @@ Pool wait settings are not universal login deadlines. Vendor connect and
 validation timeouts may be needed. A gRPC deadline or thread interrupt alone
 cannot reliably stop an arbitrary JDBC driver call.
 
-## Recommended policy
+## Implemented policy
 
-1. Start a monotonic end-to-end deadline **before admission**. Bound it by the
-   configured connection timeout and any shorter RPC deadline. After admission,
+1. Start a monotonic end-to-end deadline **before admission**, using the timeout
+   for the selected lane and any shorter RPC deadline. After admission,
    acquisition gets only the time remaining. For a 5-second timeout and a
    1-second admission wait, the acquisition budget is 4 seconds.
-2. Keep the same admission reservation through retries. Transfer it only after
-   successful session creation; release it once on terminal failure. Apply the
-   same ownership check to lazy primary/replica and eager XA paths rather than
-   assuming they all use the non-XA helper.
+2. Keep the same non-XA admission reservation through retries. Transfer it only
+   after successful session creation; release it once on terminal failure.
+   Lazy primary/replica borrows use the same deadline. XA uses its pool's own
+   cap; it does not acquire or transfer the non-XA session permit.
 3. On a classified capacity timeout, check cancellation, remaining time, pool
    lifecycle, idle count, total, and effective maximum. Retry if an idle
    connection may have appeared or if total is below the current maximum. If
    the pool is full with no idle connections, fail as exhausted. Unknown or
    unavailable statistics must not be treated as zero.
-4. Pace retries. Prefer a provider-native timed wait where available; otherwise
-   use a modest bounded delay (for example, about 25 ms with jitter), capped by
-   the time remaining. Do not retry every 1 ms: that can create a CPU-heavy loop
-   without making connections arrive sooner. Keep Hikari retry gaps short
-   enough not to interrupt its background growth.
+4. Pace retries with a randomized 20–50 ms delay, capped by the remaining time.
+   Do not retry every 1 ms: that can create a CPU-heavy loop without making
+   connections arrive sooner. For Hikari, do not start another borrow when
+   less than its configured borrow timeout remains.
 5. Charge every attempt and pause to the same deadline. For synchronous
    DBCP/XA creation, check the deadline again when the call returns. If the
    request was cancelled or expired, safely return the late result instead of
    publishing a session.
 6. Preserve the final provider cause, SQLState, vendor code, and chained
    exceptions. Report one terminal exhaustion per failed request, not one per
-   retry. Track total acquisition time and retry attempts separately.
+   retry. Record total acquisition time and log retry attempts.
 
 Use `System.nanoTime()` for elapsed time. Pool counts are advisory and can race
 with borrowers, creators, and resizers. Never exceed a pool's applied maximum,
@@ -98,45 +98,35 @@ were connection borrows.
 ## SPI impact
 
 The existing [`ConnectionPoolProvider`](../../ojp-datasource-api/src/main/java/org/openjproxy/datasource/ConnectionPoolProvider.java#L114-L130)
-and [`XAConnectionPoolProvider`](../../ojp-xa-pool-commons/src/main/java/org/openjproxy/xa/pool/spi/XAConnectionPoolProvider.java#L153-L172)
-allow optional statistics. Built-in providers report pool totals and maxima,
-so a limited implementation does not need a breaking SPI change.
+provides optional statistics. Built-in providers report pool totals and
+maxima, so non-XA retry does not require an SPI change. The XA provider SPI
+adds a default per-call budget overload; existing implementations continue to
+work through the prior method.
 
-The current SPI does not define whether totals include in-flight creation,
-whether a maximum is current or unbounded, how to classify timeout errors, or
-whether a provider honors deadlines or cancellation. For portable support, add
-an optional capability that describes pool state, typed failure categories,
-per-call remaining-time behavior, and ownership of late results. Keep legacy
-providers working; report the feature as unsupported, or reject them when a
-deployment explicitly requires the capability.
+Providers without usable statistics, recognized timeout errors, or per-call
+deadline support cannot provide the same guarantee. Non-XA acquisition keeps
+legacy behavior when statistics are unavailable. A custom XA provider using
+the default overload also keeps its original borrow behavior.
 
 ## Implementation and acceptance checks
 
-Implement in phases: first inventory acquisition paths and preserve original
-failure categories; then add bounded retries for built-in providers; finally
-measure driver behavior and consider the optional capability. Keep pool maxima
-and shared timeout settings unchanged.
+The implementation applies the deadline to admission-scoped non-XA primary
+and replica acquisition, eager pooled XA session borrowing, and the Commons
+Pool 2 XA provider. It leaves XA transaction operations and direct, unpooled
+JDBC connections unchanged. Pool maxima and shared timeout settings are
+unchanged.
 
-At minimum, test:
+Focused checks cover:
 
-- A cold Hikari pool where a 250 ms borrow fails but growth completes within
-  the remaining end-to-end timeout.
-- A 5-second overall timeout with 1 second spent in admission; acquisition
-  must not receive a new 5-second budget.
-- DBCP and XA synchronous creation taking longer than the configured wait.
-- A full pool, a creation already in progress, and a concurrent pool resize;
-  retries stay bounded and never exceed the applied maximum.
-- Unreachable database, authentication failure, cancellation, and a late
-  connection result; causes and permit ownership remain correct.
-- A custom provider without useful statistics or deadline support; behavior
-  follows the documented legacy or unsupported path.
-- Successful retries and terminal failures; retry metrics do not inflate
-  exhaustion counts.
+- Hikari retries after a capacity timeout while the pool has growth capacity.
+- A 300 ms deadline with 250 ms already consumed; no second Hikari borrow starts.
+- Full-pool exhaustion and permanent errors; no retry occurs.
+- A connection returned after the deadline; it is closed rather than published.
+- XA acquisition at the pool maximum; no connection is created beyond the cap.
 
-Measure elapsed time, attempt count, physical connections, permit balance,
-terminal cause, and acquisition/exhaustion metrics. Do not claim a hard
-end-to-end deadline unless the specific driver and provider have demonstrated
-that they honor it.
+Driver creation calls may still outlast the remaining deadline. Late
+connections are returned or closed, but this policy is not a hard interruption
+of arbitrary JDBC driver code.
 
 ## References
 

@@ -37,6 +37,7 @@ public class ConnectionAcquisitionManager {
     private static final String SQLSTATE_CONNECTION_FAILURE = "08001";
     private static final long RETRY_DELAY_MIN_MS = 20L;
     private static final long RETRY_DELAY_MAX_MS = 50L;
+    private static final int MAX_ACQUISITION_ATTEMPTS = 1_000_000;
     private static final ThreadLocal<Long> ACQUISITION_DEADLINE_NANOS = new ThreadLocal<>();
 
     /**
@@ -209,9 +210,7 @@ public class ConnectionAcquisitionManager {
         }
 
         long acquisitionStart = System.nanoTime();
-        int attempts = 0;
-        while (true) {
-            attempts++;
+        for (int attempts = 1; attempts <= MAX_ACQUISITION_ATTEMPTS; attempts++) {
             try {
                 Connection connection = acquireConnectionAttempt(dataSource, connectionHash);
                 long acquisitionTimeMs = (System.nanoTime() - acquisitionStart) / 1_000_000L;
@@ -220,7 +219,7 @@ public class ConnectionAcquisitionManager {
                 poolMetrics.recordConnectionAcquisitionTime(poolName, acquisitionTimeMs);
                 return connection;
             } catch (SQLException e) {
-                if (shouldRetry(dataSource, e) && waitBeforeRetry()) {
+                if (attempts < MAX_ACQUISITION_ATTEMPTS && shouldRetry(dataSource, e) && waitBeforeRetry()) {
                     log.debug("Retrying capacity-limited connection acquisition for hash: {} (attempt={})",
                             connectionHash, attempts + 1);
                     continue;
@@ -228,6 +227,7 @@ public class ConnectionAcquisitionManager {
                 throw connectionAcquisitionFailure(dataSource, connectionHash, poolMetrics, poolName, e);
             }
         }
+        throw new SQLException("Maximum connection acquisition attempts exceeded for hash: " + connectionHash);
     }
 
     private static Connection acquireConnectionAttempt(DataSource dataSource, String connectionHash)

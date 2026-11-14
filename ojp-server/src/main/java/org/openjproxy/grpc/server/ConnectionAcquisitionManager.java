@@ -14,6 +14,7 @@ import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 import java.util.Locale;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -212,26 +213,7 @@ public class ConnectionAcquisitionManager {
         while (true) {
             attempts++;
             try {
-                if (isAcquisitionCancelledOrExpired()) {
-                    throw new SQLTransientConnectionException(
-                            "Connection acquisition deadline expired or request cancelled for hash: "
-                                    + connectionHash,
-                            SQLSTATE_CONNECTION_FAILURE);
-                }
-                Connection connection = dataSource.getConnection();
-                if (isAcquisitionCancelledOrExpired()) {
-                    try {
-                        connection.close();
-                    } catch (SQLException closeException) {
-                        log.warn("Could not close connection acquired after deadline for hash: {}",
-                                connectionHash, closeException);
-                    }
-                    throw new SQLTransientConnectionException(
-                            "Connection acquired after deadline or request cancellation for hash: "
-                                    + connectionHash,
-                            SQLSTATE_CONNECTION_FAILURE);
-                }
-
+                Connection connection = acquireConnectionAttempt(dataSource, connectionHash);
                 long acquisitionTimeMs = (System.nanoTime() - acquisitionStart) / 1_000_000L;
                 log.debug("Successfully acquired connection for hash: {} in thread: {} (waited {}ms, attempts={})",
                         connectionHash, Thread.currentThread().getName(), acquisitionTimeMs, attempts);
@@ -243,45 +225,65 @@ public class ConnectionAcquisitionManager {
                             connectionHash, attempts + 1);
                     continue;
                 }
+                throw connectionAcquisitionFailure(dataSource, connectionHash, poolMetrics, poolName, e);
+            }
+        }
+    }
 
-            // Enhanced error message with pool statistics (HikariCP-specific)
-            String enhancedMessage;
-            if (dataSource instanceof HikariDataSource) {
-                HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
-                try {
-                    enhancedMessage = String.format(
-                        "Connection acquisition failed for hash: %s (phase=pool_borrow, poolTimeoutMs=%d). Pool state - Active: %d, Max: %d, Waiting threads: %d. Original error: %s",
+    private static Connection acquireConnectionAttempt(DataSource dataSource, String connectionHash)
+            throws SQLException {
+        if (isAcquisitionCancelledOrExpired()) {
+            throw new SQLTransientConnectionException(
+                    "Connection acquisition deadline expired or request cancelled for hash: " + connectionHash,
+                    SQLSTATE_CONNECTION_FAILURE);
+        }
+        Connection connection = dataSource.getConnection();
+        if (isAcquisitionCancelledOrExpired()) {
+            try {
+                connection.close();
+            } catch (SQLException closeException) {
+                log.warn("Could not close connection acquired after deadline for hash: {}",
+                        connectionHash, closeException);
+            }
+            throw new SQLTransientConnectionException(
+                    "Connection acquired after deadline or request cancellation for hash: " + connectionHash,
+                    SQLSTATE_CONNECTION_FAILURE);
+        }
+        return connection;
+    }
+
+    private static SQLTransientConnectionException connectionAcquisitionFailure(DataSource dataSource,
+            String connectionHash, PoolMetrics poolMetrics, String poolName, SQLException exception) {
+        String enhancedMessage;
+        if (dataSource instanceof HikariDataSource hikariDataSource) {
+            try {
+                enhancedMessage = String.format(
+                        "Connection acquisition failed for hash: %s (phase=pool_borrow, poolTimeoutMs=%d). "
+                                + "Pool state - Active: %d, Max: %d, Waiting threads: %d. Original error: %s",
                         connectionHash,
                         hikariDataSource.getConnectionTimeout(),
                         hikariDataSource.getHikariPoolMXBean().getActiveConnections(),
                         hikariDataSource.getMaximumPoolSize(),
                         hikariDataSource.getHikariPoolMXBean().getThreadsAwaitingConnection(),
-                        e.getMessage()
-                    );
-                } catch (Exception poolStatsException) {
-                    enhancedMessage = String.format(
-                        "Connection acquisition failed for hash: %s. Could not retrieve pool statistics. Original error: %s",
-                        connectionHash, e.getMessage()
-                    );
-                }
-            } else {
+                        exception.getMessage());
+            } catch (Exception poolStatsException) {
                 enhancedMessage = String.format(
-                    "Connection acquisition failed for hash: %s. Original error: %s",
-                    connectionHash, e.getMessage()
-                );
+                        "Connection acquisition failed for hash: %s. Could not retrieve pool statistics. "
+                                + "Original error: %s",
+                        connectionHash, exception.getMessage());
             }
-
-            // Record exhaustion event when acquisition fails
-            poolMetrics.recordPoolExhaustion(poolName + "|phase=pool_borrow");
-
-            log.error(enhancedMessage);
-            String sqlState = e.getSQLState();
-            if (sqlState == null || sqlState.length() != 5 || !sqlState.startsWith(SQLSTATE_CONNECTION_CLASS)) {
-                sqlState = SQLSTATE_CONNECTION_FAILURE;
-            }
-            throw new SQLTransientConnectionException(enhancedMessage, sqlState, 0, e);
-            }
+        } else {
+            enhancedMessage = String.format("Connection acquisition failed for hash: %s. Original error: %s",
+                    connectionHash, exception.getMessage());
         }
+
+        poolMetrics.recordPoolExhaustion(poolName + "|phase=pool_borrow");
+        log.error(enhancedMessage);
+        String sqlState = exception.getSQLState();
+        if (sqlState == null || sqlState.length() != 5 || !sqlState.startsWith(SQLSTATE_CONNECTION_CLASS)) {
+            sqlState = SQLSTATE_CONNECTION_FAILURE;
+        }
+        return new SQLTransientConnectionException(enhancedMessage, sqlState, 0, exception);
     }
 
     private static boolean shouldRetry(DataSource dataSource, SQLException exception) {
@@ -332,10 +334,9 @@ public class ConnectionAcquisitionManager {
 
         Throwable cause = exception;
         while (cause != null) {
-            if ("java.util.NoSuchElementException".equals(cause.getClass().getName())) {
-                String message = cause.getMessage();
-                return message != null
-                        && message.toLowerCase(Locale.ROOT).contains("timeout waiting for idle object");
+            if (cause instanceof NoSuchElementException noSuchElementException) {
+                String message = noSuchElementException.getMessage();
+                return message != null && message.toLowerCase(Locale.ROOT).contains("timeout waiting for idle object");
             }
             cause = cause.getCause();
         }

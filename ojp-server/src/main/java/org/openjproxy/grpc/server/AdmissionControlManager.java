@@ -156,73 +156,77 @@ public class AdmissionControlManager {
                                                        SegregatedOperation<T> operation,
                                                        boolean isSlowOperation) throws Exception {
         if (!enabled) {
-            // If admission control is disabled, just execute and monitor performance
             return executeAndMonitor(operationHash, sql, operation);
         }
-
         if (admissionControlOnly) {
-            boolean slotAcquired = false;
-            try {
-                slotAcquired = slotManager.acquireFastSlot(fastSlotTimeoutMs);
-                if (!slotAcquired) {
-                    throw new ServerOverloadException(
-                            "Timeout waiting for admission control slot for operation: " + operationHash,
-                            ServerOverloadException.Lane.FAST);
-                }
-                logger.debug("Acquired admission control slot for operation: {}", operationHash);
-                threadHeldSlot.set(new HeldSlot(false));
-                return executeAndMonitor(operationHash, sql, operation);
-            } finally {
-                HeldSlot heldSlot = threadHeldSlot.get();
-                if (slotAcquired && (heldSlot == null || !heldSlot.claimed)) {
-                    slotManager.releaseFastSlot();
-                    logger.debug("Released admission control slot for operation: {}", operationHash);
-                }
-                threadHeldSlot.remove();
-            }
+            return executeWithAdmissionControlOnly(operationHash, sql, operation);
         }
+        return executeWithSegregatedAdmission(operationHash, sql, operation, isSlowOperation);
+    }
 
-        // Acquire appropriate slot
+    private <T> T executeWithAdmissionControlOnly(String operationHash, String sql,
+                                                 SegregatedOperation<T> operation) throws Exception {
         boolean slotAcquired = false;
-
         try {
-            if (isSlowOperation) {
-                slotAcquired = slotManager.acquireSlowSlot(slowSlotTimeoutMs);
-                if (!slotAcquired) {
-                    throw new ServerOverloadException(
-                            "Timeout waiting for slow operation slot for operation: " + operationHash,
-                            ServerOverloadException.Lane.SLOW);
-                }
-                logger.debug("Acquired slow slot for operation: {}", operationHash);
-                threadHeldSlot.set(new HeldSlot(true));
-            } else {
-                slotAcquired = slotManager.acquireFastSlot(fastSlotTimeoutMs);
-                if (!slotAcquired) {
-                    throw new ServerOverloadException(
-                            "Timeout waiting for fast operation slot for operation: " + operationHash,
-                            ServerOverloadException.Lane.FAST);
-                }
-                logger.debug("Acquired fast slot for operation: {}", operationHash);
-                threadHeldSlot.set(new HeldSlot(false));
+            slotAcquired = slotManager.acquireFastSlot(fastSlotTimeoutMs);
+            if (!slotAcquired) {
+                throw new ServerOverloadException(
+                        "Timeout waiting for admission control slot for operation: " + operationHash,
+                        ServerOverloadException.Lane.FAST);
             }
-
-            // Execute the operation and monitor its performance
+            logger.debug("Acquired admission control slot for operation: {}", operationHash);
+            threadHeldSlot.set(new HeldSlot(false));
             return executeAndMonitor(operationHash, sql, operation);
-
         } finally {
-            // Always release the slot
             HeldSlot heldSlot = threadHeldSlot.get();
             if (slotAcquired && (heldSlot == null || !heldSlot.claimed)) {
-                if (isSlowOperation) {
-                    slotManager.releaseSlowSlot();
-                    logger.debug("Released slow slot for operation: {}", operationHash);
-                } else {
-                    slotManager.releaseFastSlot();
-                    logger.debug("Released fast slot for operation: {}", operationHash);
-                }
+                slotManager.releaseFastSlot();
+                logger.debug("Released admission control slot for operation: {}", operationHash);
             }
             threadHeldSlot.remove();
         }
+    }
+
+    private <T> T executeWithSegregatedAdmission(String operationHash, String sql,
+                                                SegregatedOperation<T> operation,
+                                                boolean isSlowOperation) throws Exception {
+        boolean slotAcquired = false;
+        try {
+            acquireClassifiedSlot(operationHash, isSlowOperation);
+            slotAcquired = true;
+            threadHeldSlot.set(new HeldSlot(isSlowOperation));
+            return executeAndMonitor(operationHash, sql, operation);
+        } finally {
+            HeldSlot heldSlot = threadHeldSlot.get();
+            if (slotAcquired && (heldSlot == null || !heldSlot.claimed)) {
+                releaseClassifiedSlot(operationHash, isSlowOperation);
+            }
+            threadHeldSlot.remove();
+        }
+    }
+
+    private void acquireClassifiedSlot(String operationHash, boolean isSlowOperation) throws InterruptedException {
+        boolean acquired = isSlowOperation
+                ? slotManager.acquireSlowSlot(slowSlotTimeoutMs)
+                : slotManager.acquireFastSlot(fastSlotTimeoutMs);
+        if (!acquired) {
+            ServerOverloadException.Lane lane = isSlowOperation
+                    ? ServerOverloadException.Lane.SLOW : ServerOverloadException.Lane.FAST;
+            String operationType = isSlowOperation ? "slow" : "fast";
+            throw new ServerOverloadException(
+                    "Timeout waiting for " + operationType + " operation slot for operation: " + operationHash,
+                    lane);
+        }
+        logger.debug("Acquired {} slot for operation: {}", isSlowOperation ? "slow" : "fast", operationHash);
+    }
+
+    private void releaseClassifiedSlot(String operationHash, boolean isSlowOperation) {
+        if (isSlowOperation) {
+            slotManager.releaseSlowSlot();
+        } else {
+            slotManager.releaseFastSlot();
+        }
+        logger.debug("Released {} slot for operation: {}", isSlowOperation ? "slow" : "fast", operationHash);
     }
 
     /**

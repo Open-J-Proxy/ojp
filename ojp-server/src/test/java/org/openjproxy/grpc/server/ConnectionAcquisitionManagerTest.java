@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,7 +37,7 @@ class ConnectionAcquisitionManagerTest {
 
         assertNotNull(acquired);
         assertEquals(connection, acquired);
-        verify(dataSource, org.mockito.Mockito.times(2)).getConnection();
+        verify(dataSource, times(2)).getConnection();
     }
 
     @Test

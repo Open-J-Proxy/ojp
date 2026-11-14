@@ -78,6 +78,19 @@ class DatasourcePropertiesLoaderInfoPropertiesTest {
     }
 
     @Test
+    void shouldForwardCreationGraceForSelectedDatasource() {
+        Properties info = new Properties();
+        info.setProperty("mainApp.ojp.connection.pool.connectionCreationGracePeriod", "7500");
+        info.setProperty("batch.ojp.connection.pool.connectionCreationGracePeriod", "0");
+
+        Properties result = DatasourcePropertiesLoader.applyInfoProperties(null, info, "mainApp");
+
+        assertNotNull(result);
+        assertEquals("7500", result.getProperty("ojp.connection.pool.connectionCreationGracePeriod"));
+        assertEquals("mainApp", result.getProperty(CommonConstants.DATASOURCE_NAME_PROPERTY));
+    }
+
+    @Test
     void shouldSetDatasourceNameWhenOnlyInfoProperties() {
         Properties info = new Properties();
         info.setProperty("ojp.connection.pool.maximumPoolSize", "15");

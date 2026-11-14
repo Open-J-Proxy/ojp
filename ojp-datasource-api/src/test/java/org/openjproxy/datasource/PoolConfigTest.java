@@ -213,6 +213,12 @@ class PoolConfigTest {
     }
 
     @Test
+    void shouldRejectNegativeCreationGracePeriod() {
+        assertThrows(IllegalArgumentException.class,
+                () -> PoolConfig.builder().connectionCreationGracePeriodMs(-1).build());
+    }
+
+    @Test
     @DisplayName("idleTimeoutMs validation should reject negative values")
     void testIdleTimeoutValidation() {
         assertThrows(IllegalArgumentException.class, 

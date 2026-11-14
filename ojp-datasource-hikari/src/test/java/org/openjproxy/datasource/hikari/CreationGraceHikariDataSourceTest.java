@@ -29,9 +29,15 @@ class CreationGraceHikariDataSourceTest {
             fixture.blockCreation.set(true);
             var executor = Executors.newSingleThreadExecutor();
             try {
-                var acquisition = executor.submit(pool::getConnection);
+                var acquisition = executor.submit(() -> pool.getConnection());
                 assertTrue(fixture.creationStarted.await(2, TimeUnit.SECONDS));
                 assertTrue(fixture.borrowTimedOut.await(2, TimeUnit.SECONDS));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+                while (pool.getHikariPoolMXBean().getThreadsAwaitingConnection() == 0
+                        && System.nanoTime() < deadline) {
+                    Thread.sleep(5);
+                }
+                assertEquals(1, pool.getHikariPoolMXBean().getThreadsAwaitingConnection());
                 fixture.allowCreation.countDown();
                 try (Connection connection = acquisition.get(2, TimeUnit.SECONDS);
                      var statement = connection.createStatement();

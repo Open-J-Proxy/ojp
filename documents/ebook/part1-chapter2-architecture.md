@@ -781,8 +781,8 @@ graph TB
 # Maximum pool size (most important setting)
 maximumPoolSize=20
 
-# Minimum idle connections (kept ready)
-minimumIdle=5
+# Minimum idle connections (fixed size recommended)
+minimumIdle=20
 
 # Connection timeout (wait for available connection)
 connectionTimeout=30000
@@ -798,6 +798,21 @@ connectionTestQuery=SELECT 1
 ```
 
 **Pool Sizing Guidelines**:
+
+Prefer a fixed-size pool: configure `ojp.connection.pool.minimumIdle` equal to
+`ojp.connection.pool.maximumPoolSize`. A smaller minimum is discouraged because
+cold startup and later expansion can cause acquisition timeouts while physical
+connections are still being created, even though the pool has spare capacity.
+Fixed sizing reduces this risk after warm-up; it does not eliminate startup time.
+
+The default HikariCP provider mitigates this with
+`ojp.connection.pool.connectionCreationGracePeriod=5000` (milliseconds): after a
+normal borrow timeout below the current maximum capacity, it allows one extra
+wait for background creation. Full pools receive no extra grace, `0` disables it,
+and it does not increase pool limits or replace JDBC connect/login timeouts.
+Configure it per datasource, for example
+`mainApp.ojp.connection.pool.connectionCreationGracePeriod=5000`.
+DBCP and XA synchronous creation behavior is unchanged.
 
 Use the modern formula above for SSD-backed and cloud databases. For an 8-core database server, a good starting point is often around 10 connections using the `cores + 2` rule, or 13 connections in the high-frequency OLTP example. Increase only when metrics show connection wait time while database CPU still has headroom.
 

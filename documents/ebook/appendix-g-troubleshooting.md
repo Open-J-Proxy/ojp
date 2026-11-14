@@ -280,11 +280,22 @@ ping -c 10 db.example.com
 
 High network latency (>10ms) significantly impacts query performance, especially for queries that return many small rows. Consider deploying OJP closer to either the application or database, whichever has worse latency.
 
-Connection pool configuration affects latency. If `minimumIdle` is too low, requests must wait for new connections to be established. Set `minimumIdle` to handle your typical concurrent request load:
+Connection pool configuration affects latency. Prefer `minimumIdle` equal to
+`maximumPoolSize`; a smaller minimum is discouraged because cold startup and
+expansion can time out while new connections are being established, even below
+maximum capacity. Fixed sizing reduces this risk once the pool is warm:
 
 ```properties
-hikariCP.minimumIdle=20
+ojp.connection.pool.minimumIdle=20
+ojp.connection.pool.maximumPoolSize=20
+ojp.connection.pool.connectionCreationGracePeriod=5000
 ```
+
+For HikariCP, the creation grace allows one additional wait after a normal borrow
+timeout below the current maximum capacity. It defaults to 5 seconds, can be
+configured per datasource with a name prefix, and `0` disables it. It does not
+extend full-pool waits, raise pool limits, or bound synchronous JDBC connection
+creation. DBCP and XA behavior is unchanged.
 
 Too many concurrent connections can also cause latency. If you're maxing out database connection limits, queries queue waiting for database connections to become available. This is a capacity issue—scale your database or reduce concurrent query load.
 

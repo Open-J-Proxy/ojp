@@ -4,6 +4,23 @@ This directory contains technical analysis documents for various OJP features an
 
 ## Latest Analysis (November 2026)
 
+### Capacity-Aware Connection Acquisition
+
+**Question:** Can OJP avoid a short connection acquisition timeout when a cold
+pool still has capacity to grow, across HikariCP, DBCP2, and Commons Pool 2?
+
+**Quick Answer:** Use bounded, capacity-aware acquisition grace after admission,
+without changing shared pool timeouts or increasing pool maxima. Hikari's 250 ms
+floor can interrupt background growth; DBCP/XA synchronous creation can already
+outlast their borrow wait timeout. Statistics are hints, not growth reservations.
+
+**Document:** [CAPACITY_AWARE_CONNECTION_ACQUISITION_ANALYSIS.md](./CAPACITY_AWARE_CONNECTION_ACQUISITION_ANALYSIS.md)
+- Provider-specific feasibility, alternatives, deadline and lifecycle constraints
+- Existing SPI limitations and a compatible optional acquisition capability
+- Proposed implementation phases and acceptance scenarios; analysis only
+
+---
+
 ### Transaction Multiplexing and JDBC Request Boundaries
 
 **Question:** Could OJP share physical connections between transactions like PgBouncer, and could JDBC `beginRequest()` / `endRequest()` improve safe reuse?

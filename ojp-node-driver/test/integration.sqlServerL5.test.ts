@@ -130,12 +130,22 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
   it('preserves empty BLOB and CLOB values distinctly from NULL', async () => {
     const blob = await client.createLob(Buffer.alloc(0), 'BLOB');
     const clob = await client.createLob('', 'CLOB');
+    const emptyBlobChunks: Buffer[] = [];
+    const emptyClobChunks: Buffer[] = [];
+    for await (const chunk of client.readLobStream(blob)) {
+      emptyBlobChunks.push(Buffer.from(chunk));
+    }
+    for await (const chunk of client.readLobStream(clob)) {
+      emptyClobChunks.push(Buffer.from(chunk));
+    }
     await client.executeUpdate(
       `INSERT INTO ${table} (id, payload, body) VALUES (?, ?, ?)`,
       [6, blob, clob],
     );
     const result = await client.executeQuery(`SELECT payload, body FROM ${table} WHERE id = ?`, [6]);
 
+    expect(Buffer.concat(emptyBlobChunks)).toEqual(Buffer.alloc(0));
+    expect(Buffer.concat(emptyClobChunks)).toEqual(Buffer.alloc(0));
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0].payload).toEqual(Buffer.alloc(0));
     expect(result.rows[0].body).toBe('');

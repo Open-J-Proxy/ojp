@@ -114,6 +114,7 @@ jobs:
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
           OJP_ENABLE_XA_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
+          OJP_ENABLE_SQLSERVER_L5_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_L4_TESTS: 'true'
           OJP_ENABLE_MULTINODE_FAILOVER_TESTS: 'true'
         run: |

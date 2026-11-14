@@ -126,6 +126,7 @@ jobs:
           OJP_ENABLE_SQLSERVER_L4_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_L7_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_L8_TESTS: 'true'
+          OJP_ENABLE_SQLSERVER_XA_TESTS: 'true'
           OJP_ENABLE_MULTINODE_FAILOVER_TESTS: 'true'
         run: |
           npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/node-integration.json"

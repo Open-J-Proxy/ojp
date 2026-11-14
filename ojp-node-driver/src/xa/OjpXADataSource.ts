@@ -39,4 +39,18 @@ export class OjpXADataSource {
     await client.connect();
     return new OjpXAConnection(client);
   }
+
+  /** Opens an XA connection for one unit of work and always terminates its session afterward. */
+  async withXAConnection<T>(
+    operation: (connection: OjpXAConnection) => T | Promise<T>,
+    user?: string,
+    password?: string,
+  ): Promise<T> {
+    const connection = await this.getXAConnection(user, password);
+    try {
+      return await operation(connection);
+    } finally {
+      await connection.close();
+    }
+  }
 }

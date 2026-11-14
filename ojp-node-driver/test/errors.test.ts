@@ -52,6 +52,14 @@ describe('SQL error metadata', () => {
     expect(isConnectionLevelError(sql)).toBe(false);
   });
 
+  it('does not classify a lost server-session binding as a transport failure', () => {
+    const raw = Object.assign(new Error('Session abc binding was lost'), {
+      code: grpc.status.INTERNAL,
+      details: 'Session abc binding was lost',
+    });
+    expect(isConnectionLevelError(raw)).toBe(false);
+  });
+
   it('does not classify pool exhaustion carried by a transient SQL trailer as transport failure', () => {
     const metadata = new grpc.Metadata();
     metadata.set(

@@ -111,6 +111,14 @@ export function isConnectionLevelError(err: unknown): boolean {
       || /pool.{0,30}exhaust|exhaust.{0,30}pool/i.test(rawMessage)) {
     return false;
   }
+  const lowerMessage = rawMessage.toLowerCase();
+  if (lowerMessage.includes('session')
+      && (lowerMessage.includes('has no associated server')
+        || lowerMessage.includes('binding was lost')
+        || lowerMessage.includes('may have expired')
+        || lowerMessage.includes('were invalidated'))) {
+    return false;
+  }
   const raw = grpcError?.metadata?.get(SQL_ERROR_METADATA_KEY)[0];
   if (Buffer.isBuffer(raw)) {
     const decoded = decodeSqlErrorResponse(raw);

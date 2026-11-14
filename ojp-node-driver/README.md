@@ -11,9 +11,9 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L8** for SQL Server |
-| Higher-level features | Partial; not a cumulative level claim |
+| Target level | **L9** for SQL Server |
+| Cumulative level | **L1** for H2; **L9** for SQL Server |
+| Higher-level features | L9 XA lifecycle and recovery operations are exercised against SQL Server |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
 The H2 and SQL Server L1 suites exercise CRUD, errors, and session lifecycle through
@@ -34,7 +34,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L6** | SQL Server (certified) | Local temporary-table state is preserved across calls and transactions; the client keeps each session bound to its OJP endpoint and surfaces bound-node loss without silently rerouting. See `test/integration.sqlServerL6.test.ts`. |
 | **L7** | SQL Server (certified) | Least-connections selection with round-robin tie-breaking, active endpoint health probes, cluster-health pool propagation, cached `connHash` reuse, and one safe retry after `NOT_FOUND` only for stateless sessions. See `test/integration.sqlServerL7.test.ts` and `test/multinodeClient.test.ts`. |
 | **L8** | SQL Server (certified) | Bounded retries for stateless operations after transport failures, unhealthy-node avoidance, recovered-node reuse and redistribution. Sticky sessions, active transactions, SQL errors, and pool exhaustion are surfaced without failover or replay. See `test/integration.sqlServerL8.test.ts`, `test/multinodeClient.test.ts`, and `test/errors.test.ts`. |
-| **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
+| **L9** | SQL Server (certified) | XA connection lifecycle, two-phase and one-phase commit, rollback, timeout, prepared-branch recovery, resource-manager identity, XA errors, and XA-only transaction demarcation. See `test/integration.sqlServerXA.test.ts`. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
@@ -284,7 +284,8 @@ unchanged.
 The real-server suites `test/integration.sqlServerAg.test.ts`,
 `test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`,
 `test/integration.sqlServerL5.test.ts`, `test/integration.sqlServerL6.test.ts`,
-`test/integration.sqlServerL7.test.ts`, and `test/integration.sqlServerL8.test.ts`
+`test/integration.sqlServerL7.test.ts`, `test/integration.sqlServerL8.test.ts`,
+and `test/integration.sqlServerXA.test.ts`
 cover SQL Server:
 
 - L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
@@ -312,6 +313,9 @@ cover SQL Server:
 - L7/L8 multinode operations and recovery: health and pool propagation, safe stateless
   `NOT_FOUND` recovery, bounded transport-failure retry, sticky-session and transaction
   fail-fast behavior, SQL-error classification, and recovered-node redistribution.
+- L9 XA behavior: XA connection lifecycle, two-phase and one-phase commit, rollback,
+  timeout configuration, prepared-branch recovery, resource-manager identity, XA error
+  mapping, and rejection of local transaction methods on XA sessions.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide
@@ -324,12 +328,14 @@ $env:OJP_ENABLE_SQLSERVER_L5_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L6_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L7_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L8_TESTS = 'true'
+$env:OJP_ENABLE_SQLSERVER_XA_TESTS = 'true'
 npm run test:sqlserver-ag
 npm run test:sqlserver-l4
 npm run test:sqlserver-l5
 npm run test:sqlserver-l6
 npm run test:sqlserver-l7
 npm run test:sqlserver-l8
+npm run test:sqlserver-xa
 ```
 
 The L6-L8 multinode cases require `OJP_TEST_NODE_CONTAINERS` to name at least two
@@ -564,8 +570,9 @@ high-availability XA connection pool. Deliberately not implemented yet:
   previously prepared transaction — a bare `Xid` is not enough on its own.
 
 Validated end-to-end with real two-phase commit, rollback, one-phase commit
-optimization, `recover()`, `isSameRM()`, and error mapping
-(`test/integration.xa.postgres.test.ts`, against a real `ojp-server` + PostgreSQL).
+optimization, `recover()`, `isSameRM()`, timeout operations, and error mapping
+against both PostgreSQL (`test/integration.xa.postgres.test.ts`) and SQL Server
+(`test/integration.sqlServerXA.test.ts`), each using a real `ojp-server`.
 Run locally:
 
 ```powershell
@@ -623,6 +630,7 @@ npm run test:sqlserver-ag # SQL Server integration (requires OJP_ENABLE_SQLSERVE
 npm run test:sqlserver-l8 # SQL Server L8 multinode failover/recovery integration
 npm run test:multinode-failover # multinode failover, orchestrates real Docker containers (requires OJP_ENABLE_MULTINODE_FAILOVER_TESTS=true)
 npm run test:xa           # XA (distributed transaction) integration against ojp-server + PostgreSQL (requires OJP_ENABLE_XA_TESTS=true)
+npm run test:sqlserver-xa # XA integration against ojp-server + SQL Server (requires OJP_ENABLE_SQLSERVER_XA_TESTS=true)
 ```
 
 ## Testing locally against ojp-server

@@ -48,8 +48,41 @@ export interface SessionInfo {
   observedPeak?: number;
 }
 
-/** ParameterTypeProto enum from the .proto, used to type each ParameterProto. */
-export type ParameterType =
+/** Public parameter type hints; protobuf wire names are mapped by valueMapper. */
+export enum ParameterType {
+  NULL = 'NULL',
+  BOOLEAN = 'BOOLEAN',
+  BYTE = 'BYTE',
+  SHORT = 'SHORT',
+  INT = 'INT',
+  LONG = 'LONG',
+  FLOAT = 'FLOAT',
+  DOUBLE = 'DOUBLE',
+  BIG_DECIMAL = 'BIG_DECIMAL',
+  STRING = 'STRING',
+  BYTES = 'BYTES',
+  DATE = 'DATE',
+  TIME = 'TIME',
+  TIMESTAMP = 'TIMESTAMP',
+  ASCII_STREAM = 'ASCII_STREAM',
+  UNICODE_STREAM = 'UNICODE_STREAM',
+  BINARY_STREAM = 'BINARY_STREAM',
+  OBJECT = 'OBJECT',
+  CHARACTER_READER = 'CHARACTER_READER',
+  REF = 'REF',
+  BLOB = 'BLOB',
+  CLOB = 'CLOB',
+  ARRAY = 'ARRAY',
+  URL = 'URL',
+  ROW_ID = 'ROW_ID',
+  N_STRING = 'N_STRING',
+  N_CHARACTER_STREAM = 'N_CHARACTER_STREAM',
+  N_CLOB = 'N_CLOB',
+  SQL_XML = 'SQL_XML',
+}
+
+/** ParameterTypeProto values used on the protobuf wire. */
+export type ParameterTypeProto =
   | 'PT_NULL' | 'PT_BOOLEAN' | 'PT_BYTE' | 'PT_SHORT' | 'PT_INT' | 'PT_LONG'
   | 'PT_FLOAT' | 'PT_DOUBLE' | 'PT_BIG_DECIMAL' | 'PT_STRING' | 'PT_BYTES'
   | 'PT_DATE' | 'PT_TIME' | 'PT_TIMESTAMP' | 'PT_ASCII_STREAM' | 'PT_UNICODE_STREAM'
@@ -107,7 +140,7 @@ export interface ParameterValue {
 
 export interface ParameterProto {
   index: number;
-  type: ParameterType;
+  type: ParameterTypeProto;
   values: ParameterValue[];
 }
 

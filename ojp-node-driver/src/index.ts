@@ -1,4 +1,16 @@
-export { OjpClient, OjpClientOptions, QueryResult, OjpLobRef, OjpTypedParam, withOjpClient } from './client/OjpClient';
+export {
+  OjpClient,
+  OjpClientOptions,
+  OjpClientStatementOptions,
+  QueryResult,
+  QueryColumnMetadata,
+  QueryResultMetadata,
+  OjpLobRef,
+  OjpNullParam,
+  OjpTypedParam,
+  withOjpClient,
+} from './client/OjpClient';
+export { OjpStatement, OjpPreparedStatement, OjpExecutionResult } from './client/statement';
 export { OjpSqlError, OjpConnectionError } from './client/errors';
 export { parseOjpUrl, ParsedOjpUrl, OjpServerEndpoint } from './client/connectionString';
 export {

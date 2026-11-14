@@ -38,7 +38,7 @@ const IMPLEMENTED_RPCS = [
 
 // Proto message/enum name -> TS type name, listed only where they intentionally differ.
 const TYPE_NAME_OVERRIDES = {
-  ParameterTypeProto: 'ParameterType',
+  ParameterTypeProto: 'ParameterTypeProto',
   LobType: 'LobTypeProto',
 };
 
@@ -103,7 +103,7 @@ function collectReachableTypes(root) {
   return reachable;
 }
 
-/** Parses the message interfaces and string-literal enum aliases in types.ts. */
+/** Parses the message interfaces, TypeScript enums, and string-literal enum aliases. */
 function extractTsTypes(filePath, sourceText = fs.readFileSync(filePath, 'utf8')) {
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
   const types = new Map();
@@ -117,6 +117,16 @@ function extractTsTypes(filePath, sourceText = fs.readFileSync(filePath, 'utf8')
         }
       }
       types.set(node.name.text, { kind: 'message', values: props });
+    } else if (ts.isEnumDeclaration(node)) {
+      const values = new Set();
+      const names = new Set();
+      for (const member of node.members) {
+        names.add(member.name.getText(sourceFile));
+        if (member.initializer && ts.isStringLiteral(member.initializer)) {
+          values.add(member.initializer.text);
+        }
+      }
+      types.set(node.name.text, { kind: 'enum', values, names });
     } else if (ts.isTypeAliasDeclaration(node)) {
       const members = ts.isUnionTypeNode(node.type) ? node.type.types : [node.type];
       const values = new Set();
@@ -165,6 +175,18 @@ function findTypeErrors(reachableProtoTypes, tsTypes) {
     for (const value of tsType.values) {
       if (!expected.has(value)) {
         errors.push(`Extra ${expectedKind === 'message' ? 'field' : 'enum value'} "${value}" on TS type "${tsName}".`);
+      }
+    }
+    if (expectedKind === 'enum' && tsType.names) {
+      for (const value of expected) {
+        if (!tsType.names.has(value)) {
+          errors.push(`Missing enum member "${value}" on TS enum "${tsName}".`);
+        }
+      }
+      for (const value of tsType.names) {
+        if (!expected.has(value)) {
+          errors.push(`Extra enum member "${value}" on TS enum "${tsName}".`);
+        }
       }
     }
   }

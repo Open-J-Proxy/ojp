@@ -12,20 +12,22 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2 and SQL Server |
+| Cumulative level | **L1** for H2; **L2** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
 The H2 and SQL Server L1 suites exercise CRUD, errors, and session lifecycle through
 a real OJP server and database. SQL Server L1 passed in the
-[Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512).
-The H2 suite also covers datasource selection using `testdata/h2_connections.csv`.
+[Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512);
+the SQL Server L2 suite passed in [run 43528198577](https://github.com/Open-J-Proxy/ojp/actions/runs/43528198577)
+with all 53 integration tests passing. The H2 suite also covers datasource selection
+using `testdata/h2_connections.csv`.
 
 | Level | Status | Notes |
 |---|---|---|
 | **L1** | H2, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts` and `test/integration.sqlServerAg.test.ts`. |
-| **L2** | ⚠️ Partial | Broad typed-parameter coverage (`ParameterTypeProto` — null, boolean, numeric, string, bytes, timestamp, `BigDecimal`, plus explicit type hints for dialect shims) is unit-tested extensively. There is **no** distinct PreparedStatement/Statement variant, **no** generated-keys retrieval, and **no** result-set metadata API. |
-| **L3** | Partial | Streaming and row-by-row fetching are implemented; L2 and cursor lifecycle are incomplete. |
+| **L2** | SQL Server (certified) | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, plain/prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Real-server certification passed in run 43528198577; declared type omissions are listed below. |
+| **L3** | Partial | Streaming and row-by-row fetching are implemented; cursor lifecycle certification remains incomplete. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
 | **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
 | **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
@@ -35,10 +37,18 @@ The H2 suite also covers datasource selection using `testdata/h2_connections.csv
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
 No cumulative level is claimed for PostgreSQL until its required level-specific
-coverage is run in CI. SQL Server's L1 cumulative claim is limited to the passing
-integration run above; SQL Server L2 and higher are not claimed. L2 needs statement
-variants, generated keys, metadata and result-producing DML before L3 or higher can be
-claimed.
+coverage is run in CI. SQL Server's tested cumulative claim is L2, based on the passing
+real-server integration run above. The Node metadata shape intentionally reports the
+stream protocol's column labels; it does not expose JDBC's full vendor-specific
+`ResultSetMetaData` surface.
+
+Explicit `OjpTypedParam` mappings cover scalar, decimal, date/time, text/binary stream
+payloads, URL, row ID, and LOB-reference values. Use the exported `ParameterType` enum
+(for example, `ParameterType.N_STRING`) for explicit type hints. The `OjpTypedParam` type
+requires an enum member rather than a raw string. `ARRAY` and
+`REF` are not currently representable through this API, and `OBJECT` is limited to scalar
+values. These declared omissions fail explicitly rather than silently falling back to another
+parameter type.
 
 ## Why this driver exists
 
@@ -116,6 +126,34 @@ await client.commit();
 
 await client.close();
 ```
+
+### Statements, prepared parameters, batches, and generated keys
+
+The statement wrappers reuse the owning `OjpClient`; callers do not pass or update
+`SessionInfo` themselves. Prepared parameter indexes are 1-based, and values can be
+rebound between executions:
+
+```ts
+const statement = client.prepareStatement(
+  'UPDATE inventory SET label = ? OUTPUT inserted.id WHERE id = ?',
+);
+statement.setParameter(1, 'updated');
+statement.setParameter(2, 42);
+const returnedRows = await statement.executeQuery();
+await statement.close();
+
+const insert = client.prepareStatement(
+  'INSERT INTO inventory (label) VALUES (?)',
+  { generatedKeys: true },
+);
+await insert.executeUpdate(['new item']);
+const generatedKeys = await insert.getGeneratedKeys();
+await insert.close();
+```
+
+For prepared batches, call `addBatch(values)` for each parameter set and then
+`executeBatch()`. Close prepared wrappers when finished; closing the owning client also
+terminates the OJP session and releases its server-side resources.
 
 ## Real pagination for large result sets (`executeQueryStream`)
 

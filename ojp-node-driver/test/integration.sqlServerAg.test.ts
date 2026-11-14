@@ -2,7 +2,7 @@
  * Real OJP server and SQL Server integration, enabled by
  * OJP_ENABLE_SQLSERVER_AG_TESTS=true. Every CSV connection row runs the full suite.
  */
-import { OjpClient, OjpConnectionError, OjpSqlError, withOjpClient } from '../src';
+import { OjpClient, OjpConnectionError, OjpTypedParam, ParameterType, withOjpClient } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_AG_TESTS === 'true';
@@ -96,9 +96,8 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     await txClient.executeUpdate(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [10, 'committed']);
     await txClient.commit();
 
-    const { rows } = await txClient.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [10]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].label).toBe('committed');
+    const { rows } = await client.executeQuery(`SELECT id, label FROM ${tableName} WHERE id = ?`, [10]);
+    expect(rows).toEqual([{ id: 10, label: 'committed' }]);
   }, 15_000);
 
   it('should support transaction rollback', async () => {
@@ -107,7 +106,7 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     await txClient.executeUpdate(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [11, 'should disappear']);
     await txClient.rollback();
 
-    const { rows } = await txClient.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [11]);
+    const { rows } = await client.executeQuery(`SELECT id, label FROM ${tableName} WHERE id = ?`, [11]);
     expect(rows).toHaveLength(0);
   }, 15_000);
 
@@ -120,7 +119,11 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
   it('should throw OjpSqlError for invalid SQL', async () => {
     txClient = await newClient();
     await expect(txClient.executeQuery('SELECT * FROM table_that_does_not_exist'))
-      .rejects.toBeInstanceOf(OjpSqlError);
+      .rejects.toMatchObject({
+        name: 'OjpSqlError',
+        sqlState: expect.stringMatching(/^[0-9A-Z]{5}$/),
+        vendorCode: expect.any(Number),
+      });
   }, 15_000);
 
   it('should satisfy L1 connection lifecycle and release a scoped client', async () => {
@@ -150,6 +153,127 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server: %s', (jdbcUrl, OJP_
     const empty = await client.executeQuery(`SELECT id, label FROM ${tableName} WHERE id = ?`, [-1]);
     expect(empty.rows).toHaveLength(0);
     expect(empty.columns.map((column) => column.toLowerCase())).toEqual(['id', 'label']);
+    expect(empty.metadata).toEqual({
+      columnCount: 2,
+      columns: [
+        { index: 1, label: empty.columns[0] },
+        { index: 2, label: empty.columns[1] },
+      ],
+    });
+  }, 15_000);
+
+  it('should support L2 plain/prepared statements, SQL Server OUTPUT, batches and generated keys', async () => {
+    const id = Date.now() % 100_000_000;
+    const output = await client.createStatement().executeQuery(
+      `INSERT INTO ${tableName} (id, label) OUTPUT inserted.id, inserted.label VALUES (?, ?)`,
+      [id, 'plain output'],
+    );
+    expect(output.columns.map((column) => column.toLowerCase())).toEqual(['id', 'label']);
+    expect(output.rows).toEqual([{ id, label: 'plain output' }]);
+    expect(output.metadata).toEqual({
+      columnCount: 2,
+      columns: [
+        { index: 1, label: output.columns[0] },
+        { index: 2, label: output.columns[1] },
+      ],
+    });
+
+    const preparedOutput = client.prepareStatement(
+      `UPDATE ${tableName} SET label = ? OUTPUT inserted.id WHERE id = ?`,
+    );
+    try {
+      const result = await preparedOutput.executeQuery(['prepared output', id]);
+      expect(result.rows).toEqual([{ id }]);
+      expect(result.metadata.columnCount).toBe(1);
+      const { rows } = await client.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [id]);
+      expect(rows).toEqual([{ label: 'prepared output' }]);
+    } finally {
+      await preparedOutput.close();
+    }
+
+    const batch = client.prepareStatement(`INSERT INTO ${tableName} (id, label) VALUES (?, ?)`);
+    try {
+      await batch.addBatch([id + 1, 'batch one']);
+      await batch.addBatch([id + 2, 'batch two']);
+      expect(await batch.executeBatch()).toEqual([1, 1]);
+      const { rows } = await client.executeQuery(
+        `SELECT id, label FROM ${tableName} WHERE id BETWEEN ? AND ? ORDER BY id`,
+        [id + 1, id + 2],
+      );
+      expect(rows).toEqual([
+        { id: id + 1, label: 'batch one' },
+        { id: id + 2, label: 'batch two' },
+      ]);
+    } finally {
+      await batch.close();
+    }
+
+    const plainBatch = client.createStatement();
+    try {
+      await plainBatch.addBatch(`INSERT INTO ${tableName} (id, label) VALUES (${id + 3}, 'plain batch')`);
+      await plainBatch.addBatch(`INSERT INTO ${tableName} (id, label) VALUES (${id + 4}, 'plain batch')`);
+      expect(await plainBatch.executeBatch()).toEqual([1, 1]);
+      const { rows } = await client.executeQuery(
+        `SELECT id, label FROM ${tableName} WHERE id BETWEEN ? AND ? ORDER BY id`,
+        [id + 3, id + 4],
+      );
+      expect(rows).toEqual([
+        { id: id + 3, label: 'plain batch' },
+        { id: id + 4, label: 'plain batch' },
+      ]);
+    } finally {
+      await plainBatch.close();
+    }
+
+    const keyTable = `${tableName}_keys`;
+    await client.executeUpdate(
+      `CREATE TABLE ${keyTable} (id INT IDENTITY(1,1) PRIMARY KEY, label NVARCHAR(100))`,
+    );
+    const generated = client.prepareStatement(
+      `INSERT INTO ${keyTable} (label) VALUES (?)`,
+      { generatedKeys: true },
+    );
+    try {
+      expect(await generated.executeUpdate(['generated'])).toBe(1);
+      const keys = await generated.getGeneratedKeys();
+      expect(keys.columns.length).toBeGreaterThan(0);
+      expect(keys.rows).toHaveLength(1);
+      const generatedId = Number(Object.values(keys.rows[0])[0]);
+      expect(generatedId).toBeGreaterThan(0);
+      const { rows } = await client.executeQuery(
+        `SELECT id, label FROM ${keyTable} WHERE id = ?`,
+        [generatedId],
+      );
+      expect(rows).toEqual([{ id: generatedId, label: 'generated' }]);
+    } finally {
+      await generated.close();
+      await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
+      await client.executeUpdate(`DELETE FROM ${tableName} WHERE id BETWEEN ? AND ?`, [id, id + 4]);
+    }
+  }, 30_000);
+
+  it('should bind typed SQL Server values and NULL type codes through a prepared statement', async () => {
+    const id = 1_000_000_000 + (Date.now() % 100_000_000);
+    const statement = client.prepareStatement(
+      `INSERT INTO ${tableName} (id, label, price, active, created_at) VALUES (?, ?, ?, ?, ?)`,
+    );
+    try {
+      statement.setParameter(1, id);
+      statement.setParameter(2, new OjpTypedParam('typed NVARCHAR', ParameterType.N_STRING));
+      statement.setParameter(3, new OjpTypedParam('1234.56', ParameterType.BIG_DECIMAL));
+      statement.setNull(4, -7);
+      statement.setParameter(5, new Date('2026-03-10T12:00:00.000Z'));
+
+      expect(await statement.executeUpdate()).toBe(1);
+      const { rows } = await client.executeQuery(
+        `SELECT label, price, active FROM ${tableName} WHERE id = ?`,
+        [id],
+      );
+      expect(rows).toEqual([{ label: 'typed NVARCHAR', price: '1234.56', active: null }]);
+    } finally {
+      await statement.close();
+      await client.executeUpdate(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+    }
   }, 15_000);
 
   it('should read MONEY columns without an external sample database', async () => {

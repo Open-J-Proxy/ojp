@@ -11,9 +11,9 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L9** for SQL Server |
-| Cumulative level | **L1** for H2; **L9** for SQL Server |
-| Higher-level features | L9 XA lifecycle and recovery operations are exercised against SQL Server |
+| Target level | **L10** for SQL Server |
+| Cumulative level | **L1** for H2; **L10** for SQL Server |
+| Higher-level features | SQL Server L10 combines multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
 The H2 and SQL Server L1 suites exercise CRUD, errors, and session lifecycle through
@@ -35,7 +35,11 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L7** | SQL Server (certified) | Least-connections selection with round-robin tie-breaking, active endpoint health probes, cluster-health pool propagation, cached `connHash` reuse, and one safe retry after `NOT_FOUND` only for stateless sessions. See `test/integration.sqlServerL7.test.ts` and `test/multinodeClient.test.ts`. |
 | **L8** | SQL Server (certified) | Bounded retries for stateless operations after transport failures, unhealthy-node avoidance, recovered-node reuse and redistribution. Sticky sessions, active transactions, SQL errors, and pool exhaustion are surfaced without failover or replay. See `test/integration.sqlServerL8.test.ts`, `test/multinodeClient.test.ts`, and `test/errors.test.ts`. |
 | **L9** | SQL Server (certified) | XA connection lifecycle, two-phase and one-phase commit, rollback, timeout, prepared-branch recovery, resource-manager identity, XA errors, and XA-only transaction demarcation. See `test/integration.sqlServerXA.test.ts`. |
-| **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
+| **L10** | SQL Server (certified) | `test/integration.sqlServerL10.test.ts` combines SQL and XA commit/rollback/recovery, stateless failover and recovered-node reuse, sticky-session and XA affinity failures over two mTLS endpoints, and rejection of missing or untrusted client certificates. |
+
+The Node integration workflow provisions two SQL Server OJP endpoints that require
+client certificates and runs the L10 suite alongside the L1–L9 suites. L10 is claimed
+only for SQL Server; H2 remains at L1.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent
@@ -76,10 +80,33 @@ NestJS).
   a fresh client; this helper does not pool or reuse virtual connections.
 
 ```ts
+import { readFileSync } from 'node:fs';
+
 const result = await withOjpClient(ojpUrl, async (db) => {
   return db.executeQuery('SELECT name FROM customers WHERE id = ?', [customerId]);
 }, { user, password });
 ```
+
+For TLS or mutual TLS, pass PEM-encoded buffers in `tls`; the client configures gRPC
+credentials and continues to manage endpoint routing and session state internally:
+
+```ts
+const result = await withOjpClient(ojpUrl, async (db) => {
+  return db.executeQuery('SELECT name FROM customers WHERE id = ?', [customerId]);
+}, {
+  user,
+  password,
+  tls: {
+    rootCert: readFileSync('server-cert.pem'),
+    privateKey: readFileSync('client-key.pem'),
+    certChain: readFileSync('client-cert.pem'),
+  },
+});
+```
+
+`privateKey` and `certChain` must be supplied together. `tls` enables TLS; `rootCert`
+configures server verification, while omitting both client-identity fields uses regular
+server-authenticated TLS.
 
 ### Multinode routing
 

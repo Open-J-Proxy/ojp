@@ -117,8 +117,7 @@ jobs:
               - 'ojp-client-php-pdo/**'
               - '!**/*.md'
             node:
-              - 'ojp-node-driver/**'
-              - '.github/workflows/node-client-integration.yml'
+              - '{ojp-node-driver/**,.github/workflows/node-client-integration.yml}'
               - '!**/*.md'
             unknown:
               - '**'

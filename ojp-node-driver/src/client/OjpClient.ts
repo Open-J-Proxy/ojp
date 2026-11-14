@@ -55,6 +55,15 @@ export interface QueryResultMetadata {
   columns: QueryColumnMetadata[];
 }
 
+export interface OjpTlsOptions {
+  /** PEM-encoded certificate authorities used to verify the OJP server. */
+  rootCert?: Buffer;
+  /** PEM-encoded client private key for mutual TLS. Requires `certChain`. */
+  privateKey?: Buffer;
+  /** PEM-encoded client certificate chain for mutual TLS. Requires `privateKey`. */
+  certChain?: Buffer;
+}
+
 export interface OjpClientOptions {
   /** Target database user (passed through to the ojp-server). */
   user?: string;
@@ -64,6 +73,8 @@ export interface OjpClientOptions {
   callTimeoutMs?: number;
   /** Use an insecure gRPC channel (no TLS). Default: true (local/dev MVP). */
   insecure?: boolean;
+  /** TLS trust roots and optional client identity. Supplying this enables TLS. */
+  tls?: OjpTlsOptions;
   /** Endpoint selection policy in multinode mode. Default: least-connections. */
   loadBalancingStrategy?: 'least-connections' | 'round-robin';
   /** Interval between shared multinode health probes, in milliseconds. Default: 5000. */
@@ -286,8 +297,18 @@ export class OjpClient {
       throw new RangeError('failoverRetryDelayMs must be a non-negative number.');
     }
     this.clientUUID = CLIENT_UUID;
-    this.credentials = options.insecure === false
-      ? grpc.credentials.createSsl()
+    if (!!options.tls?.privateKey !== !!options.tls?.certChain) {
+      throw new TypeError('tls.privateKey and tls.certChain must be provided together.');
+    }
+    if (options.tls && options.insecure === true) {
+      throw new TypeError('tls options cannot be combined with insecure: true.');
+    }
+    this.credentials = options.tls || options.insecure === false
+      ? grpc.credentials.createSsl(
+        options.tls?.rootCert,
+        options.tls?.privateKey,
+        options.tls?.certChain,
+      )
       : grpc.credentials.createInsecure();
     this.autoCommit = !options.xa;
     this.poolKey = connectionKey(this.buildConnectionDetails());

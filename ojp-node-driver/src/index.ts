@@ -8,6 +8,7 @@ export {
   QueryResult,
   QueryColumnMetadata,
   QueryResultMetadata,
+  OjpTlsOptions,
   OjpLobRef,
   OjpNullParam,
   OjpTypedParam,

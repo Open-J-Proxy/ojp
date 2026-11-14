@@ -110,8 +110,8 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     const ref = await client.createLob(Readable.from([content]), 'CLOB');
     expect(await client.executeUpdate(`INSERT INTO ${table} (id, body) VALUES (?, ?)`, [4, ref])).toBe(1);
     await expectUnsupportedLobRead(ref);
-    await expect(client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [4]))
-      .rejects.toThrow(/not supported/i);
+    const result = await client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [4]);
+    expect(result.rows).toEqual([{ body: content }]);
   }, 60_000);
 
   it('round-trips a NULL BLOB and NULL CLOB without hydrating them as empty values', async () => {
@@ -136,8 +136,8 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     const result = await client.executeQuery(`SELECT payload FROM ${table} WHERE id = ?`, [6]);
 
     expect(result.rows).toEqual([{ payload: Buffer.alloc(0) }]);
-    await expect(client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [6]))
-      .rejects.toThrow(/not supported/i);
+    expect((await client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [6])).rows)
+      .toEqual([{ body: '' }]);
   }, 30_000);
 
   it('reuses one BLOB reference across multiple parameter bindings', async () => {

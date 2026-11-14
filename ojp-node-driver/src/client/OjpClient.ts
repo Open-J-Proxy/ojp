@@ -1,5 +1,6 @@
 import * as grpc from '@grpc/grpc-js';
 import { randomUUID } from 'crypto';
+import { PassThrough, Readable } from 'stream';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
 import { toOjpError, OjpConnectionError, OjpTransactionError, isConnectionLevelError } from './errors';
@@ -150,6 +151,40 @@ const LOB_CHUNK_SIZE = 65536;
  */
 const READ_LOB_MAX_LENGTH = 2147483647;
 const CLIENT_UUID = randomUUID();
+
+type LobInput = Buffer | string | AsyncIterable<Buffer | string>;
+
+async function* singleLobChunk(input: Buffer | string): AsyncGenerator<Buffer | string, void, undefined> {
+  yield input;
+}
+
+async function* chunkLobInput(input: LobInput, clob: boolean): AsyncGenerator<Buffer, void, undefined> {
+  const source: AsyncIterable<Buffer | string> =
+    typeof input === 'string' || Buffer.isBuffer(input) ? singleLobChunk(input) : input;
+  let pending = Buffer.alloc(0);
+
+  for await (const chunk of source) {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+    if (bytes.length === 0) {
+      continue;
+    }
+    pending = pending.length === 0 ? bytes : Buffer.concat([pending, bytes]);
+    while (pending.length >= LOB_CHUNK_SIZE) {
+      let chunkSize = LOB_CHUNK_SIZE;
+      if (clob) {
+        while (chunkSize > 0 && (pending[chunkSize] & 0xc0) === 0x80) {
+          chunkSize -= 1;
+        }
+      }
+      yield pending.subarray(0, chunkSize);
+      pending = pending.subarray(chunkSize);
+    }
+  }
+
+  if (pending.length > 0) {
+    yield pending;
+  }
+}
 
 interface StreamedRow {
   columns: string[];
@@ -861,11 +896,10 @@ export class OjpClient {
    * returns a reference (`OjpLobRef`) that can be used as a parameter in
    * `executeUpdate`/`executeQuery` (e.g. `INSERT INTO t (col) VALUES (?)` with `[lobRef]`).
    *
-   * For CLOB, `data` can be passed as a string (automatically UTF-8 encoded)
-   * or as a Buffer already encoded in UTF-8.
+   * Accepts a Buffer, string, or async iterable of Buffer/string chunks (including a Node
+   * Readable). The client owns the session propagation for every upload block.
    */
-  async createLob(data: Buffer | string, lobKind: 'BLOB' | 'CLOB' = 'BLOB'): Promise<OjpLobRef> {
-    const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+  async createLob(data: LobInput, lobKind: 'BLOB' | 'CLOB' = 'BLOB'): Promise<OjpLobRef> {
     const protoLobType = lobKind === 'BLOB' ? 'LT_BLOB' : 'LT_CLOB';
 
     // "Stateless" session (empty sessionUUID): normal connect()/executeQuery/executeUpdate
@@ -879,15 +913,10 @@ export class OjpClient {
     // SessionConnectionHelper.sessionConnection).
     let session = this.requireSession();
 
-    const chunks: Buffer[] = [];
-    if (bytes.length === 0) {
-      // Empty LOB: we still need to send one block for the server to initialize the Blob/Clob.
-      chunks.push(Buffer.alloc(0));
-    } else {
-      for (let offset = 0; offset < bytes.length; offset += LOB_CHUNK_SIZE) {
-        chunks.push(bytes.subarray(offset, offset + LOB_CHUNK_SIZE));
-      }
-    }
+    const isClob = lobKind === 'CLOB';
+    const iterator = chunkLobInput(data, isClob)[Symbol.asyncIterator]();
+    const firstChunk = await iterator.next();
+    const firstBytes = firstChunk.done ? Buffer.alloc(0) : firstChunk.value;
 
     return new Promise<OjpLobRef>((resolve, reject) => {
       const call = this.requireClient().createLob();
@@ -895,18 +924,35 @@ export class OjpClient {
       let firstAckReceived = false;
       let settled = false;
 
-      // 1-based position, advancing by the size (in bytes) of each block sent —
-      // mirrors exactly the position tracking of the reference JDBC driver.
-      // Note: for CLOB with multi-byte characters (accents, emojis) near a
-      // block boundary, the position advances in bytes, not characters — same
-      // limitation as the original protocol (see ParameterHandler/CreateLobAction).
+      // Blob positions count bytes; Clob.setCharacterStream positions count UTF-16 units.
       let position = 1;
-      let nextChunkIndex = 0;
-      const writeNextChunk = (): void => {
-        const chunk = chunks[nextChunkIndex];
-        nextChunkIndex += 1;
-        call.write({ session, position: position.toString(), data: chunk, lobType: protoLobType });
-        position += chunk.length;
+      const writeChunk = (chunk: Buffer): Promise<void> => new Promise((writeResolve, writeReject) => {
+        const chunkPosition = position;
+        position += isClob ? chunk.toString('utf8').length : chunk.length;
+        call.write(
+          { session, position: chunkPosition.toString(), data: chunk, lobType: protoLobType },
+          (err?: Error | null) => {
+            if (err) {
+              writeReject(err);
+              return;
+            }
+            writeResolve();
+          },
+        );
+      });
+      const writeRemainingChunks = async (): Promise<void> => {
+        try {
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) {
+              break;
+            }
+            await writeChunk(next.value);
+          }
+          call.end();
+        } catch (error) {
+          call.destroy(error instanceof Error ? error : new Error(String(error)));
+        }
       };
 
       call.on('data', (ref: LobReference) => {
@@ -917,10 +963,7 @@ export class OjpClient {
           // From here on, use the "stateful" session returned by the server (with
           // sessionUUID/connection affinity) for the remaining blocks.
           session = ref.session;
-          while (nextChunkIndex < chunks.length) {
-            writeNextChunk();
-          }
-          call.end();
+          void writeRemainingChunks();
         }
       });
       call.on('error', (err) => {
@@ -928,6 +971,7 @@ export class OjpClient {
           return;
         }
         settled = true;
+        void iterator.return?.();
         reject(this.toClientError(err));
       });
       call.on('end', () => {
@@ -944,8 +988,45 @@ export class OjpClient {
 
       // Sends only the first block and waits for the ack ('data' event above) before
       // sending the rest — see the comment about connection affinity right above.
-      writeNextChunk();
+      void writeChunk(firstBytes).catch((error: unknown) => call.destroy(
+        error instanceof Error ? error : new Error(String(error)),
+      ));
     });
+  }
+
+  /**
+   * Reads a LOB reference as a Node.js readable stream. The active OJP session and LOB
+   * type come from this client and the reference, so callers never pass protocol session
+   * state.
+   */
+  readLobStream(reference: OjpLobRef): Readable {
+    const request: ReadLobRequest = {
+      lobReference: {
+        session: this.requireSession(),
+        uuid: reference.uuid,
+        lobType: reference.lobKind === 'BLOB' ? 'LT_BLOB' : 'LT_CLOB',
+      },
+      position: '1',
+      length: READ_LOB_MAX_LENGTH,
+    };
+    const call = this.requireClient().readLob(request);
+    const output = new PassThrough();
+
+    call.on('data', (block: LobDataBlock) => {
+      this.updateSessionFrom(block);
+      if (block.position !== '-1' && block.data?.length && !output.write(block.data)) {
+        call.pause();
+      }
+    });
+    output.on('drain', () => call.resume());
+    call.on('error', (error) => output.destroy(this.toClientError(error)));
+    call.on('end', () => output.end());
+    output.on('close', () => {
+      if (!output.readableEnded) {
+        call.cancel();
+      }
+    });
+    return output;
   }
 
 

@@ -177,10 +177,14 @@ Important points:
   advances through the iteration — memory usage proportional to one block, not the
   entire result set.
 - Interrupting the iteration early (`break`/`return` in a `for await`) automatically
-  cancels the underlying gRPC call, releasing the result set on `ojp-server`. The
-  connection remains usable normally afterward.
+  cancels the underlying gRPC call and closes the server-side result set through
+  `callResource(RES_RESULT_SET, CALL_CLOSE)`. Normal exhaustion also closes the result
+  set; the connection remains usable afterward.
 - `executeQuery()` (buffered) is internally implemented on top of the same streaming
   logic — both share the same code path and error semantics.
+- The client propagates the current `SessionInfo` on every stream/fetch/close RPC;
+  callers do not manage session or result-set UUIDs. For short-lived work, wrapping
+  iteration in `withOjpClient()` also handles connect and session termination.
 - SQL Server and DB2 use a special "row-by-row" mode when the result set contains
   LOBs (advancing the cursor ahead would invalidate the LOBs): the server signals this
   via `OpResult.flag`, and the driver then fetches each additional row with a unary
@@ -496,7 +500,8 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
       decoded from the gRPC metadata (`SqlErrorResponse`).
 - [x] Real pagination (`executeQueryStream`): on-demand consumption of the gRPC stream,
       without accumulating the entire result set in memory, with automatic cancellation
-      on early interruption. Includes support for "row-by-row" mode via `fetchNextRows`
+      and result-set resource closure on early interruption or normal completion.
+      Includes support for "row-by-row" mode via `fetchNextRows`
       (SQL Server/DB2 + LOBs), **validated with real integration against SQL Server**.
 - [x] `DECIMAL`/`NUMERIC`/`MONEY` mapping (`BigDecimalWire` → decimal string).
 - [x] Real integration validation against SQL Server in an Always On AG (multinode).

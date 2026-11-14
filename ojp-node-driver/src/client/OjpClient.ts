@@ -647,8 +647,7 @@ export class OjpClient {
    * "row-by-row" mode (SQL Server/DB2 + LOBs), it keeps pulling rows via `fetchNextRows`
    * until it receives an empty block.
    *
-   * Interrupting the iteration early (e.g. `break` in a `for await`) automatically
-   * cancels the underlying gRPC call, releasing the result set on the server.
+   * Exhausting or interrupting the iteration closes the server-side result set.
    */
   private async *streamOpResults(request: StatementRequest): AsyncGenerator<OpResult, void, undefined> {
     const stream = this.requireClient().executeQuery(request);
@@ -658,10 +657,10 @@ export class OjpClient {
     stream.on('error', () => undefined);
 
     let endedNormally = false;
+    let resultSetUUID = '';
     try {
       let rowByRowMode = false;
       let firstBlock = true;
-      let resultSetUUID = '';
 
       try {
         for await (const opResult of stream as unknown as AsyncIterable<OpResult>) {
@@ -693,6 +692,14 @@ export class OjpClient {
     } finally {
       if (!endedNormally) {
         stream.cancel();
+      }
+      if (resultSetUUID) {
+        await this.invokeCallResource({
+          resourceType: 'RES_RESULT_SET',
+          resourceUUID: resultSetUUID,
+          callType: 'CALL_CLOSE',
+          resourceName: '',
+        });
       }
     }
   }

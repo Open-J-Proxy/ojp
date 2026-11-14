@@ -51,6 +51,7 @@ function makeHost(client: unknown, session: SessionInfo): OjpXAResourceHost & { 
     getClient: () => client as StatementServiceClient,
     getSession: () => session,
     updateSession: (s) => updatedSessions.push(s),
+    startWithFailover: (operation) => operation(client as StatementServiceClient, session),
     mapError: (err) => (err instanceof Error ? err : new Error(String(err))),
   };
 }
@@ -155,7 +156,7 @@ describe('OjpXAResource', () => {
     await expect(resource.start(xid)).rejects.toMatchObject({ errorCode: XA.XAER_RMFAIL });
   });
 
-  it('start() maps a non-connection-level transport failure to XAER_RMERR', async () => {
+  it('start() maps a non-connection-level failure to XAER_RMERR', async () => {
     const client = makeFakeClient();
     const grpcErr = Object.assign(new Error('invalid argument'), { code: grpc.status.INVALID_ARGUMENT });
     client.xaStart.mockImplementation((_req, cb) => cb(grpcErr as grpc.ServiceError, undefined as never));
@@ -165,7 +166,7 @@ describe('OjpXAResource', () => {
   });
 
   it.each(['end', 'commit', 'rollback', 'forget'] as const)(
-    '%s() always maps a transport failure to XAER_RMERR, even when connection-level',
+    '%s() maps a connection-level failure to XAER_RMFAIL without retrying',
     async (op) => {
       const client = makeFakeClient();
       const grpcErr = Object.assign(new Error('server unavailable'), { code: grpc.status.UNAVAILABLE });
@@ -175,7 +176,7 @@ describe('OjpXAResource', () => {
       const resource = new OjpXAResource(makeHost(client, makeSession()));
 
       const call = op === 'commit' ? resource.commit(xid, true) : (resource as unknown as Record<string, (x: Xid) => Promise<void>>)[op](xid);
-      await expect(call).rejects.toMatchObject({ errorCode: XA.XAER_RMERR });
+      await expect(call).rejects.toMatchObject({ errorCode: XA.XAER_RMFAIL });
     },
   );
 
@@ -212,9 +213,9 @@ describe('OjpXAResource', () => {
     await expect(resource.recover(XA.TMSTARTRSCAN)).rejects.toMatchObject({ errorCode: XA.XAER_RMFAIL });
   });
 
-  it('recover() maps a non-transient transport failure to XAER_RMERR', async () => {
+  it('recover() maps a non-connection-level failure to XAER_RMERR', async () => {
     const client = makeFakeClient();
-    const grpcErr = Object.assign(new Error('boom'), { code: grpc.status.INTERNAL });
+    const grpcErr = Object.assign(new Error('invalid argument'), { code: grpc.status.INVALID_ARGUMENT });
     client.xaRecover.mockImplementation((_req, cb) => cb(grpcErr as grpc.ServiceError, undefined as never));
     const resource = new OjpXAResource(makeHost(client, makeSession()));
 

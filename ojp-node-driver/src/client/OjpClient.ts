@@ -34,6 +34,7 @@ import {
   SessionInfo,
   SessionTerminationStatus,
   StatementRequest,
+  XaResponse,
 } from '../proto/types';
 
 export { OjpLobRef, OjpTypedParam } from './valueMapper';
@@ -288,6 +289,7 @@ export class OjpClient {
     this.credentials = options.insecure === false
       ? grpc.credentials.createSsl()
       : grpc.credentials.createInsecure();
+    this.autoCommit = !options.xa;
     this.poolKey = connectionKey(this.buildConnectionDetails());
   }
 
@@ -1655,8 +1657,59 @@ export class OjpClient {
       updateSession: (session) => {
         this.session = session;
       },
+      startWithFailover: (operation) => this.startXaWithFailover(operation),
       mapError: (err) => this.toClientError(err),
     });
+  }
+
+  private async startXaWithFailover(
+    operation: (client: StatementServiceClient, session: SessionInfo) => Promise<XaResponse>,
+  ): Promise<XaResponse> {
+    const excludedEndpoints = new Set<string>();
+    const maxAttempts = this.options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS;
+    let attempts = 0;
+
+    while (true) {
+      try {
+        return await operation(this.requireClient(), this.requireSession());
+      } catch (err) {
+        const failedEndpoint = this.boundServerEndpoint;
+        if (!isConnectionLevelError(err) || attempts >= maxAttempts || !failedEndpoint) {
+          throw err;
+        }
+
+        this.toClientError(err);
+        excludedEndpoints.add(endpointKey(failedEndpoint));
+        this.releaseXaSessionAfterTransportFailure();
+        attempts += 1;
+        const delayMs = this.options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS;
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        try {
+          await this.connectToAvailableEndpoint(excludedEndpoints);
+        } catch {
+          throw err;
+        }
+      }
+    }
+  }
+
+  private releaseXaSessionAfterTransportFailure(): void {
+    const endpoint = this.boundServerEndpoint;
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = undefined;
+    }
+    if (this.endpointRegistered && endpoint) {
+      unregisterEndpointSession(endpoint);
+      this.endpointRegistered = false;
+    }
+    this.session = undefined;
+    this.boundServerEndpoint = undefined;
+    const client = this.grpcClient;
+    this.grpcClient = undefined;
+    client?.close();
   }
 
   /** Terminates the session on the ojp-server and closes the gRPC channel. Idempotent. */

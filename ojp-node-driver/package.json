@@ -21,6 +21,7 @@
     "test:sqlserver-l6": "jest test/integration.sqlServerL6.test.ts",
     "test:sqlserver-l7": "jest test/integration.sqlServerL7.test.ts",
     "test:sqlserver-l8": "jest test/integration.sqlServerL8.test.ts",
+    "test:sqlserver-xa": "jest test/integration.sqlServerXA.test.ts",
     "test:sqlserver-l4": "jest test/integration.sqlServerL4.test.ts",
     "test:multinode-failover": "jest test/integration.multinode.test.ts",
     "test:xa": "jest test/integration.xa.postgres.test.ts"

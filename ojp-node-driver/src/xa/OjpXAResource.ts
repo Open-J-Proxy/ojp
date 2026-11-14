@@ -33,14 +33,13 @@ export interface OjpXAResourceHost {
   getClient(): StatementServiceClient;
   getSession(): SessionInfo;
   updateSession(session: SessionInfo): void;
+  startWithFailover(operation: (client: StatementServiceClient, session: SessionInfo) => Promise<XaResponse>): Promise<XaResponse>;
   /** Maps a raw gRPC error to this driver's error hierarchy, marking the bound endpoint unhealthy as a side effect when applicable. */
   mapError(err: unknown): Error;
 }
 
-/** Transient gRPC status codes that `recover()` maps to `XAER_RMFAIL`, matching the reference JDBC driver's narrower check for this specific operation (see class docs). */
-function isTransientRecoverError(err: unknown): boolean {
-  const grpcError = err as { code?: number } | undefined;
-  return grpcError?.code === grpc.status.DEADLINE_EXCEEDED || grpcError?.code === grpc.status.UNAVAILABLE;
+function transportErrorCode(err: unknown): number {
+  return isConnectionLevelError(err) ? XA.XAER_RMFAIL : XA.XAER_RMERR;
 }
 
 /**
@@ -55,36 +54,41 @@ function isTransientRecoverError(err: unknown): boolean {
  * - `errorCode === 0` — business-level failure reported by the server (`XaResponse.
  *   success === false`), mirroring the reference JDBC driver's `new XAException(message)`
  *   (uninitialized/default error code).
- * - `XAER_RMFAIL` — the resource manager (ojp-server) is unavailable (connection-level
- *   transport failure). Only assigned for `start()` and `recover()`, matching the Java
- *   reference; every other operation maps a transport failure to `XAER_RMERR` uniformly.
+ * - `XAER_RMFAIL` — the bound resource manager (ojp-server) is unavailable (connection-
+ *   level transport failure); XA work is never silently rerouted.
  * - `XAER_RMERR` — any other resource-manager-side error, including all non-connection-
  *   level transport failures.
  *
- * Known scope reduction vs. the reference JDBC driver's `OjpXAResource` (documented in
- * README.md's "XA support" section): no cross-node retry-with-session-recreation on a
- * connection-level failure in `start()`, and no proactive multinode health-listener
- * invalidation. Every operation still marks the bound endpoint unhealthy for future
- * `connect()` calls via the injected `mapError` callback, consistent with the ordinary
- * SQL path.
+ * `start()` alone may recreate the XA session and retry on another endpoint after a
+ * connection-level failure. Every other operation remains bound and is never replayed.
  */
 export class OjpXAResource {
   constructor(private readonly host: OjpXAResourceHost) {}
 
   /** Starts work on behalf of a transaction branch. `flags`: `TMNOFLAGS` (new branch), `TMJOIN`, or `TMRESUME`. */
   async start(xid: Xid, flags: number = XA.TMNOFLAGS): Promise<void> {
-    const request: XaStartRequest = { session: this.host.getSession(), xid: toXidProto(xid), flags };
-    const response = await this.runUnary<XaResponse>(
-      (client, cb) => client.xaStart(request, cb),
-      (err) => (isConnectionLevelError(err) ? XA.XAER_RMFAIL : XA.XAER_RMERR),
-    );
+    let response: XaResponse;
+    try {
+      response = await this.host.startWithFailover((client, session) => {
+        const request: XaStartRequest = { session, xid: toXidProto(xid), flags };
+        return new Promise<XaResponse>((resolve, reject) => {
+          client.xaStart(request, (err, result) => (err ? reject(err) : resolve(result)));
+        });
+      });
+    } catch (err) {
+      const mapped = this.host.mapError(err);
+      throw new OjpXaError(mapped.message, transportErrorCode(err), err);
+    }
     this.assertSuccess(response);
   }
 
   /** Ends the association of the calling thread with the transaction branch. `flags`: `TMSUCCESS`, `TMFAIL`, or `TMSUSPEND`. */
   async end(xid: Xid, flags: number = XA.TMSUCCESS): Promise<void> {
     const request: XaEndRequest = { session: this.host.getSession(), xid: toXidProto(xid), flags };
-    const response = await this.runUnary<XaResponse>((client, cb) => client.xaEnd(request, cb), () => XA.XAER_RMERR);
+    const response = await this.runUnary<XaResponse>(
+      (client, cb) => client.xaEnd(request, cb),
+      transportErrorCode,
+    );
     this.assertSuccess(response);
   }
 
@@ -93,7 +97,7 @@ export class OjpXAResource {
     const request: XaPrepareRequest = { session: this.host.getSession(), xid: toXidProto(xid) };
     const response = await this.runUnary<XaPrepareResponse>(
       (client, cb) => client.xaPrepare(request, cb),
-      () => XA.XAER_RMERR,
+      transportErrorCode,
     );
     this.host.updateSession(response.session);
     return response.result;
@@ -102,14 +106,20 @@ export class OjpXAResource {
   /** Commits the transaction branch. `onePhase=true` skips the prepare phase (single resource manager optimization). */
   async commit(xid: Xid, onePhase: boolean): Promise<void> {
     const request: XaCommitRequest = { session: this.host.getSession(), xid: toXidProto(xid), onePhase };
-    const response = await this.runUnary<XaResponse>((client, cb) => client.xaCommit(request, cb), () => XA.XAER_RMERR);
+    const response = await this.runUnary<XaResponse>(
+      (client, cb) => client.xaCommit(request, cb),
+      transportErrorCode,
+    );
     this.assertSuccess(response);
   }
 
   /** Rolls back work done on behalf of the transaction branch. */
   async rollback(xid: Xid): Promise<void> {
     const request: XaRollbackRequest = { session: this.host.getSession(), xid: toXidProto(xid) };
-    const response = await this.runUnary<XaResponse>((client, cb) => client.xaRollback(request, cb), () => XA.XAER_RMERR);
+    const response = await this.runUnary<XaResponse>(
+      (client, cb) => client.xaRollback(request, cb),
+      transportErrorCode,
+    );
     this.assertSuccess(response);
   }
 
@@ -123,7 +133,7 @@ export class OjpXAResource {
     const request: XaRecoverRequest = { session: this.host.getSession(), flag };
     const response = await this.runUnary<XaRecoverResponse>(
       (client, cb) => client.xaRecover(request, cb),
-      (err) => (isTransientRecoverError(err) ? XA.XAER_RMFAIL : XA.XAER_RMERR),
+      transportErrorCode,
     );
     this.host.updateSession(response.session);
     return (response.xids ?? []).map(fromXidProto);
@@ -132,7 +142,10 @@ export class OjpXAResource {
   /** Tells the resource manager to forget about a heuristically completed transaction branch. */
   async forget(xid: Xid): Promise<void> {
     const request: XaForgetRequest = { session: this.host.getSession(), xid: toXidProto(xid) };
-    const response = await this.runUnary<XaResponse>((client, cb) => client.xaForget(request, cb), () => XA.XAER_RMERR);
+    const response = await this.runUnary<XaResponse>(
+      (client, cb) => client.xaForget(request, cb),
+      transportErrorCode,
+    );
     this.assertSuccess(response);
   }
 
@@ -141,7 +154,7 @@ export class OjpXAResource {
     const request: XaSetTransactionTimeoutRequest = { session: this.host.getSession(), seconds };
     const response = await this.runUnary<XaSetTransactionTimeoutResponse>(
       (client, cb) => client.xaSetTransactionTimeout(request, cb),
-      () => XA.XAER_RMERR,
+      transportErrorCode,
     );
     this.host.updateSession(response.session);
     return response.success;
@@ -152,7 +165,7 @@ export class OjpXAResource {
     const request: XaGetTransactionTimeoutRequest = { session: this.host.getSession() };
     const response = await this.runUnary<XaGetTransactionTimeoutResponse>(
       (client, cb) => client.xaGetTransactionTimeout(request, cb),
-      () => XA.XAER_RMERR,
+      transportErrorCode,
     );
     this.host.updateSession(response.session);
     return response.seconds;
@@ -163,7 +176,7 @@ export class OjpXAResource {
     const request: XaIsSameRMRequest = { session1: this.host.getSession(), session2: other.host.getSession() };
     const response = await this.runUnary<XaIsSameRMResponse>(
       (client, cb) => client.xaIsSameRM(request, cb),
-      () => XA.XAER_RMERR,
+      transportErrorCode,
     );
     return response.isSame;
   }

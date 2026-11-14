@@ -78,10 +78,9 @@ class DatasourcePropertiesLoaderInfoPropertiesTest {
     }
 
     @Test
-    void shouldForwardCreationGraceForSelectedDatasource() {
+    void shouldApplyCreationGraceToSelectedDatasource() {
         Properties info = new Properties();
-        info.setProperty("mainApp.ojp.connection.pool.connectionCreationGracePeriod", "7500");
-        info.setProperty("batch.ojp.connection.pool.connectionCreationGracePeriod", "0");
+        info.setProperty("ojp.connection.pool.connectionCreationGracePeriod", "7500");
 
         Properties result = DatasourcePropertiesLoader.applyInfoProperties(null, info, "mainApp");
 

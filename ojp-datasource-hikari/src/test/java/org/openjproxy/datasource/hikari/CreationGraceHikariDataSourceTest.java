@@ -13,10 +13,12 @@ import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,12 +34,7 @@ class CreationGraceHikariDataSourceTest {
                 var acquisition = executor.submit(() -> pool.getConnection());
                 assertTrue(fixture.creationStarted.await(2, TimeUnit.SECONDS));
                 assertTrue(fixture.borrowTimedOut.await(2, TimeUnit.SECONDS));
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-                while (pool.getHikariPoolMXBean().getThreadsAwaitingConnection() == 0
-                        && System.nanoTime() < deadline) {
-                    Thread.sleep(5);
-                }
-                assertEquals(1, pool.getHikariPoolMXBean().getThreadsAwaitingConnection());
+                assertGraceWaitStarted(pool);
                 fixture.allowCreation.countDown();
                 try (Connection connection = acquisition.get(2, TimeUnit.SECONDS);
                      var statement = connection.createStatement();
@@ -110,6 +107,50 @@ class CreationGraceHikariDataSourceTest {
         pool.close();
         assertThrows(SQLException.class, pool::getConnection);
         assertEquals(0, fixture.timeouts.get());
+    }
+
+    @Test
+    void shouldPreserveInterruptionDuringGrace() throws Exception {
+        Fixture fixture = new Fixture();
+        try (CreationGraceHikariDataSource pool = fixture.createPool(5000)) {
+            fixture.blockCreation.set(true);
+            AtomicReference<Thread> borrower = new AtomicReference<>();
+            AtomicBoolean interrupted = new AtomicBoolean();
+            var executor = Executors.newSingleThreadExecutor();
+            try {
+                var acquisition = executor.submit(() -> {
+                    borrower.set(Thread.currentThread());
+                    try {
+                        return pool.getConnection();
+                    } finally {
+                        interrupted.set(Thread.currentThread().isInterrupted());
+                    }
+                });
+                assertTrue(fixture.borrowTimedOut.await(2, TimeUnit.SECONDS));
+                assertGraceWaitStarted(pool);
+                borrower.get().interrupt();
+
+                ExecutionException failure = assertThrows(ExecutionException.class,
+                        () -> acquisition.get(2, TimeUnit.SECONDS));
+                assertInstanceOf(SQLException.class, failure.getCause());
+                assertTrue(interrupted.get());
+                assertEquals(1, fixture.timeouts.get(), "Interruption must not start another wait");
+                assertEquals(0, pool.getHikariPoolMXBean().getActiveConnections());
+            } finally {
+                fixture.allowCreation.countDown();
+                executor.shutdownNow();
+                assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    private static void assertGraceWaitStarted(CreationGraceHikariDataSource pool) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (pool.getHikariPoolMXBean().getThreadsAwaitingConnection() == 0
+                && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertEquals(1, pool.getHikariPoolMXBean().getThreadsAwaitingConnection());
     }
 
     private static class Fixture {

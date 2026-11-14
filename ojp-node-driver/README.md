@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L4** for SQL Server |
+| Cumulative level | **L1** for H2; **L5** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -30,14 +30,14 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L2** | SQL Server (certified) | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, plain/prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Real-server certification passed in run 43528198577; declared type omissions are listed below. |
 | **L3** | SQL Server (certified) | Covers streamed query results, `fetchNextRows` pagination, result-set metadata and EOF, concurrent independent cursors, and cleanup after early close. See `test/integration.sqlServerL3.test.ts`. |
 | **L4** | SQL Server (certified) | `startTransaction`/`commit`/`rollback`, autocommit state, transaction-isolation get/set, named/unnamed savepoints, rollback-to-savepoint, release, transaction completion invalidation, batch rollback, and error recovery. See `test/integration.sqlServerL4.test.ts`. |
-| **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
+| **L5** | SQL Server (certified) | BLOB/CLOB round trips including multi-chunk values, Unicode, empty and NULL values, updates, reusable references, and Node `Readable` input/output. See `test/integration.sqlServerL5.test.ts`. |
 | **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
 | **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
 | **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
-The SQL Server L4 claim is based on real-server integration coverage; SQL Server's
+The SQL Server L5 claim is based on real-server integration coverage; SQL Server's
 coverage does not establish a PostgreSQL level. The Node metadata shape intentionally
 reports the stream protocol's column labels; it does not expose JDBC's full vendor-specific
 `ResultSetMetaData` surface.
@@ -260,7 +260,8 @@ unchanged.
 ## SQL Server integration
 
 The real-server suites `test/integration.sqlServerAg.test.ts`,
-`test/integration.sqlServerL3.test.ts`, and `test/integration.sqlServerL4.test.ts`
+`test/integration.sqlServerL3.test.ts`, `test/integration.sqlServerL4.test.ts`, and
+`test/integration.sqlServerL5.test.ts`
 cover SQL Server:
 
 - L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
@@ -279,6 +280,8 @@ cover SQL Server:
 - L4 transaction behavior: default autocommit, commit/rollback durability, isolation
   get/set, savepoint rollback and release, nested savepoints, batch rollback, recovery
   after a SQL error, and rejection of savepoints after transaction completion.
+- L5 LOB behavior: BLOB/CLOB round trips, >64KB uploads, Unicode, update, NULL versus
+  empty values, reusable references, and stream input/output through Node `Readable`.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide
@@ -287,8 +290,10 @@ connection fixture if the default does not match your database, and provide
 ```powershell
 $env:OJP_ENABLE_SQLSERVER_AG_TESTS = 'true'
 $env:OJP_ENABLE_SQLSERVER_L4_TESTS = 'true'
+$env:OJP_ENABLE_SQLSERVER_L5_TESTS = 'true'
 npm run test:sqlserver-ag
 npm run test:sqlserver-l4
+npm run test:sqlserver-l5
 ```
 
 **Known observations/limitations:**
@@ -311,19 +316,31 @@ Large `BLOB`/`CLOB` columns don't comfortably fit in a single `ParameterValue` �
 protocol treats LOBs as a separate resource, referenced by a `LobReference`
 (UUID) instead of the entire value embedded in the row:
 
-- **Reading**: when reading a native `CLOB` column, the driver transparently
-  "dereferences" it — you receive the content as a `string`, without needing to know
-  that there's a LOB underneath. For explicit/streaming reads in chunks, use
-  `readLobAsString(ref)` / `readLobChunks(ref)`.
-- **Writing** (`createLob(data: Buffer | string, lobKind: 'BLOB' | 'CLOB')`): writes
-  the content to the server via bidirectional gRPC streaming (one `LobDataBlock` per
-  64KB chunk) and returns an `OjpLobRef` (`{ session, lobReference }`) to use as a
-  parameter in `INSERT`/`UPDATE`.
+- **Reading**: native `CLOB` columns are transparently dereferenced to JavaScript
+  strings, and binary columns arrive as `Buffer` values. For explicit streaming reads
+  from an `OjpLobRef`, use `readLobStream(ref)`; it returns a Node `Readable` of bytes
+  (use `setEncoding('utf8')` for CLOB text).
+- **Writing** (`createLob(data, lobKind)`): accepts a `Buffer`, string, or async
+  iterable of `Buffer`/string chunks, including a Node `Readable`. It streams data to
+  the server in blocks of at most 64KB and returns an `OjpLobRef` for `INSERT`/`UPDATE`.
+  The client manages `SessionInfo` internally for upload, binding, transparent CLOB
+  hydration, and `readLobStream`; application code never passes session tokens or
+  protocol session objects.
 
 ```ts
+import { createReadStream } from 'fs';
+
 const ref = await client.createLob(Buffer.from('large content...'), 'BLOB');
 await client.executeUpdate('INSERT INTO files (id, content) VALUES (?, ?)', [1, ref]);
+
+const fileRef = await client.createLob(createReadStream('archive.bin'), 'BLOB');
+await client.executeUpdate('INSERT INTO files (id, content) VALUES (?, ?)', [2, fileRef]);
 ```
+
+`OjpLobRef` is the explicit resource handle for a separate LOB upload; reusing one
+reference for multiple parameter bindings is supported. For ordinary values that fit
+the statement protocol, pass a `Buffer` or string directly as a query parameter and
+avoid the extra LOB upload step.
 
 **Important protocol detail (multi-chunk upload):** the first chunk is sent with the
 connection's "normal" session; the first acknowledgement (`LobReference`) returned by

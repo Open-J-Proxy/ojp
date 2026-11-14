@@ -1,3 +1,4 @@
+import { Readable } from 'stream';
 import { OjpClient } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
@@ -63,6 +64,28 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
 
     expect((result.rows[0].payload as Buffer).length).toBe(content.length);
     expect((result.rows[0].payload as Buffer).equals(content)).toBe(true);
+  }, 60_000);
+
+  it('uploads from a Node Readable, reads to a Node Readable, and keeps the session internal', async () => {
+    const content = Buffer.alloc(180_123);
+    for (let index = 0; index < content.length; index++) {
+      content[index] = (index * 17) % 256;
+    }
+    const source = Readable.from([
+      content.subarray(0, 17_000),
+      content.subarray(17_000, 98_000),
+      content.subarray(98_000),
+    ]);
+    const ref = await client.createLob(source, 'BLOB');
+    const chunks: Buffer[] = [];
+    for await (const chunk of client.readLobStream(ref)) {
+      chunks.push(Buffer.from(chunk));
+    }
+
+    expect(Buffer.concat(chunks).equals(content)).toBe(true);
+    expect(await client.executeUpdate(`INSERT INTO ${table} (id, payload) VALUES (?, ?)`, [10, ref])).toBe(1);
+    expect((await client.executeQuery(`SELECT payload FROM ${table} WHERE id = ?`, [10])).rows[0].payload)
+      .toEqual(content);
   }, 60_000);
 
   it('updates a BLOB and returns only the new bytes', async () => {

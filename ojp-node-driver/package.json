@@ -17,6 +17,7 @@
     "test:integration": "jest test/integration.ojpServer.test.ts",
     "test:lob-h2": "jest test/integration.lob.h2.test.ts",
     "test:sqlserver-ag": "jest test/integration.sqlServerAg.test.ts",
+    "test:sqlserver-l5": "jest test/integration.sqlServerL5.test.ts",
     "test:sqlserver-l4": "jest test/integration.sqlServerL4.test.ts",
     "test:multinode-failover": "jest test/integration.multinode.test.ts",
     "test:xa": "jest test/integration.xa.postgres.test.ts"

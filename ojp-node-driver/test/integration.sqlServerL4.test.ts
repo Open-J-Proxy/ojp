@@ -1,4 +1,4 @@
-import { OjpClient, TransactionIsolation } from '../src';
+import { OjpClient, TransactionIsolation, TransactionIsolationLevel } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_SQLSERVER_L4_TESTS === 'true';
@@ -44,10 +44,11 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L4: %s', (jdbcUrl, u
 
   it('starts transactions from autocommit mode and gets/sets SQL Server isolation', async () => {
     const connection = await newClient();
+    let originalIsolation: TransactionIsolationLevel | undefined;
     try {
       expect(connection.getAutoCommit()).toBe(true);
 
-      const originalIsolation = await connection.getTransactionIsolation();
+      originalIsolation = await connection.getTransactionIsolation();
       expect(originalIsolation).toBe(TransactionIsolation.READ_COMMITTED);
       await connection.setTransactionIsolation(TransactionIsolation.SERIALIZABLE);
       await expect(connection.getTransactionIsolation()).resolves.toBe(TransactionIsolation.SERIALIZABLE);
@@ -57,10 +58,15 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L4: %s', (jdbcUrl, u
       await connection.rollback();
       expect(connection.getAutoCommit()).toBe(true);
 
-      await connection.setTransactionIsolation(originalIsolation);
-      await expect(connection.getTransactionIsolation()).resolves.toBe(originalIsolation);
     } finally {
-      await connection.close();
+      try {
+        if (originalIsolation !== undefined) {
+          await connection.setTransactionIsolation(originalIsolation);
+          await expect(connection.getTransactionIsolation()).resolves.toBe(originalIsolation);
+        }
+      } finally {
+        await connection.close();
+      }
     }
   }, 30_000);
 
@@ -111,6 +117,34 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L4: %s', (jdbcUrl, u
     }
   }, 30_000);
 
+  it('automatically commits a successful unit of work and rolls back a failed one', async () => {
+    const connection = await newClient();
+    const failure = new Error('transaction callback failed');
+    try {
+      await expect(connection.withTransaction(async (transaction) => {
+        await transaction.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [1, 'committed']);
+        return 'result';
+      })).resolves.toBe('result');
+      expect(connection.getAutoCommit()).toBe(true);
+
+      await expect(connection.withTransaction(async (transaction) => {
+        await transaction.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [2, 'rolled back']);
+        throw failure;
+      })).rejects.toBe(failure);
+      expect(connection.getAutoCommit()).toBe(true);
+    } finally {
+      await connection.close();
+    }
+
+    const verifier = await newClient();
+    try {
+      const result = await verifier.executeQuery(`SELECT id, label FROM ${table} ORDER BY id`);
+      expect(result.rows).toEqual([{ id: 1, label: 'committed' }]);
+    } finally {
+      await verifier.close();
+    }
+  }, 30_000);
+
   it('rolls back to a named savepoint while preserving earlier work in the transaction', async () => {
     const connection = await newClient();
     try {
@@ -118,7 +152,7 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L4: %s', (jdbcUrl, u
       await connection.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [1, 'before']);
       const savepoint = await connection.setSavepoint('partial_rollback');
       await connection.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [2, 'after']);
-      expect(await connection.getSavepointName(savepoint)).toBe('partial_rollback');
+      expect(savepoint.name).toBe('partial_rollback');
 
       await connection.rollback(savepoint);
       await expect(connection.executeQuery(`SELECT id, label FROM ${table} ORDER BY id`))
@@ -146,17 +180,21 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L4: %s', (jdbcUrl, u
     try {
       await connection.startTransaction();
       await connection.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [1, 'base']);
-      const first = await connection.setSavepoint('first');
+      const first = await connection.setSavepoint();
+      expect(first.name).toBeUndefined();
       await connection.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [2, 'middle']);
       const second = await connection.setSavepoint('second');
+      expect(second.name).toBe('second');
       await connection.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [3, 'last']);
 
       await connection.rollback(second);
-      await expect(connection.executeQuery(`SELECT id FROM ${table} ORDER BY id`))
-        .resolves.toMatchObject({ rows: [{ id: 1 }, { id: 2 }] });
+      expect((await connection.executeQuery(`SELECT id FROM ${table} ORDER BY id`)).rows).toEqual([
+        { id: 1 },
+        { id: 2 },
+      ]);
       await connection.rollback(first);
-      await expect(connection.executeQuery(`SELECT id FROM ${table} ORDER BY id`))
-        .resolves.toMatchObject({ rows: [{ id: 1 }] });
+      expect((await connection.executeQuery(`SELECT id FROM ${table} ORDER BY id`)).rows).toEqual([{ id: 1 }]);
+      await expect(connection.rollback(second)).rejects.toThrow(/transaction|savepoint/i);
       await connection.commit();
     } finally {
       await connection.close();
@@ -220,28 +258,42 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L4: %s', (jdbcUrl, u
       const savepoint = await connection.setSavepoint('release_test');
       await connection.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [2, 'after release']);
 
+      let released = false;
       try {
         await connection.releaseSavepoint(savepoint);
-      } catch {
-        // SQL Server JDBC may report savepoint release as unsupported.
+        released = true;
+      } catch (error) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        expect(error.message).toMatch(/not supported|unsupported|not implemented/i);
       }
 
-      await expect(connection.executeQuery(`SELECT id FROM ${table} ORDER BY id`))
-        .resolves.toMatchObject({ rows: [{ id: 1 }, { id: 2 }] });
+      expect((await connection.executeQuery(`SELECT id FROM ${table} ORDER BY id`)).rows).toEqual([
+        { id: 1 },
+        { id: 2 },
+      ]);
+      if (released) {
+        await expect(connection.rollback(savepoint)).rejects.toThrow(/transaction|savepoint/i);
+      }
       await connection.commit();
     } finally {
       await connection.close();
     }
   }, 30_000);
 
-  it('rejects using a savepoint after its transaction has completed', async () => {
+  it('rejects using savepoints after either commit or rollback completes their transaction', async () => {
     const connection = await newClient();
     try {
       await connection.startTransaction();
-      const savepoint = await connection.setSavepoint('expired');
+      const committedSavepoint = await connection.setSavepoint('expired_after_commit');
       await connection.commit();
+      await expect(connection.rollback(committedSavepoint)).rejects.toThrow(/transaction|savepoint/i);
 
-      await expect(connection.rollback(savepoint)).rejects.toThrow(/transaction|savepoint/i);
+      await connection.startTransaction();
+      const rolledBackSavepoint = await connection.setSavepoint('expired_after_rollback');
+      await connection.rollback();
+      await expect(connection.rollback(rolledBackSavepoint)).rejects.toThrow(/transaction|savepoint/i);
     } finally {
       await connection.close();
     }

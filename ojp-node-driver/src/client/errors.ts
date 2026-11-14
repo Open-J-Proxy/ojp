@@ -28,6 +28,16 @@ export class OjpConnectionError extends Error {
   }
 }
 
+export class OjpTransactionError extends Error {
+  constructor(
+    public readonly operationError: unknown,
+    public readonly rollbackError: unknown,
+  ) {
+    super('The transaction operation failed and rollback also failed.');
+    this.name = 'OjpTransactionError';
+  }
+}
+
 /**
  * Extracts a SqlErrorResponse serialized in the binary gRPC metadata (key
  * "com.openjproxy.grpc.sqlerrorresponse-bin") and converts it into an OjpSqlError. The

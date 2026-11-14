@@ -255,9 +255,7 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
                 : (int) (lobLength - request.getPosition() + 1);
         readLobContextBuilder.lobLength(Optional.empty());
         readLobContextBuilder.availableLength(Optional.empty());
-        Reader reader = request.getPosition() == 1 && request.getLength() >= lobLength
-                ? clob.getCharacterStream()
-                : clob.getCharacterStream(request.getPosition(), availableLength);
+        Reader reader = clob.getCharacterStream(request.getPosition(), availableLength);
         return ReaderInputStream.builder()
                 .setReader(reader)
                 .setCharset(StandardCharsets.UTF_8)
@@ -293,9 +291,7 @@ public class ReadLobAction implements Action<ReadLobRequest, LobDataBlock> {
         int availableLength = (request.getPosition() + request.getLength()) < lobLength ? request.getLength()
                 : (int) (lobLength - request.getPosition() + 1);
         readLobContextBuilder.availableLength(Optional.of(availableLength));
-        return request.getPosition() == 1 && request.getLength() >= lobLength
-                ? blob.getBinaryStream()
-                : blob.getBinaryStream(request.getPosition(), availableLength);
+        return blob.getBinaryStream(request.getPosition(), availableLength);
     }
 
     /**

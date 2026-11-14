@@ -3,9 +3,8 @@ import { OjpServerEndpoint } from './connectionString';
 /**
  * Default cooldown period (ms) an endpoint is skipped for new connection attempts
  * after a connection-level failure, mirroring the "unhealthy retry delay" concept from
- * the reference JDBC driver's `MultinodeConnectionManager`. After this period elapses,
- * the endpoint becomes eligible again — there is no active background health-check
- * ping; the next real connection attempt against it IS the health check.
+ * the reference JDBC driver's `MultinodeConnectionManager`. Scheduled and on-connect
+ * heartbeat probes can mark an endpoint healthy sooner or extend its unhealthy period.
  */
 export const DEFAULT_UNHEALTHY_RETRY_DELAY_MS = 30_000;
 

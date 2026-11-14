@@ -103,6 +103,41 @@ describe('OjpClient multinode pool cache', () => {
     }
   });
 
+  it('probes each configured endpoint and sends cluster health when creating the pool', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l7', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+
+    const poolConnects = mockRpcState.connectRequests.filter(({ url: value }) => value !== '');
+    expect(poolConnects).toHaveLength(2);
+    expect(poolConnects.map(({ clusterHealth }) => clusterHealth)).toEqual([
+      'localhost:1059(UP);localhost:1060(UP)',
+      'localhost:1059(UP);localhost:1060(UP)',
+    ]);
+    expect(mockRpcState.connectRequests.filter(({ url: value }) => value === '')).toHaveLength(2);
+
+    await client.close();
+  });
+
+  it('continues endpoint health probes while a multinode client remains open', async () => {
+    jest.useFakeTimers();
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l7', {
+      healthCheckIntervalMs: 50,
+    });
+    try {
+      await client.connect();
+      mockRpcState.connectRequests = [];
+
+      await jest.advanceTimersByTimeAsync(50);
+
+      expect(mockRpcState.connectRequests.filter(({ url: value }) => value === '')).toHaveLength(2);
+    } finally {
+      await client.close();
+      jest.useRealTimers();
+    }
+  });
+
   it('reconnects and performs exactly one safe retry for a stateless stale pool', async () => {
     const client = new OjpClient(url);
     await client.connect();
@@ -131,6 +166,22 @@ describe('OjpClient multinode pool cache', () => {
     );
 
     await expect(client.executeUpdate('INSERT INTO t VALUES (1)')).rejects.toBeInstanceOf(OjpSqlError);
+    expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== '')).toHaveLength(1);
+    await client.close();
+  });
+
+  it('does not replay a prepared statement handle after a pool loss', async () => {
+    const client = new OjpClient(url);
+    await client.connect();
+    mockRpcState.updateErrors.push(
+      Object.assign(new Error('No pool found for connection hash: pool-hash.'), {
+        code: grpc.status.NOT_FOUND,
+        details: 'No pool found for connection hash: pool-hash.',
+      }),
+    );
+
+    await expect(client.executePreparedUpdate('INSERT INTO t VALUES (1)', [], {}, 'prepared-handle'))
+      .rejects.toBeInstanceOf(OjpSqlError);
     expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== '')).toHaveLength(1);
     await client.close();
   });

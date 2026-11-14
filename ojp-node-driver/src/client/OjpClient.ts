@@ -170,6 +170,7 @@ interface CachedPool {
   connectionDetails: ConnectionDetails;
   initializedEndpoints: Set<string>;
   clusterHealth: string;
+  endpoints: Map<string, OjpServerEndpoint>;
 }
 
 const poolCache = new Map<string, CachedPool>();
@@ -330,16 +331,16 @@ export class OjpClient {
    * Opens the logical session with the ojp-server, pointing to the target database.
    *
    * Multinode failover: when the connection string lists more than one endpoint, this
-   * tries each candidate (ordered by `orderEndpointsForAttempt` — shared round-robin,
-   * healthy endpoints first) until one accepts the connection. Only connection-level
-   * failures (unreachable server, timeout — see `isConnectionLevelError`) advance to the
-   * next candidate; a database/SQL-level failure (e.g. bad credentials, invalid backend
-   * URL) fails fast without trying other nodes, since it would fail identically
-   * everywhere. Once a session is established, it stays bound to that single endpoint
-   * for its entire lifetime — mirroring the reference JDBC driver, this driver does NOT
-   * transparently move an existing session/transaction to another node if its endpoint
-   * later goes down (see `toClientError()` below); ACID guarantees for an in-flight
-   * transaction cannot be preserved across a node failure.
+   * tries each candidate (ordered by `orderEndpointsForAttempt` — least-connections
+   * with round-robin tie-breaking, healthy endpoints first) until one accepts the
+   * connection. Only connection-level failures (unreachable server, timeout — see
+   * `isConnectionLevelError`) advance to the next candidate; a database/SQL-level failure
+   * (e.g. bad credentials, invalid backend URL) fails fast without trying other nodes,
+   * since it would fail identically everywhere. Once a session is established, it stays
+   * bound to that single endpoint for its entire lifetime — mirroring the reference JDBC
+   * driver, this driver does NOT transparently move an existing session/transaction to
+   * another node if its endpoint later goes down (see `toClientError()` below); ACID
+   * guarantees for an in-flight transaction cannot be preserved across a node failure.
    */
   async connect(): Promise<SessionInfo> {
     if (this.closed) {
@@ -388,6 +389,10 @@ export class OjpClient {
               connectionDetails: this.buildConnectionDetails(),
               initializedEndpoints: new Set([endpointKey(endpoint)]),
               clusterHealth: health,
+              endpoints: new Map(this.parsedUrl.endpoints.map((candidate) => [
+                endpointKey(candidate),
+                candidate,
+              ])),
             };
             poolCache.set(this.poolKey, pool);
             await this.ensurePoolOnHealthyEndpoints(pool, endpoint);
@@ -465,18 +470,21 @@ export class OjpClient {
       if (this.session) {
         this.session = { ...this.session, clusterHealth: currentHealth };
       }
-      const pool = poolCache.get(this.poolKey);
-      if (pool) {
+      for (const pool of poolCache.values()) {
         await this.ensurePoolOnHealthyEndpoints(pool);
       }
     }
   }
 
   private async ensurePoolOnHealthyEndpoints(pool: CachedPool, alreadyConnected?: OjpServerEndpoint): Promise<void> {
-    const health = clusterHealth(this.parsedUrl.endpoints);
+    for (const endpoint of this.parsedUrl.endpoints) {
+      pool.endpoints.set(endpointKey(endpoint), endpoint);
+    }
+    const endpoints = [...pool.endpoints.values()];
+    const health = clusterHealth(endpoints);
     const healthChanged = health !== pool.clusterHealth;
-    const targets = this.parsedUrl.endpoints.filter((endpoint) =>
-      endpoint !== alreadyConnected
+    const targets = endpoints.filter((endpoint) =>
+      (!alreadyConnected || endpointKey(endpoint) !== endpointKey(alreadyConnected))
       && isEndpointHealthy(endpoint)
       && (!pool.initializedEndpoints.has(endpointKey(endpoint)) || healthChanged));
 
@@ -488,6 +496,7 @@ export class OjpClient {
       try {
         const details = {
           ...pool.connectionDetails,
+          serverEndpoints: endpoints.map(endpointKey),
           clusterHealth: health,
         };
         const session = await this.rpcConnect(client, details);
@@ -506,11 +515,20 @@ export class OjpClient {
       }
     }
     pool.clusterHealth = health;
+    pool.connectionDetails = {
+      ...pool.connectionDetails,
+      serverEndpoints: endpoints.map(endpointKey),
+      clusterHealth: health,
+    };
   }
 
   private requireSession(): SessionInfo {
     if (!this.session) {
       throw new OjpConnectionError('Session not started. Call connect() before executing commands.');
+    }
+    const health = clusterHealth(this.parsedUrl.endpoints);
+    if (this.session.clusterHealth !== health) {
+      this.session = { ...this.session, clusterHealth: health };
     }
     return this.session;
   }
@@ -618,7 +636,8 @@ export class OjpClient {
     try {
       return await invoke();
     } catch (err) {
-      if (!isPoolNotFound(err) || this.session?.sessionUUID || this.transactionActive || this.options.xa) {
+      if (!isPoolNotFound(err) || this.session?.sessionUUID || statementUUID
+          || this.transactionActive || this.options.xa) {
         throw this.toClientError(err);
       }
 
@@ -982,7 +1001,7 @@ export class OjpClient {
           yield opResult;
         }
       } catch (err) {
-        if (poolRetryAllowed && firstBlock && !this.session?.sessionUUID
+        if (poolRetryAllowed && firstBlock && !request.statementUUID && !this.session?.sessionUUID
             && !this.transactionActive && !this.options.xa && isPoolNotFound(err)) {
           await this.reconnectAfterPoolNotFound();
           yield* this.streamOpResults({ ...request, session: this.requireSession() }, false);

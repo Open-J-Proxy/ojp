@@ -142,7 +142,9 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L7: %s', (jdbcUrl, u
       expect(secondSession.connHash).toBe(firstSession.connHash);
       expect(secondSession.sessionUUID).toBe('');
       expect(second.boundEndpoint).toBeDefined();
-      await expect(second.executeUpdate('SELECT 1')).resolves.toBeDefined();
+      await expect(second.executeQuery('SELECT 1 AS usable')).resolves.toMatchObject({
+        rows: [{ usable: 1 }],
+      });
     } finally {
       await second.close();
     }

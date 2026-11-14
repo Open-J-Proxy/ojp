@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L2** for SQL Server |
+| Cumulative level | **L1** for H2; **L3** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -20,14 +20,15 @@ The H2 and SQL Server L1 suites exercise CRUD, errors, and session lifecycle thr
 a real OJP server and database. SQL Server L1 passed in the
 [Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512);
 the SQL Server L2 suite passed in [run 43528198577](https://github.com/Open-J-Proxy/ojp/actions/runs/43528198577)
-with all 53 integration tests passing. The H2 suite also covers datasource selection
-using `testdata/h2_connections.csv`.
+with all 53 integration tests passing. The SQL Server L3 suite covers streaming results,
+pagination, metadata, EOF, concurrent cursors, and early close. The H2 suite also covers
+datasource selection using `testdata/h2_connections.csv`.
 
 | Level | Status | Notes |
 |---|---|---|
 | **L1** | H2, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts` and `test/integration.sqlServerAg.test.ts`. |
 | **L2** | SQL Server (certified) | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, plain/prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Real-server certification passed in run 43528198577; declared type omissions are listed below. |
-| **L3** | Partial | Streaming and row-by-row fetching are implemented; cursor lifecycle certification remains incomplete. |
+| **L3** | SQL Server (certified) | Covers streamed query results, `fetchNextRows` pagination, result-set metadata and EOF, concurrent independent cursors, and cleanup after early close. See `test/integration.sqlServerL3.test.ts`. |
 | **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
 | **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
 | **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
@@ -36,10 +37,9 @@ using `testdata/h2_connections.csv`.
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
-No cumulative level is claimed for PostgreSQL until its required level-specific
-coverage is run in CI. SQL Server's tested cumulative claim is L2, based on the passing
-real-server integration run above. The Node metadata shape intentionally reports the
-stream protocol's column labels; it does not expose JDBC's full vendor-specific
+The SQL Server L3 claim is based on real-server integration coverage; SQL Server's
+coverage does not establish a PostgreSQL level. The Node metadata shape intentionally
+reports the stream protocol's column labels; it does not expose JDBC's full vendor-specific
 `ResultSetMetaData` surface.
 
 Explicit `OjpTypedParam` mappings cover scalar, decimal, date/time, text/binary stream
@@ -234,7 +234,8 @@ unchanged.
 
 ## SQL Server integration
 
-The real-server suite `test/integration.sqlServerAg.test.ts` covers SQL Server:
+The real-server suites `test/integration.sqlServerAg.test.ts` and
+`test/integration.sqlServerL3.test.ts` cover SQL Server:
 
 - L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
   rejection of operations after close.
@@ -246,6 +247,9 @@ The real-server suite `test/integration.sqlServerAg.test.ts` covers SQL Server:
   correctly consumes both a single isolated row and multiple rows via
   `executeQueryStream`.
 - Real pagination (multiple blocks of 100+ rows) via `executeQueryStream`.
+- L3 result-set behavior: empty, single-row, and multi-block results; metadata and EOF;
+  SQL Server `OFFSET`/`FETCH` pagination; independent concurrent cursors; and early
+  close followed by continued client use.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide

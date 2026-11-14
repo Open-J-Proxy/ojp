@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -58,6 +59,7 @@ class HandleXAConnectionWithPoolingActionTest {
         when(provider.supportsDynamicResizing()).thenReturn(true);
         when(provider.resizePool(any(), anyInt(), anyInt())).thenReturn(true);
         when(provider.borrowSession(any())).thenReturn(mock(XABackendSession.class));
+        when(provider.borrowSession(any(), anyLong())).thenReturn(mock(XABackendSession.class));
 
         SessionManager sessionManager = mock(SessionManager.class);
         when(sessionManager.createXASession(anyString(), any(), any()))

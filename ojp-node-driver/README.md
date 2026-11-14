@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L5** for SQL Server |
+| Cumulative level | **L1** for H2; **L5** for SQL Server, with a ranged LOB-read limitation |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -30,17 +30,20 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L2** | SQL Server (certified) | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, plain/prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Real-server certification passed in run 43528198577; declared type omissions are listed below. |
 | **L3** | SQL Server (certified) | Covers streamed query results, `fetchNextRows` pagination, result-set metadata and EOF, concurrent independent cursors, and cleanup after early close. See `test/integration.sqlServerL3.test.ts`. |
 | **L4** | SQL Server (certified) | `startTransaction`/`commit`/`rollback`, autocommit state, transaction-isolation get/set, named/unnamed savepoints, rollback-to-savepoint, release, transaction completion invalidation, batch rollback, and error recovery. See `test/integration.sqlServerL4.test.ts`. |
-| **L5** | SQL Server (certified) | BLOB/CLOB round trips including multi-chunk values, Unicode, empty and NULL values, updates, reusable references, and Node `Readable` input/output. See `test/integration.sqlServerL5.test.ts`. |
+| **L5** | SQL Server (documented JDBC limitation) | Multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references. SQL Server's JDBC driver rejects ranged BLOB/CLOB reads; the L5 suite asserts that error, while `test/integration.lob.stream.h2.test.ts` verifies exact stream contents and sizes on H2. |
 | **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
 | **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
 | **L8** | ❌ Not implemented (by design) | An established session fails clearly rather than transparently retrying against another node once bound — intentional fail-fast choice, explicitly asserted by a test (`no silent recovery`), not yet the resilience model L8 describes. |
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
-The SQL Server L5 claim is based on real-server integration coverage; SQL Server's
-coverage does not establish a PostgreSQL level. The Node metadata shape intentionally
-reports the stream protocol's column labels; it does not expose JDBC's full vendor-specific
-`ResultSetMetaData` surface.
+SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
+with “This operation is not supported”; this affects `readLobStream` and transparent
+CLOB hydration, not LOB upload/binding or binary query hydration. H2 stream tests cover
+successful BLOB/CLOB reads and exact byte/character contents. SQL Server's coverage does
+not establish a PostgreSQL level. The Node metadata shape intentionally reports the stream
+protocol's column labels; it does not expose JDBC's full vendor-specific `ResultSetMetaData`
+surface.
 
 Explicit `OjpTypedParam` mappings cover scalar, decimal, date/time, text/binary stream
 payloads, URL, row ID, and LOB-reference values. Use the exported `ParameterType` enum
@@ -280,8 +283,9 @@ cover SQL Server:
 - L4 transaction behavior: default autocommit, commit/rollback durability, isolation
   get/set, savepoint rollback and release, nested savepoints, batch rollback, recovery
   after a SQL error, and rejection of savepoints after transaction completion.
-- L5 LOB behavior: BLOB/CLOB round trips, >64KB uploads, Unicode, update, NULL versus
-  empty values, reusable references, and stream input/output through Node `Readable`.
+- L5 LOB behavior: >64KB BLOB/CLOB uploads, Unicode, update, NULL versus empty values,
+  reusable references, and Node `Readable` input. SQL Server ranged LOB reads are
+  asserted as unsupported; successful exact-size BLOB/CLOB stream reads are covered on H2.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide
@@ -557,9 +561,9 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
       (SQL Server/DB2 + LOBs), **validated with real integration against SQL Server**.
 - [x] `DECIMAL`/`NUMERIC`/`MONEY` mapping (`BigDecimalWire` → decimal string).
 - [x] Real integration validation against SQL Server in an Always On AG (multinode).
-- [x] LOBs (`createLob`/transparent CLOB reading) — full support validated against
-      SQL Server; H2 (single chunk) and PostgreSQL have limitations of their own
-      backend's JDBC driver (see the compatibility table above).
+- [x] LOB upload/binding (`createLob`) validated against SQL Server. Ranged SQL Server
+      BLOB/CLOB reads are unsupported by its JDBC driver; exact-size read streams are
+      validated against H2 (see the compatibility table above).
 - [x] Multinode failover / round-robin between endpoints — connection-level-only
       failover, strict session stickiness, validated end-to-end against a real
       3-node cluster (see the dedicated section above).

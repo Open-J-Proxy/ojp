@@ -19,6 +19,14 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     return connection;
   };
 
+  const expectUnsupportedLobRead = async (reference: Parameters<OjpClient['readLobStream']>[0]): Promise<void> => {
+    await expect((async () => {
+      for await (const chunk of client.readLobStream(reference)) {
+        Buffer.from(chunk);
+      }
+    })()).rejects.toThrow(/not supported/i);
+  };
+
   beforeAll(async () => {
     client = await newClient();
     await client.executeUpdate(
@@ -66,7 +74,7 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     expect((result.rows[0].payload as Buffer).equals(content)).toBe(true);
   }, 60_000);
 
-  it('uploads from a Node Readable, reads to a Node Readable, and keeps the session internal', async () => {
+  it('uploads and binds a Node Readable but reports unsupported ranged BLOB reads', async () => {
     const content = Buffer.alloc(180_123);
     for (let index = 0; index < content.length; index++) {
       content[index] = (index * 17) % 256;
@@ -77,15 +85,10 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
       content.subarray(98_000),
     ]);
     const ref = await client.createLob(source, 'BLOB');
-    const chunks: Buffer[] = [];
-    for await (const chunk of client.readLobStream(ref)) {
-      chunks.push(Buffer.from(chunk));
-    }
-
-    expect(Buffer.concat(chunks).equals(content)).toBe(true);
     expect(await client.executeUpdate(`INSERT INTO ${table} (id, payload) VALUES (?, ?)`, [10, ref])).toBe(1);
     expect((await client.executeQuery(`SELECT payload FROM ${table} WHERE id = ?`, [10])).rows[0].payload)
       .toEqual(content);
+    await expectUnsupportedLobRead(ref);
   }, 60_000);
 
   it('updates a BLOB and returns only the new bytes', async () => {
@@ -102,19 +105,13 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     expect((result.rows[0].payload as Buffer).equals(original)).toBe(false);
   }, 30_000);
 
-  it('round-trips a multi-chunk Unicode CLOB as text', async () => {
+  it('uploads a multi-chunk Unicode CLOB but reports unsupported ranged CLOB reads', async () => {
     const content = 'SQL Server CLOB: äöü ñ 中文 🚀 — '.repeat(5_000);
     const ref = await client.createLob(Readable.from([content]), 'CLOB');
-    const chunks: Buffer[] = [];
-    for await (const chunk of client.readLobStream(ref)) {
-      chunks.push(Buffer.from(chunk));
-    }
-
-    expect(Buffer.concat(chunks).toString('utf8')).toBe(content);
     expect(await client.executeUpdate(`INSERT INTO ${table} (id, body) VALUES (?, ?)`, [4, ref])).toBe(1);
-    const result = await client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [4]);
-
-    expect(result.rows).toEqual([{ body: content }]);
+    await expectUnsupportedLobRead(ref);
+    await expect(client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [4]))
+      .rejects.toThrow(/not supported/i);
   }, 60_000);
 
   it('round-trips a NULL BLOB and NULL CLOB without hydrating them as empty values', async () => {
@@ -127,28 +124,20 @@ describeIfEnabled.each(connections)('OjpClient - SQL Server L5: %s', (jdbcUrl, u
     expect(result.rows).toEqual([{ payload: null, body: null }]);
   }, 30_000);
 
-  it('preserves empty BLOB and CLOB values distinctly from NULL', async () => {
+  it('stores an empty BLOB and reports unsupported reads for empty BLOB and CLOB values', async () => {
     const blob = await client.createLob(Buffer.alloc(0), 'BLOB');
     const clob = await client.createLob('', 'CLOB');
-    const emptyBlobChunks: Buffer[] = [];
-    const emptyClobChunks: Buffer[] = [];
-    for await (const chunk of client.readLobStream(blob)) {
-      emptyBlobChunks.push(Buffer.from(chunk));
-    }
-    for await (const chunk of client.readLobStream(clob)) {
-      emptyClobChunks.push(Buffer.from(chunk));
-    }
+    await expectUnsupportedLobRead(blob);
+    await expectUnsupportedLobRead(clob);
     await client.executeUpdate(
       `INSERT INTO ${table} (id, payload, body) VALUES (?, ?, ?)`,
       [6, blob, clob],
     );
-    const result = await client.executeQuery(`SELECT payload, body FROM ${table} WHERE id = ?`, [6]);
+    const result = await client.executeQuery(`SELECT payload FROM ${table} WHERE id = ?`, [6]);
 
-    expect(Buffer.concat(emptyBlobChunks)).toEqual(Buffer.alloc(0));
-    expect(Buffer.concat(emptyClobChunks)).toEqual(Buffer.alloc(0));
-    expect(result.rows).toHaveLength(1);
-    expect(result.rows[0].payload).toEqual(Buffer.alloc(0));
-    expect(result.rows[0].body).toBe('');
+    expect(result.rows).toEqual([{ payload: Buffer.alloc(0) }]);
+    await expect(client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [6]))
+      .rejects.toThrow(/not supported/i);
   }, 30_000);
 
   it('reuses one BLOB reference across multiple parameter bindings', async () => {

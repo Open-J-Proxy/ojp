@@ -2,7 +2,7 @@ import * as grpc from '@grpc/grpc-js';
 import { randomUUID } from 'crypto';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
-import { toOjpError, OjpConnectionError, isConnectionLevelError } from './errors';
+import { toOjpError, OjpConnectionError, OjpTransactionError, isConnectionLevelError } from './errors';
 import { fromParameterValue, OjpLobRef, OjpNullParam, toParameterProtos } from './valueMapper';
 import { markEndpointUnhealthy, orderEndpointsForAttempt } from './endpointHealth';
 import { StatementServiceClient } from './statementServiceClient';
@@ -60,6 +60,56 @@ export interface OjpClientOptions {
    * JDBC driver's `OjpXALogicalConnection`). Default: false.
    */
   xa?: boolean;
+}
+
+export const TransactionIsolation = {
+  READ_UNCOMMITTED: 1,
+  READ_COMMITTED: 2,
+  REPEATABLE_READ: 4,
+  SERIALIZABLE: 8,
+} as const;
+
+export type TransactionIsolationLevel = (typeof TransactionIsolation)[keyof typeof TransactionIsolation];
+
+const transactionIsolationLevels = new Set<number>(Object.values(TransactionIsolation));
+const isTransactionIsolationLevel = (value: unknown): value is TransactionIsolationLevel =>
+  typeof value === 'number' && transactionIsolationLevels.has(value);
+
+export class OjpSavepoint {
+  private released = false;
+  private invalidated = false;
+
+  constructor(
+    private readonly owner: OjpClient,
+    private readonly uuid: string,
+    private readonly transactionGeneration: number,
+    private readonly sequence: number,
+    readonly name?: string,
+  ) {}
+
+  /** @internal */
+  assertUsable(owner: OjpClient, transactionGeneration: number): string {
+    if (this.owner !== owner || this.transactionGeneration !== transactionGeneration
+      || this.released || this.invalidated) {
+      throw new OjpConnectionError('Savepoint does not belong to the active transaction.');
+    }
+    return this.uuid;
+  }
+
+  /** @internal */
+  invalidate(): void {
+    this.invalidated = true;
+  }
+
+  /** @internal */
+  markReleased(): void {
+    this.released = true;
+  }
+
+  /** @internal */
+  getSequence(): number {
+    return this.sequence;
+  }
 }
 
 export interface QueryResult {
@@ -124,6 +174,11 @@ export class OjpClient {
   private readonly clientUUID: string;
   private connecting = false;
   private closed = false;
+  private autoCommit = true;
+  private transactionActive = false;
+  private transactionGeneration = 0;
+  private savepointSequence = 0;
+  private readonly savepoints: OjpSavepoint[] = [];
 
   constructor(ojpUrl: string, private readonly options: OjpClientOptions = {}) {
     this.parsedUrl = parseOjpUrl(ojpUrl);
@@ -950,6 +1005,9 @@ export class OjpClient {
 
   async startTransaction(): Promise<void> {
     this.assertNotXA('startTransaction');
+    if (this.transactionActive) {
+      throw new OjpConnectionError('A transaction is already active.');
+    }
     const session = this.requireSession();
     await new Promise<void>((resolve, reject) => {
       this.requireClient().startTransaction(session, (err, response) => {
@@ -961,6 +1019,32 @@ export class OjpClient {
         resolve();
       });
     });
+    this.transactionGeneration++;
+    this.savepoints.length = 0;
+    this.transactionActive = true;
+    this.autoCommit = false;
+  }
+
+  getAutoCommit(): boolean {
+    return this.autoCommit;
+  }
+
+  async withTransaction<T>(operation: (client: OjpClient) => T | Promise<T>): Promise<T> {
+    await this.startTransaction();
+    try {
+      const result = await operation(this);
+      await this.commit();
+      return result;
+    } catch (error) {
+      if (this.transactionActive) {
+        try {
+          await this.rollback();
+        } catch (rollbackError) {
+          throw new OjpTransactionError(error, rollbackError);
+        }
+      }
+      throw error;
+    }
   }
 
   async commit(): Promise<void> {
@@ -976,11 +1060,32 @@ export class OjpClient {
         resolve();
       });
     });
+    this.endTransaction();
     await this.restoreAutoCommit();
+    this.autoCommit = true;
   }
 
-  async rollback(): Promise<void> {
+  async rollback(savepoint?: OjpSavepoint): Promise<void> {
     this.assertNotXA('rollback');
+    if (savepoint) {
+      const savepointUUID = savepoint.assertUsable(this, this.transactionGeneration);
+      if (!this.transactionActive) {
+        throw new OjpConnectionError('Cannot roll back to a savepoint outside an active transaction.');
+      }
+      await this.invokeCallResource({
+        resourceType: 'RES_CONNECTION',
+        callType: 'CALL_ROLLBACK',
+        resourceName: '',
+        params: [savepointUUID],
+      });
+      for (const laterSavepoint of this.savepoints) {
+        if (laterSavepoint.getSequence() > savepoint.getSequence()) {
+          laterSavepoint.invalidate();
+        }
+      }
+      return;
+    }
+
     const session = this.requireSession();
     await new Promise<void>((resolve, reject) => {
       this.requireClient().rollbackTransaction(session, (err, response) => {
@@ -992,7 +1097,83 @@ export class OjpClient {
         resolve();
       });
     });
+    this.endTransaction();
     await this.restoreAutoCommit();
+    this.autoCommit = true;
+  }
+
+  async setSavepoint(name?: string): Promise<OjpSavepoint> {
+    this.assertNotXA('setSavepoint');
+    if (!this.transactionActive) {
+      throw new OjpConnectionError('Savepoints require an active transaction.');
+    }
+    const response = await this.invokeCallResource({
+      resourceType: 'RES_CONNECTION',
+      callType: 'CALL_SET',
+      resourceName: 'Savepoint',
+      params: name === undefined ? [] : [name],
+    });
+    const savepointUUID = fromParameterValue(response.values?.[0]);
+    if (typeof savepointUUID !== 'string' || savepointUUID.length === 0) {
+      throw new OjpConnectionError('The server did not return a savepoint identifier.');
+    }
+    const savepoint = new OjpSavepoint(
+      this,
+      savepointUUID,
+      this.transactionGeneration,
+      this.savepointSequence++,
+      name,
+    );
+    this.savepoints.push(savepoint);
+    return savepoint;
+  }
+
+  async releaseSavepoint(savepoint: OjpSavepoint): Promise<void> {
+    this.assertNotXA('releaseSavepoint');
+    const savepointUUID = savepoint.assertUsable(this, this.transactionGeneration);
+    if (!this.transactionActive) {
+      throw new OjpConnectionError('Cannot release a savepoint outside an active transaction.');
+    }
+    await this.invokeCallResource({
+      resourceType: 'RES_CONNECTION',
+      callType: 'CALL_RELEASE',
+      resourceName: 'Savepoint',
+      params: [savepointUUID],
+    });
+    savepoint.markReleased();
+  }
+
+  async getTransactionIsolation(): Promise<TransactionIsolationLevel> {
+    const response = await this.invokeCallResource({
+      resourceType: 'RES_CONNECTION',
+      callType: 'CALL_GET',
+      resourceName: 'TransactionIsolation',
+    });
+    const level = fromParameterValue(response.values?.[0]);
+    if (!isTransactionIsolationLevel(level)) {
+      throw new OjpConnectionError(`The server returned an unsupported transaction isolation level: ${String(level)}.`);
+    }
+    return level;
+  }
+
+  async setTransactionIsolation(level: TransactionIsolationLevel): Promise<void> {
+    if (!transactionIsolationLevels.has(level)) {
+      throw new RangeError(`Unsupported transaction isolation level: ${String(level)}.`);
+    }
+    await this.invokeCallResource({
+      resourceType: 'RES_CONNECTION',
+      callType: 'CALL_SET',
+      resourceName: 'TransactionIsolation',
+      params: [level],
+    });
+  }
+
+  private endTransaction(): void {
+    this.transactionActive = false;
+    for (const savepoint of this.savepoints) {
+      savepoint.invalidate();
+    }
+    this.savepoints.length = 0;
   }
 
   /**
@@ -1080,6 +1261,8 @@ export class OjpClient {
       throw new OjpConnectionError('Cannot close while connecting. Wait for connect() to finish.');
     }
     this.closed = true;
+    this.endTransaction();
+    this.autoCommit = true;
     const session = this.session;
     const client = this.grpcClient;
     this.session = undefined;

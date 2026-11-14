@@ -1,7 +1,10 @@
 export {
   OjpClient,
+  OjpSavepoint,
   OjpClientOptions,
   OjpClientStatementOptions,
+  TransactionIsolation,
+  TransactionIsolationLevel,
   QueryResult,
   QueryColumnMetadata,
   QueryResultMetadata,
@@ -11,7 +14,7 @@ export {
   withOjpClient,
 } from './client/OjpClient';
 export { OjpStatement, OjpPreparedStatement, OjpExecutionResult } from './client/statement';
-export { OjpSqlError, OjpConnectionError } from './client/errors';
+export { OjpSqlError, OjpConnectionError, OjpTransactionError } from './client/errors';
 export { parseOjpUrl, ParsedOjpUrl, OjpServerEndpoint } from './client/connectionString';
 export {
   SessionInfo,

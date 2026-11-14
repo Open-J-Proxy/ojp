@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L8** (agreed direction for this driver — see [PR #601](https://github.com/Open-J-Proxy/ojp/pull/601) discussion) |
-| Cumulative level | **L1** for H2; **L3** for SQL Server |
+| Cumulative level | **L1** for H2; **L4** for SQL Server |
 | Higher-level features | Partial; not a cumulative level claim |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -29,7 +29,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L1** | H2, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. See `test/integration.h2.l1.test.ts` and `test/integration.sqlServerAg.test.ts`. |
 | **L2** | SQL Server (certified) | Adds `createStatement()` / `prepareStatement()`, 1-based reusable bindings, plain/prepared batches, generated-key retrieval, column-label metadata, and the `executeUpdate` result-set path for SQL Server `OUTPUT` DML. Real-server certification passed in run 43528198577; declared type omissions are listed below. |
 | **L3** | SQL Server (certified) | Covers streamed query results, `fetchNextRows` pagination, result-set metadata and EOF, concurrent independent cursors, and cleanup after early close. See `test/integration.sqlServerL3.test.ts`. |
-| **L4** | ⚠️ Partial | `startTransaction`/`commit`/`rollback` implemented and tested, including a regression-tested fix that restores autocommit on the physical connection after `commit()`/`rollback()` (see "Transaction semantics" below). **No savepoints, no transaction-isolation get/set.** |
+| **L4** | SQL Server (certified) | `startTransaction`/`commit`/`rollback`, autocommit state, transaction-isolation get/set, named/unnamed savepoints, rollback-to-savepoint, release, transaction completion invalidation, batch rollback, and error recovery. See `test/integration.sqlServerL4.test.ts`. |
 | **L5** | Partial | `createLob` and LOB reads are implemented; backend limitations apply. |
 | **L6** | Partial | Established connections remain bound to one endpoint; full routing conformance is not claimed. |
 | **L7** | ⚠️ Partial | Round-robin load balancing + cooldown-based unhealthy-endpoint avoidance, tested against a real 3-node cluster with actual Docker `kill`/`start`. **No least-connections algorithm, no `connHash`-style cache.** |
@@ -37,7 +37,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L9** | Partial | XA RPCs and PostgreSQL-specific tests exist; lower levels and full XA conformance are incomplete. |
 | **L10** | ❌ Not attempted | No combined XA + multinode scenario tested. |
 
-The SQL Server L3 claim is based on real-server integration coverage; SQL Server's
+The SQL Server L4 claim is based on real-server integration coverage; SQL Server's
 coverage does not establish a PostgreSQL level. The Node metadata shape intentionally
 reports the stream protocol's column labels; it does not expose JDBC's full vendor-specific
 `ResultSetMetaData` surface.
@@ -211,6 +211,31 @@ physical connection was left stuck in manual-commit mode with no client-facing s
 to leave it. Regression coverage: `test/integration.ojpServer.test.ts` (autocommit
 restored after both `commit()` and `rollback()`, verified via a fresh reconnect).
 
+`getAutoCommit()` reports this client's current transaction mode. `withTransaction()`
+wraps a unit of work in start/commit/rollback, so callers do not need to write transaction
+cleanup boilerplate. Combine it with `withOjpClient()` to also manage connect/close:
+
+```ts
+const orderId = await withOjpClient(
+  ojpUrl,
+  (db) => db.withTransaction(async (transaction) => {
+    await transaction.executeUpdate('INSERT INTO orders (id) VALUES (?)', [id]);
+    return id;
+  }),
+  { user, password },
+);
+```
+
+For savepoints, `setSavepoint(name?)` returns an opaque `OjpSavepoint` handle; pass that
+handle to `rollback(savepoint)` or `releaseSavepoint(savepoint)`. The client retains the
+savepoint UUID and session internally, rejects handles from another connection or
+completed transaction, and invalidates later savepoints when rolling back to an earlier
+one. Transaction isolation is accessed with `getTransactionIsolation()` and
+`setTransactionIsolation(level)`, using the exported `TransactionIsolation` constants.
+SQL Server does not support releasing savepoints through every JDBC driver; an unsupported
+release is reported by the server and is not hidden. If an operation and its rollback both
+fail inside `withTransaction()`, `OjpTransactionError` exposes both underlying errors.
+
 Recommendations:
 
 - Open a fresh `OjpClient` for each independent operation or explicit transaction,
@@ -234,8 +259,9 @@ unchanged.
 
 ## SQL Server integration
 
-The real-server suites `test/integration.sqlServerAg.test.ts` and
-`test/integration.sqlServerL3.test.ts` cover SQL Server:
+The real-server suites `test/integration.sqlServerAg.test.ts`,
+`test/integration.sqlServerL3.test.ts`, and `test/integration.sqlServerL4.test.ts`
+cover SQL Server:
 
 - L1 connectivity, CRUD, empty results, SQL errors, scoped session cleanup, and
   rejection of operations after close.
@@ -250,6 +276,9 @@ The real-server suites `test/integration.sqlServerAg.test.ts` and
 - L3 result-set behavior: empty, single-row, and multi-block results; metadata and EOF;
   SQL Server `OFFSET`/`FETCH` pagination; independent concurrent cursors; and early
   close followed by continued client use.
+- L4 transaction behavior: default autocommit, commit/rollback durability, isolation
+  get/set, savepoint rollback and release, nested savepoints, batch rollback, recovery
+  after a SQL error, and rejection of savepoints after transaction completion.
 
 Run locally with an OJP server and SQL Server. Set `OJP_TEST_SQLSERVER_CSV` to a
 connection fixture if the default does not match your database, and provide
@@ -257,7 +286,9 @@ connection fixture if the default does not match your database, and provide
 
 ```powershell
 $env:OJP_ENABLE_SQLSERVER_AG_TESTS = 'true'
+$env:OJP_ENABLE_SQLSERVER_L4_TESTS = 'true'
 npm run test:sqlserver-ag
+npm run test:sqlserver-l4
 ```
 
 **Known observations/limitations:**

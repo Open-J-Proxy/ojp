@@ -11,7 +11,14 @@ permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    uses: ./.github/workflows/ci-test-selection.yml
+    with:
+      full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
+
   integration:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.node == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

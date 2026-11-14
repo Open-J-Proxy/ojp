@@ -81,7 +81,7 @@ jobs:
         with:
           token: ''
           base: ${{ steps.base.outputs.sha }}
-          predicate-quantifier: every
+          predicate-quantifier: some-with-excludes
           filters: |
             shared:
               - '{ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons}/**'

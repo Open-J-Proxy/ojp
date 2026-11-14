@@ -97,6 +97,7 @@ These levels are based on each language client's own integration tests and are i
 | **C++ ODBC** | SQL Server | **L10** | `cpp-odbc-sqlserver-test` runs L1-L10 with required mTLS on both servers, including `sqlserver_l10_integration_test.cpp`. |
 | **C++ ODBC** | PostgreSQL | **L10** | `cpp-odbc-postgres-test` runs L1-L10 with required mTLS on both servers, including `postgresql_l10_integration_test.cpp`. |
 | **C++ ODBC** | MariaDB / MySQL | **L10** | `cpp-odbc-mariadb-test` runs L1-L10 for both database CSV rows with required mTLS on both servers, including `mariadb_l10_integration_test.cpp`. |
+| **Node.js** | SQL Server | **L3** | `ojp-node-driver/test/integration.sqlServerL3.test.ts` covers empty/single/multi-block results, metadata, EOF, SQL Server pagination, concurrent cursors, and early close; `integration.sqlServerAg.test.ts` covers L1/L2 and row-by-row LOB fetching. |
 | **Go** | H2 | **L3** | L1-L3 real-server integration coverage: `ojp-client-go-database-sql/client/h2_l1_integration_test.go`, `h2_l2_integration_test.go`, `h2_l3_integration_test.go`, and `h2_l3_fetch_integration_test.go`. |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
 | **.NET ADO.NET** | H2 | **L1** | `ojp-client-dotnet-ado-net/tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` |

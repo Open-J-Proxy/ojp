@@ -71,7 +71,7 @@ export class OjpMssqlRequest {
       const client = this.target.activeClient;
       if (!client) {
         throw new Error(
-          '@ojp/typeorm-adapter: no active transaction session (begin() was not called, or the '
+          '@ojp/node-typeorm-adapter: no active transaction session (begin() was not called, or the '
           + 'transaction has already been committed/rolled back).',
         );
       }

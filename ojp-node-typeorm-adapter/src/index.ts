@@ -42,7 +42,7 @@ export interface OjpPostgresDriverPackage {
  * Usage:
  * ```ts
  * import { DataSource } from 'typeorm';
- * import { createOjpPostgresDriver } from '@ojp/typeorm-adapter';
+ * import { createOjpPostgresDriver } from '@ojp/node-typeorm-adapter';
  *
  * const dataSource = new DataSource({
  *   type: 'postgres',
@@ -82,7 +82,7 @@ export interface OjpMssqlDriverPackage {
  * Usage:
  * ```ts
  * import { DataSource } from 'typeorm';
- * import { createOjpMssqlDriver } from '@ojp/typeorm-adapter';
+ * import { createOjpMssqlDriver } from '@ojp/node-typeorm-adapter';
  *
  * const dataSource = new DataSource({
  *   type: 'mssql',

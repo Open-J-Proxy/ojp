@@ -36,13 +36,13 @@ export class OjpMssqlTransaction {
 
   private async start(isolation: unknown): Promise<void> {
     if (this.client) {
-      throw new Error('@ojp/typeorm-adapter: transaction has already begun.');
+      throw new Error('@ojp/node-typeorm-adapter: transaction has already begun.');
     }
     let level: TransactionIsolationLevel | undefined;
     if (isolation !== undefined) {
       level = typeof isolation === 'string' ? isolationLevels[isolation] : undefined;
       if (level === undefined) {
-        throw new Error(`@ojp/typeorm-adapter: unsupported transaction isolation level: ${String(isolation)}`);
+        throw new Error(`@ojp/node-typeorm-adapter: unsupported transaction isolation level: ${String(isolation)}`);
       }
     }
     const client = await this.pool.acquireClient();
@@ -79,7 +79,7 @@ export class OjpMssqlTransaction {
   private async finish(action: 'commit' | 'rollback'): Promise<void> {
     const client = this.client;
     if (!client) {
-      throw new Error(`@ojp/typeorm-adapter: ${action}() called without a matching begin().`);
+      throw new Error(`@ojp/node-typeorm-adapter: ${action}() called without a matching begin().`);
     }
     this.client = undefined;
     try {

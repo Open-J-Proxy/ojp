@@ -1,4 +1,4 @@
-# OJP TypeORM adapter
+# OJP Node TypeORM adapter
 
 This adapter lets a TypeORM application use PostgreSQL or SQL Server through
 [OJP](../README.md). Your application sends requests to `ojp-server` through
@@ -30,7 +30,7 @@ repository root:
 cd ojp-node-driver
 npm ci
 npm run build
-cd ../ojp-type-orm-adapter
+cd ../ojp-node-typeorm-adapter
 npm ci
 npm run build
 ```
@@ -41,7 +41,7 @@ dependency on the adapter and install TypeORM and `reflect-metadata`:
 ```json
 {
   "dependencies": {
-    "@ojp/typeorm-adapter": "file:../ojp-type-orm-adapter",
+    "@ojp/node-typeorm-adapter": "file:../ojp-node-typeorm-adapter",
     "reflect-metadata": "^0.2.2",
     "typeorm": "^0.3.20"
   }
@@ -61,7 +61,7 @@ as usual, then pass the adapter as the TypeORM driver:
 ```ts
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
-import { createOjpPostgresDriver } from '@ojp/typeorm-adapter';
+import { createOjpPostgresDriver } from '@ojp/node-typeorm-adapter';
 import { MyEntity } from './MyEntity';
 
 const dataSource = new DataSource({
@@ -88,7 +88,7 @@ Use the SQL Server factory and a SQL Server JDBC URL instead:
 ```ts
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
-import { createOjpMssqlDriver } from '@ojp/typeorm-adapter';
+import { createOjpMssqlDriver } from '@ojp/node-typeorm-adapter';
 import { MyEntity } from './MyEntity';
 
 const dataSource = new DataSource({

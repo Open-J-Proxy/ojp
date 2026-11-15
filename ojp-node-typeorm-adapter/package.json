@@ -1,5 +1,5 @@
 {
-  "name": "@ojp/typeorm-adapter",
+  "name": "@ojp/node-typeorm-adapter",
   "version": "0.1.0",
   "description": "TypeORM driver adapter for OJP (Open J Proxy), usable directly from NestJS.",
   "main": "dist/index.js",

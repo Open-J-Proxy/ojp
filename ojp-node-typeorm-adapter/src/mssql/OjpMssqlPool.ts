@@ -19,7 +19,7 @@ export class OjpMssqlPool extends EventEmitter {
   constructor(options: OjpMssqlPoolOptions) {
     super();
     if (!options.ojpUrl) {
-      throw new Error('@ojp/typeorm-adapter: missing "ojpUrl" in DataSourceOptions.extra.');
+      throw new Error('@ojp/node-typeorm-adapter: missing "ojpUrl" in DataSourceOptions.extra.');
     }
     this.connections = new Connections(options.ojpUrl, {
       user: options.user,

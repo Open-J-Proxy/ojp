@@ -11,7 +11,7 @@
  * referenced index.
  */
 
-const MSSQL_PARAM_PATTERN = /@(\d+)\b/g;
+import { translateParameters } from '../common/sqlParameters';
 
 export interface TranslatedQuery {
   sql: string;
@@ -20,12 +20,7 @@ export interface TranslatedQuery {
 
 /** Rewrites `@0, @1, ...` placeholders into `?`, reordering/duplicating `params` (0-based) as needed. */
 export function translateIndexedParams(sql: string, params: ReadonlyArray<unknown> = []): TranslatedQuery {
-  const orderedParams: unknown[] = [];
-  const translatedSql = sql.replace(MSSQL_PARAM_PATTERN, (_match, indexStr: string) => {
-    orderedParams.push(params[Number(indexStr)]);
-    return '?';
-  });
-  return { sql: translatedSql, params: orderedParams };
+  return translateParameters(sql, params, 'mssql');
 }
 
 /**

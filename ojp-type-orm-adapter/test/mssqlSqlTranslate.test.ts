@@ -1,6 +1,17 @@
 import { detectCommand, producesResultSet, translateIndexedParams } from '../src/mssql/sqlTranslate';
 
 describe('translateIndexedParams', () => {
+  it('ignores placeholders in strings, identifiers and comments', () => {
+    const sql = `SELECT @0, '@1', "col@2", [col@3] -- @4\n/* @5 /* @6 */ */`;
+    expect(translateIndexedParams(sql, [42])).toEqual({
+      sql: `SELECT ?, '@1', "col@2", [col@3] -- @4\n/* @5 /* @6 */ */`,
+      params: [42],
+    });
+  });
+
+  it('rejects a placeholder without a matching value', () => {
+    expect(() => translateIndexedParams('SELECT @1', [1])).toThrow(/matching value/);
+  });
   it('should return the sql unchanged when there are no placeholders', () => {
     const result = translateIndexedParams('SELECT 1', []);
     expect(result).toEqual({ sql: 'SELECT 1', params: [] });

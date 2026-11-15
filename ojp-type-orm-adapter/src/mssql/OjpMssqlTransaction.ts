@@ -1,31 +1,22 @@
-import { OjpClient } from '@ojp/node-driver';
+import { OjpClient, TransactionIsolation, TransactionIsolationLevel } from '@ojp/node-driver';
+import { ConnectionCleanupError } from '../common/connections';
 import type { OjpMssqlPool } from './OjpMssqlPool';
 
 export type OjpMssqlTransactionCallback = (err: Error | null) => void;
 
-/**
- * Stands in for the object `mssql.ConnectionPool.transaction()` returns. `SqlServerQueryRunner`
- * only ever calls `.begin([isolationLevel], callback)`, `.commit(callback)` and
- * `.rollback(callback)` on it — see `SqlServerQueryRunner.startTransaction/commitTransaction/
- * rollbackTransaction`.
- *
- * Unlike Postgres (where `PostgresQueryRunner` sniffs `BEGIN`/`COMMIT`/`ROLLBACK` from SQL
- * text sent through the same connection object), SQL Server's TypeORM driver calls these
- * dedicated methods directly — they map 1:1 onto `OjpClient.startTransaction()/commit()/
- * rollback()`, no SQL-sentinel matching needed.
- *
- * A transaction pins exactly one `OjpClient` session (leased from the pool at `.begin()` time,
- * returned to the pool at `.commit()`/`.rollback()` time) for its entire duration, since the
- * OJP protocol requires the whole transaction to run against the same physical DB connection.
- * `OjpMssqlRequest` reads `activeClient` to run queries against that same pinned session while
- * the transaction is open.
- */
+const isolationLevels: Record<string, TransactionIsolationLevel> = {
+  READ_UNCOMMITTED: TransactionIsolation.READ_UNCOMMITTED,
+  READ_COMMITTED: TransactionIsolation.READ_COMMITTED,
+  REPEATABLE_READ: TransactionIsolation.REPEATABLE_READ,
+  SERIALIZABLE: TransactionIsolation.SERIALIZABLE,
+};
+
+/** Keeps one connection for the transaction, then closes it. */
 export class OjpMssqlTransaction {
   private client: OjpClient | undefined;
 
   constructor(private readonly pool: OjpMssqlPool) {}
 
-  /** @internal Read by `OjpMssqlRequest` to route queries to the session pinned by this transaction. */
   get activeClient(): OjpClient | undefined {
     return this.client;
   }
@@ -34,55 +25,73 @@ export class OjpMssqlTransaction {
   begin(isolationLevel: unknown, callback?: OjpMssqlTransactionCallback): void;
   begin(isolationLevelOrCallback?: unknown, maybeCallback?: OjpMssqlTransactionCallback): void {
     const callback = typeof isolationLevelOrCallback === 'function'
-      ? (isolationLevelOrCallback as OjpMssqlTransactionCallback)
+      ? isolationLevelOrCallback as OjpMssqlTransactionCallback
       : maybeCallback;
+    const isolation = typeof isolationLevelOrCallback === 'function' ? undefined : isolationLevelOrCallback;
+    this.start(isolation).then(
+      () => callback?.(null),
+      (error: Error) => callback ? callback(error) : this.pool.emit('error', error),
+    );
+  }
 
-    this.pool.acquireClient()
-      .then(async (client) => {
-        this.client = client;
-        // The isolation level is intentionally not forwarded: `OjpClient.startTransaction()`
-        // has no isolation-level parameter today. Session-default isolation applies.
-        await client.startTransaction();
-        callback?.(null);
-      })
-      .catch((err) => callback?.(err as Error));
+  private async start(isolation: unknown): Promise<void> {
+    if (this.client) {
+      throw new Error('@ojp/typeorm-adapter: transaction has already begun.');
+    }
+    let level: TransactionIsolationLevel | undefined;
+    if (isolation !== undefined) {
+      level = typeof isolation === 'string' ? isolationLevels[isolation] : undefined;
+      if (level === undefined) {
+        throw new Error(`@ojp/typeorm-adapter: unsupported transaction isolation level: ${String(isolation)}`);
+      }
+    }
+    const client = await this.pool.acquireClient();
+    try {
+      if (level !== undefined) {
+        await client.setTransactionIsolation(level);
+      }
+      await client.startTransaction();
+      this.client = client;
+    } catch (error) {
+      try {
+        await this.pool.releaseClient(client);
+      } catch (cleanupError) {
+        throw new ConnectionCleanupError(error, cleanupError);
+      }
+      throw error;
+    }
   }
 
   commit(callback?: OjpMssqlTransactionCallback): void {
-    const client = this.client;
-    if (!client) {
-      callback?.(new Error('@ojp/typeorm-driver: commit() called without a matching begin().'));
-      return;
-    }
-    client.commit()
-      .then(() => {
-        this.pool.releaseClient(client);
-        this.client = undefined;
-        callback?.(null);
-      })
-      .catch((err) => {
-        this.pool.releaseClient(client, err as Error);
-        this.client = undefined;
-        callback?.(err as Error);
-      });
+    this.finish('commit').then(
+      () => callback?.(null),
+      (error: Error) => callback ? callback(error) : this.pool.emit('error', error),
+    );
   }
 
   rollback(callback?: OjpMssqlTransactionCallback): void {
+    this.finish('rollback').then(
+      () => callback?.(null),
+      (error: Error) => callback ? callback(error) : this.pool.emit('error', error),
+    );
+  }
+
+  private async finish(action: 'commit' | 'rollback'): Promise<void> {
     const client = this.client;
     if (!client) {
-      callback?.(new Error('@ojp/typeorm-driver: rollback() called without a matching begin().'));
-      return;
+      throw new Error(`@ojp/typeorm-adapter: ${action}() called without a matching begin().`);
     }
-    client.rollback()
-      .then(() => {
-        this.pool.releaseClient(client);
-        this.client = undefined;
-        callback?.(null);
-      })
-      .catch((err) => {
-        this.pool.releaseClient(client, err as Error);
-        this.client = undefined;
-        callback?.(err as Error);
-      });
+    this.client = undefined;
+    try {
+      await client[action]();
+    } catch (error) {
+      try {
+        await this.pool.releaseClient(client);
+      } catch (cleanupError) {
+        throw new ConnectionCleanupError(error, cleanupError);
+      }
+      throw error;
+    }
+    await this.pool.releaseClient(client);
   }
 }

@@ -14,7 +14,7 @@
  * by referenced index.
  */
 
-const POSTGRES_PARAM_PATTERN = /\$(\d+)/g;
+import { translateParameters } from '../common/sqlParameters';
 
 export interface TranslatedQuery {
   sql: string;
@@ -23,12 +23,7 @@ export interface TranslatedQuery {
 
 /** Rewrites `$1, $2, ...` placeholders into `?`, reordering/duplicating `params` as needed. */
 export function translatePositionalParams(sql: string, params: ReadonlyArray<unknown> = []): TranslatedQuery {
-  const orderedParams: unknown[] = [];
-  const translatedSql = sql.replace(POSTGRES_PARAM_PATTERN, (_match, indexStr: string) => {
-    orderedParams.push(params[Number(indexStr) - 1]);
-    return '?';
-  });
-  return { sql: translatedSql, params: orderedParams };
+  return translateParameters(sql, params, 'postgres');
 }
 
 const RESULT_SET_LEADING_KEYWORDS = /^\s*(SELECT|WITH|SHOW|EXPLAIN|VALUES|TABLE)\b/i;

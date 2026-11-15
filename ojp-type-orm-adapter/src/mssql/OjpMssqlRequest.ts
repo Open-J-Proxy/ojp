@@ -1,4 +1,5 @@
 import { OjpClient, OjpTypedParam } from '@ojp/node-driver';
+import { ConnectionCleanupError } from '../common/connections';
 import { stringifyBigInts } from '../common/rowShaping';
 import { OjpMssqlPool } from './OjpMssqlPool';
 import { OjpMssqlTransaction } from './OjpMssqlTransaction';
@@ -70,7 +71,7 @@ export class OjpMssqlRequest {
       const client = this.target.activeClient;
       if (!client) {
         throw new Error(
-          '@ojp/typeorm-driver: no active transaction session (begin() was not called, or the '
+          '@ojp/typeorm-adapter: no active transaction session (begin() was not called, or the '
           + 'transaction has already been committed/rolled back).',
         );
       }
@@ -79,14 +80,19 @@ export class OjpMssqlRequest {
 
     const pool = this.target;
     const client = await pool.acquireClient();
+    let result: OjpMssqlRawResult;
     try {
-      const result = await this.runAgainst(client, sql, params);
-      pool.releaseClient(client);
-      return result;
+      result = await this.runAgainst(client, sql, params);
     } catch (err) {
-      pool.releaseClient(client, err as Error);
+      try {
+        await pool.releaseClient(client);
+      } catch (cleanupError) {
+        throw new ConnectionCleanupError(err, cleanupError);
+      }
       throw err;
     }
+    await pool.releaseClient(client);
+    return result;
   }
 
   private async runAgainst(client: OjpClient, sql: string, params: unknown[]): Promise<OjpMssqlRawResult> {

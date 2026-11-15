@@ -43,6 +43,13 @@ jobs:
           npm run build
           npm test -- --runInBand
 
+      - name: Install, build and run TypeORM adapter unit tests
+        working-directory: ojp-type-orm-adapter
+        run: |
+          npm ci
+          npm run build
+          npm test -- --runInBand
+
       - name: Build OJP server
         run: ./mvnw -q -pl ojp-server -am install -DskipTests -Dgpg.skip=true
 
@@ -171,6 +178,15 @@ jobs:
         run: |
           npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/node-integration.json"
           node -e "const r=require(process.argv[1]); const count=require('fs').readdirSync('test').filter(f => /^integration\..*\.test\.ts$/.test(f)).length; if (!count || r.numPendingTests || r.numRuntimeErrorTestSuites || r.numFailedTests || r.numPassedTestSuites !== count) process.exit(1)" "$RUNNER_TEMP/node-integration.json"
+
+      - name: Run TypeORM adapter integration suites
+        working-directory: ojp-type-orm-adapter
+        env:
+          OJP_ENABLE_INTEGRATION_TESTS: 'true'
+          OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
+        run: |
+          npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/typeorm-integration.json"
+          node -e "const r=require(process.argv[1]); const count=require('fs').readdirSync('test').filter(f => /^integration\..*\.test\.ts$/.test(f)).length; if (!count || r.numPendingTests || r.numRuntimeErrorTestSuites || r.numFailedTests || r.numPassedTestSuites !== count) process.exit(1)" "$RUNNER_TEMP/typeorm-integration.json"
 
       - name: Show logs and clean up test containers
         if: always() && env.NODE_TEST_PREFIX != ''

@@ -1,4 +1,4 @@
-import { OjpTypedParam } from '@ojp/node-driver';
+import { OjpTypedParam, ParameterType } from '@ojp/node-driver';
 import { OjpMssqlPool } from '../src/mssql/OjpMssqlPool';
 import { OjpMssqlRequest } from '../src/mssql/OjpMssqlRequest';
 import { mssqlTypes } from '../src/mssql/mssqlTypes';
@@ -7,6 +7,7 @@ const mockConnect = jest.fn();
 const mockExecuteQuery = jest.fn();
 const mockExecuteUpdate = jest.fn();
 const mockStartTransaction = jest.fn();
+const mockSetTransactionIsolation = jest.fn();
 const mockCommit = jest.fn();
 const mockRollback = jest.fn();
 const mockClose = jest.fn();
@@ -20,6 +21,7 @@ jest.mock('@ojp/node-driver', () => {
       executeQuery: mockExecuteQuery,
       executeUpdate: mockExecuteUpdate,
       startTransaction: mockStartTransaction,
+      setTransactionIsolation: mockSetTransactionIsolation,
       commit: mockCommit,
       rollback: mockRollback,
       close: mockClose,
@@ -38,6 +40,7 @@ describe('OjpMssqlPool', () => {
     jest.clearAllMocks();
     mockConnect.mockResolvedValue(undefined);
     mockClose.mockResolvedValue(undefined);
+    mockSetTransactionIsolation.mockResolvedValue(undefined);
   });
 
   it('should throw synchronously when ojpUrl is missing', () => {
@@ -56,34 +59,25 @@ describe('OjpMssqlPool', () => {
     expect(mockConnect).toHaveBeenCalledTimes(1);
   });
 
-  it('should not exceed "pool.max" concurrently connected sessions', async () => {
+  it('opens independent connections without a client-side pool', async () => {
     const pool = new OjpMssqlPool({
       ojpUrl: 'jdbc:ojp[localhost:1065]_sqlserver://host:1433;databaseName=db',
       pool: { max: 1 },
     });
 
     const clientA = await pool.acquireClient();
-    let secondAcquired = false;
-    const secondPromise = pool.acquireClient().then((client) => {
-      secondAcquired = true;
-      return client;
-    });
-
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(secondAcquired).toBe(false);
-    expect(mockConnect).toHaveBeenCalledTimes(1);
-
-    pool.releaseClient(clientA);
-    const clientB = await secondPromise;
-    expect(clientB).toBe(clientA);
+    const clientB = await pool.acquireClient();
+    expect(mockConnect).toHaveBeenCalledTimes(2);
+    expect(clientB).not.toBe(clientA);
+    await pool.releaseClient(clientA);
+    await pool.releaseClient(clientB);
+    expect(mockClose).toHaveBeenCalledTimes(2);
   });
 
   it('should drop a client released with an error instead of reusing it', async () => {
     const pool = new OjpMssqlPool({ ojpUrl: 'jdbc:ojp[localhost:1065]_sqlserver://host:1433;databaseName=db' });
-    pool.on('error', () => { /* expected in this test */ });
-
     const client = await pool.acquireClient();
-    pool.releaseClient(client, new Error('connection reset'));
+    await pool.releaseClient(client);
     expect(mockClose).toHaveBeenCalledTimes(1);
 
     await pool.acquireClient();
@@ -107,8 +101,10 @@ describe('OjpMssqlTransaction', () => {
     jest.clearAllMocks();
     mockConnect.mockResolvedValue(undefined);
     mockStartTransaction.mockResolvedValue(undefined);
+    mockSetTransactionIsolation.mockResolvedValue(undefined);
     mockCommit.mockResolvedValue(undefined);
     mockRollback.mockResolvedValue(undefined);
+    mockClose.mockResolvedValue(undefined);
   });
 
   function newPool(): OjpMssqlPool {
@@ -127,7 +123,7 @@ describe('OjpMssqlTransaction', () => {
     expect(trx.activeClient).toBeDefined();
   });
 
-  it('should accept an isolation level argument before the callback, ignoring its value', async () => {
+  it('forwards a supported isolation level before starting the transaction', async () => {
     const trx = newPool().transaction();
 
     await new Promise<void>((resolve, reject) => {
@@ -135,9 +131,28 @@ describe('OjpMssqlTransaction', () => {
     });
 
     expect(mockStartTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSetTransactionIsolation).toHaveBeenCalledWith(8);
   });
 
-  it('should commit and release the pinned client back to the pool', async () => {
+  it('closes a connection when beginning a transaction fails', async () => {
+    mockStartTransaction.mockRejectedValueOnce(new Error('begin failed'));
+    const trx = newPool().transaction();
+    await expect(new Promise<void>((resolve, reject) => {
+      trx.begin((err) => (err ? reject(err) : resolve()));
+    })).rejects.toThrow('begin failed');
+    expect(mockClose).toHaveBeenCalledTimes(1);
+    expect(trx.activeClient).toBeUndefined();
+  });
+
+  it('rejects unsupported snapshot isolation instead of silently ignoring it', async () => {
+    const trx = newPool().transaction();
+    await expect(new Promise<void>((resolve, reject) => {
+      trx.begin(mssqlTypes.ISOLATION_LEVEL.SNAPSHOT, (err) => (err ? reject(err) : resolve()));
+    })).rejects.toThrow(/unsupported transaction isolation/);
+    expect(mockConnect).not.toHaveBeenCalled();
+  });
+
+  it('commits and closes the transaction connection', async () => {
     const pool = newPool();
     const trx = pool.transaction();
     await new Promise<void>((resolve) => trx.begin(() => resolve()));
@@ -149,12 +164,12 @@ describe('OjpMssqlTransaction', () => {
     expect(mockCommit).toHaveBeenCalledTimes(1);
     expect(trx.activeClient).toBeUndefined();
 
-    // The released client should be reusable by a fresh acquireClient() call.
+    expect(mockClose).toHaveBeenCalledTimes(1);
     await pool.acquireClient();
-    expect(mockConnect).toHaveBeenCalledTimes(1);
+    expect(mockConnect).toHaveBeenCalledTimes(2);
   });
 
-  it('should rollback and release the pinned client back to the pool', async () => {
+  it('rolls back and closes the transaction connection', async () => {
     const trx = newPool().transaction();
     await new Promise<void>((resolve) => trx.begin(() => resolve()));
 
@@ -163,6 +178,7 @@ describe('OjpMssqlTransaction', () => {
     });
 
     expect(mockRollback).toHaveBeenCalledTimes(1);
+    expect(mockClose).toHaveBeenCalledTimes(1);
     expect(trx.activeClient).toBeUndefined();
   });
 
@@ -183,6 +199,7 @@ describe('OjpMssqlRequest', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockConnect.mockResolvedValue(undefined);
+    mockClose.mockResolvedValue(undefined);
   });
 
   function newPool(): OjpMssqlPool {
@@ -211,6 +228,30 @@ describe('OjpMssqlRequest', () => {
     expect(raw).toEqual({ recordset: [], rowsAffected: [3] });
   });
 
+  it('closes the connection and propagates SQL errors without emitting a pool error', async () => {
+    mockExecuteUpdate.mockRejectedValueOnce(new Error('constraint violation'));
+    const pool = newPool();
+    const request = new OjpMssqlRequest(pool);
+    await expect(request.query('UPDATE t SET a = 1')).rejects.toThrow('constraint violation');
+    expect(mockClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves both query and cleanup errors', async () => {
+    mockExecuteUpdate.mockRejectedValueOnce(new Error('query failed'));
+    mockClose.mockRejectedValueOnce(new Error('close failed'));
+    const request = new OjpMssqlRequest(newPool());
+    await expect(request.query('UPDATE t SET a = 1')).rejects.toThrow(/query failed.*close failed/);
+    expect(mockClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a cleanup error after a successful query', async () => {
+    mockExecuteUpdate.mockResolvedValueOnce(1);
+    mockClose.mockRejectedValueOnce(new Error('close failed'));
+    const request = new OjpMssqlRequest(newPool());
+    await expect(request.query('UPDATE t SET a = 1')).rejects.toThrow('close failed');
+    expect(mockClose).toHaveBeenCalledTimes(1);
+  });
+
   it('should support the node-style (err, raw) callback signature', (done) => {
     mockExecuteUpdate.mockResolvedValue(1);
     const request = new OjpMssqlRequest(newPool());
@@ -232,7 +273,7 @@ describe('OjpMssqlRequest', () => {
     const [, params] = mockExecuteUpdate.mock.calls[0];
     expect(params[0]).toBeInstanceOf(OjpTypedParam);
     expect((params[0] as OjpTypedParam).value).toBe('123.45');
-    expect((params[0] as OjpTypedParam).type).toBe('PT_BIG_DECIMAL');
+    expect((params[0] as OjpTypedParam).type).toBe(ParameterType.BIG_DECIMAL);
   });
 
   it('should route queries against a transaction through its pinned client, not the pool', async () => {

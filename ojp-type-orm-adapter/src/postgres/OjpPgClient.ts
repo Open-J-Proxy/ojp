@@ -101,7 +101,7 @@ export class OjpPgClient extends EventEmitter {
     return { rows: [], rowCount: affectedRows, command };
   }
 
-  /** Releases this connection back to the owning `OjpPgPool`. Mirrors `pg`'s `release(err?)`. */
+  /** Closes the connection. Mirrors `pg`'s `release(err?)`. */
   release(err?: Error): void {
     this.onRelease(err);
   }

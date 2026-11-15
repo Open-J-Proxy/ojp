@@ -6,6 +6,17 @@ import {
 } from '../src/postgres/sqlTranslate';
 
 describe('translatePositionalParams', () => {
+  it('ignores placeholders in strings, identifiers, comments and dollar-quoted bodies', () => {
+    const sql = `SELECT $1, '$2', "$3", $$ $4 $$, $tag$ $5 $tag$, E'escaped\\' $6' -- $7\n/* $8 /* $9 */ */`;
+    expect(translatePositionalParams(sql, [42])).toEqual({
+      sql: `SELECT ?, '$2', "$3", $$ $4 $$, $tag$ $5 $tag$, E'escaped\\' $6' -- $7\n/* $8 /* $9 */ */`,
+      params: [42],
+    });
+  });
+
+  it('rejects a placeholder without a matching value', () => {
+    expect(() => translatePositionalParams('SELECT $2', [1])).toThrow(/matching value/);
+  });
   it('should return the sql unchanged when there are no placeholders', () => {
     const result = translatePositionalParams('SELECT 1', []);
     expect(result).toEqual({ sql: 'SELECT 1', params: [] });

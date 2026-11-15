@@ -52,7 +52,7 @@ describe('OjpPgPool', () => {
     expect(connection).toBeInstanceOf(OjpPgClient);
   });
 
-  it('should reuse a released client instead of creating a new one', async () => {
+  it('closes released connections and opens a fresh one', async () => {
     const pool = new OjpPgPool({ ojpUrl: 'jdbc:ojp[localhost:1059]_postgresql://host:5432/db' });
 
     const first = await connectAsync(pool);
@@ -60,16 +60,12 @@ describe('OjpPgPool', () => {
 
     await connectAsync(pool);
 
-    // Only one underlying OjpClient.connect() call across both acquisitions.
-    expect(mockConnect).toHaveBeenCalledTimes(1);
+    expect(mockClose).toHaveBeenCalledTimes(1);
+    expect(mockConnect).toHaveBeenCalledTimes(2);
   });
 
   it('should drop a client released with an error instead of reusing it', async () => {
     const pool = new OjpPgPool({ ojpUrl: 'jdbc:ojp[localhost:1059]_postgresql://host:5432/db' });
-    // Mirrors PostgresDriver.createPool(), which always attaches its own 'error' handler;
-    // EventEmitter throws on an unhandled 'error' event if nothing is listening.
-    pool.on('error', () => { /* expected in this test */ });
-
     const first = await connectAsync(pool);
     first.release(new Error('connection reset'));
     expect(mockClose).toHaveBeenCalledTimes(1);
@@ -79,24 +75,16 @@ describe('OjpPgPool', () => {
     expect(mockConnect).toHaveBeenCalledTimes(2);
   });
 
-  it('should not exceed "max" concurrently connected clients', async () => {
+  it('opens independent connections without waiting for a client-side pool', async () => {
     const pool = new OjpPgPool({ ojpUrl: 'jdbc:ojp[localhost:1059]_postgresql://host:5432/db', max: 1 });
 
     const first = await connectAsync(pool);
-    let secondResolved = false;
-    const secondPromise = connectAsync(pool).then((result) => {
-      secondResolved = true;
-      return result;
-    });
-
-    // Give pending microtasks a chance to run; the second connect() must still be waiting.
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(secondResolved).toBe(false);
-    expect(mockConnect).toHaveBeenCalledTimes(1);
-
+    const second = await connectAsync(pool);
+    expect(mockConnect).toHaveBeenCalledTimes(2);
     first.release();
-    const second = await secondPromise;
     expect(second.connection).toBeInstanceOf(OjpPgClient);
+    second.release();
+    expect(mockClose).toHaveBeenCalledTimes(2);
   });
 
   it('should close every tracked client on end()', async () => {
@@ -108,6 +96,41 @@ describe('OjpPgPool', () => {
     });
 
     expect(mockClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an in-progress connection before closing it', async () => {
+    let finishConnect!: () => void;
+    mockConnect.mockReturnValueOnce(new Promise<void>((resolve) => { finishConnect = resolve; }));
+    const pool = new OjpPgPool({ ojpUrl: 'jdbc:ojp[localhost:1059]_postgresql://host:5432/db' });
+    const opening = connectAsync(pool);
+    const openingError = expect(opening).rejects.toThrow('closed while connecting');
+    let ended = false;
+    const ending = new Promise<void>((resolve, reject) => {
+      pool.end((err) => err ? reject(err) : resolve());
+    }).then(() => { ended = true; });
+
+    await Promise.resolve();
+    expect(ended).toBe(false);
+    expect(mockClose).not.toHaveBeenCalled();
+    finishConnect();
+    await openingError;
+    await ending;
+    expect(mockClose).toHaveBeenCalledTimes(1);
+    await expect(connectAsync(pool)).rejects.toThrow('already been closed');
+  });
+
+  it('reports cleanup failures when shutdown races with connection setup', async () => {
+    let finishConnect!: () => void;
+    mockConnect.mockReturnValueOnce(new Promise<void>((resolve) => { finishConnect = resolve; }));
+    mockClose.mockRejectedValueOnce(new Error('close failed'));
+    const pool = new OjpPgPool({ ojpUrl: 'jdbc:ojp[localhost:1059]_postgresql://host:5432/db' });
+    const openingError = expect(connectAsync(pool)).rejects.toThrow('close failed');
+    const ending = new Promise<void>((resolve, reject) => {
+      pool.end((err) => err ? reject(err) : resolve());
+    });
+    const endingError = expect(ending).rejects.toThrow('close failed');
+    finishConnect();
+    await Promise.all([openingError, endingError]);
   });
 });
 

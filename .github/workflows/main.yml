@@ -2389,7 +2389,7 @@ jobs:
             ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
           nohup bash -c '
             while true; do
-              java -Duser.timezone=UTC -Dojp.libs.path=./ojp-server/ojp-libs \
+              java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
                 -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
                 -Dojp.server.maxConcurrentRequests=1 \
                 -jar "$1" >> /tmp/ojp-server-2.log 2>&1 &
@@ -2413,11 +2413,19 @@ jobs:
           echo "Timed out waiting for second OJP server. Log:"; cat /tmp/ojp-server-2.log
           exit 1
 
+      - name: Set up Python for pyodbc
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pyodbc
+        run: python -m pip install pyodbc
+
       - name: Configure C++ ODBC client
         run: |
           cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
             -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release -DOJP_ODBC_TEST_PYODBC=ON
 
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
@@ -2436,7 +2444,7 @@ jobs:
           OJP_TEST_H2_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
         run: |
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbc(Parameters|Tls|Cancel|Batch|SqlRouting|ProcedureMetadata|TablesMetadata|DriverApi|H2L[1-9]Integration)$' --output-on-failure \
+            -R '^OjpOdbc(Parameters|Tls|Cancel|Batch|SqlRouting|ProcedureMetadata|TablesMetadata|DriverApi|Autocommit|H2L[1-9]Integration|H2(Pyodbc)?Autocommit(Single|Multinode)Integration)$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-h2-l1-l9-test.log
 
       - name: Show ojp-server.log
@@ -2593,11 +2601,12 @@ jobs:
         run: |
           jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
             ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          echo 0 > /tmp/ojp-server-2-concurrency
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
                 -Dojp.server.port=1060 -Dojp.prometheus.port=9160 \
-                -Dojp.server.maxConcurrentRequests=1 \
+                -Dojp.server.maxConcurrentRequests="$(cat /tmp/ojp-server-2-concurrency)" \
                 -jar "$1" >> /tmp/ojp-server-2.log 2>&1 &
               server_pid=$!
               echo "$server_pid" > /tmp/ojp-server-2.pid
@@ -2619,16 +2628,24 @@ jobs:
           echo "Timed out waiting for second OJP server. Log:"; cat /tmp/ojp-server-2.log
           exit 1
 
+      - name: Set up Python for pyodbc
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pyodbc
+        run: python -m pip install pyodbc
+
       - name: Configure C++ ODBC client
         run: |
           cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
             -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release -DOJP_ODBC_TEST_PYODBC=ON
 
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run C++ ODBC PostgreSQL L1-L10 tests
+      - name: Run C++ ODBC PostgreSQL L1-L7 and autocommit tests
         env:
           OJP_TEST_POSTGRESQL: 'true'
           OJP_TEST_POSTGRESQL_ADDR: 'localhost:1059'
@@ -2663,8 +2680,65 @@ jobs:
             sleep 2
           done
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcPostgreSqlL([1-9]|10)Integration$' --output-on-failure \
+            -R '^OjpOdbcPostgreSql(L[1-7]|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
             2>&1 | tee ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l10-test.log
+
+      - name: Apply L8-only concurrency limit
+        run: |
+          echo 1 > /tmp/ojp-server-2-concurrency
+          old_pid=$(cat /tmp/ojp-server-2.pid)
+          kill "$old_pid"
+          for i in $(seq 1 30); do
+            new_pid=$(cat /tmp/ojp-server-2.pid)
+            if [ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null \
+              && (echo > /dev/tcp/localhost/1060) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for the PostgreSQL L8 OJP server"
+          exit 1
+
+      - name: Run C++ ODBC PostgreSQL L8 test
+        env:
+          OJP_TEST_POSTGRESQL_L8: 'true'
+          OJP_TEST_POSTGRESQL_L8_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_POSTGRESQL_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
+        run: |
+          set -o pipefail
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcPostgreSqlL8Integration$' --output-on-failure \
+            2>&1 | tee -a ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l10-test.log
+
+      - name: Remove L8-only concurrency limit
+        run: |
+          echo 0 > /tmp/ojp-server-2-concurrency
+          old_pid=$(cat /tmp/ojp-server-2.pid)
+          kill "$old_pid"
+          for i in $(seq 1 30); do
+            new_pid=$(cat /tmp/ojp-server-2.pid)
+            if [ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null \
+              && (echo > /dev/tcp/localhost/1060) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for the unlimited-concurrency PostgreSQL server"
+          exit 1
+
+      - name: Run C++ ODBC PostgreSQL L9-L10 tests
+        env:
+          OJP_TEST_POSTGRESQL_L9: 'true'
+          OJP_TEST_POSTGRESQL_L9_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_POSTGRESQL_L9_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
+          OJP_TEST_POSTGRESQL_L10: 'true'
+          OJP_TEST_POSTGRESQL_L10_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_POSTGRESQL_L10_TARGET_PID_FILE: '/tmp/ojp-server-2.pid'
+        run: |
+          set -o pipefail
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcPostgreSqlL(9|10)Integration$' --output-on-failure \
+            2>&1 | tee -a ojp-client-cpp-odbc/build/cpp-odbc-postgresql-l1-l10-test.log
 
       - name: Show OJP server log
         if: always()
@@ -2818,7 +2892,7 @@ jobs:
         run: |
           jar=$(find ojp-server/target -maxdepth 1 -name 'ojp-server-*.jar' \
             ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
-          echo 1 > /tmp/ojp-server-2-concurrency
+          echo 0 > /tmp/ojp-server-2-concurrency
           nohup bash -c '
             while true; do
               java -Duser.timezone=UTC -Dojp.libs.path=./ojp-libs \
@@ -2846,26 +2920,58 @@ jobs:
           cat /tmp/ojp-server-2.log
           exit 1
 
+      - name: Set up Python for pyodbc
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pyodbc
+        run: python -m pip install pyodbc
+
       - name: Configure and build C++ ODBC client
         run: |
           cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
             -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release -DOJP_ODBC_TEST_PYODBC=ON
           cmake --build ojp-client-cpp-odbc/build --parallel 2
 
-      - name: Run shared C++ ODBC L1-L8 tests
+      - name: Run shared C++ ODBC L1-L7 and autocommit tests
         run: |
           set -o pipefail
           export OJP_TEST_MARIADB=true
           export OJP_TEST_MARIADB_ADDR=localhost:1059
           export OJP_TEST_MARIADB_L7=true
           export OJP_TEST_MARIADB_L7_ADDRS=localhost:1059,localhost:1060
-          export OJP_TEST_MARIADB_L8=true
-          export OJP_TEST_MARIADB_L8_ADDRS=localhost:1060,localhost:1059
-          export OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE=/tmp/ojp-server-2.pid
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcMariaDBL[1-8]Integration$' --output-on-failure \
+            -R '^OjpOdbcMariaDB(L[1-7]|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-mariadb-mysql-l1-l10-test.log
+
+      - name: Apply L8-only concurrency limit
+        run: |
+          echo 1 > /tmp/ojp-server-2-concurrency
+          old_pid=$(cat /tmp/ojp-server-2.pid)
+          kill "$old_pid"
+          for i in $(seq 1 30); do
+            new_pid=$(cat /tmp/ojp-server-2.pid)
+            if [ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null \
+              && (echo > /dev/tcp/localhost/1060) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timed out waiting for the MariaDB L8 OJP server"
+          exit 1
+
+      - name: Run shared C++ ODBC L8 test
+        env:
+          OJP_TEST_MARIADB_L8: 'true'
+          OJP_TEST_MARIADB_L8_ADDRS: 'localhost:1060,localhost:1059'
+          OJP_TEST_MARIADB_L8_FIRST_SERVER_PID_FILE: '/tmp/ojp-server-2.pid'
+        run: |
+          set -o pipefail
+          ctest --test-dir ojp-client-cpp-odbc/build \
+            -R '^OjpOdbcMariaDBL8Integration$' --output-on-failure \
+            2>&1 | tee -a /tmp/cpp-odbc-mariadb-mysql-l1-l10-test.log
 
       - name: Remove L8-only concurrency limit for XA suites
         run: |
@@ -3009,6 +3115,10 @@ jobs:
           docker exec ojp-odbc-sqlserver \
             /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
             -P 'TestPassword123!' -C -b -Q \
+            "ALTER DATABASE defaultdb SET READ_COMMITTED_SNAPSHOT ON;"
+          docker exec ojp-odbc-sqlserver \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
+            -P 'TestPassword123!' -C -b -Q \
             "IF NOT EXISTS (SELECT * FROM sys.sql_logins WHERE name = 'testuser') CREATE LOGIN testuser WITH PASSWORD = 'TestPassword123!';"
           docker exec ojp-odbc-sqlserver \
             /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
@@ -3077,11 +3187,19 @@ jobs:
           echo "Timed out waiting for second OJP server. Log:"; cat /tmp/ojp-server-2.log
           exit 1
 
+      - name: Set up Python for pyodbc
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pyodbc
+        run: python -m pip install pyodbc
+
       - name: Configure C++ ODBC client
         run: |
           cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
             -DGOOGLEAPIS_PROTO_DIR=/usr/share/gocode/src/github.com/gogo/googleapis \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release -DOJP_ODBC_TEST_PYODBC=ON
 
       - name: Build C++ ODBC client and tests
         run: cmake --build ojp-client-cpp-odbc/build --parallel 2
@@ -3090,6 +3208,7 @@ jobs:
         env:
           OJP_TEST_SQLSERVER: 'true'
           OJP_TEST_SQLSERVER_ADDR: 'localhost:1059'
+          OJP_TEST_SQLSERVER_L7: 'true'
           OJP_TEST_SQLSERVER_L7_ADDRS: 'localhost:1059,localhost:1060'
           OJP_TEST_SQLSERVER_L8: 'true'
           OJP_TEST_SQLSERVER_L8_ADDRS: 'localhost:1060,localhost:1059'
@@ -3103,7 +3222,7 @@ jobs:
         run: |
           set -o pipefail
           ctest --test-dir ojp-client-cpp-odbc/build \
-            -R '^OjpOdbcSqlServer(L([1-9]|10)|DataTypes)Integration$' --output-on-failure \
+            -R '^OjpOdbcSqlServer(L([1-9]|10)|DataTypes|(Pyodbc)?Autocommit(Single|Multinode))Integration$' --output-on-failure \
             2>&1 | tee /tmp/cpp-odbc-sqlserver-l1-l10-test.log
 
       - name: Show OJP server log

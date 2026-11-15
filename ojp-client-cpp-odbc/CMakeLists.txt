@@ -118,7 +118,16 @@ if(WIN32 AND OJP_ODBC_BUILD_SETUP)
 endif()
 
 include(CTest)
+option(OJP_ODBC_TEST_PYODBC "Run actual-driver pyodbc integration tests" OFF)
 if(BUILD_TESTING)
+    if(OJP_ODBC_TEST_PYODBC)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import pyodbc"
+            RESULT_VARIABLE PYODBC_IMPORT_RESULT)
+        if(NOT PYODBC_IMPORT_RESULT EQUAL 0)
+            message(FATAL_ERROR "OJP_ODBC_TEST_PYODBC requires pyodbc in ${Python3_EXECUTABLE}")
+        endif()
+    endif()
     add_executable(ojp_odbc_dsn_test tests/dsn_test.cpp src/ojp_odbc_dsn.cpp)
     target_include_directories(ojp_odbc_dsn_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME OjpOdbcDsn COMMAND ojp_odbc_dsn_test)
@@ -134,6 +143,13 @@ if(BUILD_TESTING)
     add_executable(ojp_odbc_fake_server tests/fake_statement_server.cpp ${PROTO_SRCS})
     target_include_directories(ojp_odbc_fake_server PRIVATE "${GENERATED_DIR}")
     target_link_libraries(ojp_odbc_fake_server PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+
+    add_executable(ojp_odbc_autocommit_test tests/autocommit_test.cpp)
+    target_include_directories(ojp_odbc_autocommit_test PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(ojp_odbc_autocommit_test PRIVATE ojp_odbc Threads::Threads)
+    add_test(NAME OjpOdbcAutocommit
+        COMMAND ojp_odbc_autocommit_test "$<TARGET_FILE:ojp_odbc_fake_server>")
+    set_tests_properties(OjpOdbcAutocommit PROPERTIES TIMEOUT 120)
 
     add_executable(ojp_odbc_cancel_test tests/cancel_test.cpp)
     target_include_directories(ojp_odbc_cancel_test PRIVATE ${ODBC_INCLUDE_DIRS})
@@ -199,6 +215,52 @@ if(BUILD_TESTING)
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/odbc/odbcinst.ini"
         CONTENT "[OJP]\nDriver=$<TARGET_FILE:ojp_odbc>\n")
+    add_executable(ojp_odbc_autocommit_integration_test tests/autocommit_integration_test.cpp)
+    target_link_libraries(ojp_odbc_autocommit_integration_test PRIVATE ODBC::ODBC Threads::Threads)
+    add_dependencies(ojp_odbc_autocommit_integration_test ojp_odbc)
+    foreach(BACKEND IN ITEMS H2 PostgreSql MariaDB SqlServer)
+        if(BACKEND STREQUAL "H2")
+            set(AUTOCOMMIT_CSV h2_l7_connection.csv)
+            set(AUTOCOMMIT_ENV OJP_TEST_H2)
+        elseif(BACKEND STREQUAL "PostgreSql")
+            set(AUTOCOMMIT_CSV postgresql_l1_connection.csv)
+            set(AUTOCOMMIT_ENV OJP_TEST_POSTGRESQL)
+        elseif(BACKEND STREQUAL "MariaDB")
+            set(AUTOCOMMIT_CSV mariadb_l1_connection.csv)
+            set(AUTOCOMMIT_ENV OJP_TEST_MARIADB)
+        else()
+            set(AUTOCOMMIT_CSV sqlserver_l1_connection.csv)
+            set(AUTOCOMMIT_ENV OJP_TEST_SQLSERVER)
+        endif()
+        foreach(TOPOLOGY IN ITEMS Single Multinode)
+            if(TOPOLOGY STREQUAL "Single")
+                set(AUTOCOMMIT_ADDR "${AUTOCOMMIT_ENV}_ADDR")
+                set(AUTOCOMMIT_NODES 1)
+                set(AUTOCOMMIT_ENABLE "${AUTOCOMMIT_ENV}")
+            else()
+                set(AUTOCOMMIT_ADDR "${AUTOCOMMIT_ENV}_L7_ADDRS")
+                set(AUTOCOMMIT_NODES 2)
+                set(AUTOCOMMIT_ENABLE "${AUTOCOMMIT_ENV}_L7")
+            endif()
+            set(AUTOCOMMIT_ARGS
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/${AUTOCOMMIT_CSV}"
+                "${AUTOCOMMIT_ENABLE}" "${AUTOCOMMIT_ADDR}" "${AUTOCOMMIT_NODES}")
+            set(AUTOCOMMIT_TEST "OjpOdbc${BACKEND}Autocommit${TOPOLOGY}Integration")
+            add_test(NAME "${AUTOCOMMIT_TEST}"
+                COMMAND ojp_odbc_autocommit_integration_test ${AUTOCOMMIT_ARGS})
+            set_tests_properties("${AUTOCOMMIT_TEST}" PROPERTIES SKIP_RETURN_CODE 77
+                ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc" TIMEOUT 180)
+            if(OJP_ODBC_TEST_PYODBC)
+                set(PYODBC_TEST "OjpOdbc${BACKEND}PyodbcAutocommit${TOPOLOGY}Integration")
+                add_test(NAME "${PYODBC_TEST}"
+                    COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/pyodbc_autocommit_integration_test.py"
+                        ${AUTOCOMMIT_ARGS})
+                set_tests_properties("${PYODBC_TEST}" PROPERTIES SKIP_RETURN_CODE 77
+                    ENVIRONMENT "ODBCSYSINI=${CMAKE_CURRENT_BINARY_DIR}/odbc" TIMEOUT 180)
+            endif()
+        endforeach()
+    endforeach()
     add_test(NAME OjpOdbcH2L1Integration
         COMMAND ojp_odbc_l1_integration_test
             "H2"

@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["grpcio-tools==1.78.2"]
+dev = ["grpcio-tools==1.78.0"]
 
 [project.scripts]
 ojp-generate-proto = "ojp._generate:main"

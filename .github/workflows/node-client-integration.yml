@@ -44,6 +44,13 @@ jobs:
           npm run build
           npm test -- --runInBand
 
+      - name: Build Node driver for TypeORM adapter
+        if: needs.detect-changes.outputs.node_typeorm == 'true' && needs.detect-changes.outputs.node != 'true'
+        working-directory: ojp-node-driver
+        run: |
+          npm ci
+          npm run build
+
       - name: Install, build and run TypeORM adapter unit tests
         if: needs.detect-changes.outputs.node_typeorm == 'true'
         working-directory: ojp-node-typeorm-adapter

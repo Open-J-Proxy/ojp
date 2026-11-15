@@ -28,7 +28,7 @@
     "test:xa": "jest test/integration.xa.postgres.test.ts"
   },
   "dependencies": {
-    "@grpc/grpc-js": "1.10.9",
+    "@grpc/grpc-js": "1.14.7",
     "@grpc/proto-loader": "0.7.13",
     "@ojp/grpc-contract": "file:../ojp-grpc-contract",
     "google-proto-files": "1.1.1",

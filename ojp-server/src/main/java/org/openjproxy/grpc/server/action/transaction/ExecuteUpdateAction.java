@@ -18,6 +18,7 @@ import org.openjproxy.grpc.server.LobDataBlocksInputStream;
 import org.openjproxy.grpc.server.SessionManager;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.lob.LobRetention;
 import org.openjproxy.grpc.server.sql.SqlSessionAffinityDetector;
 import org.openjproxy.grpc.server.statement.ParameterHandler;
 import org.openjproxy.grpc.server.statement.StatementFactory;
@@ -106,6 +107,8 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
         String resultSetUuid = "";
 
         var sessionManager = actionContext.getSessionManager();
+        List<Parameter> params = null;
+        boolean addBatch = false;
 
         try {
             // Check if SQL requires session affinity (temporary tables, session variables,
@@ -120,7 +123,8 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                             || returnResultSet
                             || requiresSessionAffinity);
 
-            List<Parameter> params = ProtoConverter.fromProtoList(request.getParametersList());
+            params = ProtoConverter.fromProtoList(request.getParametersList());
+            addBatch = StatementRequestValidator.isAddBatchOperation(request);
             PreparedStatement ps = dto.getSession() != null && !dto.getSession().getSessionUUID().isBlank()
                     && !request.getStatementUUID().isBlank()
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
@@ -134,7 +138,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                             request);
                     generatedKeysUuid = registerForGeneratedKeys(sessionManager, dto, request, ps);
                 }
-                if (StatementRequestValidator.isAddBatchOperation(request)) {
+                if (addBatch) {
                     psUUID = addBatchAndGetStatementUUID(sessionManager, dto, ps, request);
                 } else if (returnResultSet) {
                     UpdateExecutionOutcome outcome = executeForResultSet(ps, null, true, sessionManager, dto);
@@ -168,6 +172,11 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
 
             return result;
         } finally {
+            // Batched parameters are only sent to the database on executeBatch, so their LOBs must stay.
+            if (!addBatch && dto != null) {
+                LobRetention.releaseExecutedParameterLobs(actionContext.getServerConfiguration(), sessionManager,
+                        dto.getSession(), params);
+            }
             closeStatementAndConnectionIfNoSession(dto, stmt);
         }
     }

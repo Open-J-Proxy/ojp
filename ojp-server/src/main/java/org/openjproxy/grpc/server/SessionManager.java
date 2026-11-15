@@ -61,6 +61,11 @@ public interface SessionManager {
     void registerLob(SessionInfo sessionInfo, Object o, String lobUuid);
     <T> T getLob(SessionInfo sessionInfo, String uuid);
     Collection<Object> getLobs(SessionInfo sessionInfo);
+
+    /**
+     * Removes and frees the given LOBs from the session, ignoring unknown UUIDs.
+     */
+    void releaseLobs(SessionInfo sessionInfo, Collection<String> lobUuids);
     void terminateSession(SessionInfo sessionInfo) throws SQLException;
     void waitLobStreamsConsumption(SessionInfo sessionInfo);
     void registerAttr(SessionInfo sessionInfo, String key, Object value);

@@ -329,6 +329,18 @@ class ServerConfigurationTest {
     }
 
     @Test
+    void testLobKeepUntilSessionEndConfiguration() {
+        assertTrue(new ServerConfiguration().isLobKeepUntilSessionEnd());
+
+        System.setProperty("ojp.server.lob.keepUntilSessionEnd", "false");
+        try {
+            assertFalse(new ServerConfiguration().isLobKeepUntilSessionEnd());
+        } finally {
+            System.clearProperty("ojp.server.lob.keepUntilSessionEnd");
+        }
+    }
+
+    @Test
     void testDefaultTracingConfiguration() {
         ServerConfiguration config = new ServerConfiguration();
 

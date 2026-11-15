@@ -153,7 +153,7 @@ jobs:
           const full = process.env.EVENT !== 'pull_request' ||
             process.env.FORCE_FULL === 'true' ||
             process.env.DETECTION !== 'success' || !classified ||
-            changed('shared') || changed('selection') || changed('unknown');
+            changed('shared') || changed('unknown');
           const java = full || changed('jdbc') || changed('testcontainers');
           const javaBuild = java || changed('starter');
           const modules = full || changed('testcontainers')
@@ -164,10 +164,11 @@ jobs:
                changed('starter') && 'spring-boot-starter-ojp'].filter(Boolean);
           const selected = {full, java, java_build: javaBuild,
             java_modules: modules.join(','), framework: java || changed('starter')};
-          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php',
-            'node', 'node_typeorm']) {
+          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php']) {
             selected[suite] = full || changed(suite);
           }
+          selected.node = full || changed('node') || changed('selection');
+          selected.node_typeorm = full || changed('node_typeorm') || changed('selection');
           fs.appendFileSync(process.env.GITHUB_OUTPUT,
             Object.entries(selected).map(([k, v]) => `${k}=${v}\n`).join(''));
           const reason = full

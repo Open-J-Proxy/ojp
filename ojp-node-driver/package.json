@@ -31,7 +31,7 @@
     "@grpc/grpc-js": "1.14.7",
     "@grpc/proto-loader": "0.7.13",
     "@ojp/grpc-contract": "file:../ojp-grpc-contract",
-    "google-proto-files": "1.1.1",
+    "google-proto-files": "4.2.0",
     "protobufjs": "7.6.6"
   },
   "devDependencies": {

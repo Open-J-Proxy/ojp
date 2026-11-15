@@ -228,7 +228,7 @@ async function* singleLobChunk(input: Buffer | string): AsyncGenerator<Buffer | 
 async function* chunkLobInput(input: LobInput, clob: boolean): AsyncGenerator<Buffer, void, undefined> {
   const source: AsyncIterable<Buffer | string> =
     typeof input === 'string' || Buffer.isBuffer(input) ? singleLobChunk(input) : input;
-  let pending = Buffer.alloc(0);
+  let pending: Buffer = Buffer.alloc(0);
 
   for await (const chunk of source) {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;

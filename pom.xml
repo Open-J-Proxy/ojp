@@ -29,15 +29,15 @@
         <lombok.version>1.18.48</lombok.version>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
-        <slf4j.version>2.0.18</slf4j.version>
-        <logback.version>1.5.38</logback.version>
+        <slf4j.version>2.0.20</slf4j.version>
+        <logback.version>1.6.6</logback.version>
         <protobuf.version>4.34.2</protobuf.version>
-        <opentelemetry.version>1.67.0</opentelemetry.version>
+        <opentelemetry.version>1.68.0</opentelemetry.version>
         <netty.version>4.2.18.Final</netty.version>
-        <commons-lang3.version>3.18.0</commons-lang3.version>
+        <commons-lang3.version>3.22.0</commons-lang3.version>
         <commons-codec.version>1.23.0</commons-codec.version>
         <jackson-core.version>2.22.3</jackson-core.version>
-        <plexus-utils.version>4.0.3</plexus-utils.version>
+        <plexus-utils.version>4.1.0</plexus-utils.version>
         <log4j.version>2.25.5</log4j.version>
         <guava.version>33.7.2-jre</guava.version>
     </properties>

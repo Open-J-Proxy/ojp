@@ -58,7 +58,7 @@ This non-LTS feature release collects the changes merged into `main` since `v1.0
 
 ---
 
-## 🚀 Version 1.2.0 — Late December 2026 (planned)
+## 🚀 Version 1.2.0 — January 2027 (planned)
 
 **Theme: Per-pool Slow Query Segregation**
 

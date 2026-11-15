@@ -6,13 +6,13 @@ readme = "README.rst"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 dependencies = [
-    "grpcio==1.78.0",
-    "protobuf==6.33.5",
-    "googleapis-common-protos==1.75.5",
+    "grpcio==1.85.1",
+    "protobuf==6.33.6",
+    "googleapis-common-protos==1.76.0",
 ]
 
 [project.optional-dependencies]
-dev = ["grpcio-tools==1.78.0"]
+dev = ["grpcio-tools==1.78.2"]
 
 [project.scripts]
 ojp-generate-proto = "ojp._generate:main"

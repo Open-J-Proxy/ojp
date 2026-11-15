@@ -30,17 +30,17 @@
   },
   "dependencies": {
     "@grpc/grpc-js": "1.14.7",
-    "@grpc/proto-loader": "0.7.13",
+    "@grpc/proto-loader": "0.8.1",
     "@ojp/grpc-contract": "file:../ojp-grpc-contract",
     "protobufjs": "7.6.6"
   },
   "devDependencies": {
-    "@types/jest": "29.5.12",
-    "@types/node": "20.14.10",
+    "@types/jest": "29.5.14",
+    "@types/node": "20.19.43",
     "csv-parse": "5.6.0",
     "jest": "29.7.0",
-    "ts-jest": "29.1.5",
-    "typescript": "5.5.3"
+    "ts-jest": "29.4.15",
+    "typescript": "5.9.3"
   },
   "overrides": {
     "yargs": "18.0.0"

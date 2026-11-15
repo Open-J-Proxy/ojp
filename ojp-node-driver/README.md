@@ -651,9 +651,11 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
 
 ## Scripts
 
-`google-proto-files` uses the protobufjs 7.x dependency line so it can share the
-driver's patched `protobufjs` dependency instead of installing a vulnerable 6.x
-copy. Keep `package-lock.json` in sync when updating either dependency.
+`proto-includes/google/type` contains minimal wire-compatible Google `Date` and
+`TimeOfDay` schemas imported by the gRPC contract. The `google/protobuf`
+well-known types are resolved from protobufjs's built-in definitions. Keep
+`proto-includes` in the published package when changing its inclusion or build
+configuration.
 
 ```bash
 npm install

@@ -21,7 +21,7 @@ const protobuf = require('protobufjs');
 const ts = require('typescript');
 
 const PROTO_PATH = require.resolve('@ojp/grpc-contract/proto/StatementService.proto');
-const GOOGLE_PROTO_INCLUDE_DIR = path.dirname(require.resolve('google-proto-files/package.json'));
+const GOOGLE_PROTO_INCLUDE_DIR = path.resolve(__dirname, '../proto-includes');
 const TYPES_PATH = path.join(__dirname, '../src/proto/types.ts');
 const OJP_PACKAGE_PREFIX = '.com.openjproxy.grpc.';
 

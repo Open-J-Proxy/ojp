@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package google.type;
+
+message TimeOfDay {
+  int32 hours = 1;
+  int32 minutes = 2;
+  int32 seconds = 3;
+  int32 nanos = 4;
+}

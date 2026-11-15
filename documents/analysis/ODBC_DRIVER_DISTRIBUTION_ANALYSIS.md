@@ -1,173 +1,260 @@
 # OJP ODBC Driver Distribution Analysis
 
-**Status:** 📋 Draft (October 2026)
+**Status:** Proposal — release workflow not implemented (19 October 2026)
 
-## Executive Summary
+## Summary
 
-**Question:** Users must currently clone the repository and compile
-[`ojp-client-cpp-odbc`](../../ojp-client-cpp-odbc/README.md) themselves. What is
-the best way to deliver the OJP ODBC driver, should it be a DLL, how are ODBC
-drivers usually made available, and does the operating system matter?
+**Goal:** Deliver prebuilt releases of
+[`ojp-client-cpp-odbc`](../../ojp-client-cpp-odbc/README.md) for Windows,
+Linux, and macOS, with clear architecture and compatibility rules.
+This is analysis only: no workflows, packages, or repository are created.
 
-**Answer:** The driver already *is* a shared library ("DLL of sorts"):
-`add_library(ojp_odbc SHARED ...)` produces `libojp_odbc.so` (Linux),
-`libojp_odbc.dylib` (macOS), or `ojp_odbc.dll` (Windows). The missing part is
-**distribution**. Ship prebuilt, self-contained, per-OS/per-architecture
-binaries plus registration with each platform's ODBC Driver Manager. That is
-how every mainstream ODBC driver (Microsoft SQL Server, psqlODBC, MySQL
-Connector/ODBC) is delivered.
+**Recommendation:** Keep the client source, CMake build, and integration tests
+in `Open-J-Proxy/ojp`. Use a separate distribution repository under the same
+organization (proposed name: `Open-J-Proxy/ojp-odbc`) for packaging, releases,
+installation instructions, and downloads. Build from an exact OJP tag resolved
+to a commit, not a moving branch. The repository name is not yet approved.
 
-**Confidence:** High for the overall direction (it mirrors industry practice).
-Medium for the Windows porting effort, because the driver has never been built
-on Windows.
+Start with archives for Windows x64/x86, Linux x86_64/ARM64, and macOS
+x86_64/ARM64, subject to the target decisions below. Native installers can
+follow. Put compiled packages in GitHub Releases, not Git history.
+
+**Confidence:** High for this approach; Medium for the porting effort.
+Shared-library builds and Linux integration suites exist, but Windows/macOS
+build instructions do not prove those platforms work.
 
 ---
 
 ## 1. Current State
 
-| Area | Today | Impact |
-|---|---|---|
-| Release pipeline | `.github/workflows/release.yml` publishes only Maven Central artefacts and the Docker image. No C++ artefacts. | Users need CMake, gRPC, protobuf, unixODBC, and a googleapis checkout to build. |
-| Dependencies | Dynamically linked against system gRPC/protobuf (CI uses Ubuntu `libgrpc++-dev`). | A binary only works on machines with the exact same library versions. |
-| Symbol visibility | `CXX_VISIBILITY_PRESET default` exports every symbol. | On Linux, gRPC/protobuf/abseil symbols leak and can clash with other copies in the host process. On Windows (MSVC), nothing is exported without `__declspec(dllexport)` or a `.def` file. |
-| Windows support | No `_WIN32` handling in `src/ojp_odbc_driver.cpp`; CI builds on Linux only. | Probably does not build or load on Windows as-is. |
-| Connection methods | Only `SQLDriverConnect`; `SQLConnect` with a DSN returns `IM002`. ANSI only, no `W` (Unicode) entry points. | Most GUI/BI tools (Excel, Power BI, Tableau, DBeaver, LibreOffice) expect DSNs, and many call `W` functions. |
-| Versioning | CMake `project(... VERSION 0.1.0)`, not tied to the OJP release version. | Users cannot match a driver build to a server version. |
-| Proto inputs | Requires `GOOGLEAPIS_PROTO_DIR` for `google/type/date.proto` and `timeofday.proto`. | Extra, non-obvious build dependency. |
+| Area | Current state and gap |
+|---|---|
+| Release | `.github/workflows/release.yml` publishes Maven Central artifacts and Docker images, not C++ packages. Users must build the driver. |
+| Build/install | C++17, CMake release preset, and install rules produce `.dll`, `.so`, or `.dylib`. The preset disables tests; installing a build does not prove it is ready to release. |
+| Dependencies | CMake links gRPC/protobuf; Linux CI uses system development packages. Install rules do not bundle third-party runtimes or check how the installed driver finds them. |
+| Exports | `CXX_VISIBILITY_PRESET default`, `WINDOWS_EXPORT_ALL_SYMBOLS ON`, and Windows XA export annotations exist. Limit exports to supported APIs and check for exposed dependency symbols. |
+| Platforms | Windows UTC handling and cross-platform instructions exist; ODBC integration jobs in `main.yml` run on Ubuntu. Windows/macOS still need build and installed-package tests. |
+| Connections | ANSI/Unicode APIs exist; standard connections are DSN-less. There is no Windows installer or setup-dialog DLL. DSN and BI-tool support are separate work. |
+| Versions | CMake uses `0.1.0`; `SQL_DRIVER_VER` reports `00.01.0000`. Use one version source and define driver/server compatibility. |
+| Build inputs | Users need CMake, gRPC, protobuf, a platform ODBC manager/headers, and googleapis sources. `GOOGLEAPIS_PROTO_DIR` supplies `google/type/date.proto` and `timeofday.proto`. |
 
 ---
 
-## 2. How ODBC Drivers Are Usually Delivered
+## 2. Installation and OS Differences
 
-An ODBC driver always has two parts:
-
-1. **The driver library** (`.dll` / `.so` / `.dylib`).
-2. **A registration entry** that tells the platform's ODBC Driver Manager
-   where the library is (`odbcinst.ini` or the Windows registry).
-
-Applications never link to the driver directly. They link to the Driver
-Manager, which loads the driver named in the connection string or DSN, for
-example `DRIVER={OJP};...`.
-
-### Per operating system
+An installation normally includes a driver library and a registration entry
+pointing to it. Applications use the ODBC Driver Manager to load the driver
+named in a connection string or DSN, such as `DRIVER={OJP};...`.
+OJP's extra XA APIs must also remain exported.
 
 | OS | Driver Manager | Driver registration | Typical delivery | Real-world examples |
 |---|---|---|---|---|
 | **Windows** | Built into the OS (`odbc32.dll`) | Registry: `HKLM\SOFTWARE\ODBC\ODBCINST.INI` (32-bit drivers under `WOW6432Node`) | Signed **MSI installer**; sometimes winget/Chocolatey | Microsoft ODBC Driver for SQL Server (`msodbcsql`), psqlODBC MSI, MySQL Connector/ODBC MSI |
-| **Linux** | unixODBC (iODBC is rare) | `/etc/odbcinst.ini` or `$ODBCSYSINI` | **.deb / .rpm** packages from a vendor repository, plus a **tar.gz** for manual installs. Package post-install scripts run `odbcinst -i -d`. | `msodbcsql18` from packages.microsoft.com; `odbc-postgresql` in Debian/Ubuntu |
+| **Linux** | Usually unixODBC | `/etc/odbcinst.ini` or `$ODBCSYSINI` | `.deb` / `.rpm`, often from a vendor repository, and `.tar.gz` for manual installs | `msodbcsql18` from packages.microsoft.com; Debian/Ubuntu `odbc-postgresql` |
 | **macOS** | No built-in manager is commonly used; unixODBC (Homebrew) or iODBC | `odbcinst.ini` (location depends on the manager) | **Notarized .pkg** and/or **Homebrew tap** | `brew tap microsoft/mssql-release` |
 
-### OS-specific differences that matter
-
 **Windows**
-- **Bitness:** a 64-bit driver cannot be loaded by a 32-bit application (for
-  example 32-bit Excel). Ship x64, consider x86, and ARM64 later. There are two
-  separate ODBC Administrator tools (32-bit and 64-bit).
-- **Code signing:** without an Authenticode signature, SmartScreen and
-  corporate policies block the installer.
-- **Setup UI:** the ODBC Administrator calls a `ConfigDSN` entry point (often
-  in a separate setup DLL) to show a configuration dialog. Without one, DSNs
-  must be created by the installer or by editing the registry.
-- **Unicode:** the Driver Manager maps `W` calls to an ANSI-only driver, but
-  non-ASCII data can be lost in the conversion.
+- Has separate 32-bit and 64-bit ODBC Administrator tools.
+- Plan Authenticode signing for public DLLs/installers. Unsigned downloads may
+  face SmartScreen warnings or company restrictions, but can still load.
+- ODBC Administrator uses `ConfigDSN`, often in a separate setup DLL, for a
+  DSN dialog. Without it, an installer or registry edits must create DSNs.
+- Check binary compatibility: `SQL_API` calling conventions, undecorated x86
+  API names, Unicode, and the matching Visual C++ runtime.
 
 **Linux**
-- **glibc compatibility:** build on an old glibc (for example AlmaLinux 8,
-  glibc 2.28, similar to the Python `manylinux` approach) so one binary works
-  on most distributions.
-- **Architectures:** x86_64 and aarch64.
-- **Driver Manager:** unixODBC is the de facto standard; target it.
+- Test glibc and C++ runtime requirements on the oldest supported distribution;
+  building on the newest runner does not prove compatibility.
+- Alpine/musl needs a separate build from glibc.
+- Target unixODBC.
 
 **macOS**
-- **Signing:** Developer ID signing and notarization are required, or
-  Gatekeeper blocks the `.dylib`.
-- **Architectures:** ship a `universal2` binary (arm64 + x86_64).
-- **Driver Manager split:** unixODBC vs iODBC is a real nuisance. Most vendors
-  target unixODBC for Homebrew users.
+- Plan Developer ID signing and notarization for public installers.
+  Gatekeeper behavior depends on packaging, quarantine, and the host app;
+  unsigned `.dylib` files are not always blocked.
+- A universal binary needs both architecture slices in every bundled dependency.
+- Choose and test a minimum macOS version per architecture.
+- Target Homebrew's unixODBC; do not mix it with iODBC.
 
 ---
 
-## 3. Recommendation (Phased)
+## 3. Repository and Package Location
 
-### Phase 0: Make the binary self-contained (prerequisite)
+| Option | Advantages | Costs |
+|---|---|---|
+| Folder in the existing module | Change source/build/packaging together; reuse CI and permissions; no cross-repository trigger. | Native and main-project releases share one location. |
+| Separate distribution repository; source stays here | Dedicated downloads, release rules, signing permissions, and installation instructions. | Must pin source commits and coordinate packaging changes and triggers across repositories. |
+| Move client source to a new repository | Independent source ownership and releases. | Must extract shared protobuf inputs, reconnect server tests, and maintain cross-repository compatibility. |
 
-- Statically link gRPC, protobuf, abseil, re2, c-ares, zlib, and SSL, for
-  example with vcpkg static triplets on all three operating systems. The
-  result is one file with no external C++ dependencies.
-- Export **only** the `SQL*` entry points:
+Prefer the second option: publishing packages does not require moving source.
+
+For module-local packaging, keep definitions in
+`ojp-client-cpp-odbc/packaging/`, split by platform, and generated packages in
+an ignored folder such as `ojp-client-cpp-odbc/build/packages/`.
+Either approach must record each release's source commit, packaging revision,
+and dependency/toolchain versions.
+
+## 4. Architecture Matrix
+
+“64-bit” alone is not enough: x86_64 and ARM64 need different binaries.
+The application, driver, and loaded dependencies must match architectures:
+32-bit Excel cannot load a 64-bit driver, even on 64-bit Windows.
+The separate OJP server process need not match the client's bitness.
+
+| OS | Initial proposed targets | 32-bit policy |
+|---|---|---|
+| Windows | x64 and x86 | Include x86 for 32-bit Office/legacy users; test in a real 32-bit process on supported Windows. |
+| Linux | x86_64 and ARM64/aarch64 | Defer x86 unless demand justifies its dependencies, tools, and tests. |
+| macOS | Intel x86_64 and Apple Silicon arm64 | Do not target 32-bit: modern macOS does not run 32-bit applications. |
+
+Windows ARM64, Linux musl/x86, and macOS universal packages are later options.
+Start with separate macOS archives. Pin runner images and check architecture
+availability before implementation.
+
+## 5. Build and Test Requirements
+
+### Repeatable builds and dependencies
+
+- Pin compilers, SDKs, dependencies, and googleapis inputs. A pinned package
+  manager such as vcpkg is one option, not a requirement.
+- Use compatible `protoc`, protobuf libraries, and gRPC generator versions.
+  Cross-builds need generators that run on the build host and libraries for
+  the target architecture.
+- Prefer statically linking private gRPC/protobuf and their dependencies.
+  Otherwise bundle libraries where licenses allow, with reliable loader paths
+  (for example relative RPATHs on Linux/macOS).
+- Keep the Driver Manager as a system dependency. OS/compiler runtimes still
+  matter; do not promise a dependency-free binary.
+- Check Linux position-independent static libraries and Windows runtime linkage.
+  Scan bundled/static dependencies for vulnerabilities and plan updates.
+- Export only the supported ODBC and `OjpXA*` APIs:
   - Linux: linker version script plus `-fvisibility=hidden`.
   - macOS: exported-symbols list.
   - Windows: `.def` file.
 
-  This prevents symbol clashes when the host process already loads another
-  protobuf or gRPC (Python, Java via JNI, other drivers). It is the biggest
-  stability risk.
-- Port to Windows (`windows.h`, `SQL_API` calling convention, `.def` file) and
-  add Windows and macOS CI build jobs.
-- Vendor the two `google/type` proto files (Apache-2.0) to remove the
-  `GOOGLEAPIS_PROTO_DIR` requirement.
-- Tie the driver version to the OJP release version and ship a third-party
-  license NOTICE.
+  This avoids clashes with another gRPC/protobuf in the app. Static linkage
+  alone does not hide symbols.
+- Download pinned googleapis sources with integrity checks, or include the
+  needed proto files and licenses. Keep the canonical OJP protocol here.
+- Use one release version for CMake, packages, driver reporting, and binary
+  metadata. Keep prerelease labels separate where numeric versions are required.
+- Include OJP/third-party notices, the XA header where needed, registration
+  templates/instructions, and OS/runtime requirements.
 
-### Phase 1: GitHub Release archives (cheapest, covers everyone)
+### Test installed packages
 
-Add a build matrix job to `release.yml` that attaches:
+- Test every published architecture on native runners where available, or
+  cross-build and run on the target using a tested setup.
+- Port POSIX process control, dynamic loading, and environment handling in tests
+  to Windows. Use Windows driver registration, not unixODBC's `odbcinst.ini`.
+- Install in a clean environment and load through the real Driver Manager.
+  Build-tree libraries/development packages must not hide missing dependencies,
+  bad loader paths, or registration errors.
+- Against a real server, test connections, ANSI/Unicode, parameters,
+  transactions, cleanup, TLS/mTLS, and applicable failover/XA behavior.
+- Keep CSV-driven database tests; fail if required tests are skipped.
+- Run all suites required for each claimed level/database on each platform.
+  Linux results do not certify Windows/macOS.
+- Test upgrades, installer removal/unregistration, and Windows x86/x64
+  coexistence without deleting unrelated driver entries.
+
+The driver build needs no Java. Server tests need Java 25, UTC, and JDBC
+drivers. Do not add client-side pooling to packaging or tests.
+
+## 6. Release Workflow
+
+Start with a manually triggered workflow in the selected repository:
+
+1. Validate the version and fixed OJP source revision; record source and
+   packaging commits.
+2. Build all required OS/architecture targets with pinned inputs.
+3. Package and test the installed contents.
+4. Generate license notices, SBOMs (dependency inventories), and build provenance
+   (records of source and build inputs).
+5. Sign binaries/installers and notarize macOS installers as configured.
+   Generate final SHA-256 checksums after signing changes the files.
+6. Publish one GitHub Release only when every required target passes.
+   Keep incomplete results unpublished or in a draft.
+
+Support dry runs, release approval, one release at a time, prereleases, and
+publication retries. Never silently replace a published version's binaries.
+
+Keep build jobs read-only; grant write/signing permissions only to protected
+publication jobs. Use protected environments or a signing service for
+credentials. Never put credentials in packages.
+
+Later, the main OJP workflow could trigger distribution with the exact release
+commit. Cross-repository triggers/writes may need a narrowly scoped GitHub App
+or fine-grained token; do not assume the default token can do this. Give version
+management one clear owner.
+
+The current Maven/Docker release is one Ubuntu job with no native-package gate.
+Adding uploads alone is not enough: if native packages must block an OJP
+release, run their checks before any public publication. Otherwise document
+their separate release schedule.
+
+## 7. Delivery Stages
+
+### Stage 1: GitHub Release archives
+
+Proposed assets:
 
 - `ojp-odbc-<version>-linux-x86_64.tar.gz` and `-linux-aarch64.tar.gz`
   (the `.so`, a sample `odbcinst.ini`, and a README)
-- `ojp-odbc-<version>-windows-x64.zip` (plus x86 if 32-bit Office matters)
-- `ojp-odbc-<version>-macos-universal.tar.gz`
-- SHA-256 checksums and an SBOM, optionally with cosign/Sigstore signatures
+- `ojp-odbc-<version>-windows-x64.zip` and `-windows-x86.zip` if selected
+- `ojp-odbc-<version>-macos-x86_64.tar.gz` and `-macos-arm64.tar.gz`
+- SHA-256 checksums, SBOMs, and provenance/signatures as configured
 
-### Phase 2: Native installers and package managers
+Include manual installation/registration instructions, system dependencies,
+and signing status. A preview label may describe the new delivery channel,
+not understate the client's existing features.
+
+### Stage 2: Native installers and package managers
 
 - **Windows:** MSI (WiX, or CPack with WiX) that writes the `ODBCINST.INI`
   registry keys; then publish to winget.
-- **Linux:** `.deb` and `.rpm` packages (nfpm or CPack) whose install script
+- **Linux:** `.deb` and `.rpm` packages (for example using CPack) whose install script
   runs `odbcinst -i -d` and whose removal script unregisters the driver.
-  Attach them to the GitHub Release first; hosting an apt/yum repository can
-  come later.
-- **macOS:** Homebrew tap (`brew install open-j-proxy/tap/ojp-odbc`), and later
-  a notarized `.pkg`.
+  Publish to GitHub Releases first; an apt/yum repository can follow.
+- **macOS:** Homebrew tap and/or signed, notarized `.pkg`, after testing
+  installation and Driver Manager compatibility.
 - **Docker:** an example base image with unixODBC and the OJP driver
   preinstalled, for containerized applications.
 
-### Phase 3: Features needed by GUI and BI tools
+### Stage 3: Optional DSN and GUI/BI improvements
 
 - `SQLConnect` with DSNs, reading `SERVER` and `DATABASE` from `odbc.ini` or
   the registry via `SQLGetPrivateProfileString`.
-- Unicode (`W`) entry points, which matter most on Windows.
 - Optionally, a Windows `ConfigDSN` setup dialog.
+- Test intended BI tools, including the existing Unicode APIs.
 
-Without Phase 3, packaging mainly helps C++ developers, not BI-tool users.
-
----
-
-## 4. Concerns and Open Questions
-
-- **Signing costs and key management:** Windows Authenticode and Apple
-  Developer ID certificates cost money and need secure key handling in CI
-  secrets. Unsigned artefacts are acceptable for Linux archives, not for
-  end-user Windows or macOS installers.
-- **Maturity:** the driver is at L1–L3 (no transactions, LOBs, or multinode;
-  see [Client Implementation Levels](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)).
-  Ship Phase 1 labelled **preview** now; hold MSI and Homebrew until at least
-  L4 (transactions) works, so polished installers do not suggest more maturity
-  than exists.
-- **Compatibility matrix:** document which OJP server versions each driver
-  release supports. Driver and server can be upgraded independently, so proto
-  changes must remain backward compatible.
-- **Target users:** C++ developers on Linux benefit from Phase 1 immediately.
-  Windows BI users benefit only after Phases 2 and 3. Knowing the main
-  audience decides the order.
+These need not block archives: DSN-less use needs no setup dialog, and an
+installer does not prove BI-tool compatibility.
 
 ---
 
-## 5. Summary
+## 8. Decisions Before Implementation
 
-| Question | Answer |
-|---|---|
-| Should it be a DLL? | It already is a shared library. The work is making it self-contained, exporting only ODBC symbols, and building it for each OS. |
-| How are ODBC drivers usually delivered? | Prebuilt per-OS binaries plus Driver Manager registration: MSI on Windows, deb/rpm (and tar.gz) on Linux, pkg/Homebrew on macOS. |
-| Does the OS matter? | Yes: Driver Manager and registration mechanism, 32/64-bit on Windows, glibc baseline and architecture on Linux, signing and notarization on Windows and macOS, and universal binaries on macOS. |
-| First step | Self-contained static builds with restricted symbol exports, published as preview archives on GitHub Releases. |
+1. Separate distribution repository or module-local packaging?
+2. Include Windows x86 for 32-bit Office/legacy users?
+3. Include Linux ARM64 from the first release?
+4. Which minimum OS, glibc/C++ runtime, and Driver Manager versions?
+5. Shared OJP version or independent driver versions? Either needs a tested
+   driver/server compatibility table and backward-compatible protocol.
+6. Which static/bundled dependency, update, and license policy?
+7. Archives first, or signed installers immediately? Arrange signing identities,
+   notarization access, and secure key storage.
+8. Must native checks block the main release, or are releases independent?
+
+---
+
+## 9. Source References
+
+- [CMake build and install rules](../../ojp-client-cpp-odbc/CMakeLists.txt)
+- [Release preset](../../ojp-client-cpp-odbc/CMakePresets.json)
+- [Platform build, registration, and support status](../../ojp-client-cpp-odbc/README.md)
+- [Driver implementation and version reporting](../../ojp-client-cpp-odbc/src/ojp_odbc_driver.cpp)
+- [Public XA API](../../ojp-client-cpp-odbc/include/ojp_odbc_xa.h)
+- [Current integration workflow](../../.github/workflows/main.yml)
+- [Current Maven/Docker release workflow](../../.github/workflows/release.yml)
+- [Client implementation level requirements](../multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)

@@ -31,6 +31,8 @@ on:
         value: ${{ jobs.select.outputs.php }}
       node:
         value: ${{ jobs.select.outputs.node }}
+      node_typeorm:
+        value: ${{ jobs.select.outputs.node_typeorm }}
       framework:
         value: ${{ jobs.select.outputs.framework }}
 
@@ -53,6 +55,7 @@ jobs:
       go: ${{ steps.select.outputs.go }}
       php: ${{ steps.select.outputs.php }}
       node: ${{ steps.select.outputs.node }}
+      node_typeorm: ${{ steps.select.outputs.node_typeorm }}
       framework: ${{ steps.select.outputs.framework }}
     steps:
       - uses: actions/checkout@v5
@@ -84,8 +87,10 @@ jobs:
           predicate-quantifier: every
           filters: |
             shared:
-              - '{ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons}/**'
+              - '{ojp-grpc-contract,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons}/**'
               - '!**/*.md'
+            selection:
+              - '.github/workflows/ci-test-selection.yml'
             jdbc:
               - 'ojp-jdbc-driver/**'
               - '!**/*.md'
@@ -117,11 +122,14 @@ jobs:
               - 'ojp-client-php-pdo/**'
               - '!**/*.md'
             node:
-              - '{ojp-node-driver/**,ojp-node-typeorm-adapter/**,.github/workflows/node-client-integration.yml}'
+              - '{ojp-node-driver/**,.github/workflows/node-client-integration.yml}'
+              - '!**/*.md'
+            node_typeorm:
+              - 'ojp-node-typeorm-adapter/**'
               - '!**/*.md'
             unknown:
               - '**'
-              - '!{documents,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons,ojp-jdbc-driver,ojp-testcontainers,spring-boot-starter-ojp,ojp-node-driver,ojp-node-typeorm-adapter,ojp-client-dotnet-ado-net,ojp-client-ruby-dbi,ojp-client-python-dbapi,ojp-client-cpp-odbc,ojp-client-dart-drift,ojp-client-go-database-sql,ojp-client-php-pdo}/**'
+              - '!{documents,ojp-grpc-contract,ojp-grpc-commons,ojp-server,ojp-datasource-api,ojp-datasource-hikari,ojp-datasource-dbcp,ojp-xa-pool-commons,ojp-jdbc-driver,ojp-testcontainers,spring-boot-starter-ojp,ojp-node-driver,ojp-node-typeorm-adapter,ojp-client-dotnet-ado-net,ojp-client-ruby-dbi,ojp-client-python-dbapi,ojp-client-cpp-odbc,ojp-client-dart-drift,ojp-client-go-database-sql,ojp-client-php-pdo}/**'
               - '!.github/workflows/node-client-integration.yml'
               - '!.github/workflows/ci-test-selection.yml'
               - '!**/*.md'
@@ -139,13 +147,13 @@ jobs:
           const fs = require('fs');
           const paths = JSON.parse(process.env.FILTERS);
           const changed = key => paths[key] === 'true';
-          const classified = ['shared', 'unknown', 'jdbc', 'testcontainers', 'starter',
-            'dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php', 'node']
+          const classified = ['shared', 'selection', 'unknown', 'jdbc', 'testcontainers', 'starter',
+            'dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php', 'node', 'node_typeorm']
             .every(key => ['true', 'false'].includes(paths[key]));
           const full = process.env.EVENT !== 'pull_request' ||
             process.env.FORCE_FULL === 'true' ||
             process.env.DETECTION !== 'success' || !classified ||
-            changed('shared') || changed('unknown');
+            changed('shared') || changed('selection') || changed('unknown');
           const java = full || changed('jdbc') || changed('testcontainers');
           const javaBuild = java || changed('starter');
           const modules = full || changed('testcontainers')
@@ -156,7 +164,8 @@ jobs:
                changed('starter') && 'spring-boot-starter-ojp'].filter(Boolean);
           const selected = {full, java, java_build: javaBuild,
             java_modules: modules.join(','), framework: java || changed('starter')};
-          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php', 'node']) {
+          for (const suite of ['dotnet', 'ruby', 'python', 'cpp', 'dart', 'go', 'php',
+            'node', 'node_typeorm']) {
             selected[suite] = full || changed(suite);
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT,

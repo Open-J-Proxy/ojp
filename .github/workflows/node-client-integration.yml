@@ -18,7 +18,7 @@ jobs:
 
   integration:
     needs: detect-changes
-    if: needs.detect-changes.outputs.node == 'true'
+    if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -37,6 +37,7 @@ jobs:
           cache-dependency-path: ojp-node-driver/package-lock.json
 
       - name: Install, build and run unit tests
+        if: needs.detect-changes.outputs.node == 'true'
         working-directory: ojp-node-driver
         run: |
           npm ci
@@ -44,6 +45,7 @@ jobs:
           npm test -- --runInBand
 
       - name: Install, build and run TypeORM adapter unit tests
+        if: needs.detect-changes.outputs.node_typeorm == 'true'
         working-directory: ojp-node-typeorm-adapter
         run: |
           npm ci
@@ -159,6 +161,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Run every client integration suite
+        if: needs.detect-changes.outputs.node == 'true'
         working-directory: ojp-node-driver
         env:
           OJP_TEST_H2: 'true'
@@ -180,6 +183,7 @@ jobs:
           node -e "const r=require(process.argv[1]); const count=require('fs').readdirSync('test').filter(f => /^integration\..*\.test\.ts$/.test(f)).length; if (!count || r.numPendingTests || r.numRuntimeErrorTestSuites || r.numFailedTests || r.numPassedTestSuites !== count) process.exit(1)" "$RUNNER_TEMP/node-integration.json"
 
       - name: Run TypeORM adapter integration suites
+        if: needs.detect-changes.outputs.node_typeorm == 'true'
         working-directory: ojp-node-typeorm-adapter
         env:
           OJP_ENABLE_INTEGRATION_TESTS: 'true'

@@ -651,6 +651,10 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
 
 ## Scripts
 
+`google-proto-files` uses the protobufjs 7.x dependency line so it can share the
+driver's patched `protobufjs` dependency instead of installing a vulnerable 6.x
+copy. Keep `package-lock.json` in sync when updating either dependency.
+
 ```bash
 npm install
 npm run verify-types # fails if src/proto/types.ts drifted from StatementService.proto (also runs as prebuild/pretest)

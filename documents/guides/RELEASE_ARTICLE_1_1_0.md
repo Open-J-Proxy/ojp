@@ -12,6 +12,21 @@ With database connection budgets, you can configure a maximum for pools whose JD
 
 For example, a budget of 24 connections shared across three healthy OJP servers gives each server a local share of eight connections across its matching pools. If one server becomes unhealthy and the remaining servers have an updated, consistent view of cluster health, their shares can grow to 12 each. OJP adjusts pool allocations as pools come and go and as health information changes. It uses the largest healthy-server count reported by the pools sharing a budget, so one client with a narrower view cannot by itself expand everyone else's allocation. This conservative approach can also delay expansion until the other pools report the smaller count.
 
+```mermaid
+flowchart LR
+    app["Application pool<br/>maximum 20"]
+    reporting["Reporting pool<br/>maximum 20"]
+    budget["Shared database budget<br/>maximum 24 total"]
+    app --> budget
+    reporting --> budget
+    budget --> three["3 healthy OJP servers<br/>8 per server"]
+    budget -. "one server unhealthy" .-> two["2 healthy OJP servers<br/>12 per server"]
+    three --> db["Orders database"]
+    two --> db
+```
+
+Each server's local share is shared across its matching pools, and each pool's own maximum still applies.
+
 You can keep some capacity aside for tools or applications outside OJP with a reserve. You can also give database usernames different weights: when capacity is tight, a username with weight two receives roughly twice the share of one with weight one, subject to pool maxima. Pools using the same username share that username's weight. This gives you a way to express the relative importance of workloads without having to predict every pool's exact size in advance.
 
 The configuration belongs on the server, not in the application's JDBC properties. For example, the following budget matches an orders database, keeps four of 28 connections in reserve, and gives the application a higher weight than reporting:
@@ -39,6 +54,16 @@ The clients now share a central gRPC contract, and the client specification desc
 ## A smoother path through the proxy
 
 For JDBC users running several OJP servers, optional priority tiers can now prefer a nearby server and use other healthy tiers as fallbacks. Lower numbers have higher priority, and normal load-aware or round-robin selection still applies within the chosen tier. Existing sessions and transactions keep their affinity; after a preferred server recovers, new unbound work can return to it. This is strict preference, not automatic spillover when a healthy preferred server is busy, and existing URLs without priorities keep their previous behavior. The [JDBC configuration guide](../configuration/ojp-jdbc-configuration.md#optional-server-priority-in-jdbc-urls) has the URL syntax and deployment details.
+
+```mermaid
+flowchart TD
+    new["New, unbound work"] --> healthy["Find the lowest-numbered tier<br/>with healthy servers"]
+    healthy --> choose["Select by load-aware or<br/>round-robin strategy within that tier"]
+    choose --> busy["A busy but healthy preferred tier<br/>does not spill over"]
+    session["Existing session or transaction"] --> affinity["Keep its server affinity"]
+    recovered["Preferred server recovers"] --> recheck["After health validation,<br/>new unbound work can prefer it again"]
+    recheck --> healthy
+```
 
 Pool acquisition is more forgiving during cold starts. Regular pooled connections, including read replicas, can retry a failed borrow during an additional grace period, which defaults to five seconds and can be disabled. This is not a database login timeout or an end-to-end request deadline, and it does not change XA or unpooled acquisition. The release also preserves XA transaction registries during budget-related pool resizing, so changing an allocation does not unnecessarily disrupt ongoing XA work.
 

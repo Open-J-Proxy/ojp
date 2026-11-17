@@ -25,7 +25,7 @@ Learn how Open J Proxy works, how to deploy it, and how to use it in production.
 
 ---
 
-**An open-source database connectivity and workload management platform that brings control-plane capabilities to application-to-database communication** — delivered as a Type 3 JDBC driver, early language-native clients, and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover.
+**An open-source, intelligent database proxy and connectivity control plane that centralizes connection management, optimizes database resource utilization, and provides workload isolation, intelligent routing, and high availability** — delivered as a Type 3 JDBC driver, early language-native clients, and a Layer 7 proxy server. OJP sits between your applications and your relational databases and provides backpressure, rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover.
 
 <a id="overview"></a>
 ## System picture

@@ -84,7 +84,7 @@ OJP operates as a **Layer 7 (Application Layer) proxy**, which means it understa
 
 ### Core Definition
 
-> **Open J Proxy is the only open-source JDBC Type 3 driver globally**, and it uses that foundation to deliver a transparent Quality-of-Service layer — a *smart database control plane* — that decouples application performance from database bottlenecks. Beyond backpressure, OJP provides rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover, all behind a standard JDBC API.
+> **Open J Proxy is an open-source database connectivity and workload management platform that brings control-plane capabilities to application-to-database communication.** It is built on the only open-source JDBC Type 3 driver and uses that foundation to deliver a transparent Quality-of-Service layer — a *smart database control plane* — that decouples application performance from database bottlenecks. Beyond backpressure, OJP provides rich observability, client-side reactive throttling, slow-vs-fast query segregation, and load balancing / failover, all behind a standard JDBC API.
 
 In simple terms: **OJP sits between your applications and your databases as a programmable control plane — managing connections, throttling under pressure, segregating slow from fast queries, and exposing what the data tier is doing — so applications can scale elastically without overwhelming the database.**
 

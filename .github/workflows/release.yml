@@ -298,7 +298,10 @@ jobs:
           fi
 
           # ── Check that the release tag does not already exist ───────────────
-          if git ls-remote --tags origin "refs/tags/v${RELEASE}" | grep -q "refs/tags/v${RELEASE}"; then
+          # RC and milestone versions may reuse a tag name as their release
+          # candidate/milestone is advanced.
+          if [[ ! "${RELEASE}" =~ -(RC|M)[0-9]+$ ]] \
+              && git ls-remote --tags origin "refs/tags/v${RELEASE}" | grep -q "refs/tags/v${RELEASE}"; then
             echo "ERROR: Tag v${RELEASE} already exists. Did you forget to bump the version?" >&2
             exit 1
           fi

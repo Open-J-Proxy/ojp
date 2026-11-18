@@ -37,7 +37,7 @@ jobs:
           cache-dependency-path: ojp-node-driver/package-lock.json
 
       - name: Install, build and run unit tests
-        if: needs.detect-changes.outputs.node == 'true'
+        if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
         working-directory: ojp-node-driver
         run: |
           npm ci

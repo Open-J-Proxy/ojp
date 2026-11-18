@@ -89,6 +89,22 @@ void check_statement_attributes(SQLHSTMT statement) {
 }
 
 void check_connection_attributes(SQLHDBC connection) {
+    for (const bool wide : {false, true}) {
+        struct {
+            SQLUINTEGER mode = 99;
+            SQLUINTEGER guard = 0x12345678;
+        } output;
+        SQLINTEGER length = -1;
+        const auto result = wide
+            ? SQLGetConnectAttrW(connection, SQL_ATTR_AUTOCOMMIT, &output.mode,
+                                 sizeof(output.mode), &length)
+            : SQLGetConnectAttr(connection, SQL_ATTR_AUTOCOMMIT, &output.mode,
+                                sizeof(output.mode), &length);
+        success(result, "SQLGetConnectAttr[W](SQL_ATTR_AUTOCOMMIT)");
+        require(output.mode == SQL_AUTOCOMMIT_ON, "Autocommit must default to ON");
+        require(output.guard == 0x12345678, "The autocommit getter overwrote its output buffer");
+        require(length == sizeof(SQLUINTEGER), "Autocommit must be returned as SQLUINTEGER");
+    }
     success(SQLSetConnectAttrW(connection, SQL_ATTR_CONNECTION_TIMEOUT,
                                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(7)), 0),
             "SQLSetConnectAttrW(SQL_ATTR_CONNECTION_TIMEOUT)");

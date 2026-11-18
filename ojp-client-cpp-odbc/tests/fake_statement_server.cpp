@@ -40,7 +40,46 @@ public:
     grpc::Status connect(grpc::ServerContext*, const proto::ConnectionDetails* request,
                          proto::SessionInfo* response) override {
         report("connect " + request->url());
+        fail_transactions_ = request->url().find("autocommit_failures") != std::string::npos;
+        transport_failure_ = request->url().find("autocommit_transport") != std::string::npos;
         response->set_connhash("fake-server");
+        return grpc::Status::OK;
+    }
+
+    grpc::Status startTransaction(grpc::ServerContext* context, const proto::SessionInfo* request,
+                                   proto::SessionInfo* response) override {
+        report("startTransaction " + request->sessionuuid());
+        if (fail_transactions_ && !start_failed_) {
+            start_failed_ = true;
+            return sql_error(context, "40001", "start transaction rejected", 701);
+        }
+        response->CopyFrom(*request);
+        response->set_sessionuuid("autocommit-session");
+        response->mutable_transactioninfo()->set_transactionstatus(proto::TRX_ACTIVE);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status commitTransaction(grpc::ServerContext* context, const proto::SessionInfo* request,
+                                    proto::SessionInfo* response) override {
+        report("commitTransaction " + request->sessionuuid());
+        if (fail_transactions_ && !commit_failed_) {
+            commit_failed_ = true;
+            return sql_error(context, "40001", "commit rejected", 702);
+        }
+        response->CopyFrom(*request);
+        response->mutable_transactioninfo()->set_transactionstatus(proto::TRX_COMMITED);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status rollbackTransaction(grpc::ServerContext* context, const proto::SessionInfo* request,
+                                      proto::SessionInfo* response) override {
+        report("rollbackTransaction " + request->sessionuuid());
+        if (fail_transactions_ && !rollback_failed_) {
+            rollback_failed_ = true;
+            return sql_error(context, "40001", "rollback rejected", 703);
+        }
+        response->CopyFrom(*request);
+        response->mutable_transactioninfo()->set_transactionstatus(proto::TRX_ROLLBACK);
         return grpc::Status::OK;
     }
 
@@ -88,6 +127,26 @@ public:
     // set in the JDBC shape.
     grpc::Status callResource(grpc::ServerContext* context, const proto::CallResourceRequest* request,
                               proto::CallResourceResponse* response) override {
+        if (request->resourcetype() == proto::RES_CONNECTION &&
+            request->target().calltype() == proto::CALL_SET &&
+            request->target().resourcename() == "AutoCommit") {
+            report("setAutoCommit " + request->session().sessionuuid());
+            if (request->session().sessionuuid() != "autocommit-session" ||
+                request->target().params_size() != 1 ||
+                request->target().params(0).value_case() != proto::ParameterValue::kBoolValue ||
+                !request->target().params(0).bool_value()) {
+                return sql_error(context, "HY000", "invalid autocommit request", 704);
+            }
+            if (transport_failure_) {
+                return grpc::Status(grpc::StatusCode::UNAVAILABLE, "transaction owner unavailable");
+            }
+            if (fail_transactions_ && !enable_failed_) {
+                enable_failed_ = true;
+                return sql_error(context, "40001", "autocommit commit rejected", 705);
+            }
+            response->mutable_session()->CopyFrom(request->session());
+            return grpc::Status::OK;
+        }
         if (request->resourcetype() == proto::RES_RESULT_SET &&
             request->target().calltype() == proto::CALL_CLOSE) {
             report("closeResultSet " + request->resourceuuid());
@@ -446,6 +505,12 @@ private:
     std::mutex mutex_;
     std::condition_variable terminated_cv_;
     bool terminated_ = false;
+    bool fail_transactions_ = false;
+    bool transport_failure_ = false;
+    bool start_failed_ = false;
+    bool commit_failed_ = false;
+    bool rollback_failed_ = false;
+    bool enable_failed_ = false;
     std::string pending_metadata_;
     std::string callable_sql_;
     std::map<int, int> callable_values_;

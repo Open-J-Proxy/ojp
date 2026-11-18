@@ -102,11 +102,16 @@ void set_connect_option(SQLHDBC connection, SQLINTEGER attribute, SQLULEN value)
 
 SQLULEN get_connect_option(SQLHDBC connection, SQLINTEGER attribute) {
     SQLULEN value = 0;
+    SQLUINTEGER autocommit = 0;
+    const bool is_autocommit = attribute == SQL_ATTR_AUTOCOMMIT;
     SQLINTEGER length = 0;
-    require_success(SQLGetConnectAttr(connection, attribute, &value, sizeof(value), &length),
+    require_success(SQLGetConnectAttr(connection, attribute,
+                                      is_autocommit ? static_cast<SQLPOINTER>(&autocommit) : &value,
+                                      0, &length),
                     "SQLGetConnectAttr", SQL_HANDLE_DBC, connection);
-    expect(length == sizeof(value), "SQLGetConnectAttr returned an incorrect value size");
-    return value;
+    expect(length == (is_autocommit ? sizeof(autocommit) : sizeof(value)),
+           "SQLGetConnectAttr returned an incorrect value size");
+    return is_autocommit ? autocommit : value;
 }
 
 SQLINTEGER row_count(SQLHSTMT statement, const std::string& table) {

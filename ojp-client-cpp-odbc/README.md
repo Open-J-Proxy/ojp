@@ -471,6 +471,96 @@ while (SQLFetch(statement) == SQL_SUCCESS) {
 SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT);
 ```
 
+#### Autocommit and Python frameworks
+
+Connections default to `SQL_AUTOCOMMIT_ON`. `SQLSetConnectAttr` and
+`SQLSetConnectAttrW` both accept `SQL_ATTR_AUTOCOMMIT` on an existing connection;
+the ANSI and Unicode getters return the same mode as a `SQLUINTEGER` (not a
+pointer-sized `SQLULEN`). No disconnect, replacement HDBC, or new virtual
+connection is required.
+
+Switching OFF uses OJP's existing `startTransaction` RPC and does not commit
+anything. `SQLEndTran` commits or rolls back while leaving manual mode enabled.
+Switching ON delegates to JDBC `setAutoCommit(true)`, which **commits any pending
+transaction** before restoring autocommit. Reapplying the current mode is a
+no-op. Invalid mode values return `HY024`. If the server rejects a change, its
+SQLSTATE/vendor diagnostic is returned and the driver's previous mode is
+preserved. Stateful transaction requests are never replayed on another server;
+after a transport failure the outcome may be unknown and the application must
+resolve the transaction or close the connection.
+
+The same OJP session/owner routing and backend pooling rules apply in either
+mode. A transaction stays on its owning backend connection. This does not
+promise permanent physical-session affinity for separate autocommit statements
+(for example, session `SET` state or temporary tables outside a transaction).
+XA connections still reject enabling autocommit.
+
+With the registered `OJP` driver, normal pyodbc switching works directly:
+
+```python
+import pyodbc
+
+pyodbc.pooling = False  # Only OJP Server pools physical connections.
+conn = pyodbc.connect(connection_string, autocommit=True)
+try:
+    conn.autocommit = False
+    conn.execute("INSERT INTO items (id) VALUES (?)", 1)
+    conn.rollback()
+    conn.execute("INSERT INTO items (id) VALUES (?)", 2)
+    conn.autocommit = True  # Implicitly commits row 2 on this connection.
+    conn.execute("INSERT INTO items (id) VALUES (?)", 3)  # Automatically committed.
+finally:
+    conn.close()
+```
+
+The Django adapter introduced in
+[ojp-framework-integration PR #50](https://github.com/Open-J-Proxy/ojp-framework-integration/pull/50)
+can replace its reconnecting `_set_autocommit()` with
+`self.connection.autocommit = autocommit`, remove the `_odbc_autocommit` shadow
+state and pre-connect `attrs_before` workaround, and pass the requested
+`autocommit` value directly to `pyodbc.connect()`. Remove only the warning about
+autocommit transitions reconnecting; the warning about session state between
+autocommit statements remains relevant. No Django adapter files are changed
+here.
+
+#### Autocommit regression tests
+
+`OjpOdbcAutocommit` covers ANSI/Unicode transitions, invalid values, diagnostics,
+failed RPCs, no-op requests and connection lifecycle with the fake server.
+Native and actual-driver pyodbc integration tests cover cross-connection
+visibility, commit, rollback, implicit commit, repeated transitions, retained
+statement handles, transaction backend identity, and rollback on close.
+The Python tests also inspect driver API traces to reject hidden reconnects.
+Every integration suite runs all rows of its database connection CSV and creates
+uniquely named tables that it drops afterwards.
+
+Enable the optional Python tests explicitly (configuration fails if pyodbc is
+missing), then run against two real OJP servers:
+
+```bash
+python -m pip install pyodbc
+cmake -S ojp-client-cpp-odbc -B ojp-client-cpp-odbc/build \
+  -DGOOGLEAPIS_PROTO_DIR=/path/to/googleapis \
+  -DOJP_ODBC_TEST_PYODBC=ON
+cmake --build ojp-client-cpp-odbc/build --parallel 2
+OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 \
+  OJP_TEST_H2_L7=true \
+  OJP_TEST_H2_L7_ADDRS=localhost:1059,localhost:1060 \
+  ctest --test-dir ojp-client-cpp-odbc/build \
+    -R '^OjpOdbc(Autocommit|H2(Pyodbc)?Autocommit(Single|Multinode)Integration)$' \
+    --output-on-failure
+```
+
+The existing H2, PostgreSQL, MariaDB/MySQL and SQL Server CI jobs run the native
+and pyodbc suites with their existing database fixtures and endpoint variables
+(`OJP_TEST_<DATABASE>_ADDR` and `OJP_TEST_<DATABASE>_L7_ADDRS`). Multinode tests
+are enabled separately with `OJP_TEST_<DATABASE>_L7=true`, require distinct
+endpoints, run against the shared list and each node
+individually, and use the shared file-backed H2 fixture rather than independent
+in-memory databases. SQL Server visibility checks require
+`ALTER DATABASE defaultdb SET READ_COMMITTED_SNAPSHOT ON`, configured in CI,
+so reads can observe committed rows without blocking on the writer's locks.
+
 Use `SQLDriverConnect` or `SQLDriverConnectW` for DSN-less connections, and
 `SQLConnect`/`SQLConnectW` with a DSN name (see [Data sources (DSN)](#data-sources-dsn)).
 Do not pass a `SERVER=...;DATABASE=...` options string as the `SQLConnect` server

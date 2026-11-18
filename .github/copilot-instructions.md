@@ -31,7 +31,7 @@ The root `pom.xml` compiles with `source/target = 11` but the server module over
 
 ## What OJP Is
 
-OJP is the **world's first open-source JDBC Type 3 driver**. It consists of two main deployable artefacts:
+OJP is **an open-source, intelligent database proxy and connectivity control plane that centralizes connection management, optimizes database resource utilization, and provides workload isolation, intelligent routing, and high availability**, built on the world's first open-source JDBC Type 3 driver. It consists of two main deployable artefacts:
 
 1. **ojp-server** – a standalone gRPC server that owns and controls the real database connection pools (HikariCP). Applications never connect directly to the database.
 2. **ojp-jdbc-driver** – a JDBC 4.2-compliant driver that clients drop in. Instead of opening real connections, it makes gRPC calls to ojp-server.

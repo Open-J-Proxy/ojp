@@ -43,10 +43,13 @@ dependency on the adapter and install TypeORM and `reflect-metadata`:
   "dependencies": {
     "@ojp/node-typeorm-adapter": "file:../ojp-node-typeorm-adapter",
     "reflect-metadata": "^0.2.2",
-    "typeorm": "^0.3.20"
+    "typeorm": "^1.1.3"
   }
 }
 ```
+
+The adapter requires TypeORM 1.1.3 or later and Node.js 20.19.0, 22.13.0,
+24.11.0, or later.
 
 Keep `ojp-node-driver` and `ojp-grpc-contract` alongside the adapter as they
 are in this repository. Build the Node driver and adapter before installing

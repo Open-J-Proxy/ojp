@@ -122,6 +122,40 @@ assert_error() {
     fi
 }
 
+should_check_existing_tag() {
+    [[ ! "$1" =~ -(RC|M)[0-9]+$ ]]
+}
+
+# =============================================================================
+# Tests — existing release tag validation
+# =============================================================================
+echo ""
+echo "── existing release tag validation ─────────────────────────────────────"
+
+if should_check_existing_tag "1.1.0-RC1" && should_check_existing_tag "1.1.0-RC2"; then
+    echo "${RED}FAIL${RST}  RC versions should skip the existing-tag check"
+    (( FAIL++ )) || true
+else
+    echo "${GRN}PASS${RST}  RC versions skip the existing-tag check"
+    (( PASS++ )) || true
+fi
+
+if should_check_existing_tag "1.1.0-M1"; then
+    echo "${RED}FAIL${RST}  milestone versions should skip the existing-tag check"
+    (( FAIL++ )) || true
+else
+    echo "${GRN}PASS${RST}  milestone versions skip the existing-tag check"
+    (( PASS++ )) || true
+fi
+
+if should_check_existing_tag "1.1.0" && should_check_existing_tag "1.1.0-SNAPSHOT1"; then
+    echo "${GRN}PASS${RST}  GA and other qualifiers retain the existing-tag check"
+    (( PASS++ )) || true
+else
+    echo "${RED}FAIL${RST}  GA and other qualifiers should retain the existing-tag check"
+    (( FAIL++ )) || true
+fi
+
 # =============================================================================
 # Tests — lts/1.0 branch
 # =============================================================================

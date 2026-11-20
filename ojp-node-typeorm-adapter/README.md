@@ -56,6 +56,21 @@ are in this repository. Build the Node driver and adapter before installing
 the application dependencies. Adjust the `file:` path if your application
 is elsewhere.
 
+## Dependency advisory status
+
+The committed lockfile resolves TypeORM 1.1.3 to tinyglobby 0.2.17 and
+Picomatch 4.0.7. [CVE-2026-112366 / GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf),
+which reported denial of service through repeated extglob patterns, was
+withdrawn by GitHub on November 18, 2026. The
+[upstream maintainer's response](https://github.com/micromatch/picomatch/pull/235#issuecomment-6315749381)
+rejects the vulnerability classification and advises against accepting
+untrusted glob patterns.
+
+As of November 18, 2026, Picomatch 4.0.7 is the latest npm release and the
+advisory lists no patched version. Dependencies remain unchanged; this note
+records the withdrawn advisory, not a security fix or a claim that arbitrary
+untrusted glob patterns are safe.
+
 ## Use PostgreSQL
 
 Start an OJP server that can reach your database. Define your TypeORM entities

@@ -16,7 +16,7 @@ Add the following dependency to your project's `pom.xml`:
 <dependency>
     <groupId>org.openjproxy</groupId>
     <artifactId>ojp-testcontainers</artifactId>
-    <version>1.0.7</version>
+    <version>1.1.0</version>
     <scope>test</scope>
 </dependency>
 ```
@@ -66,7 +66,7 @@ Or with full image name:
 ```java
 @Container
 public static OjpContainer ojpContainer = new OjpContainer(
-    DockerImageName.parse("rrobetti/ojp:1.0.7")
+    DockerImageName.parse("rrobetti/ojp:1.1.0")
 );
 ```
 
@@ -92,7 +92,7 @@ If you want to use a custom Docker image (e.g., from a private registry or with 
 
 ```java
 DockerImageName customImage = DockerImageName.parse("myregistry.com/my-ojp:1.0.0")
-        .asCompatibleSubstituteFor("rrobetti/ojp:1.0.7");
+        .asCompatibleSubstituteFor("rrobetti/ojp:1.1.0");
         
 OjpContainer ojpContainer = new OjpContainer(customImage);
 ```
@@ -100,7 +100,7 @@ OjpContainer ojpContainer = new OjpContainer(customImage);
 ### Using a Specific Version
 
 ```java
-OjpContainer ojpContainer = new OjpContainer("rrobetti/ojp:1.0.7");
+OjpContainer ojpContainer = new OjpContainer("rrobetti/ojp:1.1.0");
 ```
 
 ## API Methods

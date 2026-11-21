@@ -14,7 +14,7 @@
 #      (see VERSION SCHEME below for details)
 #   6. Bumps all pom.xml versions to the release version
 #   7. Builds all Maven modules and the Docker image, then smoke-tests both
-#   8. Deploys all modules to Maven Central only after both startup gates pass
+#   8. Optionally deploys all modules to Maven Central after both startup gates pass
 #   9. Pushes the already-tested OJP Server Docker image to Docker Hub
 #  10. Updates all documentation to reference the new release version
 #  11. Creates a signed Git tag on the release commit
@@ -73,6 +73,8 @@
 # --------------
 #   GitHub UI → Actions → "Release to Maven Central & Docker Hub" → Run workflow
 #   Check "Dry run" to validate the version calculation and build without publishing.
+#   Check "Skip Maven Central deployment" to continue the release without publishing
+#   to Maven Central; Docker Hub publishing and the remaining release steps still run.
 #   Optionally provide "Release version" to override the computed release version,
 #   e.g. "2.0.0" for a major version bump regardless of the current pom version.
 #
@@ -85,6 +87,11 @@ on:
     inputs:
       dry_run:
         description: 'Dry run — build & version bump only, skip publishing and push'
+        required: false
+        default: 'false'
+        type: boolean
+      skip_maven_central:
+        description: 'Skip Maven Central deployment and continue the remaining release steps'
         required: false
         default: 'false'
         type: boolean
@@ -389,7 +396,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Deploy to Maven Central
         id: central_deploy
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ inputs.dry_run == false && inputs.skip_maven_central == false }}
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}

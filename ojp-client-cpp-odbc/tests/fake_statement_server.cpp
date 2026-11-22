@@ -10,6 +10,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -44,7 +45,9 @@ public:
         transport_failure_ = request->url().find("autocommit_transport") != std::string::npos;
         response->set_connhash("fake-server");
         // A URL containing "legacy" simulates a server without parameter-set support.
-        if (request->url().find("legacy") == std::string::npos) {
+        const bool capability_changed = request->url().find("capability_change") != std::string::npos
+            && capability_change_connects_.fetch_add(1) > 0;
+        if (request->url().find("legacy") == std::string::npos && !capability_changed) {
             response->add_servercapabilities("PARAMETER_SETS");
         }
         return grpc::Status::OK;
@@ -391,6 +394,9 @@ public:
         const int sets = request.parameters_size() / set_size;
         report("executeParameterSets " + request.sql() + " " + std::to_string(set_size) + " " +
                std::to_string(sets));
+        if (request.sql().find("capability_change") != std::string::npos) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "reconnect required");
+        }
         const bool partial = request.sql().find("partial") != std::string::npos;
         proto::SqlErrorResponse error;
         bool failed = false;
@@ -561,6 +567,7 @@ private:
     bool commit_failed_ = false;
     bool rollback_failed_ = false;
     bool enable_failed_ = false;
+    std::atomic<int> capability_change_connects_{0};
     std::string pending_metadata_;
     std::string callable_sql_;
     std::map<int, int> callable_values_;

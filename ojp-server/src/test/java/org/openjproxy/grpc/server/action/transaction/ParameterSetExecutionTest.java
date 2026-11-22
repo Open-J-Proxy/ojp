@@ -20,6 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class ParameterSetExecutionTest {
 
@@ -64,6 +69,40 @@ class ParameterSetExecutionTest {
                 () -> ParameterSetExecution.split(params, 0)).getSQLState());
         assertEquals("07009", assertThrows(SQLException.class,
                 () -> ParameterSetExecution.split(zeroIndex, 1)).getSQLState());
+    }
+
+    @Test
+    void rejectsIncompleteOrDuplicateSetsBeforeExecution() {
+        List<Parameter> params = flattened(new Object[][]{{1, "a"}, {2, "b"}});
+        assertEquals("07001", assertThrows(SQLException.class,
+                () -> ParameterSetExecution.split(params.subList(0, 3), 2)).getSQLState());
+        List<Parameter> duplicate = new ArrayList<>(params);
+        duplicate.set(3, params.get(2));
+        assertEquals("07009", assertThrows(SQLException.class,
+                () -> ParameterSetExecution.split(duplicate, 2)).getSQLState());
+        List<Parameter> hugeIndex = List.of(Parameter.builder().index(Integer.MAX_VALUE)
+                .type(ParameterType.INT).values(List.of(1)).build());
+        assertEquals("07009", assertThrows(SQLException.class,
+                () -> ParameterSetExecution.split(hugeIndex, 1)).getSQLState());
+    }
+
+    @Test
+    void neverEnablesAutoCommitAfterRollbackFails() throws SQLException {
+        Connection failingConnection = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(ps.getConnection()).thenReturn(failingConnection);
+        when(failingConnection.getAutoCommit()).thenReturn(true);
+        BatchUpdateException batchFailure = new BatchUpdateException();
+        when(ps.executeBatch()).thenThrow(batchFailure);
+        SQLException rollbackFailure = new SQLException("rollback failed");
+        doThrow(rollbackFailure).when(failingConnection).rollback();
+
+        assertEquals(batchFailure, assertThrows(BatchUpdateException.class,
+                () -> ParameterSetExecution.execute(null, null, ps,
+                        flattened(new Object[][]{{1, "a"}}), 2)));
+        assertArrayEquals(new Throwable[]{rollbackFailure}, batchFailure.getSuppressed());
+        verify(failingConnection).close();
+        verify(failingConnection, never()).setAutoCommit(true);
     }
 
     @Test

@@ -131,6 +131,36 @@ void require_sqlstate(SQLRETURN result, SQLHSTMT statement, const std::string& e
     }
 }
 
+void insert_parameter_array(SQLHSTMT statement, const std::string& table, SQLINTEGER first_id) {
+    SQLINTEGER ids[] = {first_id, first_id + 1, first_id + 2};
+    SQLCHAR labels[][16] = {"ONE", "TWO", "THREE"};
+    SQLLEN lengths[] = {SQL_NTS, SQL_NTS, SQL_NTS};
+    SQLUSMALLINT statuses[3] = {};
+    SQLULEN processed = 0;
+    require_success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMSET_SIZE,
+                                   reinterpret_cast<SQLPOINTER>(3), 0), "set array size");
+    require_success(SQLSetStmtAttr(statement, SQL_ATTR_PARAM_STATUS_PTR, statuses, 0), "set status");
+    require_success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0),
+                    "set processed pointer");
+    require_success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER,
+                                     0, 0, ids, 0, nullptr), "bind ids");
+    require_success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR,
+                                     16, 0, labels, sizeof(labels[0]), lengths), "bind labels");
+    const std::string sql = "INSERT INTO " + table + " (id, label) VALUES (?, ?)";
+    require_success(SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
+                                 SQL_NTS), "execute array", SQL_HANDLE_STMT, statement);
+    if (processed != 3 || !std::all_of(std::begin(statuses), std::end(statuses),
+                                       [](SQLUSMALLINT status) { return status == SQL_PARAM_SUCCESS; })) {
+        throw std::runtime_error("parameter array did not report all rows successful");
+    }
+    require_success(SQLFreeStmt(statement, SQL_RESET_PARAMS), "reset parameters");
+    require_success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMSET_SIZE,
+                                   reinterpret_cast<SQLPOINTER>(1), 0), "reset array size");
+    require_success(SQLSetStmtAttr(statement, SQL_ATTR_PARAM_STATUS_PTR, nullptr, 0), "clear status");
+    require_success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMS_PROCESSED_PTR, nullptr, 0),
+                    "clear processed pointer");
+}
+
 int run_connection(const DatabaseConfig& config,
                    const std::string& endpoint) {
     SQLHENV environment = SQL_NULL_HENV;
@@ -185,11 +215,21 @@ int run_connection(const DatabaseConfig& config,
                                   " (id INT PRIMARY KEY, label VARCHAR(32) NOT NULL)");
         table_created = true;
         execute_direct(statement, "INSERT INTO " + table + " (id, label) VALUES (1, 'INITIAL')");
+        insert_parameter_array(statement, table, 10);
+        if (read_label(statement, table, 10) != "ONE" ||
+            read_label(statement, table, 12) != "THREE") {
+            throw std::runtime_error("autocommit parameter array did not insert its rows");
+        }
 
         set_connect_option(connection, SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF);
         if (get_connect_option(connection, SQL_ATTR_AUTOCOMMIT) != SQL_AUTOCOMMIT_OFF) {
             throw std::runtime_error("autocommit did not turn off");
         }
+        insert_parameter_array(statement, table, 20);
+        require_success(SQLEndTran(SQL_HANDLE_DBC, connection, SQL_ROLLBACK), "rollback array",
+                        SQL_HANDLE_DBC, connection);
+        require_missing_row(statement, table, 20);
+        require_missing_row(statement, table, 22);
         execute_direct(statement, "UPDATE " + table + " SET label = 'COMMITTED' WHERE id = 1");
         require_success(SQLEndTran(SQL_HANDLE_DBC, connection, SQL_COMMIT), "SQLEndTran(commit)",
                         SQL_HANDLE_DBC, connection);

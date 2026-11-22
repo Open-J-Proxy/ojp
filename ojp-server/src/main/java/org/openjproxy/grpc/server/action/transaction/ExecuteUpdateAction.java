@@ -24,6 +24,7 @@ import org.openjproxy.grpc.server.statement.StatementFactory;
 import org.openjproxy.grpc.server.utils.StatementRequestValidator;
 
 import java.sql.PreparedStatement;
+import java.sql.BatchUpdateException;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
@@ -101,6 +102,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
         ConnectionSessionDTO dto = null;
 
         Statement stmt = null;
+        boolean closeSessionBatchStatement = false;
         String psUUID = "";
         String generatedKeysUuid = "";
         String resultSetUuid = "";
@@ -114,6 +116,7 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
             boolean requiresSessionAffinity = SqlSessionAffinityDetector.requiresSessionAffinity(request.getSql());
             boolean requiresGeneratedKeys = StatementRequestValidator.requiresGeneratedKeysTracking(request);
             boolean returnResultSet = StatementRequestValidator.requestsUpdateResultSet(request);
+            int parameterSetSize = StatementRequestValidator.parameterSetSize(request);
 
             dto = sessionConnection(actionContext, request.getSession(),
                     StatementRequestValidator.isAddBatchOperation(request)
@@ -122,7 +125,6 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                             || requiresSessionAffinity);
 
             List<Parameter> params = ProtoConverter.fromProtoList(request.getParametersList());
-            int parameterSetSize = StatementRequestValidator.parameterSetSize(request);
             PreparedStatement ps = dto.getSession() != null && !dto.getSession().getSessionUUID().isBlank()
                     && !request.getStatementUUID().isBlank()
                     ? sessionManager.getPreparedStatement(dto.getSession(), request.getStatementUUID())
@@ -132,8 +134,18 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
                 PreparedStatement batch = StatementFactory.createPreparedStatement(sessionManager, dto,
                         request.getSql(), List.of(), request);
                 stmt = batch;
-                batchUpdateCounts = ParameterSetExecution.execute(sessionManager, dto.getSession(), batch, params,
-                        parameterSetSize);
+                closeSessionBatchStatement = dto.getSession() != null
+                        && !dto.getSession().getSessionUUID().isEmpty();
+                try {
+                    batchUpdateCounts = ParameterSetExecution.execute(sessionManager, dto.getSession(), batch,
+                            params, parameterSetSize);
+                } catch (BatchUpdateException e) {
+                    // Some rows can have succeeded even when the batch reports an error.
+                    org.openjproxy.grpc.server.cache.QueryCacheHelper.invalidateCacheIfEnabled(
+                            actionContext, dto.getSession(), request.getSql());
+                    markStickySessionAfterWrite(actionContext, dto);
+                    throw e;
+                }
                 updated = sumUpdateCounts(batchUpdateCounts);
             } else if (CollectionUtils.isNotEmpty(params) || ps != null || requiresGeneratedKeys || returnResultSet) {
                 if (!request.getStatementUUID().isEmpty() && ps != null) {
@@ -177,6 +189,13 @@ public class ExecuteUpdateAction implements Action<StatementRequest, OpResult> {
 
             return result;
         } finally {
+            if (closeSessionBatchStatement) {
+                try {
+                    stmt.close();
+                } catch (SQLException e) {
+                    log.error("Failure closing batch statement: {}", e.getMessage(), e);
+                }
+            }
             closeStatementAndConnectionIfNoSession(dto, stmt);
         }
     }

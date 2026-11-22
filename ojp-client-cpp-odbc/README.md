@@ -7,6 +7,41 @@ communicates with the server over gRPC.
 [ODBC_API_COVERAGE.md](ODBC_API_COVERAGE.md) lists the implemented ODBC 3.x
 functions and the remaining work.
 
+## Insert or update many rows
+
+ODBC parameter arrays let an application send many rows for the same SQL statement.
+For example, after connecting and allocating `stmt`:
+
+```cpp
+SQLINTEGER ids[] = {1, 2, 3};
+SQLINTEGER quantities[] = {10, 20, 30};
+SQLUSMALLINT status[3] = {};
+SQLULEN processed = 0;
+SQLSetStmtAttr(stmt, SQL_ATTR_PARAMSET_SIZE, (SQLPOINTER)3, 0);
+SQLSetStmtAttr(stmt, SQL_ATTR_PARAM_STATUS_PTR, status, 0);
+SQLSetStmtAttr(stmt, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0);
+SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, ids, 0, nullptr);
+SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, quantities, 0, nullptr);
+SQLRETURN result = SQLExecDirect(stmt, (SQLCHAR*)"INSERT INTO items (id, qty) VALUES (?, ?)", SQL_NTS);
+```
+
+Check every ODBC return code and diagnostics in real code. After execution, `processed`
+and `status` report per-row outcomes. Keep the arrays and pointers valid until the
+statement attributes and bindings are reset or the statement is freed.
+
+With a server that advertises parameter-set support, the driver packs rows into
+requests of roughly 1 MiB and the server executes each request as a JDBC batch.
+Large rows may make a request bigger; the server's request-size limit still applies.
+An older server uses the existing per-row `addBatch` requests instead. Queries,
+procedure calls and statements returning result sets use their existing paths.
+After a connection failure, a packed request is retried only if the selected
+server has advertised support; otherwise the driver reports an error because
+the outcome of the original request may be unknown.
+In autocommit mode each request is committed as a unit; on a batch error the server
+rolls it back and retries in autocommit mode to obtain per-row outcomes. Database
+side effects that are not transactional, such as sequences, may occur during both
+attempts. With autocommit off, the application controls commit and rollback.
+
 ## Supported levels by database
 
 | Database | Highest supported level |

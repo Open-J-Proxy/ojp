@@ -151,6 +151,37 @@ void test_failure_continues_batch(SQLHSTMT statement) {
                                SQL_PARAM_SUCCESS, SQL_PARAM_SUCCESS}, "every count");
 }
 
+void test_procedure_uses_callable_path(SQLHSTMT statement) {
+    const auto execution = execute_array(statement, "{CALL example(?, ?)}", {1, 2, 3, 4, 5});
+    require(execution.result == SQL_SUCCESS, "The procedure array must succeed");
+    require(execution.processed == kRows, "The procedure must process every row");
+}
+
+void test_large_array_is_chunked(SQLHSTMT statement) {
+    constexpr SQLULEN rows = 3;
+    constexpr std::size_t width = 600 * 1024;
+    SQLINTEGER ids[] = {1, 2, 3};
+    std::vector<char> values(rows * width, 'x');
+    SQLLEN lengths[] = {width, width, width};
+    SQLUSMALLINT statuses[rows] = {};
+    SQLULEN processed = 0;
+    success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMSET_SIZE, reinterpret_cast<SQLPOINTER>(rows), 0),
+            "Set chunked array size");
+    success(SQLSetStmtAttr(statement, SQL_ATTR_PARAM_STATUS_PTR, statuses, 0), "Set chunked status");
+    success(SQLSetStmtAttr(statement, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0),
+            "Set chunked processed pointer");
+    success(SQLBindParameter(statement, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0,
+                             ids, 0, nullptr), "Bind chunked ids");
+    success(SQLBindParameter(statement, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR, width, 0,
+                             values.data(), width, lengths), "Bind chunked values");
+    const std::string sql = "INSERT INTO chunked VALUES (?, ?)";
+    success(SQLExecDirect(statement, reinterpret_cast<SQLCHAR*>(const_cast<char*>(sql.c_str())),
+                          SQL_NTS), "Execute chunked array");
+    require(processed == rows && std::all_of(std::begin(statuses), std::end(statuses),
+            [](SQLUSMALLINT status) { return status == SQL_PARAM_SUCCESS; }),
+            "Every chunked row must succeed");
+}
+
 void test_legacy_server(const std::string& fake_server) {
     FakeServerProcess server(fake_server);
     {
@@ -169,6 +200,26 @@ void test_legacy_server(const std::string& fake_server) {
             "Parameter sets must not be sent to a server without the capability");
 }
 
+void test_capability_change_on_reconnect(const std::string& fake_server) {
+    FakeServerProcess server(fake_server);
+    {
+        Session session(server.connection_string("jdbc:h2:mem:capability_change"));
+        const auto execution = execute_array(session.statement,
+                                             "INSERT INTO capability_change VALUES (?, ?)",
+                                             {1, 2, 3, 4, 5});
+        require(execution.result == SQL_ERROR, "Retry without the capability must fail");
+        std::string state;
+        const std::string message = first_diagnostic(session.statement, &state);
+        require(state == "08S01" && message.find("outcome may be unknown") != std::string::npos,
+                "The error must report the uncertain outcome: [" + state + "] " + message);
+    }
+    const auto calls = server.finish();
+    require(count_lines(calls, "connect jdbc:h2:mem:capability_change") == 2,
+            "The driver must reconnect");
+    require(count_lines(calls, "executeParameterSets INSERT INTO capability_change VALUES (?, ?) 2 5") == 1,
+            "The driver must not retry parameter sets without the capability");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -181,14 +232,24 @@ int main(int argc, char** argv) {
                 test_single_request(session.statement);
                 test_failure_stops_batch(session.statement);
                 test_failure_continues_batch(session.statement);
+                test_procedure_uses_callable_path(session.statement);
+                test_large_array_is_chunked(session.statement);
             }
             const auto calls = server.finish();
             require(count_lines(calls, "executeParameterSets INSERT INTO ok VALUES (?, ?) 2 5") == 1,
                     "The array must be sent in one request");
             require(count_lines(calls, "executeUpdate INSERT INTO ok VALUES (?, ?)") == 0,
                     "No row may be sent on its own");
+            require(count_lines(calls, "prepareCall {CALL example(?, ?)}") == 5,
+                    "Procedure arrays must use the callable path for each row");
+            require(count_lines(calls, "executeParameterSets {CALL example(?, ?)} 2 5") == 0,
+                    "Procedure arrays must not use the DML batch path");
+            require(count_lines(calls, "executeParameterSets INSERT INTO chunked VALUES (?, ?) 2 2") == 1 &&
+                    count_lines(calls, "executeParameterSets INSERT INTO chunked VALUES (?, ?) 2 1") == 1,
+                    "Large arrays must be sent in separate requests");
         }
         test_legacy_server(argv[1]);
+        test_capability_change_on_reconnect(argv[1]);
         std::cout << "Parameter set tests passed\n";
         return 0;
     } catch (const std::exception& error) {

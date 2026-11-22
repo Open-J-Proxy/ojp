@@ -7063,7 +7063,7 @@ static SQLRETURN execute_parameter_sets(StatementHandle* target, SQLULEN rows, b
     const auto marker_count = count_parameter_markers(target->sql);
     std::string savepoint_name;
     if (connection == nullptr || marker_count == 0 || is_query_sql(target->sql) ||
-        uses_update_result_set(target->sql) ||
+        uses_update_result_set(target->sql) || may_return_multiple_results(target->sql) ||
         parse_savepoint_statement(target->sql, &savepoint_name) != SavepointAction::NONE) {
         return SQL_SUCCESS;
     }
@@ -7076,6 +7076,10 @@ static SQLRETURN execute_parameter_sets(StatementHandle* target, SQLULEN rows, b
         return SQL_SUCCESS;
     }
     *handled = true;
+    const SQLRETURN close_result = close_open_callable(target);
+    if (!SQL_SUCCEEDED(close_result)) {
+        return close_result;
+    }
     clear_diagnostics(target);
     target->columns.clear();
     target->column_meta.clear();
@@ -7120,6 +7124,16 @@ static SQLRETURN execute_parameter_sets(StatementHandle* target, SQLULEN rows, b
             if (attempt < connection->retry_attempts &&
                 prepare_stateless_retry(connection, status, context, initial_request_session,
                                         &attempted_endpoints, &not_found_retried)) {
+                route_session_rpc(connection);
+                if (!endpoint_runtime(connection->last_rpc_endpoint, connection->tls)->parameter_sets.load()) {
+                    fail(target, "Cannot retry parameter sets: the selected server has not advertised "
+                                 "support; the original request's outcome may be unknown", "08S01");
+                    set_status(first, SQL_PARAM_ERROR);
+                    ++failed;
+                    processed = first + 1;
+                    prefix_parameter_row(&target->diagnostics, first, &errors);
+                    return false;
+                }
                 request_session.CopyFrom(connection->session);
                 request->mutable_session()->CopyFrom(request_session);
                 continue;

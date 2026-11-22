@@ -19,9 +19,8 @@ import java.util.List;
  *
  * <p>Clients that bind arrays of parameters (ODBC {@code SQL_ATTR_PARAMSET_SIZE}) send all sets in
  * one executeUpdate request with flattened indexes: set {@code s} (0-based) uses indexes
- * {@code s * setSize + 1 .. (s + 1) * setSize}. This avoids one round-trip per set. A server
- * without this feature fails on the first index beyond the statement's markers, before executing
- * anything, so an older server never applies a partial or wrong update.
+ * {@code s * setSize + 1 .. (s + 1) * setSize}. This avoids one round-trip per set.
+ * Clients must first check the server capability before using this format.
  */
 @Slf4j
 final class ParameterSetExecution {
@@ -55,12 +54,15 @@ final class ParameterSetExecution {
             return executeBatch(sessionManager, session, ps, sets);
         }
         connection.setAutoCommit(false);
+        boolean safeToRestoreAutoCommit = false;
         try {
             int[] counts = executeBatch(sessionManager, session, ps, sets);
             connection.commit();
+            safeToRestoreAutoCommit = true;
             return counts;
         } catch (BatchUpdateException e) {
-            connection.rollback();
+            rollbackOrClose(connection, e);
+            safeToRestoreAutoCommit = true;
             if (Context.current().isCancelled()) {
                 throw e;
             }
@@ -70,12 +72,30 @@ final class ParameterSetExecution {
             connection.setAutoCommit(true);
             return executeBatch(sessionManager, session, ps, sets);
         } catch (SQLException | RuntimeException e) {
-            connection.rollback();
+            rollbackOrClose(connection, e);
+            safeToRestoreAutoCommit = true;
             throw e;
         } finally {
-            if (!connection.getAutoCommit()) {
+            if (safeToRestoreAutoCommit && !connection.getAutoCommit()) {
                 connection.setAutoCommit(true);
             }
+        }
+    }
+
+    private static void rollbackOrClose(Connection connection, Exception original) throws SQLException {
+        try {
+            connection.rollback();
+        } catch (SQLException rollbackFailure) {
+            original.addSuppressed(rollbackFailure);
+            try {
+                connection.close();
+            } catch (SQLException closeFailure) {
+                original.addSuppressed(closeFailure);
+            }
+            if (original instanceof SQLException sqlException) {
+                throw sqlException;
+            }
+            throw (RuntimeException) original;
         }
     }
 
@@ -100,14 +120,18 @@ final class ParameterSetExecution {
         if (setSize <= 0) {
             throw new SQLException("Invalid parameter-set size " + setSize, "HY024");
         }
-        int highestIndex = 0;
+        if (params.isEmpty() || params.size() % setSize != 0) {
+            throw new SQLException("Incomplete parameter sets", "07001");
+        }
+        boolean[] seen = new boolean[params.size()];
         for (Parameter parameter : params) {
-            if (parameter.getIndex() == null || parameter.getIndex() < 1) {
+            if (parameter.getIndex() == null || parameter.getIndex() < 1
+                    || parameter.getIndex() > params.size() || seen[parameter.getIndex() - 1]) {
                 throw new SQLException("Invalid parameter index " + parameter.getIndex(), "07009");
             }
-            highestIndex = Math.max(highestIndex, parameter.getIndex());
+            seen[parameter.getIndex() - 1] = true;
         }
-        int setCount = (highestIndex + setSize - 1) / setSize;
+        int setCount = params.size() / setSize;
         List<List<Parameter>> sets = new ArrayList<>(setCount);
         for (int i = 0; i < setCount; i++) {
             sets.add(new ArrayList<>(setSize));

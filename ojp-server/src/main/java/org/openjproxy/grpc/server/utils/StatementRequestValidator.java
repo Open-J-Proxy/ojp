@@ -5,6 +5,7 @@ import lombok.experimental.UtilityClass;
 import org.openjproxy.constants.CommonConstants;
 import org.openjproxy.grpc.ProtoConverter;
 
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Map;
 
@@ -85,13 +86,20 @@ public class StatementRequestValidator {
      *
      * @param request The statement request
      * @return the parameter-set size, or 0 when the request carries a single parameter set
+     * @throws SQLException if the property is present but is not a positive integer
      */
-    public int parameterSetSize(StatementRequest request) {
+    public int parameterSetSize(StatementRequest request) throws SQLException {
         if (request.getPropertiesList().isEmpty()) {
             return 0;
         }
         Map<String, Object> properties = ProtoConverter.propertiesFromProto(request.getPropertiesList());
+        if (!properties.containsKey(CommonConstants.PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY)) {
+            return 0;
+        }
         Object size = properties.get(CommonConstants.PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY);
-        return size instanceof Number number ? number.intValue() : 0;
+        if (!(size instanceof Integer) || (Integer) size <= 0) {
+            throw new SQLException("Invalid parameter-set size", "HY024");
+        }
+        return (Integer) size;
     }
 }

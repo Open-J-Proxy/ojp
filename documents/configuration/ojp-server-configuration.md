@@ -70,7 +70,17 @@ java -Duser.timezone=UTC \
 
 Weights are optional shares, not connection counts: `2:1` gives one username about twice the share of another when the budget is tight. Pools using the same username share that username's weight. If requested pool maxima already fit under the budget, OJP leaves them unchanged. A reserve reduces the capacity available to OJP.
 
-The budget covers OJP-managed pooled primary, XA, and read/write replica connections. It does not count unpooled connections or connections from other applications. Configure the same budget on every server in a multinode cluster. Servers recalculate their shares from the JDBC driver's health reports; they must have a consistent view. This is not distributed consensus, so a network partition can temporarily produce inconsistent views. When a pool shrinks, active work is not terminated, so open connections may take time to fall. The budget adds no queue or semaphore to connection borrowing.
+The budget covers OJP-managed pooled primary, XA, and read/write replica connections. It does not count unpooled connections or connections from other applications. Configure the same budget on every server in a multinode cluster. Servers recalculate their shares from the JDBC driver's health votes. This is not distributed consensus, so a network partition can temporarily produce inconsistent views. When a pool shrinks, active work is not terminated, so open connections may take time to fall. The budget adds no queue or semaphore to connection borrowing.
+
+
+### Multinode Pool Rebalancing Settings
+
+| Property | Environment variable | Default | Description |
+|----------|----------------------|---------|-------------|
+| `ojp.server.multinode.poolRebalancing.enabled` | `OJP_SERVER_MULTINODE_POOLREBALANCING_ENABLED` | `true` | Resizes pools when clients vote that another OJP server is down. Set to `false` to keep fixed shares. |
+| `ojp.server.multinode.healthVoteWindowMs` | `OJP_SERVER_MULTINODE_HEALTHVOTEWINDOWMS` | `10000` | How long DOWN votes must continue, with no client reporting the server UP, before pools resize. |
+
+See [Health Voting and Pool Rebalancing](../multinode/health-voting-and-pool-rebalancing.md) for examples and limitations, including split brain.
 
 
 > **Note on `ojp.server.virtualThreads.enabled`:** Virtual threads are disabled by default because, during heavy-concurrency testing with the current OJP code, they proved less efficient than platform threads. This may change as the OJP code evolves — further investigation is needed to determine whether future improvements could make virtual threads beneficial. You can still opt in by setting this property to `true`.

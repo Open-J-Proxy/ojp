@@ -71,6 +71,7 @@ The transaction manager coordinates distributed transactions; OJP relays partici
 - [Multinode Overview](multinode/README.md) - Introduction to multinode deployments
 - [Multinode Architecture](multinode/multinode-architecture.md) - Detailed multinode architecture
 - [Multinode Flow](multinode/MULTINODE_FLOW.md) - Detailed operation flows
+- [Health Voting and Pool Rebalancing](multinode/health-voting-and-pool-rebalancing.md) - How servers confirm a failed node, limitations, and how to disable rebalancing
 - [Per-Endpoint Datasources](multinode/per-endpoint-datasources.md) - Different datasource configurations per endpoint
 - [Server Recovery and Redistribution](multinode/server-recovery-and-redistribution.md) - Server recovery and connection redistribution
 

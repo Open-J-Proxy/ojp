@@ -345,6 +345,34 @@ not just for consensus.
 | Mesh OFF (all topics) | Client-relay for everything; consensus specifically requires the shared AEAD key + sequence numbers + a widened election timeout (§5.5) — cache invalidation is fine unencrypted |
 | Switch to BFT | Only if a multi-tenant, mutually-untrusting mesh becomes a real deployment target (open question, §3) |
 
+### 6.1 Future use case: multinode pool rebalancing
+
+Multinode pool and database-budget rebalancing would also benefit from
+consensus between OJP servers. Today each server uses windowed client health
+votes to decide which peers are DOWN and calculates its own pool and budget
+shares. Different partitions can reach different decisions and grow their
+pools at the same time. See
+[Health Voting and Pool Rebalancing](../multinode/health-voting-and-pool-rebalancing.md)
+for the current behavior and limitations.
+
+A future RAFT-backed design could commit cluster membership and allocation
+decisions for each pool's endpoint set and database budget. Servers would
+apply committed allocations rather than independently expanding on client
+reports; client health reports could remain inputs to the decision, not
+consensus votes. A partition without a quorum could not commit new allocations,
+trading failover capacity for safety. Client-relay still requires connected
+clients that can bridge the servers; use a direct mesh when that cannot be
+assumed (§5.5).
+
+**Consensus alone does not enforce a hard database connection limit.** A
+partitioned, paused, or recovering server can still hold or open connections
+under an old allocation, and shrinking a pool does not immediately close
+busy connections. A design must define how old allocations are fenced or
+revoked and how released connections are accounted for before capacity is
+reassigned, including across restart and recovery. Without effective
+enforcement, retain a database-side hard cap or use fixed shares. This is a
+proposed use case, not functionality provided by the current health voting.
+
 ## 7. Open questions
 
 1. Is a multi-tenant, mutually-untrusting mesh a real target for OJP, or is

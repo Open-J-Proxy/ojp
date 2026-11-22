@@ -8,6 +8,7 @@ import org.openjproxy.grpc.ProtoConverter;
 import org.openjproxy.grpc.server.ClusterHealthTracker;
 import org.openjproxy.grpc.server.MultinodePoolCoordinator;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.grpc.server.action.util.ProcessClusterHealthAction;
 
 import java.util.List;
 import java.util.Map;
@@ -23,15 +24,27 @@ public class ConnectionPoolConfigurer {
 
     private static final MultinodePoolCoordinator POOL_COORDINATOR = new MultinodePoolCoordinator();
 
-    public static int getHealthyServerCount(ConnectionDetails connectionDetails) {
-        if (!connectionDetails.getClusterHealth().isEmpty()) {
-            int healthyServerCount =
-                    new ClusterHealthTracker().countHealthyServers(connectionDetails.getClusterHealth());
-            if (healthyServerCount > 0) {
-                return healthyServerCount;
-            }
+    /**
+     * Returns how many OJP servers a new pool should share its configured size with.
+     *
+     * <p>When health-driven rebalancing is enabled, the client's report is recorded as votes and the count reflects
+     * the votes of all clients (see {@link ClusterHealthTracker}). When it is disabled, the configured number of
+     * servers is used so each server keeps a fixed share.</p>
+     */
+    public static int getHealthyServerCount(ActionContext context, ConnectionDetails connectionDetails) {
+        int configuredServers = Math.max(1, connectionDetails.getServerEndpointsCount());
+        if (context == null || !ProcessClusterHealthAction.isRebalancingEnabled(context)) {
+            return configuredServers;
         }
-        return Math.max(1, connectionDetails.getServerEndpointsCount());
+        ClusterHealthTracker tracker = context.getClusterHealthTracker();
+        String clusterHealth = connectionDetails.getClusterHealth();
+        if (!clusterHealth.isEmpty()) {
+            tracker.recordVotes(clusterHealth);
+        }
+        List<String> endpoints = connectionDetails.getServerEndpointsCount() > 0
+                ? connectionDetails.getServerEndpointsList()
+                : List.copyOf(tracker.parseClusterHealth(clusterHealth).keySet());
+        return endpoints.isEmpty() ? 1 : tracker.countVotedHealthyServers(endpoints);
     }
 
     /**

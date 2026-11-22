@@ -77,7 +77,8 @@ public class StatementServiceImpl extends StatementServiceGrpc.StatementServiceI
         // disabled)
         Map<String, UnpooledConnectionDetails> unpooledConnectionDetailsMap = new ConcurrentHashMap<>();
         // Cluster health tracker for monitoring health changes
-        ClusterHealthTracker clusterHealthTracker = new ClusterHealthTracker();
+        ClusterHealthTracker clusterHealthTracker =
+                new ClusterHealthTracker(serverConfiguration.getMultinodeHealthVoteWindowMs());
         Map<String, DataSource> datasourceMap = new ConcurrentHashMap<>();
         Map<String, DbName> dbNameMap = new ConcurrentHashMap<>();
         // Per-datasource admission control managers

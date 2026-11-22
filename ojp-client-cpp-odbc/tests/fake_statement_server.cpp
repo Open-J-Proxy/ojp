@@ -10,6 +10,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -43,6 +44,12 @@ public:
         fail_transactions_ = request->url().find("autocommit_failures") != std::string::npos;
         transport_failure_ = request->url().find("autocommit_transport") != std::string::npos;
         response->set_connhash("fake-server");
+        // A URL containing "legacy" simulates a server without parameter-set support.
+        const bool capability_changed = request->url().find("capability_change") != std::string::npos
+            && capability_change_connects_.fetch_add(1) > 0;
+        if (request->url().find("legacy") == std::string::npos && !capability_changed) {
+            response->add_servercapabilities("PARAMETER_SETS");
+        }
         return grpc::Status::OK;
     }
 
@@ -89,6 +96,9 @@ public:
         for (const auto& property : request->properties()) {
             if (property.key() == "PREPARED_STATEMENT_ADD_BATCH_FLAG" && property.bool_value()) {
                 return add_batch(context, *request, response);
+            }
+            if (property.key() == "PREPARED_STATEMENT_PARAMETER_SET_SIZE_KEY") {
+                return execute_parameter_sets(context, *request, property.int_value(), response);
             }
         }
         // The update-result-set request returns the first result set or the update count; the
@@ -375,6 +385,52 @@ public:
         return grpc::Status(grpc::StatusCode::INTERNAL, reason);
     }
 
+    // Each set whose first parameter is 99 fails. SQL containing "partial" reports only the
+    // counts before the failure (PostgreSQL); "every" reports all sets with EXECUTE_FAILED
+    // (SQL Server).
+    grpc::Status execute_parameter_sets(grpc::ServerContext* context,
+                                        const proto::StatementRequest& request, int set_size,
+                                        proto::OpResult* response) {
+        const int sets = request.parameters_size() / set_size;
+        report("executeParameterSets " + request.sql() + " " + std::to_string(set_size) + " " +
+               std::to_string(sets));
+        if (request.sql().find("capability_change") != std::string::npos) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND, "reconnect required");
+        }
+        const bool partial = request.sql().find("partial") != std::string::npos;
+        proto::SqlErrorResponse error;
+        bool failed = false;
+        int total = 0;
+        for (int set = 0; set < sets; ++set) {
+            const auto& first = request.parameters(set * set_size);
+            if (first.index() != set * set_size + 1) {
+                return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unexpected parameter index");
+            }
+            const bool set_fails = first.values_size() > 0 && first.values(0).int_value() == 99;
+            if (set_fails) {
+                failed = true;
+                if (partial) {
+                    break;
+                }
+                error.add_batchupdatecounts(-3);
+                continue;
+            }
+            error.add_batchupdatecounts(1);
+            response->add_batchupdatecounts(1);
+            ++total;
+        }
+        if (failed) {
+            error.set_sqlstate("23000");
+            error.set_reason("duplicate key");
+            error.set_vendorcode(2627);
+            context->AddTrailingMetadata("sqlerrorresponse-bin", error.SerializeAsString());
+            return grpc::Status(grpc::StatusCode::INTERNAL, "duplicate key");
+        }
+        response->set_type(proto::INTEGER);
+        response->set_int_value(total);
+        return grpc::Status::OK;
+    }
+
     // Simulates "{? = CALL add_values(?, ?)}": the return value is 42 and the INPUT_OUTPUT
     // parameter 3 becomes parameter 2 + parameter 3. SQL containing "rows" also returns a result set.
     grpc::Status prepare_call(const proto::CallResourceRequest& request,
@@ -511,6 +567,7 @@ private:
     bool commit_failed_ = false;
     bool rollback_failed_ = false;
     bool enable_failed_ = false;
+    std::atomic<int> capability_change_connects_{0};
     std::string pending_metadata_;
     std::string callable_sql_;
     std::map<int, int> callable_values_;

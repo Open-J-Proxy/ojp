@@ -8,6 +8,7 @@ import io.grpc.protobuf.ProtoUtils;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
 
+import java.sql.BatchUpdateException;
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 
@@ -58,6 +59,11 @@ public class GrpcExceptionHandler {
                     .setVendorCode(e.getErrorCode());
             if (e.getSQLState() != null) {
                 responseBuilder.setSqlState(e.getSQLState());
+            }
+            if (e instanceof BatchUpdateException batchError && batchError.getUpdateCounts() != null) {
+                for (int count : batchError.getUpdateCounts()) {
+                    responseBuilder.addBatchUpdateCounts(count);
+                }
             }
 
             SqlErrorResponse sqlErrorResponse = responseBuilder.build();

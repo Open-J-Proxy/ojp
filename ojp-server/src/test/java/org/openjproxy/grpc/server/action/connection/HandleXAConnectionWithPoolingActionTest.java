@@ -65,7 +65,7 @@ class HandleXAConnectionWithPoolingActionTest {
         context = new ActionContext(
                 new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), new ConcurrentHashMap<>(),
                 new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), new ConcurrentHashMap<>(),
-                new ConcurrentHashMap<>(), null, provider, null, new ClusterHealthTracker(),
+                new ConcurrentHashMap<>(), null, provider, null, new ClusterHealthTracker(0),
                 sessionManager, null, new ServerConfiguration(), null, null);
     }
 

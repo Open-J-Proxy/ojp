@@ -3,7 +3,9 @@ package org.openjproxy.grpc.server;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -180,5 +182,53 @@ class ClusterHealthTrackerTest {
         int healthyCount = tracker.countHealthyServers(clusterHealth);
 
         assertEquals(TWO, healthyCount);
+    }
+
+    @Test
+    void shouldTreatServerAsDownOnlyAfterAFullWindowOfDownVotes() {
+        AtomicLong now = new AtomicLong(1_000);
+        ClusterHealthTracker votes = new ClusterHealthTracker(10_000, now::get);
+        List<String> endpoints = List.of("a:1059", "b:1059");
+
+        votes.recordVotes("a:1059(UP);b:1059(DOWN)");
+        now.addAndGet(9_999);
+        assertEquals(TWO, votes.countVotedHealthyServers(endpoints));
+        assertEquals(1, votes.millisUntilNextDownConfirmation());
+
+        now.addAndGet(1);
+        assertEquals(1, votes.countVotedHealthyServers(endpoints));
+        assertEquals(-1, votes.millisUntilNextDownConfirmation());
+    }
+
+    @Test
+    void shouldLetAClientWithADifferentServerListVetoADownVote() {
+        AtomicLong now = new AtomicLong(1_000);
+        ClusterHealthTracker votes = new ClusterHealthTracker(10_000, now::get);
+
+        // Client 2 only knows A and B and cannot reach B; client 1 knows A, B and C and still reaches B.
+        votes.recordVotes("a:1059(UP);b:1059(DOWN)");
+        now.addAndGet(5_000);
+        votes.recordVotes("a:1059(UP);b:1059(UP);c:1059(UP)");
+        now.addAndGet(6_000);
+        votes.recordVotes("a:1059(UP);b:1059(DOWN)");
+        now.addAndGet(9_000);
+
+        assertFalse(votes.isVotedDown("b:1059"));
+        assertEquals(TWO, votes.countVotedHealthyServers(List.of("a:1059", "b:1059")));
+        assertEquals(THREE, votes.countVotedHealthyServers(List.of("a:1059", "b:1059", "c:1059")));
+    }
+
+    @Test
+    void shouldCountARecoveredServerAsUpImmediately() {
+        AtomicLong now = new AtomicLong(1_000);
+        ClusterHealthTracker votes = new ClusterHealthTracker(10_000, now::get);
+        votes.recordVotes("a:1059(UP);B:1059(DOWN)");
+        now.addAndGet(10_000);
+        assertTrue(votes.isVotedDown("b:1059"));
+
+        votes.recordVotes("a:1059(UP);b:1059(UP)");
+
+        assertFalse(votes.isVotedDown("b:1059"));
+        assertEquals(TWO, votes.countVotedHealthyServers(List.of("a:1059", "b:1059")));
     }
 }

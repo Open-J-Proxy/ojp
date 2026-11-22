@@ -3,8 +3,6 @@ package org.openjproxy.grpc.server;
 import lombok.extern.slf4j.Slf4j;
 import org.openjproxy.constants.CommonConstants;
 
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -213,27 +211,10 @@ public class MultinodePoolCoordinator {
     }
 
     /**
-     * Returns pools whose configured endpoint set matches the given pool.
-     * Health reports describe one endpoint set and must not be applied to a different cluster.
-     *
-     * @param connHash connection hash identifying the source pool
-     * @return matching pool hashes, including the source when it has an allocation
+     * Returns the connection hashes of all multinode pools that currently have an allocation.
      */
-    public List<String> getConnHashesWithSameServerEndpoints(String connHash) {
-        PoolAllocation source = poolAllocations.get(connHash);
-        if (source == null || source.getServerEndpoints().isEmpty()) {
-            return List.of(connHash);
-        }
-
-        Set<String> sourceEndpoints = new HashSet<>(source.getServerEndpoints());
-        List<String> matchingConnHashes = new ArrayList<>();
-        poolAllocations.forEach((poolConnHash, allocation) -> {
-            if (sourceEndpoints.equals(new HashSet<>(allocation.getServerEndpoints()))) {
-                matchingConnHashes.add(poolConnHash);
-            }
-        });
-        matchingConnHashes.sort(String::compareTo);
-        return matchingConnHashes;
+    public Set<String> getAllocatedConnHashes() {
+        return Set.copyOf(poolAllocations.keySet());
     }
 
     /**

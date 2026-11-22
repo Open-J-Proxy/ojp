@@ -203,7 +203,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
                         String parsedUrl = UrlParser.parseUrl(connectionDetails.getUrl());
                         budgetRegistration = budgetManager.registerPool("regular:" + connHash, parsedUrl,
                                 connectionDetails.getUser(), maxPoolSize, minIdle, poolProvider.supportsDynamicResizing(),
-                                ConnectionPoolConfigurer.getHealthyServerCount(connectionDetails));
+                                ConnectionPoolConfigurer.getHealthyServerCount(context, connectionDetails));
                         maxPoolSize = budgetRegistration.getMaximumPoolSize();
                         minIdle = budgetRegistration.getMinimumIdle();
 
@@ -439,7 +439,7 @@ public class ConnectAction implements Action<ConnectionDetails, SessionInfo> {
 
             ReadWriteConfiguration config = rwManager.setupReadWriteSplitting(
                     connectionDetails, connHash, ds, datasourceName,
-                    ConnectionPoolConfigurer.getHealthyServerCount(connectionDetails));
+                    ConnectionPoolConfigurer.getHealthyServerCount(context, connectionDetails));
 
             if (config != null) {
                 log.info("Read/write splitting successfully configured for datasource '{}'", datasourceName);

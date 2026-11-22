@@ -77,6 +77,8 @@ public class ServerConfiguration {
 
     // Session cleanup configuration keys
     private static final String SESSION_CLEANUP_ENABLED_KEY = "ojp.server.sessionCleanup.enabled";
+    private static final String MULTINODE_POOL_REBALANCING_ENABLED_KEY = "ojp.server.multinode.poolRebalancing.enabled";
+    private static final String MULTINODE_HEALTH_VOTE_WINDOW_MS_KEY = "ojp.server.multinode.healthVoteWindowMs";
     private static final String SESSION_TIMEOUT_MINUTES_KEY = "ojp.server.sessionCleanup.timeoutMinutes";
     private static final String SESSION_CLEANUP_INTERVAL_MINUTES_KEY = "ojp.server.sessionCleanup.intervalMinutes";
 
@@ -163,6 +165,8 @@ public class ServerConfiguration {
 
     // Session cleanup default values
     public static final boolean DEFAULT_SESSION_CLEANUP_ENABLED = true; // Enable session cleanup by default
+    public static final boolean DEFAULT_MULTINODE_POOL_REBALANCING_ENABLED = true;
+    public static final long DEFAULT_MULTINODE_HEALTH_VOTE_WINDOW_MS = ClusterHealthTracker.DEFAULT_VOTE_WINDOW_MILLIS;
     public static final long DEFAULT_SESSION_TIMEOUT_MINUTES = 30; // 30 minutes session timeout
     public static final long DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES = 5; // Run cleanup every 5 minutes
 
@@ -256,6 +260,8 @@ public class ServerConfiguration {
 
     // Session cleanup configuration
     private final boolean sessionCleanupEnabled;
+    private final boolean multinodePoolRebalancingEnabled;
+    private final long multinodeHealthVoteWindowMs;
     private final long sessionTimeoutMinutes;
     private final long sessionCleanupIntervalMinutes;
 
@@ -355,6 +361,10 @@ public class ServerConfiguration {
 
         // Session cleanup configuration
         this.sessionCleanupEnabled = getBooleanProperty(SESSION_CLEANUP_ENABLED_KEY, DEFAULT_SESSION_CLEANUP_ENABLED);
+        this.multinodePoolRebalancingEnabled = getBooleanProperty(MULTINODE_POOL_REBALANCING_ENABLED_KEY,
+                DEFAULT_MULTINODE_POOL_REBALANCING_ENABLED);
+        this.multinodeHealthVoteWindowMs = getNonNegativeLongProperty(MULTINODE_HEALTH_VOTE_WINDOW_MS_KEY,
+                DEFAULT_MULTINODE_HEALTH_VOTE_WINDOW_MS);
         this.sessionTimeoutMinutes = getLongProperty(SESSION_TIMEOUT_MINUTES_KEY, DEFAULT_SESSION_TIMEOUT_MINUTES);
         this.sessionCleanupIntervalMinutes = getLongProperty(SESSION_CLEANUP_INTERVAL_MINUTES_KEY, DEFAULT_SESSION_CLEANUP_INTERVAL_MINUTES);
 
@@ -608,6 +618,9 @@ public class ServerConfiguration {
         logger.info("  Session Cleanup Enabled: {}", sessionCleanupEnabled);
         logger.info("  Session Timeout: {} minutes", sessionTimeoutMinutes);
         logger.info("  Cleanup Interval: {} minutes", sessionCleanupIntervalMinutes);
+        logger.info("Multinode Pool Rebalancing Configuration:");
+        logger.info("  Health-Driven Pool Rebalancing Enabled: {}", multinodePoolRebalancingEnabled);
+        logger.info("  Health Vote Window: {} ms", multinodeHealthVoteWindowMs);
         logger.info("TLS Configuration:");
         logger.info("  TLS Enabled: {}", tlsEnabled);
         if (tlsEnabled) {
@@ -959,4 +972,12 @@ public class ServerConfiguration {
         return resultsetRowsPerBlock;
     }
 
+
+    public boolean isMultinodePoolRebalancingEnabled() {
+        return multinodePoolRebalancingEnabled;
+    }
+
+    public long getMultinodeHealthVoteWindowMs() {
+        return multinodeHealthVoteWindowMs;
+    }
 }

@@ -175,6 +175,7 @@ jobs:
           OJP_TEST_H2_ADDR: localhost:1059
           OJP_ENABLE_LOB_H2_TESTS: 'true'
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
+          OJP_ENABLE_POSTGRES_L7_TESTS: 'true'
           OJP_ENABLE_XA_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_L6_TESTS: 'true'

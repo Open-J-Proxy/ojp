@@ -22,6 +22,7 @@
     "test:postgres-l4": "jest --runInBand test/integration.postgres.l4.test.ts",
     "test:postgres-l5": "jest --runInBand test/integration.postgres.l5.test.ts",
     "test:postgres-l6": "jest --runInBand test/integration.postgres.l6.test.ts",
+    "test:postgres-l7": "jest --runInBand test/integration.postgres.l7.test.ts",
     "test:lob-h2": "jest test/integration.lob.h2.test.ts",
     "test:sqlserver-ag": "jest test/integration.sqlServerAg.test.ts",
     "test:sqlserver-l5": "jest test/integration.sqlServerL5.test.ts",

@@ -11,9 +11,9 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L10** for SQL Server |
-| Cumulative level | **L1** for H2; **L9** for PostgreSQL; **L10** for SQL Server |
-| Higher-level features | PostgreSQL L9 covers multinode XA lifecycle and affinity; SQL Server L10 combines multinode recovery and XA behavior over mTLS |
+| Target level | **L10** for PostgreSQL and SQL Server |
+| Cumulative level | **L1** for H2; **L10** for PostgreSQL and SQL Server |
+| Higher-level features | PostgreSQL and SQL Server L10 combine multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
 The H2, PostgreSQL, and SQL Server L1 suites exercise CRUD, errors, and session lifecycle
@@ -51,7 +51,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L7** | PostgreSQL, SQL Server (certified) | PostgreSQL and SQL Server verify least-connections selection, round-robin distribution, unavailable/recovered-node health, cluster-health propagation, cached `connHash` reuse, safe stale-pool reconnect/retry for stateless operations, and SQL-error classification. See `test/integration.postgres.l7.test.ts`, `test/integration.sqlServerL7.test.ts`, and `test/multinodeClient.test.ts`. |
 | **L8** | PostgreSQL, SQL Server (certified) | PostgreSQL covers bounded stateless failover, recovery and redistribution, and verifies sticky-session loss, transaction failures, SQL errors, and server overload do not trigger unsafe rerouting or replay. See `test/integration.postgres.l8.test.ts`. SQL Server covers the same resilience behavior in `test/integration.sqlServerL8.test.ts`, `test/multinodeClient.test.ts`, and `test/errors.test.ts`. |
 | **L9** | PostgreSQL, SQL Server (certified) | PostgreSQL covers scoped XA session lifecycle, two-phase and one-phase commit, rollback, prepared-branch recovery with complete Xid matching, PostgreSQL's unsupported transaction-timeout behavior, sequential branch reuse, resource-manager identity, XA errors, and multinode affinity/failover safety. See `test/integration.xa.postgres.test.ts`. SQL Server also covers timeout support and the corresponding XA lifecycle in `test/integration.sqlServerXA.test.ts`. |
-| **L10** | SQL Server (certified) | `test/integration.sqlServerL10.test.ts` combines SQL and XA commit/rollback/recovery, stateless failover and recovered-node reuse, sticky-session and XA affinity failures over two mTLS endpoints, and rejection of missing or untrusted client certificates. |
+| **L10** | PostgreSQL, SQL Server (certified) | PostgreSQL `test/integration.postgres.l10.test.ts` and SQL Server `test/integration.sqlServerL10.test.ts` authenticate against each mTLS endpoint, verify local and XA commit/rollback/recovery outcomes, stateless failover and redistribution, sticky-session and XA affinity failures, and rejection of missing or untrusted client certificates. |
 
 PostgreSQL L5 uses the JDBC driver's supported `BYTEA`/`TEXT` hydrated path; PostgreSQL's
 JDBC driver does not implement native `createBlob()`/`createClob()`. Binary stream
@@ -69,9 +69,9 @@ container configuration. `OjpClient` manages `SessionInfo`, `sessionUUID`, and `
 for every operation; `withOjpClient()` and `withTransaction()` also avoid manual
 connect/close and transaction-cleanup boilerplate.
 
-The Node integration workflow provisions two SQL Server OJP endpoints that require
-client certificates and runs the L10 suite alongside the L1–L9 suites. L10 is claimed
-only for SQL Server; H2 remains at L1, PostgreSQL is at L9.
+The Node integration workflow provisions separate two-node PostgreSQL and SQL Server
+OJP clusters that require client certificates and runs both L10 suites alongside their
+L1–L9 suites. H2 remains at L1.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent
@@ -702,6 +702,7 @@ npm test             # unit tests (parser, type mapping) — no external infrast
 npm run test:integration  # integration against ojp-server + PostgreSQL (requires OJP_ENABLE_INTEGRATION_TESTS=true)
 npm run test:integration:all # all integration suites; configure all test infrastructure and flags
 npm run test:postgres-l8 # PostgreSQL L8 recovery; requires three OJP nodes and a maxConcurrentRequests=1 node
+npm run test:postgres-l10 # PostgreSQL L10 combined multinode/mTLS certification
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)
 npm run test:sqlserver-ag # SQL Server integration (requires OJP_ENABLE_SQLSERVER_AG_TESTS=true)
 npm run test:sqlserver-l8 # SQL Server L8 multinode failover/recovery integration
@@ -713,7 +714,8 @@ npm run test:sqlserver-xa # XA integration against ojp-server + SQL Server (requ
 ## Testing locally against ojp-server
 
 The Node client workflow configures H2, PostgreSQL, SQL Server, three dedicated OJP
-nodes, and a separate PostgreSQL L8 overload-test node; it runs every integration suite.
+nodes, a separate PostgreSQL L8 overload-test node, and dedicated PostgreSQL and SQL
+Server mTLS clusters; it runs every integration suite.
 For PostgreSQL L8, set `OJP_ENABLE_POSTGRES_L8_TESTS=true`,
 `OJP_TEST_NODE_CONTAINERS`, and `OJP_TEST_POSTGRES_L8_THROTTLED_NODE_CONTAINER` /
 `OJP_TEST_POSTGRES_L8_THROTTLED_NODE_PORT` for an OJP node started with

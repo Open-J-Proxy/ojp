@@ -63,10 +63,13 @@ The PostgreSQL L7 suite uses `OJP_ENABLE_POSTGRES_L7_TESTS=true npm run test:pos
 and requires at least two dedicated OJP node containers in `OJP_TEST_NODE_CONTAINERS`
 (ports default to 1059–1061); all nodes must share the same PostgreSQL database. The L6
 sticky-node failure scenario uses `OJP_ENABLE_MULTINODE_FAILOVER_TESTS` and the same
-container configuration.
+container configuration. `OjpClient` manages `SessionInfo`, `sessionUUID`, and `connHash`
+for every operation; `withOjpClient()` and `withTransaction()` also avoid manual
+connect/close and transaction-cleanup boilerplate.
 
 The Node integration workflow provisions two SQL Server OJP endpoints that require
-client certificates and runs the L10 suite alongside the L1–L9 suites. L10 is claimed only for SQL Server; H2 remains at L1, and PostgreSQL is at L7.
+client certificates and runs the L10 suite alongside the L1–L9 suites. L10 is claimed
+only for SQL Server; H2 remains at L1, and PostgreSQL is at L7.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent

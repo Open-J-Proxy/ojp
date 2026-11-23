@@ -7,7 +7,7 @@ import * as net from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
 import { resetPoolCacheForTests } from '../src/client/OjpClient';
-import { resetEndpointHealthForTests } from '../src/client/endpointHealth';
+import { isEndpointHealthy, resetEndpointHealthForTests } from '../src/client/endpointHealth';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_POSTGRES_L7_TESTS === 'true';
@@ -177,8 +177,12 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L7: %s', (jdbcUrl, u
 
     const client = await newClient(singleNodeUrl(target.port));
     try {
-      await expect(client.executeQuery(`SELECT id, value FROM ${table}`)).resolves.toMatchObject({
-        rows: [{ id: 7, value: 'recovered' }],
+      await expect(client.executeUpdate(`INSERT INTO ${table} VALUES (8, 'retried')`)).resolves.toBe(1);
+      await expect(client.executeQuery(`SELECT id, value FROM ${table} ORDER BY id`)).resolves.toMatchObject({
+        rows: [
+          { id: 7, value: 'recovered' },
+          { id: 8, value: 'retried' },
+        ],
       });
       await expect(client.executeUpdate(`DROP TABLE ${table}`)).resolves.toBeDefined();
     } finally {
@@ -206,8 +210,10 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L7: %s', (jdbcUrl, u
 
   it('keeps endpoint health intact after a PostgreSQL SQL error', async () => {
     const client = await newClient();
+    const endpoint = client.boundEndpoint!;
     try {
       await expect(client.executeUpdate('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
+      expect(isEndpointHealthy(endpoint)).toBe(true);
     } finally {
       await client.close();
     }

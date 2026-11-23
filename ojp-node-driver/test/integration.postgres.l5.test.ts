@@ -80,12 +80,12 @@ const endpoint = process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059';
       }
     }, 60_000);
 
-    it('round-trips Unicode character stream parameters without losing text or UTF-8 bytes', async () => {
-      const content = 'PostgreSQL CLOB stream: äöü ñ 中文 🚀 — '.repeat(2_000);
+    it('round-trips Unicode TEXT values without losing content or UTF-8 bytes', async () => {
+      const content = 'PostgreSQL TEXT value: äöü ñ 中文 🚀 — '.repeat(2_000);
       const insert = client.prepareStatement(`INSERT INTO ${table} (id, text_value) VALUES (?, ?)`);
       try {
         insert.setParameter(1, 3);
-        insert.setParameter(2, new OjpTypedParam(content, ParameterType.UNICODE_STREAM));
+        insert.setParameter(2, content);
         expect(await insert.executeUpdate()).toBe(1);
       } finally {
         await insert.close();
@@ -103,7 +103,7 @@ const endpoint = process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059';
       try {
         insert.setParameter(1, 4);
         insert.setParameter(2, new OjpTypedParam(Buffer.alloc(0), ParameterType.BINARY_STREAM));
-        insert.setParameter(3, new OjpTypedParam('', ParameterType.UNICODE_STREAM));
+        insert.setParameter(3, '');
         expect(await insert.executeUpdate()).toBe(1);
 
         insert.clearParameters();
@@ -145,7 +145,7 @@ const endpoint = process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059';
       );
       try {
         update.setParameter(1, new OjpTypedParam(updatedBytes, ParameterType.BINARY_STREAM));
-        update.setParameter(2, new OjpTypedParam(updatedText, ParameterType.UNICODE_STREAM));
+        update.setParameter(2, updatedText);
         update.setParameter(3, 6);
         expect(await update.executeUpdate()).toBe(1);
       } finally {

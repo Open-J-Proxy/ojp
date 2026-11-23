@@ -196,13 +196,11 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L10 mTLS: %s', (jdbc
       });
 
       await withClient(async (verification) => {
-        await expect(verification.executeQuery(`SELECT id, label FROM ${table} ORDER BY id`))
-          .resolves.toMatchObject({
-            rows: [
-              { id: 1, label: 'local-commit' },
-              { id: 3, label: 'xa-commit' },
-            ],
-          });
+        const result = await verification.executeQuery(`SELECT id, label FROM ${table} ORDER BY id`);
+        expect(result.rows).toEqual([
+          { id: 1, label: 'local-commit' },
+          { id: 3, label: 'xa-commit' },
+        ]);
       });
     } finally {
       await withClient((client) => client.executeUpdate(`DROP TABLE IF EXISTS ${table}`));

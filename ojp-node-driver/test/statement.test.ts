@@ -118,6 +118,31 @@ describe('L2 statement API', () => {
     expect(execute).toHaveBeenCalledWith('prepared-id');
   });
 
+  it('keeps the prepared statement handle for generated keys after adding a batch', async () => {
+    const client = new OjpClient(url);
+    const add = jest.spyOn(client, 'addPreparedBatch').mockResolvedValue('generated-batch-id');
+    const execute = jest.spyOn(client, 'executePreparedBatch').mockResolvedValue([1]);
+    const getKeys = jest.spyOn(client, 'getGeneratedKeys').mockResolvedValue({
+      columns: ['id'],
+      rows: [{ id: 7 }],
+      metadata: { columnCount: 1, columns: [{ index: 1, label: 'id' }] },
+    });
+    const statement = client.prepareStatement('INSERT INTO t(name) VALUES (?)', { generatedKeys: true });
+
+    await statement.addBatch(['generated']);
+    await expect(statement.executeBatch()).resolves.toEqual([1]);
+    await expect(statement.getGeneratedKeys()).resolves.toMatchObject({ rows: [{ id: 7 }] });
+
+    expect(add).toHaveBeenCalledWith(
+      'INSERT INTO t(name) VALUES (?)',
+      ['generated'],
+      undefined,
+      { generatedKeys: true },
+    );
+    expect(execute).toHaveBeenCalledWith('generated-batch-id');
+    expect(getKeys).toHaveBeenCalledWith('generated-batch-id');
+  });
+
   it('encodes SQL NULL using its explicit java.sql.Types code', () => {
     const parameter = new OjpNullParam(12);
     expect(toParameterProtos([parameter])).toEqual([

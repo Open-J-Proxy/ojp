@@ -97,7 +97,7 @@ These levels are based on each language client's own integration tests and are i
 | **C++ ODBC** | SQL Server | **L10** | `cpp-odbc-sqlserver-test` runs L1-L10 with required mTLS on both servers, including `sqlserver_l10_integration_test.cpp`. |
 | **C++ ODBC** | PostgreSQL | **L10** | `cpp-odbc-postgres-test` runs L1-L10 with required mTLS on both servers, including `postgresql_l10_integration_test.cpp`. |
 | **C++ ODBC** | MariaDB / MySQL | **L10** | `cpp-odbc-mariadb-test` runs L1-L10 for both database CSV rows with required mTLS on both servers, including `mariadb_l10_integration_test.cpp`. |
-| **Node.js** | PostgreSQL | **L1** | `ojp-node-driver/test/integration.postgres.l1.test.ts` covers parameterized CRUD, SQLSTATE errors, session termination, closed-client behavior, and scoped lifecycle. |
+| **Node.js** | PostgreSQL | **L2** | `ojp-node-driver/test/integration.postgres.l1.test.ts` and `integration.postgres.l2.test.ts` cover CRUD/lifecycle, typed values and NULLs, prepared/plain statements and batches, generated keys, result metadata, PostgreSQL `RETURNING`, and explicit `ARRAY`/`REF` omissions. |
 | **Node.js** | SQL Server | **L10** | `ojp-node-driver/test/integration.sqlServerL10.test.ts` combines SQL and XA outcomes, stateless failover/recovery, sticky-session and XA affinity failures over two mTLS endpoints, and missing/untrusted certificate rejection. Existing SQL Server suites provide the full L1-L9 cumulative coverage. |
 | **Go** | H2 | **L3** | L1-L3 real-server integration coverage: `ojp-client-go-database-sql/client/h2_l1_integration_test.go`, `h2_l2_integration_test.go`, `h2_l3_integration_test.go`, and `h2_l3_fetch_integration_test.go`. |
 | **Dart** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |
@@ -145,7 +145,7 @@ The following table records the implemented target level and its real-server int
 | **C++ ODBC** | SQL Server | **L10** | `ojp-client-cpp-odbc/tests/sqlserver_l10_integration_test.cpp`: combined operational/XA behavior over mTLS, with successful authentication and missing/untrusted certificate rejection on every endpoint. |
 | **C++ ODBC** | PostgreSQL | **L10** | `ojp-client-cpp-odbc/tests/postgresql_l10_integration_test.cpp`: combined operational/XA behavior over mTLS, with successful authentication and missing/untrusted certificate rejection on every endpoint. |
 | **C++ ODBC** | MariaDB / MySQL | **L10** | `ojp-client-cpp-odbc/tests/mariadb_l10_integration_test.cpp`: combined operational/XA behavior over mTLS for both CSV rows, with certificate authentication/rejection on every endpoint. |
-| **Node.js** | PostgreSQL | **L1** | `ojp-node-driver/test/integration.postgres.l1.test.ts` |
+| **Node.js** | PostgreSQL | **L2** | `ojp-node-driver/test/integration.postgres.l1.test.ts` and `integration.postgres.l2.test.ts` |
 | **Node.js** | SQL Server | **L10** | `ojp-node-driver/test/integration.sqlServerL10.test.ts` covers combined SQL/XA behavior, stateless failover/recovery, sticky and XA affinity failures, and required-client-certificate authentication/rejection across two OJP servers. The existing `integration.sqlServerXA.test.ts`, `integration.sqlServerL8.test.ts`, and SQL Server L1-L7 suites provide cumulative coverage. |
 | **Go (`database/sql`)** | H2 | **L1** | `ojp-client-go-database-sql/client/h2_l1_integration_test.go` |
 | **Dart (Drift)** | H2 | **L1** | `ojp-client-dart-drift/test/h2_l1_integration_test.dart` |

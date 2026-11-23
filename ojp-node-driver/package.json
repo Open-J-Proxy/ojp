@@ -17,6 +17,7 @@
     "test:integration:all": "jest --runInBand test/integration",
     "test:integration": "jest test/integration.ojpServer.test.ts",
     "test:postgres-l1": "jest --runInBand test/integration.postgres.l1.test.ts",
+    "test:postgres-l2": "jest --runInBand test/integration.postgres.l2.test.ts",
     "test:lob-h2": "jest test/integration.lob.h2.test.ts",
     "test:sqlserver-ag": "jest test/integration.sqlServerAg.test.ts",
     "test:sqlserver-l5": "jest test/integration.sqlServerL5.test.ts",

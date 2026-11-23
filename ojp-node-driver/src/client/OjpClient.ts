@@ -691,11 +691,12 @@ export class OjpClient {
     statementUUID = '',
     additionalProperties: PropertyEntry[] = [],
   ): Promise<OpResult> {
+    const parameters = toParameterProtos(params);
     const invoke = (): Promise<OpResult> => {
       const request: StatementRequest = {
         session: this.requireSession(),
         sql,
-        parameters: toParameterProtos(params),
+        parameters,
         statementUUID,
         properties: [
           ...additionalProperties,

@@ -163,6 +163,7 @@ export class OjpPreparedStatement {
       this.statementUUID,
       this.options,
     );
+    this.generatedKeysStatementUUID = this.options.generatedKeys ? this.statementUUID : undefined;
     this.bindings.clear();
   }
 

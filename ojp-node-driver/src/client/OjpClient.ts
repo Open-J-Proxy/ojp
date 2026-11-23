@@ -2,6 +2,7 @@ import * as grpc from '@grpc/grpc-js';
 import { createHash, randomUUID } from 'crypto';
 import { PassThrough, Readable } from 'stream';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
+import { decodeSqlErrorResponse, SQL_ERROR_METADATA_KEY } from '../proto/errorCodec';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
 import { toOjpError, OjpConnectionError, OjpTransactionError, isConnectionLevelError } from './errors';
 import { fromParameterValue, OjpLobRef, OjpNullParam, toParameterProtos } from './valueMapper';
@@ -209,14 +210,24 @@ function connectionKey(details: ConnectionDetails): string {
 }
 
 function isPoolNotFound(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null || !('code' in err)
-      || (err as { code?: number }).code !== grpc.status.NOT_FOUND) {
+  if (typeof err !== 'object' || err === null) {
     return false;
   }
-  const message = 'details' in err && typeof err.details === 'string'
-    ? err.details
-    : 'message' in err && typeof err.message === 'string' ? err.message : '';
-  return /no pool found for connection hash/i.test(message);
+  const grpcError = err as {
+    code?: number;
+    details?: string;
+    message?: string;
+    metadata?: { get(key: string): unknown[] };
+  };
+  const rawMessage = `${grpcError.details ?? ''} ${grpcError.message ?? ''}`;
+  if (grpcError.code === grpc.status.NOT_FOUND && /no pool found for connection hash/i.test(rawMessage)) {
+    return true;
+  }
+  const raw = grpcError.metadata?.get(SQL_ERROR_METADATA_KEY)[0];
+  if (!Buffer.isBuffer(raw)) {
+    return false;
+  }
+  return /no pool found for connection hash/i.test(decodeSqlErrorResponse(raw)?.reason ?? '');
 }
 
 type LobInput = Buffer | string | AsyncIterable<Buffer | string>;
@@ -1537,17 +1548,31 @@ export class OjpClient {
     if (this.transactionActive) {
       throw new OjpConnectionError('A transaction is already active.');
     }
-    const session = this.requireSession();
-    await new Promise<void>((resolve, reject) => {
-      this.requireClient().startTransaction(session, (err, response) => {
+    const invoke = (): Promise<void> => new Promise((resolve, reject) => {
+      this.requireClient().startTransaction(this.requireSession(), (err, response) => {
         if (err) {
-          reject(this.toClientError(err));
+          reject(err);
           return;
         }
         this.session = response;
         resolve();
       });
     });
+
+    try {
+      await invoke();
+    } catch (err) {
+      if (isPoolNotFound(err) && !this.session?.sessionUUID && !this.options.xa) {
+        await this.reconnectAfterPoolNotFound();
+        try {
+          await invoke();
+        } catch (retryError) {
+          throw this.toClientError(retryError);
+        }
+      } else {
+        throw this.toClientError(err);
+      }
+    }
     this.transactionGeneration++;
     this.savepoints.length = 0;
     this.transactionActive = true;

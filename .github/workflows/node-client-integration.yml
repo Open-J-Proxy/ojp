@@ -128,7 +128,27 @@ jobs:
               sleep 1
             done
           done
+          docker run -d --name "$NODE_TEST_PREFIX-postgres-l8-throttled" --network host \
+            -v "$jar:/opt/ojp/server.jar:ro" -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
+            eclipse-temurin:25-jre java -Duser.timezone=UTC \
+            -Dojp.server.port=1062 -Dojp.prometheus.port=9165 \
+            -Dojp.server.maxConcurrentRequests=1 -Dojp.libs.path=/opt/ojp-libs \
+            -jar /opt/ojp/server.jar
+          for attempt in $(seq 1 60); do
+            if docker logs "$NODE_TEST_PREFIX-postgres-l8-throttled" 2>&1 | grep -q 'OJP gRPC Server started'; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs "$NODE_TEST_PREFIX-postgres-l8-throttled"
+              exit 1
+            fi
+            sleep 1
+          done
           echo "OJP_TEST_NODE_CONTAINERS=$NODE_TEST_PREFIX-1,$NODE_TEST_PREFIX-2,$NODE_TEST_PREFIX-3" >> "$GITHUB_ENV"
+          {
+            echo "OJP_TEST_POSTGRES_L8_THROTTLED_NODE_CONTAINER=$NODE_TEST_PREFIX-postgres-l8-throttled"
+            echo "OJP_TEST_POSTGRES_L8_THROTTLED_NODE_PORT=1062"
+          } >> "$GITHUB_ENV"
 
       - name: Start two SQL Server mTLS OJP servers
         run: |
@@ -176,6 +196,7 @@ jobs:
           OJP_ENABLE_LOB_H2_TESTS: 'true'
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L7_TESTS: 'true'
+          OJP_ENABLE_POSTGRES_L8_TESTS: 'true'
           OJP_ENABLE_XA_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_L6_TESTS: 'true'
@@ -203,7 +224,7 @@ jobs:
       - name: Show logs and clean up test containers
         if: always() && env.NODE_TEST_PREFIX != ''
         run: |
-          for name in "$NODE_TEST_PREFIX-1" "$NODE_TEST_PREFIX-2" "$NODE_TEST_PREFIX-3" "$NODE_TEST_PREFIX-mtls-1" "$NODE_TEST_PREFIX-mtls-2" "$NODE_TEST_PREFIX-postgres" "$NODE_TEST_PREFIX-sqlserver"; do
+          for name in "$NODE_TEST_PREFIX-1" "$NODE_TEST_PREFIX-2" "$NODE_TEST_PREFIX-3" "$NODE_TEST_PREFIX-postgres-l8-throttled" "$NODE_TEST_PREFIX-mtls-1" "$NODE_TEST_PREFIX-mtls-2" "$NODE_TEST_PREFIX-postgres" "$NODE_TEST_PREFIX-sqlserver"; do
             docker logs "$name" 2>&1 || true
             docker rm -f "$name" || true
           done

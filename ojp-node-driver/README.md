@@ -530,12 +530,10 @@ $env:OJP_TEST_NODE_CONTAINERS = 'node-test-1,node-test-2,node-test-3'
 npm run test:multinode-failover
 ```
 
-**Not yet implemented** (deferred, out of scope for this first pass): the reference
-JDBC driver also recovers from a `NOT_FOUND` server response (server lost its
-in-memory session/pool, e.g. after a restart) by rebuilding and retrying the same
-operation once against the *same* endpoint. This Node driver does not yet special-case
-that scenario — a `NOT_FOUND` currently surfaces as a regular SQL-level error instead
-of being retried automatically.
+When the server reports `NOT_FOUND` because a pool is missing, stateless operations
+rebuild that endpoint's pool and retry once. The retry is restricted to operations with
+no sticky session, statement resource, or active transaction; unrelated `NOT_FOUND`
+errors are surfaced without retry. XA sessions do not use the non-XA pool cache.
 
 ## XA support (distributed transactions)
 

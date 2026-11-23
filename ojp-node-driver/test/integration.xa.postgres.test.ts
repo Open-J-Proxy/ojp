@@ -170,6 +170,12 @@ describeIfEnabled.each(connections)('OjpXAResource - PostgreSQL L9: %s', (jdbcUr
       await expect(client.executeQuery(`SELECT label FROM ${tableName} WHERE id = ?`, [id]))
         .resolves.toMatchObject({ rows: [{ label: 'one-phase-commit' }] });
     });
+
+    try {
+      await xa.forget(xid);
+    } catch (error) {
+      expect(error).toBeInstanceOf(OjpXaError);
+    }
   }, 30_000);
 
   it('recovers the complete Xid of a prepared branch and resolves it exactly once', async () => {
@@ -246,7 +252,7 @@ describeIfEnabled.each(connections)('OjpXAResource - PostgreSQL L9: %s', (jdbcUr
     });
   }, 30_000);
 
-  it('identifies separate sessions on the same PostgreSQL resource manager', async () => {
+  it('reports XA resource identity for a resource itself and a separate PostgreSQL session', async () => {
     const sameEndpointDataSource = new OjpXADataSource(
       ojpUrl(`localhost:${nodes[0].port}`, jdbcUrl),
       { user, password, healthCheckIntervalMs: 0 },
@@ -254,7 +260,9 @@ describeIfEnabled.each(connections)('OjpXAResource - PostgreSQL L9: %s', (jdbcUr
     xaConn = await sameEndpointDataSource.getXAConnection();
     const other = await sameEndpointDataSource.getXAConnection();
     try {
-      await expect(xaConn.getXAResource().isSameRM(other.getXAResource())).resolves.toBe(true);
+      const resource = xaConn.getXAResource();
+      await expect(resource.isSameRM(resource)).resolves.toBe(true);
+      await expect(resource.isSameRM(other.getXAResource())).resolves.toBe(false);
     } finally {
       await other.close();
     }

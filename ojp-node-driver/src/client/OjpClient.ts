@@ -434,10 +434,24 @@ export class OjpClient {
           }
         }
         session.clusterHealth = clusterHealth(this.parsedUrl.endpoints);
-        this.grpcClient = client;
-        this.boundServerEndpoint = endpoint;
+        const targetServer = session.targetServer || this.endpointAddress(endpoint);
+        const targetEndpoint = this.endpointForTargetServer(targetServer);
+        if (!targetEndpoint) {
+          throw new OjpConnectionError(
+            `The ojp-server returned targetServer "${targetServer}", which is not a configured endpoint.`,
+          );
+        }
+        session.targetServer = targetServer;
+        const targetClient = endpointKey(targetEndpoint) === endpointKey(endpoint)
+          ? client
+          : this.buildGrpcClient(targetEndpoint);
+        if (targetClient !== client) {
+          client.close();
+        }
+        this.grpcClient = targetClient;
+        this.boundServerEndpoint = targetEndpoint;
         this.session = session;
-        registerEndpointSession(endpoint);
+        registerEndpointSession(targetEndpoint);
         this.endpointRegistered = true;
         this.startHealthMonitor();
         return session;
@@ -558,6 +572,9 @@ export class OjpClient {
   }
 
   private requireSession(): SessionInfo {
+    if (this.closed) {
+      throw new OjpConnectionError('This client is closed. Create a new client to connect.');
+    }
     if (!this.session) {
       throw new OjpConnectionError('Session not started. Call connect() before executing commands.');
     }
@@ -565,7 +582,39 @@ export class OjpClient {
     if (this.session.clusterHealth !== health) {
       this.session = { ...this.session, clusterHealth: health };
     }
+    if (!this.session.targetServer && this.boundServerEndpoint) {
+      this.session = {
+        ...this.session,
+        targetServer: this.endpointAddress(this.boundServerEndpoint),
+      };
+    }
     return this.session;
+  }
+
+  private endpointAddress(endpoint: OjpServerEndpoint): string {
+    return `${endpoint.host}:${endpoint.port}`;
+  }
+
+  private endpointForTargetServer(targetServer: string): OjpServerEndpoint | undefined {
+    const normalizedTarget = targetServer.toLowerCase();
+    return this.parsedUrl.endpoints.find((endpoint) =>
+      this.endpointAddress(endpoint).toLowerCase() === normalizedTarget);
+  }
+
+  private rebindToEndpoint(endpoint: OjpServerEndpoint): void {
+    const previousEndpoint = this.boundServerEndpoint;
+    if (previousEndpoint && endpointKey(previousEndpoint) === endpointKey(endpoint)) {
+      return;
+    }
+    const previousClient = this.grpcClient;
+    if (this.endpointRegistered && previousEndpoint) {
+      unregisterEndpointSession(previousEndpoint);
+    }
+    this.boundServerEndpoint = endpoint;
+    this.grpcClient = this.buildGrpcClient(endpoint);
+    registerEndpointSession(endpoint);
+    this.endpointRegistered = true;
+    previousClient?.close();
   }
 
   /**
@@ -710,7 +759,11 @@ export class OjpClient {
             reject(err);
             return;
           }
-          this.updateSessionFrom(response);
+          const sessionError = this.updateSessionFrom(response);
+          if (sessionError) {
+            reject(sessionError);
+            return;
+          }
           resolve(response);
         });
       });
@@ -897,7 +950,11 @@ export class OjpClient {
           reject(this.toClientError(err));
           return;
         }
-        this.updateSessionFrom(response);
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve(response);
       });
     });
@@ -961,7 +1018,11 @@ export class OjpClient {
           reject(this.toClientError(err));
           return;
         }
-        this.updateSessionFrom(response);
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve(response);
       });
     });
@@ -1046,7 +1107,11 @@ export class OjpClient {
           reject(this.toClientError(err));
           return;
         }
-        this.updateSessionFrom(response);
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve(response);
       });
     });
@@ -1080,7 +1145,10 @@ export class OjpClient {
 
       try {
         for await (const opResult of stream as unknown as AsyncIterable<OpResult>) {
-          this.updateSessionFrom(opResult);
+          const sessionError = this.updateSessionFrom(opResult);
+          if (sessionError) {
+            throw sessionError;
+          }
           if (firstBlock) {
             firstBlock = false;
             rowByRowMode = opResult.flag === ROW_BY_ROW_MODE_FLAG;
@@ -1228,14 +1296,30 @@ export class OjpClient {
     return this.toQueryResult(columns, rows);
   }
 
-  private updateSessionFrom(response: OpResult | SessionInfo | CallResourceResponse | LobReference | LobDataBlock): void {
+  private updateSessionFrom(
+    response: OpResult | SessionInfo | CallResourceResponse | LobReference | LobDataBlock,
+  ): Error | undefined {
     const session = 'session' in response ? response.session : response;
     if (session) {
+      const targetServer = session.targetServer || this.session?.targetServer
+        || (this.boundServerEndpoint ? this.endpointAddress(this.boundServerEndpoint) : undefined);
+      if (targetServer) {
+        const endpoint = this.endpointForTargetServer(targetServer);
+        if (!endpoint) {
+          return new OjpConnectionError(
+            `The ojp-server returned targetServer "${targetServer}", which is not a configured endpoint; `
+            + 'refusing to route this session.',
+          );
+        }
+        this.rebindToEndpoint(endpoint);
+      }
       this.session = {
         ...session,
+        targetServer,
         clusterHealth: session.clusterHealth ?? this.session?.clusterHealth,
       };
     }
+    return undefined;
   }
 
   /**
@@ -1304,7 +1388,13 @@ export class OjpClient {
 
       call.on('data', (ref: LobReference) => {
         lastRef = ref;
-        this.updateSessionFrom(ref);
+        const sessionError = this.updateSessionFrom(ref);
+        if (sessionError) {
+          settled = true;
+          reject(sessionError);
+          call.destroy(sessionError);
+          return;
+        }
         if (!firstAckReceived) {
           firstAckReceived = true;
           // From here on, use the "stateful" session returned by the server (with
@@ -1360,7 +1450,12 @@ export class OjpClient {
     const output = new PassThrough();
 
     call.on('data', (block: LobDataBlock) => {
-      this.updateSessionFrom(block);
+      const sessionError = this.updateSessionFrom(block);
+      if (sessionError) {
+        output.destroy(sessionError);
+        call.cancel();
+        return;
+      }
       if (block.position !== '-1' && block.data?.length && !output.write(block.data)) {
         call.pause();
       }
@@ -1404,7 +1499,13 @@ export class OjpClient {
       let settled = false;
 
       stream.on('data', (block: LobDataBlock) => {
-        this.updateSessionFrom(block);
+        const sessionError = this.updateSessionFrom(block);
+        if (sessionError) {
+          settled = true;
+          reject(sessionError);
+          stream.cancel();
+          return;
+        }
         // position === "-1" is the sentinel for "LOB reference not found"
         // (see ReadLobAction); in that case there is no data to concatenate.
         if (block.position === '-1') {

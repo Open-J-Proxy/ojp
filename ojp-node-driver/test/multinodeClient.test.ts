@@ -5,17 +5,22 @@ interface MockSession {
   clientUUID: string;
   sessionUUID: string;
   sessionStatus: 'SESSION_ACTIVE';
+  targetServer?: string;
 }
 
 const mockRpcState: {
   connectRequests: Array<{ url: string; clusterHealth?: string }>;
   updateErrors: Array<Error | undefined>;
   updateAddresses: string[];
+  updateTargetServers: Array<string | undefined>;
+  responseTargetServer?: string;
+  responseSessionUUID?: string;
   sessionUUID: string;
 } = {
   connectRequests: [],
   updateErrors: [],
   updateAddresses: [],
+  updateTargetServers: [],
   sessionUUID: '',
 };
 
@@ -48,15 +53,23 @@ jest.mock('../src/proto/loader', () => ({
             }
 
             executeUpdate(
-              _request: unknown,
-              callback: (err: Error | null, result: { intValue: number }) => void,
+              request: { session: MockSession },
+              callback: (err: Error | null, result: { intValue: number; session: MockSession }) => void,
             ): void {
               mockRpcState.updateAddresses.push(this.address);
+              mockRpcState.updateTargetServers.push(request.session.targetServer);
               const error = mockRpcState.updateErrors.shift();
               if (error) {
-                callback(error, { intValue: 0 });
+                callback(error, { intValue: 0, session: request.session });
               } else {
-                callback(null, { intValue: 1 });
+                const targetServer = mockRpcState.responseTargetServer ?? request.session.targetServer;
+                const sessionUUID = mockRpcState.responseSessionUUID ?? request.session.sessionUUID;
+                mockRpcState.responseTargetServer = undefined;
+                mockRpcState.responseSessionUUID = undefined;
+                callback(null, {
+                  intValue: 1,
+                  session: { ...request.session, sessionUUID, targetServer },
+                });
               }
             }
 
@@ -86,6 +99,9 @@ describe('OjpClient multinode pool cache', () => {
     mockRpcState.connectRequests = [];
     mockRpcState.updateErrors = [];
     mockRpcState.updateAddresses = [];
+    mockRpcState.updateTargetServers = [];
+    mockRpcState.responseTargetServer = undefined;
+    mockRpcState.responseSessionUUID = undefined;
     mockRpcState.sessionUUID = '';
     resetEndpointHealthForTests();
     resetPoolCacheForTests();
@@ -124,6 +140,69 @@ describe('OjpClient multinode pool cache', () => {
     expect(mockRpcState.connectRequests.filter(({ url: value }) => value === '')).toHaveLength(2);
 
     await client.close();
+  });
+
+  it('sends the selected endpoint as targetServer and preserves it when responses omit it', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6', {
+      healthCheckIntervalMs: 0,
+    });
+    const session = await client.connect();
+    const selectedEndpoint = client.boundEndpoint!;
+    mockRpcState.responseTargetServer = '';
+
+    try {
+      await expect(client.executeUpdate('INSERT INTO t VALUES (1)')).resolves.toBe(1);
+      expect(session.targetServer).toBe(`localhost:${selectedEndpoint.port}`);
+      expect(mockRpcState.updateTargetServers).toEqual([`localhost:${selectedEndpoint.port}`]);
+      expect(client.boundEndpoint).toEqual(selectedEndpoint);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('routes subsequent sticky requests to the configured response targetServer', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    const originalEndpoint = client.boundEndpoint!;
+    const targetPort = originalEndpoint.port === 1059 ? 1060 : 1059;
+    mockRpcState.responseTargetServer = `localhost:${targetPort}`;
+    mockRpcState.responseSessionUUID = 'sticky-session';
+
+    try {
+      await expect(client.executeUpdate('CREATE TEMP TABLE sticky_test (id INT)')).resolves.toBe(1);
+      expect(client.boundEndpoint?.port).toBe(targetPort);
+      await expect(client.executeUpdate('INSERT INTO sticky_test VALUES (1)')).resolves.toBe(1);
+      expect(mockRpcState.updateAddresses).toEqual([
+        `localhost:${originalEndpoint.port}`,
+        `localhost:${targetPort}`,
+      ]);
+      expect(mockRpcState.updateTargetServers).toEqual([
+        `localhost:${originalEndpoint.port}`,
+        `localhost:${targetPort}`,
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('rejects a response targetServer that is not configured instead of routing elsewhere', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    const originalEndpoint = client.boundEndpoint!;
+    mockRpcState.responseTargetServer = 'localhost:9999';
+
+    try {
+      await expect(client.executeUpdate('CREATE TEMP TABLE sticky_test (id INT)'))
+        .rejects.toThrow(/targetServer "localhost:9999".*not a configured endpoint/i);
+      expect(mockRpcState.updateAddresses).toEqual([`localhost:${originalEndpoint.port}`]);
+      expect(client.boundEndpoint).toEqual(originalEndpoint);
+    } finally {
+      await client.close();
+    }
   });
 
   it('continues endpoint health probes while a multinode client remains open', async () => {

@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L10** for SQL Server |
-| Cumulative level | **L1** for H2; **L5** for PostgreSQL; **L10** for SQL Server |
+| Cumulative level | **L1** for H2; **L6** for PostgreSQL; **L10** for SQL Server |
 | Higher-level features | SQL Server L10 combines multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -21,7 +21,8 @@ through a real OJP server and database. PostgreSQL L2 coverage is in
 `test/integration.postgres.l2.test.ts`; PostgreSQL L3 coverage is in
 `test/integration.postgres.l3.test.ts`; and PostgreSQL L4 coverage is in
 `test/integration.postgres.l4.test.ts`; PostgreSQL L5 coverage is in
-`test/integration.postgres.l5.test.ts`. L3 exercises streamed and buffered results across
+`test/integration.postgres.l5.test.ts`; PostgreSQL L6 covers session affinity in
+`test/integration.postgres.l6.test.ts`. L3 exercises streamed and buffered results across
 10,001 rows, paged PostgreSQL `RETURNING` results, metadata, exhaustion, independent
 cursors, and early cursor close. L4 covers transaction commit/rollback, autocommit
 behavior, isolation levels, savepoints, and transaction-scoped cleanup. The stream and fetch paths carry session state internally.
@@ -43,7 +44,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L3** | PostgreSQL, SQL Server | PostgreSQL covers streamed and buffered 10,001-row results, PostgreSQL `RETURNING` pagination through `fetchNextRows`, metadata, EOF, concurrent cursors, and early cursor close. See `test/integration.postgres.l3.test.ts`. SQL Server covers streaming, pagination, metadata, EOF, concurrent cursors, and early close in `test/integration.sqlServerL3.test.ts`. |
 | **L4** | PostgreSQL, SQL Server (certified) | PostgreSQL covers commit/rollback, autocommit behavior, isolation-level get/set, named/unnamed and nested savepoints, rollback-to-savepoint, release, and transaction completion invalidation. See `test/integration.postgres.l4.test.ts`. SQL Server additionally covers batch rollback and error recovery in `test/integration.sqlServerL4.test.ts`. |
 | **L5** | PostgreSQL, SQL Server | PostgreSQL validates hydrated `BYTEA` binary-stream and `TEXT` parameter round trips, including large and Unicode values, empty versus NULL, updates, and repeated byte-for-byte reads. It follows the JDBC PostgreSQL path, which uses hydrated values rather than native LOB RPC handles. SQL Server covers multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references; its JDBC driver rejects ranged BLOB/CLOB reads, which the L5 suite asserts. H2 verifies exact stream contents and sizes in `test/integration.lob.stream.h2.test.ts`. |
-| **L6** | SQL Server (certified) | Local temporary-table state is preserved across calls and transactions; the client keeps each session bound to its OJP endpoint and surfaces bound-node loss without silently rerouting. See `test/integration.sqlServerL6.test.ts`. |
+| **L6** | PostgreSQL, SQL Server (certified) | PostgreSQL verifies temporary-table and `SET LOCAL` state across calls/transactions, close lifecycle, and bound-node failure without rerouting; session and target-server propagation are managed internally. See `test/integration.postgres.l6.test.ts`. SQL Server also covers temporary-table state and sticky-node failure in `test/integration.sqlServerL6.test.ts`. |
 | **L7** | SQL Server (certified) | Least-connections selection with round-robin tie-breaking, active endpoint health probes, cluster-health pool propagation, cached `connHash` reuse, and one safe retry after `NOT_FOUND` only for stateless sessions. See `test/integration.sqlServerL7.test.ts` and `test/multinodeClient.test.ts`. |
 | **L8** | SQL Server (certified) | Bounded retries for stateless operations after transport failures, unhealthy-node avoidance, recovered-node reuse and redistribution. Sticky sessions, active transactions, SQL errors, and pool exhaustion are surfaced without failover or replay. See `test/integration.sqlServerL8.test.ts`, `test/multinodeClient.test.ts`, and `test/errors.test.ts`. |
 | **L9** | SQL Server (certified) | XA connection lifecycle, two-phase and one-phase commit, rollback, timeout, prepared-branch recovery, resource-manager identity, XA errors, and XA-only transaction demarcation. See `test/integration.sqlServerXA.test.ts`. |
@@ -53,12 +54,18 @@ PostgreSQL L5 uses the JDBC driver's supported `BYTEA`/`TEXT` hydrated path; Pos
 JDBC driver does not implement native `createBlob()`/`createClob()`. Binary stream
 parameters use `PT_BINARY_STREAM`; text parameters use `PT_STRING`, and query results
 are fully hydrated as `Buffer`/`string`. The Node API accepts the current session
-internally for every operation. Run this suite with
-`npm run test:postgres-l5`.
+internally for every operation. PostgreSQL L6 also keeps `sessionUUID` and `targetServer`
+propagation private to `OjpClient`, routes sticky calls to the bound OJP endpoint, and
+surfaces a bound-node failure rather than retrying stateful work elsewhere. Run the
+PostgreSQL L6 suite with `OJP_ENABLE_INTEGRATION_TESTS=true npm run test:postgres-l6`.
+For the sticky-node failure scenario, also enable
+`OJP_ENABLE_MULTINODE_FAILOVER_TESTS` and configure three dedicated OJP node containers
+through `OJP_TEST_NODE_CONTAINERS` (ports default to 1059–1061); all nodes must share the
+same PostgreSQL database.
 
 The Node integration workflow provisions two SQL Server OJP endpoints that require
 client certificates and runs the L10 suite alongside the L1–L9 suites. L10 is claimed
-only for SQL Server; H2 remains at L1, and PostgreSQL is at L5.
+only for SQL Server; H2 remains at L1, and PostgreSQL is at L6.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent

@@ -13,6 +13,8 @@ const mockRpcState: {
   updateErrors: Array<Error | undefined>;
   updateAddresses: string[];
   updateTargetServers: Array<string | undefined>;
+  startTransactionErrors: Array<Error | undefined>;
+  startTransactionAddresses: string[];
   responseTargetServer?: string;
   responseSessionUUID?: string;
   sessionUUID: string;
@@ -21,6 +23,8 @@ const mockRpcState: {
   updateErrors: [],
   updateAddresses: [],
   updateTargetServers: [],
+  startTransactionErrors: [],
+  startTransactionAddresses: [],
   sessionUUID: '',
 };
 
@@ -73,6 +77,15 @@ jest.mock('../src/proto/loader', () => ({
               }
             }
 
+            startTransaction(
+              session: MockSession,
+              callback: (err: Error | null, response: MockSession) => void,
+            ): void {
+              mockRpcState.startTransactionAddresses.push(this.address);
+              const error = mockRpcState.startTransactionErrors.shift();
+              callback(error ?? null, session);
+            }
+
             terminateSession(_session: unknown, callbackOrOptions: unknown, maybeCallback?: (err: Error | null) => void): void {
               const callback = typeof callbackOrOptions === 'function'
                 ? callbackOrOptions as (err: Error | null) => void
@@ -100,6 +113,8 @@ describe('OjpClient multinode pool cache', () => {
     mockRpcState.updateErrors = [];
     mockRpcState.updateAddresses = [];
     mockRpcState.updateTargetServers = [];
+    mockRpcState.startTransactionErrors = [];
+    mockRpcState.startTransactionAddresses = [];
     mockRpcState.responseTargetServer = undefined;
     mockRpcState.responseSessionUUID = undefined;
     mockRpcState.sessionUUID = '';
@@ -237,6 +252,45 @@ describe('OjpClient multinode pool cache', () => {
 
     expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== '')).toHaveLength(2);
     await client.close();
+  });
+
+  it('reconnects once before starting a transaction on a stale stateless pool', async () => {
+    const client = new OjpClient(url);
+    await client.connect();
+    mockRpcState.startTransactionErrors.push(
+      Object.assign(new Error('No pool found for connection hash: pool-hash. Client must reconnect.'), {
+        code: grpc.status.NOT_FOUND,
+        details: 'No pool found for connection hash: pool-hash. Client must reconnect.',
+      }),
+    );
+
+    try {
+      await expect(client.startTransaction()).resolves.toBeUndefined();
+      expect(mockRpcState.startTransactionAddresses).toHaveLength(2);
+      expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== '')).toHaveLength(2);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('does not retry a stale-pool transaction start for a sticky session', async () => {
+    mockRpcState.sessionUUID = 'sticky-session';
+    const client = new OjpClient(url);
+    await client.connect();
+    mockRpcState.startTransactionErrors.push(
+      Object.assign(new Error('No pool found for connection hash: pool-hash.'), {
+        code: grpc.status.NOT_FOUND,
+        details: 'No pool found for connection hash: pool-hash.',
+      }),
+    );
+
+    try {
+      await expect(client.startTransaction()).rejects.toBeInstanceOf(OjpSqlError);
+      expect(mockRpcState.startTransactionAddresses).toHaveLength(1);
+      expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== '')).toHaveLength(1);
+    } finally {
+      await client.close();
+    }
   });
 
   it('does not retry a stale-pool response for a sticky session', async () => {

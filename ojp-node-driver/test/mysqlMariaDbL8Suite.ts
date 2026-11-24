@@ -393,8 +393,8 @@ export function registerDatabaseL8Suite(options: DatabaseL8Options): void {
         for (const node of nodes) {
           const client = await newClient(singleNodeUrl(node.port));
           try {
-            expect((await client.executeQuery('SELECT 1 AS accessible')).rows)
-              .toEqual([{ accessible: literal(1) }]);
+            expect((await client.executeQuery('SELECT 1 AS node_ok')).rows)
+              .toEqual([{ node_ok: literal(1) }]);
           } finally {
             await client.close();
           }

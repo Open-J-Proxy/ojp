@@ -111,6 +111,7 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         ]);
         const reference = await client.createLob(source, 'CLOB');
 
+        expect((await readStream(reference)).toString('utf8')).toBe(content);
         expect(await client.executeUpdate(
           `INSERT INTO ${table} (id, body) VALUES (?, ?)`,
           [3, reference],

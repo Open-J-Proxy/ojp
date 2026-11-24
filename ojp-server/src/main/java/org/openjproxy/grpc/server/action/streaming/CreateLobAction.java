@@ -3,6 +3,7 @@ package org.openjproxy.grpc.server.action.streaming;
 import com.openjproxy.grpc.LobDataBlock;
 import com.openjproxy.grpc.LobReference;
 import com.openjproxy.grpc.LobType;
+import com.openjproxy.grpc.DbName;
 import com.openjproxy.grpc.SessionInfo;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import org.openjproxy.grpc.server.action.ActionContext;
 import org.openjproxy.grpc.server.action.StreamingAction;
 
 import java.io.IOException;
+import java.io.Reader;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Blob;
@@ -86,6 +88,8 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
         private LobDataBlocksInputStream lobDataBlocksInputStream;
         private final AtomicBoolean isFirstBlock = new AtomicBoolean(true);
         private final AtomicInteger countBytesWritten = new AtomicInteger(0);
+        private long mariaDbNextUtf16Position = 1;
+        private long mariaDbNextCodePointPosition = 1;
 
         LobStreamObserver(ActionContext context, StreamObserver<LobReference> responseObserver) {
             this.context = context;
@@ -183,10 +187,23 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
             String chunk = new String(byteArrayData, StandardCharsets.UTF_8);
             long position = lobDataBlock.getPosition();
             long lengthBefore = clob.length();
-            try (Writer writer = clob.setCharacterStream(lobDataBlock.getPosition())) {
+            boolean mariaDb = DbName.MARIADB.equals(dto.getDbName())
+                    || DbName.MARIADB.equals(context.getDbNameMap().get(lobDataBlock.getSession().getConnHash()));
+            boolean sequential = mariaDb && position == mariaDbNextUtf16Position;
+            long driverPosition = !mariaDb ? position : sequential
+                    ? mariaDbNextCodePointPosition : mariaDbClobPosition(clob, position);
+            try (Writer writer = clob.setCharacterStream(driverPosition)) {
                 writer.write(chunk.toCharArray());
             } catch (IOException e) {
                 throw new SQLException("Failed to write CLOB data: " + e.getMessage(), e);
+            }
+            if (mariaDb) {
+                if (sequential) {
+                    mariaDbNextUtf16Position += chunk.length();
+                    mariaDbNextCodePointPosition += chunk.codePointCount(0, chunk.length());
+                } else {
+                    mariaDbNextUtf16Position = -1;
+                }
             }
             log.debug("CLOB block written: position={}, bytes={}, codePoints={}, utf16Units={}, "
                             + "lengthBefore={}, lengthAfter={}",
@@ -205,6 +222,7 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
                 lobDataBlocksInputStream.addBlock(lobDataBlock);
                 return lobDataBlock.getData().toByteArray().length;
             }
+
         }
 
         /**
@@ -303,5 +321,36 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
             responseObserver.onNext(lobRefBuilder.build());
             responseObserver.onCompleted();
         }
+    }
+
+    // MariaDB's Clob.length() counts UTF-16 units, but its write position counts code points.
+    static long mariaDbClobPosition(Clob clob, long utf16Position) throws SQLException {
+        if (utf16Position < 1) {
+            throw new SQLException("CLOB position must be at least 1");
+        }
+        long codePoints = 0;
+        boolean previousHigh = false;
+        try (Reader reader = clob.getCharacterStream()) {
+            for (long index = 1; index < utf16Position; index++) {
+                int next = reader.read();
+                if (next == -1) {
+                    throw new SQLException("CLOB position exceeds its length");
+                }
+                char current = (char) next;
+                if (!previousHigh || !Character.isLowSurrogate(current)) {
+                    codePoints++;
+                }
+                previousHigh = Character.isHighSurrogate(current);
+            }
+            if (previousHigh) {
+                int next = reader.read();
+                if (next != -1 && Character.isLowSurrogate((char) next)) {
+                    throw new SQLException("CLOB position splits a surrogate pair");
+                }
+            }
+        } catch (IOException e) {
+            throw new SQLException("Failed to determine MariaDB CLOB position", e);
+        }
+        return codePoints + 1;
     }
 }

@@ -12,12 +12,14 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L10** for PostgreSQL and SQL Server |
-| Cumulative level | **L1** for H2; **L10** for PostgreSQL and SQL Server |
+| Cumulative level | **L1** for H2, MariaDB, MySQL; **L10** for PostgreSQL and SQL Server |
 | Higher-level features | PostgreSQL and SQL Server L10 combine multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
-The H2, PostgreSQL, and SQL Server L1 suites exercise CRUD, errors, and session lifecycle
-through a real OJP server and database. PostgreSQL L2 coverage is in
+The H2, MariaDB, MySQL, PostgreSQL, and SQL Server L1 suites exercise CRUD, errors, and
+session lifecycle through a real OJP server and database. MariaDB and MySQL run the same
+four L1 scenarios through their public Node API as PostgreSQL, matching the JDBC
+`BasicCrudIntegrationTest` and connection lifecycle checks. PostgreSQL L2 coverage is in
 `test/integration.postgres.l2.test.ts`; PostgreSQL L3 coverage is in
 `test/integration.postgres.l3.test.ts`; and PostgreSQL L4 coverage is in
 `test/integration.postgres.l4.test.ts`; PostgreSQL L5 coverage is in
@@ -28,9 +30,11 @@ failover, recovery and redistribution, and validates sticky-session and pool-exh
 failure behavior in `test/integration.postgres.l8.test.ts`. L3 exercises streamed and buffered results across
 10,001 rows, paged PostgreSQL `RETURNING` results, metadata, exhaustion, independent
 cursors, and early cursor close. L4 covers transaction commit/rollback, autocommit
-behavior, isolation levels, savepoints, and transaction-scoped cleanup. The stream and fetch paths carry session state internally.
-Callers still manage the client lifetime with `connect()`/`close()`, or use
-`withOjpClient()` to scope that lifecycle automatically. PostgreSQL L2 extends L1 with
+behavior, isolation levels, savepoints, and transaction-scoped cleanup. The stream and
+fetch paths carry session state internally. Callers never manually pass session state:
+`OjpClient` propagates it for each operation. Callers can manage the client lifetime with
+`connect()`/`close()`, or use `withOjpClient()` to scope that lifecycle automatically.
+PostgreSQL L2 extends L1 with
 typed values, prepared/plain statements, batches, generated keys, query metadata, and
 direct/prepared `RETURNING` DML.
 SQL Server L1 passed in the
@@ -42,7 +46,7 @@ datasource selection using `testdata/h2_connections.csv`.
 
 | Level | Status | Notes |
 |---|---|---|
-| **L1** | H2, PostgreSQL, SQL Server | `connect`/`close`, CRUD, SQL errors and empty results. PostgreSQL also verifies scoped client cleanup and distinct client instances. See `test/integration.h2.l1.test.ts`, `test/integration.postgres.l1.test.ts`, and `test/integration.sqlServerAg.test.ts`. |
+| **L1** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | `connect`/`close`, parameterized CRUD, SQL errors and empty results. MariaDB and MySQL also verify scoped client cleanup, distinct client instances, and cleanup when callbacks fail. See `test/integration.h2.l1.test.ts`, `test/integration.mariadb.l1.test.ts`, `test/integration.mysql.l1.test.ts`, `test/integration.postgres.l1.test.ts`, and `test/integration.sqlServerAg.test.ts`. |
 | **L2** | PostgreSQL, SQL Server | PostgreSQL covers typed parameters, reusable prepared bindings, plain/prepared batches, generated keys (including prepared batches), column-label metadata, and `RETURNING` DML. SQL Server adds the equivalent `OUTPUT` result-set path. `ARRAY` and `REF` are explicit, tested API omissions. SQL Server certification passed in run 43528198577. |
 | **L3** | PostgreSQL, SQL Server | PostgreSQL covers streamed and buffered 10,001-row results, PostgreSQL `RETURNING` pagination through `fetchNextRows`, metadata, EOF, concurrent cursors, and early cursor close. See `test/integration.postgres.l3.test.ts`. SQL Server covers streaming, pagination, metadata, EOF, concurrent cursors, and early close in `test/integration.sqlServerL3.test.ts`. |
 | **L4** | PostgreSQL, SQL Server (certified) | PostgreSQL covers commit/rollback, autocommit behavior, isolation-level get/set, named/unnamed and nested savepoints, rollback-to-savepoint, release, and transaction completion invalidation. See `test/integration.postgres.l4.test.ts`. SQL Server additionally covers batch rollback and error recovery in `test/integration.sqlServerL4.test.ts`. |
@@ -69,9 +73,9 @@ container configuration. `OjpClient` manages `SessionInfo`, `sessionUUID`, and `
 for every operation; `withOjpClient()` and `withTransaction()` also avoid manual
 connect/close and transaction-cleanup boilerplate.
 
-The Node integration workflow provisions separate two-node PostgreSQL and SQL Server
-OJP clusters that require client certificates and runs both L10 suites alongside their
-L1–L9 suites. H2 remains at L1.
+The Node integration workflow provisions MySQL and MariaDB, plus separate two-node
+PostgreSQL and SQL Server OJP clusters that require client certificates; it runs both L10
+suites alongside their L1–L9 suites. H2, MariaDB and MySQL are at L1.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent
@@ -701,6 +705,8 @@ npm run build        # compiles TypeScript to dist/
 npm test             # unit tests (parser, type mapping) — no external infrastructure needed
 npm run test:integration  # integration against ojp-server + PostgreSQL (requires OJP_ENABLE_INTEGRATION_TESTS=true)
 npm run test:integration:all # all integration suites; configure all test infrastructure and flags
+OJP_ENABLE_MYSQL_TESTS=true npm run test:mysql-l1 # MySQL L1 against a real server
+OJP_ENABLE_MARIADB_TESTS=true npm run test:mariadb-l1 # MariaDB L1 against a real server
 npm run test:postgres-l8 # PostgreSQL L8 recovery; requires three OJP nodes and a maxConcurrentRequests=1 node
 npm run test:postgres-l10 # PostgreSQL L10 combined multinode/mTLS certification
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)
@@ -727,10 +733,14 @@ OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npx jest --runInBand test/integ
 ```
 
 Each suite reads every JDBC URL, username and password row from its CSV fixture.
-Override fixture paths with `OJP_TEST_H2_CSV`, `OJP_TEST_POSTGRES_CSV` or
-`OJP_TEST_SQLSERVER_CSV`. Set `OJP_TEST_SERVER_ENDPOINT` for PostgreSQL and
-SQL Server, and `OJP_TEST_H2_ADDR` for H2. Database passwords can be supplied via
-`OJP_TEST_PASSWORD` (PostgreSQL) and `OJP_TEST_SQLSERVER_PASSWORD`.
+The Node workflow uses MySQL 8.0 on port 3306 and MariaDB 10.11 on port 3307, with
+the OJP server's matching JDBC drivers. Override fixture paths with
+`OJP_TEST_H2_CSV`, `OJP_TEST_MYSQL_CSV`,
+`OJP_TEST_MARIADB_CSV`, `OJP_TEST_POSTGRES_CSV` or `OJP_TEST_SQLSERVER_CSV`. Set
+`OJP_TEST_SERVER_ENDPOINT` for MariaDB, MySQL, PostgreSQL and SQL Server, and
+`OJP_TEST_H2_ADDR` for H2. Database passwords can be supplied via
+`OJP_TEST_MYSQL_PASSWORD`, `OJP_TEST_MARIADB_PASSWORD`, `OJP_TEST_PASSWORD` (PostgreSQL)
+and `OJP_TEST_SQLSERVER_PASSWORD`.
 
 ```bash
 cd ../ojp-server

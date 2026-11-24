@@ -21,6 +21,35 @@ jobs:
     if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: node_test
+          MYSQL_USER: nodeuser
+          MYSQL_PASSWORD: nodepassword
+          MYSQL_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3306:3306
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_DATABASE: node_test
+          MARIADB_USER: nodeuser
+          MARIADB_PASSWORD: nodepassword
+          MARIADB_ROOT_PASSWORD: rootpassword
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost -u root -prootpassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3307:3306
     steps:
       - uses: actions/checkout@v5
 
@@ -67,6 +96,8 @@ jobs:
           mkdir -p ojp-libs
           curl -fsSL https://repo.maven.apache.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar -o ojp-libs/h2.jar
           curl -fsSL https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.8/postgresql-42.7.8.jar -o ojp-libs/postgresql.jar
+          curl -fsSL https://repo.maven.apache.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar -o ojp-libs/mysql-connector-j.jar
+          curl -fsSL https://repo.maven.apache.org/maven2/org/mariadb/jdbc/mariadb-java-client/3.5.3/mariadb-java-client-3.5.3.jar -o ojp-libs/mariadb-java-client.jar
           curl -fsSL https://repo.maven.apache.org/maven2/com/microsoft/sqlserver/mssql-jdbc/12.8.2.jre11/mssql-jdbc-12.8.2.jre11.jar -o ojp-libs/mssql-jdbc.jar
 
       - name: Start databases
@@ -228,6 +259,8 @@ jobs:
           OJP_TEST_H2_ADDR: localhost:1059
           OJP_ENABLE_LOB_H2_TESTS: 'true'
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
+          OJP_ENABLE_MYSQL_TESTS: 'true'
+          OJP_ENABLE_MARIADB_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L7_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L8_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L10_TESTS: 'true'

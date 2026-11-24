@@ -1,0 +1,1 @@
+jdbc:mysql://localhost:3306/node_test,nodeuser,nodepassword

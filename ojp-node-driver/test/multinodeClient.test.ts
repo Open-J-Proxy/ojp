@@ -9,7 +9,9 @@ interface MockSession {
 }
 
 const mockRpcState: {
-  connectRequests: Array<{ url: string; clusterHealth?: string }>;
+  connectRequests: Array<{ url: string; address: string; clusterHealth?: string; serverEndpoints?: string[] }>;
+  connectErrors: Map<string, Error>;
+  probeErrors: Map<string, Error>;
   updateErrors: Array<Error | undefined>;
   updateAddresses: string[];
   updateTargetServers: Array<string | undefined>;
@@ -20,6 +22,8 @@ const mockRpcState: {
   sessionUUID: string;
 } = {
   connectRequests: [],
+  connectErrors: new Map(),
+  probeErrors: new Map(),
   updateErrors: [],
   updateAddresses: [],
   updateTargetServers: [],
@@ -37,7 +41,7 @@ jest.mock('../src/proto/loader', () => ({
             constructor(private readonly address: string) {}
 
             connect(
-              request: { url: string; clientUUID: string; clusterHealth?: string },
+              request: { url: string; clientUUID: string; clusterHealth?: string; serverEndpoints?: string[] },
               callbackOrOptions: unknown,
               maybeCallback?: (err: Error | null, session: MockSession) => void,
             ): void {
@@ -46,8 +50,17 @@ jest.mock('../src/proto/loader', () => ({
                 : maybeCallback!;
               mockRpcState.connectRequests.push({
                 url: request.url,
+                address: this.address,
                 clusterHealth: request.clusterHealth,
+                serverEndpoints: request.serverEndpoints,
               });
+              const connectError = request.url
+                ? mockRpcState.connectErrors.get(this.address)
+                : mockRpcState.probeErrors.get(this.address);
+              if (connectError) {
+                callback(connectError, {} as MockSession);
+                return;
+              }
               callback(null, {
                 connHash: request.url ? 'pool-hash' : '',
                 clientUUID: request.clientUUID,
@@ -129,6 +142,8 @@ describe('OjpClient multinode pool cache', () => {
 
   beforeEach(() => {
     mockRpcState.connectRequests = [];
+    mockRpcState.connectErrors.clear();
+    mockRpcState.probeErrors.clear();
     mockRpcState.updateErrors = [];
     mockRpcState.updateAddresses = [];
     mockRpcState.updateTargetServers = [];
@@ -325,6 +340,94 @@ describe('OjpClient multinode pool cache', () => {
     } finally {
       await client.close();
       jest.useRealTimers();
+    }
+  });
+
+  it('probes independent clusters without sharing their probe interval', async () => {
+    const first = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:one');
+    const second = new OjpClient('jdbc:ojp[localhost:1061,localhost:1062]_h2:mem:two');
+    try {
+      await first.connect();
+      await second.connect();
+      expect(mockRpcState.connectRequests.filter(({ url: value }) => value === '').map(({ address }) => address))
+        .toEqual(expect.arrayContaining(['localhost:1059', 'localhost:1060', 'localhost:1061', 'localhost:1062']));
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it('propagates shared-cluster health changes to each connection pool', async () => {
+    jest.useFakeTimers();
+    const first = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:one', {
+      healthCheckIntervalMs: 50,
+    });
+    const second = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:two', {
+      healthCheckIntervalMs: 50,
+    });
+    try {
+      await first.connect();
+      await second.connect();
+      mockRpcState.connectRequests = [];
+      mockRpcState.probeErrors.set('localhost:1059', Object.assign(new Error('server unavailable'), {
+        code: grpc.status.UNAVAILABLE,
+      }));
+      await jest.advanceTimersByTimeAsync(100);
+      const updates = mockRpcState.connectRequests.filter(({ url: value, clusterHealth: health }) =>
+        value !== '' && health?.includes('localhost:1059(DOWN)'));
+      expect(updates.map(({ url: value }) => value)).toEqual(expect.arrayContaining([
+        'jdbc:h2:mem:one', 'jdbc:h2:mem:two',
+      ]));
+    } finally {
+      await first.close();
+      await second.close();
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not initialize unrelated pools on a different cluster during health refresh', async () => {
+    jest.useFakeTimers();
+    const first = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:one', {
+      healthCheckIntervalMs: 50,
+    });
+    const second = new OjpClient('jdbc:ojp[localhost:1061,localhost:1062]_h2:mem:two', {
+      healthCheckIntervalMs: 50,
+    });
+    try {
+      await first.connect();
+      await second.connect();
+      mockRpcState.probeErrors.set('localhost:1059', Object.assign(new Error('server unavailable'), {
+        code: grpc.status.UNAVAILABLE,
+      }));
+      mockRpcState.connectRequests = [];
+      await jest.advanceTimersByTimeAsync(50);
+      const poolRequests = mockRpcState.connectRequests.filter(({ url: value }) => value !== '');
+      expect(poolRequests.length).toBeGreaterThan(0);
+      for (const request of poolRequests) {
+        expect(request.serverEndpoints).toEqual(
+          request.url.endsWith('one') ? ['localhost:1059', 'localhost:1060'] : ['localhost:1061', 'localhost:1062'],
+        );
+      }
+    } finally {
+      await first.close();
+      await second.close();
+      jest.useRealTimers();
+    }
+  });
+
+  it('continues connecting when initializing another endpoint encounters a transport failure', async () => {
+    mockRpcState.connectErrors.set('localhost:1060', Object.assign(new Error('server unavailable'), {
+      code: grpc.status.UNAVAILABLE,
+    }));
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:transport', {
+      healthCheckIntervalMs: 0,
+    });
+    try {
+      await expect(client.connect()).resolves.toMatchObject({ connHash: 'pool-hash' });
+      expect(client.boundEndpoint?.port).toBe(1059);
+      expect(isEndpointHealthy({ host: 'localhost', port: 1060 })).toBe(false);
+    } finally {
+      await client.close();
     }
   });
 

@@ -85,10 +85,11 @@ describe('multinode endpoint health and selection', () => {
   it('limits probes to the configured interval', () => {
     jest.useFakeTimers();
     try {
-      expect(shouldProbeEndpoints(5_000)).toBe(true);
-      expect(shouldProbeEndpoints(5_000)).toBe(false);
+      expect(shouldProbeEndpoints(endpoints, 5_000)).toBe(true);
+      expect(shouldProbeEndpoints([...endpoints].reverse(), 5_000)).toBe(false);
+      expect(shouldProbeEndpoints(endpoints.slice(0, 2), 5_000)).toBe(true);
       jest.advanceTimersByTime(5_000);
-      expect(shouldProbeEndpoints(5_000)).toBe(true);
+      expect(shouldProbeEndpoints(endpoints, 5_000)).toBe(true);
     } finally {
       jest.useRealTimers();
     }

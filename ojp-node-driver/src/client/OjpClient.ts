@@ -487,7 +487,7 @@ export class OjpClient {
 
   private async probeEndpointsIfDue(): Promise<void> {
     if (this.parsedUrl.endpoints.length < 2
-        || !shouldProbeEndpoints(this.options.healthCheckIntervalMs ?? 5_000)) {
+        || !shouldProbeEndpoints(this.parsedUrl.endpoints, this.options.healthCheckIntervalMs ?? 5_000)) {
       return;
     }
 
@@ -525,16 +525,14 @@ export class OjpClient {
   }
 
   private async refreshEndpointHealth(): Promise<void> {
-    const before = clusterHealth(this.parsedUrl.endpoints);
     await this.probeEndpointsIfDue();
     const currentHealth = clusterHealth(this.parsedUrl.endpoints);
-    if (before !== currentHealth) {
-      if (this.session) {
-        this.session = { ...this.session, clusterHealth: currentHealth };
-      }
-      for (const pool of poolCache.values()) {
-        await this.ensurePoolOnHealthyEndpoints(pool);
-      }
+    if (this.session) {
+      this.session = { ...this.session, clusterHealth: currentHealth };
+    }
+    const pool = poolCache.get(this.poolKey);
+    if (pool && pool.clusterHealth !== clusterHealth([...pool.endpoints.values()])) {
+      await this.ensurePoolOnHealthyEndpoints(pool);
     }
   }
 
@@ -567,7 +565,7 @@ export class OjpClient {
         });
         pool.initializedEndpoints.add(endpointKey(endpoint));
       } catch (err) {
-        if (isConnectionLevelError(err)) {
+        if (isConnectionLevelError(err instanceof OjpConnectionError ? err.cause : err)) {
           markEndpointUnhealthy(endpoint);
           continue;
         }

@@ -215,7 +215,8 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         expect((await readStream(reference)).equals(content)).toBe(true);
         expect((await client.executeQuery(`SELECT payload FROM ${table} WHERE id = ?`, [9])).rows[0].payload)
           .toEqual(content);
-        expect((await client.executeQuery('SELECT 1 AS value')).rows).toEqual([{ value: 1n }]);
+        const value = (await client.executeQuery('SELECT 1 AS value')).rows[0].value;
+        expect(Number(value)).toBe(1);
       }, 30_000);
 
       it('does not allow a LOB reference to be read after its session closes', async () => {

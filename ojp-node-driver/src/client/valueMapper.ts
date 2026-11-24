@@ -268,11 +268,11 @@ function toTypedParameterProto(
       return {
         index,
         type: protoType,
-        values: [{ urlValue: rawValue instanceof URL ? rawValue.toString() : String(rawValue) }],
+        values: [{ urlValue: { value: rawValue instanceof URL ? rawValue.toString() : String(rawValue) } }],
       };
     case ParameterType.ROW_ID: {
       const bytes = Buffer.isBuffer(rawValue) ? rawValue : Buffer.from(String(rawValue));
-      return { index, type: protoType, values: [{ rowidValue: bytes.toString('base64') }] };
+      return { index, type: protoType, values: [{ rowidValue: { value: bytes.toString('base64') } }] };
     }
     case ParameterType.BLOB:
     case ParameterType.CLOB:
@@ -431,13 +431,19 @@ export function fromParameterValue(value: ParameterValue | undefined): unknown {
     return decoded ?? value.bytesValue;
   }
   if (value.uuidValue !== undefined) {
-    return value.uuidValue;
+    return value.uuidValue.value;
   }
   if (value.bigintegerValue !== undefined) {
-    return BigInt(value.bigintegerValue);
+    return BigInt(value.bigintegerValue.value);
   }
   if (value.urlValue !== undefined) {
-    return value.urlValue;
+    return value.urlValue.value;
+  }
+  if (value.rowidValue !== undefined) {
+    return Buffer.from(value.rowidValue.value, 'base64');
+  }
+  if (value.rowidlifetimeValue !== undefined) {
+    return value.rowidlifetimeValue.value;
   }
   if (value.dateValue) {
     const { year, month, day } = value.dateValue;

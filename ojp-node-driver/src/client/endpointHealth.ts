@@ -22,7 +22,7 @@ interface EndpointState {
 const endpointState = new Map<string, EndpointState>();
 const activeSessions = new Map<string, number>();
 let roundRobinCursor = 0;
-let lastHealthCheckAt = 0;
+const lastHealthCheckAt = new Map<string, number>();
 
 function keyOf(endpoint: OjpServerEndpoint): string {
   return `${endpoint.host}:${endpoint.port}`;
@@ -69,12 +69,14 @@ export function activeEndpointSessions(endpoint: OjpServerEndpoint): number {
   return activeSessions.get(keyOf(endpoint)) ?? 0;
 }
 
-export function shouldProbeEndpoints(intervalMs: number): boolean {
+export function shouldProbeEndpoints(endpoints: OjpServerEndpoint[], intervalMs: number): boolean {
   const now = Date.now();
-  if (now - lastHealthCheckAt < intervalMs) {
+  const key = JSON.stringify(endpoints.map(keyOf).sort());
+  const lastProbe = lastHealthCheckAt.get(key);
+  if (lastProbe !== undefined && now - lastProbe < intervalMs) {
     return false;
   }
-  lastHealthCheckAt = now;
+  lastHealthCheckAt.set(key, now);
   return true;
 }
 
@@ -117,5 +119,5 @@ export function resetEndpointHealthForTests(): void {
   endpointState.clear();
   activeSessions.clear();
   roundRobinCursor = 0;
-  lastHealthCheckAt = 0;
+  lastHealthCheckAt.clear();
 }

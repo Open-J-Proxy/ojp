@@ -1,5 +1,5 @@
 import { ClientThrottle, throttleFor } from '../src/client/clientThrottle';
-import { OjpSqlError } from '../src';
+import { OjpClient, OjpSqlError } from '../src';
 import { SessionInfo } from '../src/proto/types';
 
 const session = (signals: Partial<SessionInfo>): SessionInfo => ({
@@ -11,6 +11,12 @@ const session = (signals: Partial<SessionInfo>): SessionInfo => ({
 });
 
 describe('shared client admission control', () => {
+  it.each(['', 'invalid'])('rejects invalid client throttle mode %j', (mode) => {
+    const options = JSON.parse(JSON.stringify({ clientThrottleMode: mode }));
+    expect(() => new OjpClient('jdbc:ojp[localhost:1059]_h2:mem:test', options))
+      .toThrow(/clientThrottleMode/);
+  });
+
   it('shares limits by pool and fails fast without consuming another permit', () => {
     const first = throttleFor('pool-a');
     expect(throttleFor('pool-a')).toBe(first);

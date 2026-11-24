@@ -327,7 +327,8 @@ export class OjpClient {
         || (options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS) < 0) {
       throw new RangeError('failoverRetryDelayMs must be a non-negative number.');
     }
-    if (options.clientThrottleMode && !['off', 'proactive', 'reactive', 'combined'].includes(options.clientThrottleMode)) {
+    if (options.clientThrottleMode !== undefined
+        && !['off', 'proactive', 'reactive', 'combined'].includes(options.clientThrottleMode)) {
       throw new TypeError('clientThrottleMode must be off, proactive, reactive, or combined.');
     }
     this.clientUUID = CLIENT_UUID;

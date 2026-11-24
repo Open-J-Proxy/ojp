@@ -16,6 +16,7 @@ export {
 } from './client/OjpClient';
 export { OjpStatement, OjpPreparedStatement, OjpExecutionResult } from './client/statement';
 export { OjpSqlError, OjpConnectionError, OjpTransactionError } from './client/errors';
+export { ClientThrottleMode } from './client/clientThrottle';
 export { parseOjpUrl, ParsedOjpUrl, OjpServerEndpoint } from './client/connectionString';
 export {
   SessionInfo,

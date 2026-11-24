@@ -16,351 +16,448 @@ interface DatabaseL8Options {
 }
 
 export function registerDatabaseL8Suite(options: DatabaseL8Options): void {
-const enabled = process.env[options.enabledEnvironmentVariable] === 'true';
-const describeIfEnabled = enabled ? describe : describe.skip;
-const connections = readConnectionFixtures(options.fixture, process.env[options.fixtureEnvironmentVariable]);
-const containers = (process.env.OJP_TEST_NODE_CONTAINERS ?? '').split(',');
-const ports = (process.env.OJP_TEST_NODE_PORTS ?? '1059,1060,1061').split(',').map(Number);
-const throttledContainer = process.env.OJP_TEST_L8_THROTTLED_NODE_CONTAINER;
-const throttledPort = Number(process.env.OJP_TEST_L8_THROTTLED_NODE_PORT);
+  const enabled = process.env[options.enabledEnvironmentVariable] === 'true';
+  const describeIfEnabled = enabled ? describe : describe.skip;
+  const connections = readConnectionFixtures(options.fixture, process.env[options.fixtureEnvironmentVariable]);
+  const containers = (process.env.OJP_TEST_NODE_CONTAINERS ?? '').split(',');
+  const ports = (process.env.OJP_TEST_NODE_PORTS ?? '1059,1060,1061').split(',').map(Number);
+  const throttledContainer = process.env.OJP_TEST_L8_THROTTLED_NODE_CONTAINER;
+  const throttledPort = Number(process.env.OJP_TEST_L8_THROTTLED_NODE_PORT);
 
-if (enabled && (containers.length < 2 || new Set(containers).size !== containers.length
-    || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
-  throw new Error('OJP_TEST_NODE_CONTAINERS must name at least two dedicated test containers');
-}
-if (enabled && (ports.length < containers.length || ports.length < 2 || new Set(ports).size !== ports.length
-    || ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535))) {
-  throw new Error('OJP_TEST_NODE_PORTS must contain a distinct TCP port for every configured test container');
-}
-if (enabled && (!throttledContainer || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(throttledContainer)
-    || !Number.isInteger(throttledPort) || throttledPort < 1 || throttledPort > 65535
-    || ports.includes(throttledPort) || containers.includes(throttledContainer))) {
-  throw new Error('L8 requires a distinct throttled OJP node container and port');
-}
+  if (enabled && (containers.length < 2 || new Set(containers).size !== containers.length
+      || containers.some((name) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)))) {
+    throw new Error('OJP_TEST_NODE_CONTAINERS must name at least two dedicated test containers');
+  }
+  if (enabled && (ports.length < containers.length || ports.length < 2 || new Set(ports).size !== ports.length
+      || ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535))) {
+    throw new Error('OJP_TEST_NODE_PORTS must contain a distinct TCP port for every configured test container');
+  }
+  if (enabled && (!throttledContainer || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(throttledContainer)
+      || !Number.isInteger(throttledPort) || throttledPort < 1 || throttledPort > 65535
+      || ports.includes(throttledPort) || containers.includes(throttledContainer))) {
+    throw new Error('L8 requires a distinct throttled OJP node container and port');
+  }
 
-const nodes = containers.map((container, index) => ({ port: ports[index], container }));
-const throttledNode = { container: throttledContainer ?? '', port: throttledPort };
+  const nodes = containers.map((container, index) => ({ port: ports[index], container }));
+  const throttledNode = { container: throttledContainer ?? '', port: throttledPort };
 
-describeIfEnabled.each(connections)(`OjpClient - ${options.database} L8: %s`, (jdbcUrl, user, fixturePassword) => {
-  const password = process.env[options.passwordEnvironmentVariable] ?? fixturePassword;
-  const prefix = `ojp_node_l8_${randomBytes(6).toString('hex')}`;
-  const clusterUrl = (endpoints = nodes): string =>
-    ojpUrl(endpoints.map(({ port }) => `localhost:${port}`).join(','), jdbcUrl);
-  const singleNodeUrl = (port: number): string => ojpUrl(`localhost:${port}`, jdbcUrl);
-  const connectClient = async (
-    url = clusterUrl(),
-    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number } = {},
-  ): Promise<{ client: OjpClient; session: Awaited<ReturnType<OjpClient['connect']>> }> => {
-    const client = new OjpClient(url, {
-      user,
-      password,
-      healthCheckIntervalMs: 0,
-      failoverRetryDelayMs: 0,
-      ...options,
+  describeIfEnabled.each(connections)(`OjpClient - ${options.database} L8: %s`, (jdbcUrl, user, fixturePassword) => {
+    const password = process.env[options.passwordEnvironmentVariable] ?? fixturePassword;
+    const literal = (value: number): number | bigint => options.database === 'MySQL' ? BigInt(value) : value;
+    const prefix = `ojp_node_l8_${randomBytes(6).toString('hex')}`;
+    const clusterUrl = (endpoints = nodes): string =>
+      ojpUrl(endpoints.map(({ port }) => `localhost:${port}`).join(','), jdbcUrl);
+    const singleNodeUrl = (port: number): string => ojpUrl(`localhost:${port}`, jdbcUrl);
+    const connectClient = async (
+      url = clusterUrl(),
+      options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number; clientThrottleMode?: 'off' } = {},
+    ): Promise<{ client: OjpClient; session: Awaited<ReturnType<OjpClient['connect']>> }> => {
+      const client = new OjpClient(url, {
+        user,
+        password,
+        healthCheckIntervalMs: 0,
+        failoverRetryDelayMs: 0,
+        ...options,
+      });
+      return { client, session: await client.connect() };
+    };
+    const newClient = async (
+      url = clusterUrl(),
+      options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number; clientThrottleMode?: 'off' } = {},
+    ): Promise<OjpClient> => (await connectClient(url, options)).client;
+    const stoppedContainers = new Set<string>();
+
+    beforeEach(() => {
+      resetEndpointHealthForTests();
+      resetPoolCacheForTests();
     });
-    return { client, session: await client.connect() };
-  };
-  const newClient = async (
-    url = clusterUrl(),
-    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number } = {},
-  ): Promise<OjpClient> => (await connectClient(url, options)).client;
-  const stoppedContainers = new Set<string>();
 
-  beforeEach(() => {
-    resetEndpointHealthForTests();
-    resetPoolCacheForTests();
-  });
-
-  afterEach(async () => {
-    for (const node of nodes) {
-      if (stoppedContainers.has(node.container)) {
-        execFileSync('docker', ['start', node.container], { stdio: 'ignore' });
-        await waitForPortOpen(node.port, 60_000);
-        stoppedContainers.delete(node.container);
+    afterEach(async () => {
+      for (const node of nodes) {
+        if (stoppedContainers.has(node.container)) {
+          execFileSync('docker', ['start', node.container], { stdio: 'ignore' });
+          await waitForPortOpen(node.port, 60_000);
+          stoppedContainers.delete(node.container);
+        }
       }
-    }
-    resetEndpointHealthForTests();
-    resetPoolCacheForTests();
-  }, 90_000);
+      resetEndpointHealthForTests();
+      resetPoolCacheForTests();
+    }, 90_000);
 
-  it('retries a stateless update on a healthy node and persists exactly one row', async () => {
-    const table = `${prefix}_update`;
-    const client = await newClient();
-    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
-    try {
-      await client.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`);
+    it('retries a stateless update on a healthy node and persists exactly one row', async () => {
+      const table = `${prefix}_update`;
+      const client = await newClient();
+      const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
+      try {
+        await client.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`);
+        execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
+        stoppedContainers.add(bound.container);
+        await waitForPortClosed(bound.port);
+
+        await expect(client.executeUpdate(`INSERT INTO ${table} VALUES (7, 'retried')`)).resolves.toBe(1);
+        expect(client.boundEndpoint?.port).not.toBe(bound.port);
+        await expect(client.executeQuery(`SELECT id, value FROM ${table} ORDER BY id`)).resolves.toMatchObject({
+          rows: [{ id: 7, value: 'retried' }],
+        });
+      } finally {
+        await client.close().catch(() => undefined);
+        const cleanup = await newClient();
+        try {
+          await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        } finally {
+          await cleanup.close();
+        }
+      }
+    }, 120_000);
+
+    it('retries a query stream only before its first result block', async () => {
+      const client = await newClient();
+      const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
       execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
       stoppedContainers.add(bound.container);
       await waitForPortClosed(bound.port);
 
-      await expect(client.executeUpdate(`INSERT INTO ${table} VALUES (7, 'retried')`)).resolves.toBe(1);
-      expect(client.boundEndpoint?.port).not.toBe(bound.port);
-      await expect(client.executeQuery(`SELECT id, value FROM ${table} ORDER BY id`)).resolves.toMatchObject({
-        rows: [{ id: 7, value: 'retried' }],
-      });
-    } finally {
-      await client.close().catch(() => undefined);
-      const cleanup = await newClient();
       try {
-        await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        await expect(client.executeQuery('SELECT 9 AS recovered')).resolves.toMatchObject({
+          rows: [{ recovered: literal(9) }],
+        });
+        expect(client.boundEndpoint?.port).not.toBe(bound.port);
       } finally {
-        await cleanup.close();
+        await client.close().catch(() => undefined);
       }
-    }
-  }, 120_000);
+    }, 120_000);
 
-  it('retries a query stream only before its first result block', async () => {
-    const client = await newClient();
-    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
-    execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
-    stoppedContainers.add(bound.container);
-    await waitForPortClosed(bound.port);
+    it('surfaces sticky-session loss without rerouting temporary-table operations', async () => {
+      const client = await newClient();
+      const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
+      const table = `${prefix}_sticky`;
+      await client.executeUpdate(`CREATE TEMPORARY TABLE ${table} (id INTEGER PRIMARY KEY)`);
+      execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
+      stoppedContainers.add(bound.container);
+      await waitForPortClosed(bound.port);
 
-    try {
-      await expect(client.executeQuery('SELECT 9 AS recovered')).resolves.toMatchObject({
-        rows: [{ recovered: 9 }],
-      });
-      expect(client.boundEndpoint?.port).not.toBe(bound.port);
-    } finally {
-      await client.close().catch(() => undefined);
-    }
-  }, 120_000);
+      try {
+        await expect(client.executeUpdate(`INSERT INTO ${table} VALUES (1)`))
+          .rejects.toBeInstanceOf(OjpConnectionError);
+        expect(client.boundEndpoint?.port).toBe(bound.port);
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    }, 90_000);
 
-  it('surfaces sticky-session loss without rerouting temporary-table operations', async () => {
-    const client = await newClient();
-    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
-    const table = `${prefix}_sticky`;
-    await client.executeUpdate(`CREATE TEMPORARY TABLE ${table} (id INTEGER PRIMARY KEY)`);
-    execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
-    stoppedContainers.add(bound.container);
-    await waitForPortClosed(bound.port);
+    it('does not fail over or replay operations from an active transaction', async () => {
+      const client = await newClient();
+      const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
+      const table = `${prefix}_transaction`;
+      await client.startTransaction();
+      execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
+      stoppedContainers.add(bound.container);
+      await waitForPortClosed(bound.port);
 
-    try {
-      await expect(client.executeUpdate(`INSERT INTO ${table} VALUES (1)`))
-        .rejects.toBeInstanceOf(OjpConnectionError);
-      expect(client.boundEndpoint?.port).toBe(bound.port);
-    } finally {
-      await client.close().catch(() => undefined);
-    }
-  }, 90_000);
+      try {
+        await expect(client.executeUpdate(`CREATE TABLE ${table} (id INTEGER)`))
+          .rejects.toBeInstanceOf(OjpConnectionError);
+        expect(client.boundEndpoint?.port).toBe(bound.port);
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    }, 90_000);
 
-  it('does not fail over or replay operations from an active transaction', async () => {
-    const client = await newClient();
-    const bound = nodes.find(({ port }) => port === client.boundEndpoint?.port)!;
-    const table = `${prefix}_transaction`;
-    await client.startTransaction();
-    execFileSync('docker', ['kill', bound.container], { stdio: 'ignore' });
-    stoppedContainers.add(bound.container);
-    await waitForPortClosed(bound.port);
+    it('does not fail over for a database error and remains usable on the same endpoint', async () => {
+      const client = await newClient();
+      const endpoint = client.boundEndpoint!;
+      try {
+        await expect(client.executeUpdate('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
+        expect(isEndpointHealthy(endpoint)).toBe(true);
+        expect(client.boundEndpoint).toEqual(endpoint);
+        await expect(client.executeQuery('SELECT 1 AS usable')).resolves.toMatchObject({
+          rows: [{ usable: literal(1) }],
+        });
+        expect(client.boundEndpoint).toEqual(endpoint);
+      } finally {
+        await client.close();
+      }
+    }, 60_000);
 
-    try {
-      await expect(client.executeUpdate(`CREATE TABLE ${table} (id INTEGER)`))
-        .rejects.toBeInstanceOf(OjpConnectionError);
-      expect(client.boundEndpoint?.port).toBe(bound.port);
-    } finally {
-      await client.close().catch(() => undefined);
-    }
-  }, 90_000);
-
-  it('does not fail over for a database error and remains usable on the same endpoint', async () => {
-    const client = await newClient();
-    const endpoint = client.boundEndpoint!;
-    try {
-      await expect(client.executeUpdate('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
-      expect(isEndpointHealthy(endpoint)).toBe(true);
-      expect(client.boundEndpoint).toEqual(endpoint);
-      await expect(client.executeQuery('SELECT 1 AS usable')).resolves.toMatchObject({
-        rows: [{ usable: 1 }],
-      });
-      expect(client.boundEndpoint).toEqual(endpoint);
-    } finally {
-      await client.close();
-    }
-  }, 60_000);
-
-  it('routes around an unavailable node and propagates its health state', async () => {
-    const seed = await newClient();
-    const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
-    await seed.close();
-    execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
-    stoppedContainers.add(down.container);
-    await waitForPortClosed(down.port);
-
-    const duringOutage = await connectClient(clusterUrl(), { healthCheckIntervalMs: 0 });
-    try {
-      expect(duringOutage.client.boundEndpoint?.port).not.toBe(down.port);
-      expect(duringOutage.session.clusterHealth).toContain(`localhost:${down.port}(DOWN)`);
-      await expect(duringOutage.client.executeQuery('SELECT 1 AS healthy')).resolves.toMatchObject({
-        rows: [{ healthy: 1 }],
-      });
-    } finally {
-      await duringOutage.client.close();
-    }
-
-  }, 90_000);
-
-  it('reuses a recovered node and redistributes new sessions to every endpoint', async () => {
-    const seed = await newClient();
-    const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
-    await seed.close();
-    execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
-    stoppedContainers.add(down.container);
-    await waitForPortClosed(down.port);
-
-    const duringOutage = await connectClient(clusterUrl(), { healthCheckIntervalMs: 0 });
-    try {
-      expect(duringOutage.client.boundEndpoint?.port).not.toBe(down.port);
-      expect(duringOutage.session.clusterHealth).toContain(`localhost:${down.port}(DOWN)`);
-    } finally {
-      await duringOutage.client.close();
-    }
-
-    execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
-    stoppedContainers.delete(down.container);
-    await waitForPortOpen(down.port, 60_000);
-    const recovered = await connectClient(clusterUrl(), { healthCheckIntervalMs: 0 });
-    try {
-      const endpoint: OjpServerEndpoint = { host: 'localhost', port: down.port };
-      expect(isEndpointHealthy(endpoint)).toBe(true);
-      expect(recovered.session.clusterHealth).toContain(`localhost:${down.port}(UP)`);
-    } finally {
-      await recovered.client.close();
-    }
-
-    const selected = new Set<number>();
-    for (let index = 0; index < nodes.length * 3; index++) {
-      const client = await newClient(clusterUrl(), { loadBalancingStrategy: 'round-robin' });
-      selected.add(client.boundEndpoint!.port);
-      await client.close();
-    }
-    expect(selected).toEqual(new Set(nodes.map(({ port }) => port)));
-  }, 180_000);
-
-  it('completes repeated stateless writes on healthy nodes while one endpoint is down', async () => {
-    const table = `${prefix}_outage_writes`;
-    const seed = await newClient();
-    const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
-    try {
-      await seed.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`);
+    it('routes around an unavailable node and propagates its health state', async () => {
+      const seed = await newClient();
+      const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
       await seed.close();
       execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
       stoppedContainers.add(down.container);
       await waitForPortClosed(down.port);
 
-      const affectedRows: number[] = [];
-      for (let id = 1; id <= 5; id++) {
-        const client = await newClient();
-        try {
-          expect(client.boundEndpoint?.port).not.toBe(down.port);
-          affectedRows.push(await client.executeUpdate(`INSERT INTO ${table} VALUES (${id}, 'outage-${id}')`));
-        } finally {
-          await client.close();
-        }
-      }
-      expect(affectedRows).toEqual([1, 1, 1, 1, 1]);
-
-      const verify = await newClient();
+      const duringOutage = await connectClient(clusterUrl(), { healthCheckIntervalMs: 0 });
       try {
-        await expect(verify.executeQuery(`SELECT id, value FROM ${table} ORDER BY id`)).resolves.toMatchObject({
-          rows: [1, 2, 3, 4, 5].map((id) => ({ id, value: `outage-${id}` })),
+        expect(duringOutage.client.boundEndpoint?.port).not.toBe(down.port);
+        expect(duringOutage.session.clusterHealth).toContain(`localhost:${down.port}(DOWN)`);
+        await expect(duringOutage.client.executeQuery('SELECT 1 AS healthy')).resolves.toMatchObject({
+          rows: [{ healthy: literal(1) }],
         });
       } finally {
-        await verify.close();
-      }
-    } finally {
-      await seed.close().catch(() => undefined);
-      if (stoppedContainers.has(down.container)) {
-        execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
-        stoppedContainers.delete(down.container);
-        await waitForPortOpen(down.port, 60_000);
-      }
-      const cleanup = await newClient();
-      try {
-        await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
-      } finally {
-        await cleanup.close();
-      }
-    }
-  }, 150_000);
-
-  it('commits and rolls back transactions through a recovered database node', async () => {
-    const table = `${prefix}_recovered_transactions`;
-    const down = nodes[0];
-    let recovered: OjpClient | undefined;
-    try {
-      const setup = await newClient(singleNodeUrl(down.port));
-      try {
-        await setup.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY)`);
-      } finally {
-        await setup.close();
+        await duringOutage.client.close();
       }
 
+    }, 90_000);
+
+    it('reuses a recovered node and redistributes new sessions to every endpoint', async () => {
+      const seed = await newClient();
+      const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
+      await seed.close();
       execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
       stoppedContainers.add(down.container);
       await waitForPortClosed(down.port);
-      const outage = await newClient();
+
+      const duringOutage = await connectClient(clusterUrl(), { healthCheckIntervalMs: 0 });
       try {
-        expect(outage.boundEndpoint?.port).not.toBe(down.port);
-        expect(isEndpointHealthy({ host: 'localhost', port: down.port })).toBe(false);
+        expect(duringOutage.client.boundEndpoint?.port).not.toBe(down.port);
+        expect(duringOutage.session.clusterHealth).toContain(`localhost:${down.port}(DOWN)`);
       } finally {
-        await outage.close();
+        await duringOutage.client.close();
       }
 
       execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
       stoppedContainers.delete(down.container);
       await waitForPortOpen(down.port, 60_000);
-      recovered = await newClient(singleNodeUrl(down.port));
-      await recovered.withTransaction(async (client) => {
-        await client.executeUpdate(`INSERT INTO ${table} VALUES (1)`);
-      });
-      expect(isEndpointHealthy({ host: 'localhost', port: down.port })).toBe(true);
-      await expect(recovered.withTransaction(async (client) => {
-        await client.executeUpdate(`INSERT INTO ${table} VALUES (2)`);
-        throw new Error('force rollback');
-      })).rejects.toThrow('force rollback');
-      await expect(recovered.executeQuery(`SELECT id FROM ${table} ORDER BY id`)).resolves.toMatchObject({
-        rows: [{ id: 1 }],
-      });
-    } finally {
-      await recovered?.close();
-      if (stoppedContainers.has(down.container)) {
+      const recovered = await connectClient(clusterUrl(), { healthCheckIntervalMs: 0 });
+      try {
+        const endpoint: OjpServerEndpoint = { host: 'localhost', port: down.port };
+        expect(isEndpointHealthy(endpoint)).toBe(true);
+        expect(recovered.session.clusterHealth).toContain(`localhost:${down.port}(UP)`);
+      } finally {
+        await recovered.client.close();
+      }
+
+      const selected = new Set<number>();
+      for (let index = 0; index < nodes.length * 3; index++) {
+        const client = await newClient(clusterUrl(), { loadBalancingStrategy: 'round-robin' });
+        selected.add(client.boundEndpoint!.port);
+        await client.close();
+      }
+      expect(selected).toEqual(new Set(nodes.map(({ port }) => port)));
+    }, 180_000);
+
+    it('completes repeated stateless writes on healthy nodes while one endpoint is down', async () => {
+      const table = `${prefix}_outage_writes`;
+      const seed = await newClient();
+      const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
+      try {
+        await seed.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`);
+        await seed.close();
+        execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
+        stoppedContainers.add(down.container);
+        await waitForPortClosed(down.port);
+
+        const affectedRows: number[] = [];
+        for (let id = 1; id <= 5; id++) {
+          const client = await newClient();
+          try {
+            expect(client.boundEndpoint?.port).not.toBe(down.port);
+            affectedRows.push(await client.executeUpdate(`INSERT INTO ${table} VALUES (${id}, 'outage-${id}')`));
+          } finally {
+            await client.close();
+          }
+        }
+        expect(affectedRows).toEqual([1, 1, 1, 1, 1]);
+
+        const verify = await newClient();
+        try {
+          await expect(verify.executeQuery(`SELECT id, value FROM ${table} ORDER BY id`)).resolves.toMatchObject({
+            rows: [1, 2, 3, 4, 5].map((id) => ({ id, value: `outage-${id}` })),
+          });
+        } finally {
+          await verify.close();
+        }
+      } finally {
+        await seed.close().catch(() => undefined);
+        if (stoppedContainers.has(down.container)) {
+          execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
+          stoppedContainers.delete(down.container);
+          await waitForPortOpen(down.port, 60_000);
+        }
+        const cleanup = await newClient();
+        try {
+          await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        } finally {
+          await cleanup.close();
+        }
+      }
+    }, 150_000);
+
+    it('commits and rolls back transactions through a recovered database node', async () => {
+      const table = `${prefix}_recovered_transactions`;
+      const down = nodes[0];
+      let recovered: OjpClient | undefined;
+      try {
+        const setup = await newClient(singleNodeUrl(down.port));
+        try {
+          await setup.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY)`);
+        } finally {
+          await setup.close();
+        }
+
+        execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
+        stoppedContainers.add(down.container);
+        await waitForPortClosed(down.port);
+        const outage = await newClient();
+        try {
+          expect(outage.boundEndpoint?.port).not.toBe(down.port);
+          expect(isEndpointHealthy({ host: 'localhost', port: down.port })).toBe(false);
+        } finally {
+          await outage.close();
+        }
+
         execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
         stoppedContainers.delete(down.container);
         await waitForPortOpen(down.port, 60_000);
-      }
-      const cleanup = await newClient(singleNodeUrl(down.port));
-      try {
-        await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        recovered = await newClient(singleNodeUrl(down.port));
+        await recovered.withTransaction(async (client) => {
+          await client.executeUpdate(`INSERT INTO ${table} VALUES (1)`);
+        });
+        expect(isEndpointHealthy({ host: 'localhost', port: down.port })).toBe(true);
+        await expect(recovered.withTransaction(async (client) => {
+          await client.executeUpdate(`INSERT INTO ${table} VALUES (2)`);
+          throw new Error('force rollback');
+        })).rejects.toThrow('force rollback');
+        await expect(recovered.executeQuery(`SELECT id FROM ${table} ORDER BY id`)).resolves.toMatchObject({
+          rows: [{ id: 1 }],
+        });
       } finally {
-        await cleanup.close();
+        await recovered?.close();
+        if (stoppedContainers.has(down.container)) {
+          execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
+          stoppedContainers.delete(down.container);
+          await waitForPortOpen(down.port, 60_000);
+        }
+        const cleanup = await newClient(singleNodeUrl(down.port));
+        try {
+          await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        } finally {
+          await cleanup.close();
+        }
       }
-    }
-  }, 150_000);
+    }, 150_000);
 
-  it('surfaces pool exhaustion without retrying on another database node', async () => {
-    const alternate = nodes[0];
-    const holder = await newClient(singleNodeUrl(alternate.port));
-    const client = await newClient(clusterUrl([throttledNode, alternate]));
-    expect(client.boundEndpoint?.port).toBe(throttledNode.port);
+    it('commits a transaction and returns consistent results while a node is down', async () => {
+      const table = `${prefix}_outage_tx`;
+      const seed = await newClient();
+      const down = nodes.find(({ port }) => port === seed.boundEndpoint?.port)!;
+      try {
+        await seed.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value VARCHAR(100))`);
+        await seed.close();
+        execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
+        stoppedContainers.add(down.container);
+        await waitForPortClosed(down.port);
 
-    const running = client.executeQuery('SELECT 42 AS held, SLEEP(2) AS delay');
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      await expect(client.executeQuery('SELECT 1 AS should_not_retry'))
-        .rejects.toBeInstanceOf(OjpSqlError);
+        const client = await newClient();
+        try {
+          expect(client.boundEndpoint?.port).not.toBe(down.port);
+          await client.withTransaction(async (transaction) => {
+            expect(await transaction.executeUpdate(`INSERT INTO ${table} VALUES (?, ?)`, [1, 'committed'])).toBe(1);
+          });
+          for (let index = 0; index < 3; index++) {
+            expect((await client.executeQuery(`SELECT id, value FROM ${table}`)).rows)
+              .toEqual([{ id: 1, value: 'committed' }]);
+          }
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await seed.close().catch(() => undefined);
+        const cleanup = await newClient();
+        try {
+          await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        } finally {
+          await cleanup.close();
+        }
+      }
+    }, 120_000);
+
+    it('runs batches and continuous operations on both nodes after recovery', async () => {
+      const table = `${prefix}_recovery_batch`;
+      const down = nodes[0];
+      const setup = await newClient();
+      try {
+        await setup.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value VARCHAR(100))`);
+        await setup.close();
+        execFileSync('docker', ['kill', down.container], { stdio: 'ignore' });
+        stoppedContainers.add(down.container);
+        await waitForPortClosed(down.port);
+        const outage = await newClient();
+        expect(outage.boundEndpoint?.port).not.toBe(down.port);
+        await outage.close();
+        execFileSync('docker', ['start', down.container], { stdio: 'ignore' });
+        stoppedContainers.delete(down.container);
+        await waitForPortOpen(down.port, 60_000);
+
+        for (const node of nodes) {
+          const client = await newClient(singleNodeUrl(node.port));
+          try {
+            expect((await client.executeQuery('SELECT 1 AS accessible')).rows)
+              .toEqual([{ accessible: literal(1) }]);
+          } finally {
+            await client.close();
+          }
+        }
+        const batchClient = await newClient(singleNodeUrl(down.port));
+        try {
+          const batch = batchClient.prepareStatement(`INSERT INTO ${table} VALUES (?, ?)`);
+          try {
+            for (let id = 1; id <= 5; id++) {
+              await batch.addBatch([id, `batch-${id}`]);
+            }
+            expect(await batch.executeBatch()).toEqual([1, 1, 1, 1, 1]);
+          } finally {
+            await batch.close();
+          }
+        } finally {
+          await batchClient.close();
+        }
+        for (let id = 6; id <= 20; id++) {
+          const client = await newClient(clusterUrl(), { loadBalancingStrategy: 'round-robin' });
+          try {
+            expect(await client.executeUpdate(`INSERT INTO ${table} VALUES (?, ?)`, [id, `continuous-${id}`])).toBe(1);
+            const rows = (await client.executeQuery(`SELECT id FROM ${table} ORDER BY id`)).rows;
+            expect(rows.map((row) => row.id)).toEqual(Array.from({ length: id }, (_, index) => index + 1));
+          } finally {
+            await client.close();
+          }
+        }
+      } finally {
+        await setup.close().catch(() => undefined);
+        const cleanup = await newClient();
+        try {
+          await cleanup.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
+        } finally {
+          await cleanup.close();
+        }
+      }
+    }, 180_000);
+
+    it('surfaces pool exhaustion without retrying on another database node', async () => {
+      const alternate = nodes[0];
+      const holder = await newClient(singleNodeUrl(alternate.port));
+      const client = await newClient(clusterUrl([throttledNode, alternate]), { clientThrottleMode: 'off' });
       expect(client.boundEndpoint?.port).toBe(throttledNode.port);
-      await expect(running).resolves.toMatchObject({ rows: [{ held: 42 }] });
-      await expect(client.executeQuery('SELECT 7 AS usable')).resolves.toMatchObject({
-        rows: [{ usable: 7 }],
-      });
-      expect(client.boundEndpoint?.port).toBe(throttledNode.port);
-    } finally {
-      await running;
-      await client.close();
-      await holder.close();
-    }
-  }, 60_000);
-});
+
+      const running = client.executeQuery('SELECT 42 AS held, SLEEP(2) AS delay');
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await expect(client.executeQuery('SELECT 1 AS should_not_retry'))
+          .rejects.toBeInstanceOf(OjpSqlError);
+        expect(client.boundEndpoint?.port).toBe(throttledNode.port);
+        await expect(running).resolves.toMatchObject({ rows: [{ held: literal(42) }] });
+        await expect(client.executeQuery('SELECT 7 AS usable')).resolves.toMatchObject({
+          rows: [{ usable: literal(7) }],
+        });
+        expect(client.boundEndpoint?.port).toBe(throttledNode.port);
+      } finally {
+        await running;
+        await client.close();
+        await holder.close();
+      }
+    }, 60_000);
+  });
 }
 
 async function waitForPortClosed(port: number): Promise<void> {

@@ -20,6 +20,7 @@ import { StatementServiceClient } from './statementServiceClient';
 import { OjpXAResource } from '../xa/OjpXAResource';
 import { looksLikeQuery, returnsRowsFromDml } from './sqlStatementClassifier';
 import { OjpPreparedStatement, OjpStatement } from './statement';
+import { ClientThrottleMode, resetClientThrottlesForTests, throttleFor } from './clientThrottle';
 import {
   CallType,
   CallResourceRequest,
@@ -84,6 +85,8 @@ export interface OjpClientOptions {
   maxFailoverAttempts?: number;
   /** Delay between stateless operation failover attempts, in milliseconds. Default: 100. */
   failoverRetryDelayMs?: number;
+  /** Shared per-pool admission control. Default: reactive. */
+  clientThrottleMode?: ClientThrottleMode;
   /**
    * Opens this session as an XA (distributed transaction) resource. When `true`,
    * transaction demarcation must go through `createXAResource()` — `startTransaction`/
@@ -240,9 +243,22 @@ async function* chunkLobInput(input: LobInput, clob: boolean): AsyncGenerator<Bu
   const source: AsyncIterable<Buffer | string> =
     typeof input === 'string' || Buffer.isBuffer(input) ? singleLobChunk(input) : input;
   let pending: Buffer = Buffer.alloc(0);
+  let highSurrogate = '';
 
   for await (const chunk of source) {
-    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+    let bytes: Buffer;
+    if (typeof chunk === 'string') {
+      let text = highSurrogate + chunk;
+      highSurrogate = '';
+      if (clob && /[\uD800-\uDBFF]$/.test(text)) {
+        highSurrogate = text.slice(-1);
+        text = text.slice(0, -1);
+      }
+      bytes = Buffer.from(text, 'utf8');
+    } else {
+      bytes = highSurrogate ? Buffer.concat([Buffer.from(highSurrogate, 'utf8'), chunk]) : chunk;
+      highSurrogate = '';
+    }
     if (bytes.length === 0) {
       continue;
     }
@@ -259,6 +275,9 @@ async function* chunkLobInput(input: LobInput, clob: boolean): AsyncGenerator<Bu
     }
   }
 
+  if (highSurrogate) {
+    pending = Buffer.concat([pending, Buffer.from(highSurrogate, 'utf8')]);
+  }
   if (pending.length > 0) {
     yield pending;
   }
@@ -307,6 +326,9 @@ export class OjpClient {
     if (!Number.isFinite(options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS)
         || (options.failoverRetryDelayMs ?? DEFAULT_FAILOVER_RETRY_DELAY_MS) < 0) {
       throw new RangeError('failoverRetryDelayMs must be a non-negative number.');
+    }
+    if (options.clientThrottleMode && !['off', 'proactive', 'reactive', 'combined'].includes(options.clientThrottleMode)) {
+      throw new TypeError('clientThrottleMode must be off, proactive, reactive, or combined.');
     }
     this.clientUUID = CLIENT_UUID;
     if (!!options.tls?.privateKey !== !!options.tls?.certChain) {
@@ -464,6 +486,9 @@ export class OjpClient {
         this.grpcClient = targetClient;
         this.boundServerEndpoint = targetEndpoint;
         this.session = session;
+        if (session.connHash) {
+          throttleFor(session.connHash).update(session);
+        }
         registerEndpointSession(targetEndpoint);
         this.endpointRegistered = true;
         this.startHealthMonitor();
@@ -759,6 +784,21 @@ export class OjpClient {
     options: OjpClientStatementOptions = {},
     statementUUID = '',
     additionalProperties: PropertyEntry[] = [],
+  ): Promise<OpResult> {
+    const release = this.acquireThrottle();
+    try {
+      return await this.sendUpdateWithRetry(sql, params, options, statementUUID, additionalProperties);
+    } finally {
+      release();
+    }
+  }
+
+  private async sendUpdateWithRetry(
+    sql: string,
+    params: unknown[],
+    options: OjpClientStatementOptions,
+    statementUUID: string,
+    additionalProperties: PropertyEntry[],
   ): Promise<OpResult> {
     const parameters = toParameterProtos(params);
     const invoke = (): Promise<OpResult> => {
@@ -1150,6 +1190,23 @@ export class OjpClient {
     poolRetryAllowed = true,
     failoverAttemptsRemaining = this.options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS,
     attemptedEndpoints = new Set<string>(),
+    alreadyAcquired = false,
+  ): AsyncGenerator<OpResult, void, undefined> {
+    const release = alreadyAcquired ? () => undefined : this.acquireThrottle();
+    try {
+      yield* this.streamOpResultsWithThrottle(
+        request, poolRetryAllowed, failoverAttemptsRemaining, attemptedEndpoints,
+      );
+    } finally {
+      release();
+    }
+  }
+
+  private async *streamOpResultsWithThrottle(
+    request: StatementRequest,
+    poolRetryAllowed: boolean,
+    failoverAttemptsRemaining: number,
+    attemptedEndpoints: Set<string>,
   ): AsyncGenerator<OpResult, void, undefined> {
     const stream = this.requireClient().executeQuery(request);
     // Prevents an error emitted after explicit cancellation (e.g. "Cancelled on
@@ -1182,7 +1239,10 @@ export class OjpClient {
         if (poolRetryAllowed && firstBlock && !request.statementUUID && !this.session?.sessionUUID
             && !this.transactionActive && !this.options.xa && isPoolNotFound(err)) {
           await this.reconnectAfterPoolNotFound();
-          yield* this.streamOpResults({ ...request, session: this.requireSession() }, false);
+          yield* this.streamOpResults(
+            { ...request, session: this.requireSession() }, false,
+            failoverAttemptsRemaining, attemptedEndpoints, true,
+          );
           return;
         }
         if (firstBlock && failoverAttemptsRemaining > 0
@@ -1194,6 +1254,7 @@ export class OjpClient {
             poolRetryAllowed,
             failoverAttemptsRemaining - 1,
             attemptedEndpoints,
+            true,
           );
           return;
         }
@@ -1324,6 +1385,9 @@ export class OjpClient {
       markEndpointHealthy(this.boundServerEndpoint);
     }
     if (session) {
+      if (session.connHash) {
+        throttleFor(session.connHash).update(session);
+      }
       const targetServer = session.targetServer || this.session?.targetServer
         || (this.boundServerEndpoint ? this.endpointAddress(this.boundServerEndpoint) : undefined);
       if (targetServer) {
@@ -1344,6 +1408,13 @@ export class OjpClient {
       };
     }
     return undefined;
+  }
+
+  private acquireThrottle(): () => void {
+    const session = this.requireSession();
+    return session.connHash
+      ? throttleFor(session.connHash).acquire(this.options.clientThrottleMode ?? 'reactive', !this.autoCommit || this.transactionActive)
+      : () => undefined;
   }
 
   /**
@@ -1932,6 +2003,7 @@ export class OjpClient {
 /** @internal Test isolation for the process-wide pool identity cache. */
 export function resetPoolCacheForTests(): void {
   poolCache.clear();
+  resetClientThrottlesForTests();
 }
 
 /**

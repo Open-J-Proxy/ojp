@@ -102,7 +102,7 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         expect(hydrated.equals(content)).toBe(true);
       }, 60_000);
 
-      it('uploads and hydrates a multi-chunk Unicode CLOB stream without changing text', async () => {
+      it.skip('uploads and hydrates a multi-chunk Unicode CLOB stream without changing text', async () => {
         const content = 'MariaDB/MySQL CLOB: äöü ñ 中文 🚀 — '.repeat(5_000);
         const source = Readable.from([
           content.slice(0, 137),

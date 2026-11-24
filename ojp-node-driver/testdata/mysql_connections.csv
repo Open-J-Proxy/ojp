@@ -1,1 +1,1 @@
-jdbc:mysql://localhost:3306/node_test,nodeuser,nodepassword
+jdbc:mysql://localhost:3306/node_test?useUnicode=true&characterEncoding=utf8,nodeuser,nodepassword

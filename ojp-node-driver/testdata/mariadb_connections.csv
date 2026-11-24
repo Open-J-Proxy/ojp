@@ -1,1 +1,1 @@
-jdbc:mariadb://localhost:3307/node_test,nodeuser,nodepassword
+jdbc:mariadb://localhost:3307/node_test?useUnicode=true&characterEncoding=utf8,nodeuser,nodepassword

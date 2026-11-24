@@ -297,6 +297,7 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L8: %s', (jdbcUrl, u
       const outage = await newClient();
       try {
         expect(outage.boundEndpoint?.port).not.toBe(down.port);
+        expect(isEndpointHealthy({ host: 'localhost', port: down.port })).toBe(false);
       } finally {
         await outage.close();
       }
@@ -308,6 +309,7 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L8: %s', (jdbcUrl, u
       await recovered.withTransaction(async (client) => {
         await client.executeUpdate(`INSERT INTO ${table} VALUES (1)`);
       });
+      expect(isEndpointHealthy({ host: 'localhost', port: down.port })).toBe(true);
       await expect(recovered.withTransaction(async (client) => {
         await client.executeUpdate(`INSERT INTO ${table} VALUES (2)`);
         throw new Error('force rollback');

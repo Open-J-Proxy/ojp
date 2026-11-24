@@ -429,6 +429,7 @@ export class OjpClient {
           };
         } else {
           session = await this.rpcConnect(client);
+          markEndpointHealthy(endpoint);
           if (!this.options.xa && session.connHash) {
             const health = clusterHealth(this.parsedUrl.endpoints);
             const pool: CachedPool = {
@@ -1321,6 +1322,9 @@ export class OjpClient {
     response: OpResult | SessionInfo | CallResourceResponse | LobReference | LobDataBlock,
   ): Error | undefined {
     const session = 'session' in response ? response.session : response;
+    if (this.boundServerEndpoint) {
+      markEndpointHealthy(this.boundServerEndpoint);
+    }
     if (session) {
       const targetServer = session.targetServer || this.session?.targetServer
         || (this.boundServerEndpoint ? this.endpointAddress(this.boundServerEndpoint) : undefined);

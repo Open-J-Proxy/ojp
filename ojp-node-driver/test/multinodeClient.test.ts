@@ -122,7 +122,7 @@ jest.mock('../src/proto/loader', () => ({
 
 import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
 import { resetPoolCacheForTests } from '../src/client/OjpClient';
-import { markEndpointUnhealthy, resetEndpointHealthForTests } from '../src/client/endpointHealth';
+import { isEndpointHealthy, markEndpointUnhealthy, resetEndpointHealthForTests } from '../src/client/endpointHealth';
 
 describe('OjpClient multinode pool cache', () => {
   const url = 'jdbc:ojp[localhost:1059]_h2:mem:l7';
@@ -358,6 +358,104 @@ describe('OjpClient multinode pool cache', () => {
       await expect(client.startTransaction()).resolves.toBeUndefined();
       expect(mockRpcState.startTransactionAddresses).toHaveLength(2);
       expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== '')).toHaveLength(2);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('marks a recovered endpoint healthy after reconnecting to a stale pool', async () => {
+    const client = new OjpClient(url);
+    await client.connect();
+    const endpoint = client.boundEndpoint!;
+    markEndpointUnhealthy(endpoint);
+    mockRpcState.startTransactionErrors.push(
+      Object.assign(new Error('No pool found for connection hash: pool-hash.'), {
+        code: grpc.status.NOT_FOUND,
+        details: 'No pool found for connection hash: pool-hash.',
+      }),
+    );
+    mockRpcState.responseSessionUUID = 'transaction-session';
+
+    try {
+      await client.withTransaction(async (transaction) => {
+        await transaction.executeUpdate('INSERT INTO t VALUES (1)');
+      });
+      expect(isEndpointHealthy(endpoint)).toBe(true);
+      await expect(client.withTransaction(async (transaction) => {
+        await transaction.executeUpdate('INSERT INTO t VALUES (2)');
+        throw new Error('force rollback');
+      })).rejects.toThrow('force rollback');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('marks an endpoint healthy after a successful transaction on a cached pool', async () => {
+    const first = new OjpClient(url);
+    await first.connect();
+    const endpoint = first.boundEndpoint!;
+    await first.close();
+    markEndpointUnhealthy(endpoint);
+    const client = new OjpClient(url);
+    await client.connect();
+    mockRpcState.responseSessionUUID = 'transaction-session';
+
+    try {
+      expect(isEndpointHealthy(endpoint)).toBe(false);
+      await client.withTransaction(async (transaction) => {
+        await transaction.executeUpdate('INSERT INTO t VALUES (1)');
+      });
+      expect(isEndpointHealthy(endpoint)).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('marks a successfully connected endpoint healthy before using a sticky session', async () => {
+    const endpoint = { host: 'localhost', port: 1059 };
+    markEndpointUnhealthy(endpoint);
+    mockRpcState.sessionUUID = 'sticky-session';
+    const client = new OjpClient(url);
+    await client.connect();
+    try {
+      expect(isEndpointHealthy(endpoint)).toBe(true);
+      await expect(client.executeUpdate('INSERT INTO t VALUES (1)')).resolves.toBe(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('marks an endpoint healthy after a stateless update creates a sticky session', async () => {
+    const client = new OjpClient(url);
+    await client.connect();
+    const endpoint = client.boundEndpoint!;
+    markEndpointUnhealthy(endpoint);
+    mockRpcState.responseSessionUUID = 'sticky-session';
+    try {
+      await client.executeUpdate('CREATE TEMPORARY TABLE t (id INT)');
+      expect(isEndpointHealthy(endpoint)).toBe(true);
+      await expect(client.executeUpdate('INSERT INTO t VALUES (1)')).resolves.toBe(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('only marks the responding endpoint healthy when a transaction changes its target', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l8-target', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    const original = client.boundEndpoint!;
+    const target = { host: 'localhost', port: original.port === 1059 ? 1060 : 1059 };
+    markEndpointUnhealthy(original);
+    markEndpointUnhealthy(target);
+    mockRpcState.responseTargetServer = `localhost:${target.port}`;
+    mockRpcState.responseSessionUUID = 'transaction-session';
+    try {
+      await client.startTransaction();
+      expect(isEndpointHealthy(original)).toBe(true);
+      expect(isEndpointHealthy(target)).toBe(false);
+      await expect(client.rollback()).rejects.toThrow(/endpoint is unhealthy/i);
     } finally {
       await client.close();
     }

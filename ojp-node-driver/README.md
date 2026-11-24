@@ -11,8 +11,8 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L10** for PostgreSQL and SQL Server |
-| Cumulative level | **L1** for H2, MariaDB, MySQL; **L10** for PostgreSQL and SQL Server |
+| Target level | **L10** for PostgreSQL and SQL Server; **L2** for MariaDB and MySQL |
+| Cumulative level | **L1** for H2; **L2** for MariaDB and MySQL; **L10** for PostgreSQL and SQL Server |
 | Higher-level features | PostgreSQL and SQL Server L10 combine multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -37,6 +37,12 @@ fetch paths carry session state internally. Callers never manually pass session 
 PostgreSQL L2 extends L1 with
 typed values, prepared/plain statements, batches, generated keys, query metadata, and
 direct/prepared `RETURNING` DML.
+MariaDB and MySQL L2 coverage is in `test/integration.mariadb.l2.test.ts` and
+`test/integration.mysql.l2.test.ts`; the shared suite verifies supported typed values,
+including URL, RowId, scalar Object, and character/binary stream parameters, reusable
+prepared and plain statements, both batch forms, generated keys, query metadata, empty
+results, and explicit unsupported types. MariaDB also verifies direct and prepared
+`INSERT ... RETURNING`; MySQL verifies the unsupported syntax is surfaced as a SQL error.
 SQL Server L1 passed in the
 [Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512);
 the SQL Server L2 suite passed in [run 43528198577](https://github.com/Open-J-Proxy/ojp/actions/runs/43528198577)
@@ -47,7 +53,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | Level | Status | Notes |
 |---|---|---|
 | **L1** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | `connect`/`close`, parameterized CRUD, SQL errors and empty results. MariaDB and MySQL also verify scoped client cleanup, distinct client instances, and cleanup when callbacks fail. See `test/integration.h2.l1.test.ts`, `test/integration.mariadb.l1.test.ts`, `test/integration.mysql.l1.test.ts`, `test/integration.postgres.l1.test.ts`, and `test/integration.sqlServerAg.test.ts`. |
-| **L2** | PostgreSQL, SQL Server | PostgreSQL covers typed parameters, reusable prepared bindings, plain/prepared batches, generated keys (including prepared batches), column-label metadata, and `RETURNING` DML. SQL Server adds the equivalent `OUTPUT` result-set path. `ARRAY` and `REF` are explicit, tested API omissions. SQL Server certification passed in run 43528198577. |
+| **L2** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover numeric, decimal, text, binary, date/time, NULL, URL, RowId, scalar Object, and stream bindings; prepared/plain execution and batches; generated keys; and result metadata. MariaDB covers `INSERT ... RETURNING`; MySQL asserts its unsupported syntax is reported as a SQL error. PostgreSQL covers reusable prepared bindings, batches, generated keys, column-label metadata, and `RETURNING` DML; SQL Server adds the equivalent `OUTPUT` result-set path. `ARRAY` and `REF` are explicit, tested API omissions. |
 | **L3** | PostgreSQL, SQL Server | PostgreSQL covers streamed and buffered 10,001-row results, PostgreSQL `RETURNING` pagination through `fetchNextRows`, metadata, EOF, concurrent cursors, and early cursor close. See `test/integration.postgres.l3.test.ts`. SQL Server covers streaming, pagination, metadata, EOF, concurrent cursors, and early close in `test/integration.sqlServerL3.test.ts`. |
 | **L4** | PostgreSQL, SQL Server (certified) | PostgreSQL covers commit/rollback, autocommit behavior, isolation-level get/set, named/unnamed and nested savepoints, rollback-to-savepoint, release, and transaction completion invalidation. See `test/integration.postgres.l4.test.ts`. SQL Server additionally covers batch rollback and error recovery in `test/integration.sqlServerL4.test.ts`. |
 | **L5** | PostgreSQL, SQL Server | PostgreSQL validates hydrated `BYTEA` binary-stream and `TEXT` parameter round trips, including large and Unicode values, empty versus NULL, updates, and repeated byte-for-byte reads. It follows the JDBC PostgreSQL path, which uses hydrated values rather than native LOB RPC handles. SQL Server covers multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references; its JDBC driver rejects ranged BLOB/CLOB reads, which the L5 suite asserts. H2 verifies exact stream contents and sizes in `test/integration.lob.stream.h2.test.ts`. |
@@ -75,7 +81,7 @@ connect/close and transaction-cleanup boilerplate.
 
 The Node integration workflow provisions MySQL and MariaDB, plus separate two-node
 PostgreSQL and SQL Server OJP clusters that require client certificates; it runs both L10
-suites alongside their L1–L9 suites. H2, MariaDB and MySQL are at L1.
+suites alongside their L1–L9 suites. H2 is at L1; MariaDB and MySQL are at L2.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent
@@ -707,6 +713,8 @@ npm run test:integration  # integration against ojp-server + PostgreSQL (require
 npm run test:integration:all # all integration suites; configure all test infrastructure and flags
 OJP_ENABLE_MYSQL_TESTS=true npm run test:mysql-l1 # MySQL L1 against a real server
 OJP_ENABLE_MARIADB_TESTS=true npm run test:mariadb-l1 # MariaDB L1 against a real server
+OJP_ENABLE_MYSQL_TESTS=true npm run test:mysql-l2 # MySQL L2 against a real server
+OJP_ENABLE_MARIADB_TESTS=true npm run test:mariadb-l2 # MariaDB L2 against a real server
 npm run test:postgres-l8 # PostgreSQL L8 recovery; requires three OJP nodes and a maxConcurrentRequests=1 node
 npm run test:postgres-l10 # PostgreSQL L10 combined multinode/mTLS certification
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)

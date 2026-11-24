@@ -116,6 +116,10 @@ export interface StringArray {
   values: string[];
 }
 
+export interface StringValue {
+  value: string;
+}
+
 export interface ParameterValue {
   boolValue?: boolean;
   intValue?: number;
@@ -130,12 +134,12 @@ export interface ParameterValue {
   timestampValue?: TimestampWithZone;
   dateValue?: { year: number; month: number; day: number };
   timeValue?: { hours: number; minutes: number; seconds: number; nanos: number };
-  urlValue?: string;
-  rowidValue?: string;
-  uuidValue?: string;
-  bigintegerValue?: string;
+  urlValue?: StringValue;
+  rowidValue?: StringValue;
+  uuidValue?: StringValue;
+  bigintegerValue?: StringValue;
   stringArrayValue?: StringArray;
-  rowidlifetimeValue?: string;
+  rowidlifetimeValue?: StringValue;
 }
 
 export interface ParameterProto {

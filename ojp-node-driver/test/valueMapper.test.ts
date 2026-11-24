@@ -185,7 +185,12 @@ describe('valueMapper', () => {
     it('should encode PT_URL using the URL wrapper field', () => {
       const proto = toParameterProto(1, new OjpTypedParam('hello', ParameterType.URL));
       expect(proto.type).toBe('PT_URL');
-      expect(proto.values[0].urlValue).toBe('hello');
+      expect(proto.values[0].urlValue).toEqual({ value: 'hello' });
+      expect(fromParameterValue({ urlValue: { value: 'https://example.test' } })).toBe('https://example.test');
+      expect(fromParameterValue({ rowidValue: { value: Buffer.from([0, 1]).toString('base64') } }))
+        .toEqual(Buffer.from([0, 1]));
+      expect(fromParameterValue({ bigintegerValue: { value: '9223372036854775808' } }))
+        .toBe(9223372036854775808n);
     });
 
     it('should preserve explicitly requested stream, row-id, SQLXML, and LOB types', () => {
@@ -198,7 +203,7 @@ describe('valueMapper', () => {
         values: [{ bytesValue: Buffer.from('bytes') }],
       });
       expect(toParameterProto(1, new OjpTypedParam(Buffer.from([0, 1]), ParameterType.ROW_ID)).values[0].rowidValue)
-        .toBe(Buffer.from([0, 1]).toString('base64'));
+        .toEqual({ value: Buffer.from([0, 1]).toString('base64') });
       expect(toParameterProto(1, new OjpTypedParam('<x/>', ParameterType.SQL_XML)).values[0].stringValue).toBe('<x/>');
       expect(toParameterProto(1, new OjpTypedParam('lob-id', ParameterType.CLOB)).values[0].stringValue).toBe('lob-id');
       expect(() => toParameterProto(

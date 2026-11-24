@@ -290,6 +290,7 @@ export class OjpClient {
   private healthCheckTimer?: NodeJS.Timeout;
   private connecting = false;
   private closed = false;
+  private affinityError?: OjpConnectionError;
   private autoCommit = true;
   private transactionActive = false;
   private transactionGeneration = 0;
@@ -586,8 +587,17 @@ export class OjpClient {
     if (this.closed) {
       throw new OjpConnectionError('This client is closed. Create a new client to connect.');
     }
+    if (this.affinityError) {
+      throw this.affinityError;
+    }
     if (!this.session) {
       throw new OjpConnectionError('Session not started. Call connect() before executing commands.');
+    }
+    if (this.session.sessionUUID && this.boundServerEndpoint && !isEndpointHealthy(this.boundServerEndpoint)) {
+      throw new OjpConnectionError(
+        `The session bound to ${this.endpointAddress(this.boundServerEndpoint)} is no longer usable `
+        + 'while its endpoint is unhealthy; create a new OjpClient/session to retry.',
+      );
     }
     const health = clusterHealth(this.parsedUrl.endpoints);
     if (this.session.clusterHealth !== health) {
@@ -1317,10 +1327,11 @@ export class OjpClient {
       if (targetServer) {
         const endpoint = this.endpointForTargetServer(targetServer);
         if (!endpoint) {
-          return new OjpConnectionError(
+          this.affinityError = new OjpConnectionError(
             `The ojp-server returned targetServer "${targetServer}", which is not a configured endpoint; `
             + 'refusing to route this session.',
           );
+          return this.affinityError;
         }
         this.rebindToEndpoint(endpoint);
       }
@@ -1554,7 +1565,11 @@ export class OjpClient {
           reject(err);
           return;
         }
-        this.session = response;
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve();
       });
     });
@@ -1610,7 +1625,11 @@ export class OjpClient {
           reject(this.toClientError(err));
           return;
         }
-        this.session = response;
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve();
       });
     });
@@ -1647,7 +1666,11 @@ export class OjpClient {
           reject(this.toClientError(err));
           return;
         }
-        this.session = response;
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve();
       });
     });
@@ -1767,7 +1790,11 @@ export class OjpClient {
           reject(this.toClientError(err));
           return;
         }
-        this.session = response.session;
+        const sessionError = this.updateSessionFrom(response);
+        if (sessionError) {
+          reject(sessionError);
+          return;
+        }
         resolve();
       });
     });

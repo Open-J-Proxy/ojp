@@ -83,7 +83,26 @@ jest.mock('../src/proto/loader', () => ({
             ): void {
               mockRpcState.startTransactionAddresses.push(this.address);
               const error = mockRpcState.startTransactionErrors.shift();
-              callback(error ?? null, session);
+              callback(error ?? null, {
+                ...session,
+                sessionUUID: mockRpcState.responseSessionUUID ?? session.sessionUUID,
+                targetServer: mockRpcState.responseTargetServer ?? session.targetServer,
+              });
+            }
+
+            commitTransaction(session: MockSession, callback: (err: Error | null, response: MockSession) => void): void {
+              callback(null, { ...session, targetServer: mockRpcState.responseTargetServer ?? session.targetServer });
+            }
+
+            rollbackTransaction(session: MockSession, callback: (err: Error | null, response: MockSession) => void): void {
+              callback(null, { ...session, targetServer: mockRpcState.responseTargetServer ?? session.targetServer });
+            }
+
+            callResource(
+              request: { session: MockSession },
+              callback: (err: Error | null, response: { session: MockSession }) => void,
+            ): void {
+              callback(null, { session: request.session });
             }
 
             terminateSession(_session: unknown, callbackOrOptions: unknown, maybeCallback?: (err: Error | null) => void): void {
@@ -103,7 +122,7 @@ jest.mock('../src/proto/loader', () => ({
 
 import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
 import { resetPoolCacheForTests } from '../src/client/OjpClient';
-import { resetEndpointHealthForTests } from '../src/client/endpointHealth';
+import { markEndpointUnhealthy, resetEndpointHealthForTests } from '../src/client/endpointHealth';
 
 describe('OjpClient multinode pool cache', () => {
   const url = 'jdbc:ojp[localhost:1059]_h2:mem:l7';
@@ -179,6 +198,7 @@ describe('OjpClient multinode pool cache', () => {
     const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6', {
       healthCheckIntervalMs: 0,
     });
+
     await client.connect();
     const originalEndpoint = client.boundEndpoint!;
     const targetPort = originalEndpoint.port === 1059 ? 1060 : 1059;
@@ -197,6 +217,76 @@ describe('OjpClient multinode pool cache', () => {
         `localhost:${originalEndpoint.port}`,
         `localhost:${targetPort}`,
       ]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('routes requests to the target returned when a transaction starts', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6-transaction', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    const target = client.boundEndpoint!.port === 1059 ? 'localhost:1060' : 'localhost:1059';
+    mockRpcState.responseTargetServer = target;
+    mockRpcState.responseSessionUUID = 'transaction-session';
+
+    try {
+      await client.startTransaction();
+      await client.executeUpdate('INSERT INTO t VALUES (1)');
+      expect(mockRpcState.updateAddresses).toEqual([target]);
+      expect(mockRpcState.updateTargetServers).toEqual([target]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('rejects an unconfigured target returned when a transaction starts', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6-transaction', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    mockRpcState.responseTargetServer = 'localhost:9999';
+    mockRpcState.responseSessionUUID = 'transaction-session';
+    try {
+      await expect(client.startTransaction()).rejects.toThrow(/targetServer "localhost:9999".*not a configured endpoint/i);
+      await expect(client.executeUpdate('INSERT INTO t VALUES (1)')).rejects.toThrow(/targetServer "localhost:9999"/i);
+      expect(mockRpcState.updateAddresses).toHaveLength(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('fails a sticky request immediately when its bound endpoint is unhealthy', async () => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6-unhealthy', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    mockRpcState.responseSessionUUID = 'sticky-session';
+    try {
+      await client.executeUpdate('CREATE TEMPORARY TABLE t (id INT)');
+      markEndpointUnhealthy(client.boundEndpoint!);
+      await expect(client.executeUpdate('INSERT INTO t VALUES (1)'))
+        .rejects.toThrow(/session bound to .* is no longer usable/i);
+      expect(mockRpcState.updateAddresses).toHaveLength(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(['commit', 'rollback'] as const)('uses the %s response target for subsequent calls', async (operation) => {
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:l6-finish', {
+      healthCheckIntervalMs: 0,
+    });
+    await client.connect();
+    try {
+      await client.startTransaction();
+      const target = client.boundEndpoint!.port === 1059 ? 'localhost:1060' : 'localhost:1059';
+      mockRpcState.responseTargetServer = target;
+      await client[operation]();
+      await client.executeUpdate('INSERT INTO t VALUES (1)');
+      expect(mockRpcState.updateAddresses).toEqual([target]);
+      expect(mockRpcState.updateTargetServers).toEqual([target]);
     } finally {
       await client.close();
     }

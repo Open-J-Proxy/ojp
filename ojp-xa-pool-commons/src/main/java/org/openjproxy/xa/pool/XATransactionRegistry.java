@@ -396,10 +396,8 @@ public class XATransactionRegistry {
             int result = ctx.getSession().getXAResource().prepare(actualXid);
 
             if (result == XAResource.XA_RDONLY) {
-                // Read-only optimization: no prepare needed, transaction can complete immediately
                 ctx.transitionToCommitted();
-                returnSessionToPool(ctx);
-                contexts.remove(xid);
+                ctx.markTransactionComplete();
 
                 log.info("XA transaction prepared (read-only optimization): xid={}", xid);
                 return XAResource.XA_RDONLY;
@@ -793,23 +791,6 @@ public class XATransactionRegistry {
     }
 
     // Private helper methods
-
-    private void returnSessionToPool(TxContext ctx) {
-        XABackendSession session = ctx.getSession();
-        if (session != null) {
-            try {
-                poolProvider.returnSession(poolDataSource, session);
-            } catch (Exception e) {
-                log.error("Failed to return session to pool", e);
-                // Best effort: try to invalidate
-                try {
-                    poolProvider.invalidateSession(poolDataSource, session);
-                } catch (Exception e2) {
-                    log.error("Failed to invalidate session", e2);
-                }
-            }
-        }
-    }
 
     private static String flagsToString(int flags) {
         switch (flags) {

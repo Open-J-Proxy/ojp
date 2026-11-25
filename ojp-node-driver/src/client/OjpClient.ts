@@ -1903,7 +1903,10 @@ export class OjpClient {
       getClient: () => this.requireClient(),
       getSession: () => this.requireSession(),
       updateSession: (session) => {
-        this.session = session;
+        const error = this.updateSessionFrom(session);
+        if (error) {
+          throw error;
+        }
       },
       mapError: (err) => this.toClientError(err),
     });

@@ -17,6 +17,7 @@ const mockRpcState: {
   updateTargetServers: Array<string | undefined>;
   startTransactionErrors: Array<Error | undefined>;
   startTransactionAddresses: string[];
+  xaStartAddresses: string[];
   responseTargetServer?: string;
   responseSessionUUID?: string;
   sessionUUID: string;
@@ -29,6 +30,7 @@ const mockRpcState: {
   updateTargetServers: [],
   startTransactionErrors: [],
   startTransactionAddresses: [],
+  xaStartAddresses: [],
   sessionUUID: '',
 };
 
@@ -103,6 +105,20 @@ jest.mock('../src/proto/loader', () => ({
               });
             }
 
+            xaStart(
+              request: { session: MockSession },
+              callback: (err: Error | null, response: { session: MockSession; success: boolean; message: string }) => void,
+            ): void {
+              mockRpcState.xaStartAddresses.push(this.address);
+              const targetServer = mockRpcState.responseTargetServer;
+              mockRpcState.responseTargetServer = undefined;
+              callback(null, {
+                session: { ...request.session, targetServer },
+                success: true,
+                message: '',
+              });
+            }
+
             commitTransaction(session: MockSession, callback: (err: Error | null, response: MockSession) => void): void {
               callback(null, { ...session, targetServer: mockRpcState.responseTargetServer ?? session.targetServer });
             }
@@ -150,6 +166,7 @@ describe('OjpClient multinode pool cache', () => {
     mockRpcState.updateTargetServers = [];
     mockRpcState.startTransactionErrors = [];
     mockRpcState.startTransactionAddresses = [];
+    mockRpcState.xaStartAddresses = [];
     mockRpcState.responseTargetServer = undefined;
     mockRpcState.responseSessionUUID = undefined;
     mockRpcState.sessionUUID = '';
@@ -217,6 +234,34 @@ describe('OjpClient multinode pool cache', () => {
     expect(mockRpcState.connectRequests.filter(({ url: value }) => value === '')).toHaveLength(2);
 
     await client.close();
+  });
+
+  it('updates XA session routing from responses and rejects unconfigured targets', async () => {
+    mockRpcState.sessionUUID = 'xa-session';
+    const client = new OjpClient('jdbc:ojp[localhost:1059,localhost:1060]_h2:mem:xa', {
+      xa: true,
+      healthCheckIntervalMs: 0,
+    });
+    const xid = { formatId: 1, globalTransactionId: Buffer.from([1]), branchQualifier: Buffer.from([2]) };
+    await client.connect();
+    const original = `localhost:${client.boundEndpoint!.port}`;
+    const target = original === 'localhost:1059' ? 'localhost:1060' : 'localhost:1059';
+    const resource = client.createXAResource();
+    try {
+      mockRpcState.responseTargetServer = target;
+      await resource.start(xid);
+      expect(client.boundEndpoint?.port).toBe(Number(target.split(':')[1]));
+
+      await resource.start(xid);
+      expect(mockRpcState.xaStartAddresses).toEqual([original, target]);
+
+      mockRpcState.responseTargetServer = 'localhost:9999';
+      await expect(resource.start(xid)).rejects.toThrow(/not a configured endpoint/);
+      await expect(resource.start(xid)).rejects.toThrow(/not a configured endpoint/);
+      expect(mockRpcState.xaStartAddresses).toHaveLength(3);
+    } finally {
+      await client.close();
+    }
   });
 
   it('sends the selected endpoint as targetServer and preserves it when responses omit it', async () => {

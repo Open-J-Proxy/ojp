@@ -98,7 +98,17 @@ export function registerDatabaseL9Suite(options: SuiteOptions): void {
     }, 30_000);
 
     afterEach(async () => {
-      await xaConn?.close().catch(() => undefined);
+      if (xaConn) {
+        if (stoppedContainers.size > 0) {
+          await xaConn.close().catch((error: unknown) => {
+            if (!(error instanceof OjpConnectionError)) {
+              throw error;
+            }
+          });
+        } else {
+          await xaConn.close();
+        }
+      }
       xaConn = undefined;
       for (const node of nodes) {
         if (stoppedContainers.has(node.container)) {
@@ -124,6 +134,24 @@ export function registerDatabaseL9Suite(options: SuiteOptions): void {
 
       await expect(scopedClient!.executeQuery('SELECT 1')).rejects.toBeInstanceOf(OjpConnectionError);
     }, 30_000);
+
+    it('closes the scoped XA session when the callback fails', async () => {
+      let scopedClient: OjpClient | undefined;
+      const failure = new Error('transaction manager failed');
+      await expect(dataSource.withXAConnection(async (connection) => {
+        scopedClient = connection.getConnection();
+        throw failure;
+      })).rejects.toBe(failure);
+      await expect(scopedClient!.executeQuery('SELECT 1')).rejects.toBeInstanceOf(OjpConnectionError);
+    }, 30_000);
+
+    it('releases unused XA sessions back to the server pool', async () => {
+      for (let i = 0; i < 30; i++) {
+        await dataSource.withXAConnection(async (connection) => {
+          expect(connection.getConnection().getAutoCommit()).toBe(false);
+        });
+      }
+    }, 60_000);
 
     it('commits a two-phase transaction and verifies the row through an independent session', async () => {
       xaConn = await dataSource.getXAConnection();
@@ -213,14 +241,18 @@ export function registerDatabaseL9Suite(options: SuiteOptions): void {
       const xa = xaConn.getXAResource();
       const id = nextId++;
       const xid = newXid();
+      let started = false;
+      let ended = false;
       let resolved = false;
 
       try {
         await xa.start(xid, XA.TMNOFLAGS);
+        started = true;
         await xaConn.getConnection().executeUpdate(
           `INSERT INTO ${tableName} (id, label) VALUES (?, ?)`, [id, 'recoverable'],
         );
         await xa.end(xid, XA.TMSUCCESS);
+        ended = true;
         expect(await xa.prepare(xid)).toBe(XA.XA_OK);
 
         const recovered = await xa.recover(XA.TMSTARTRSCAN | XA.TMENDRSCAN);
@@ -235,8 +267,11 @@ export function registerDatabaseL9Suite(options: SuiteOptions): void {
         resolved = true;
         await expect(rowExists(id)).resolves.toBe(true);
       } finally {
-        if (!resolved) {
-          await xa.rollback(xid).catch(() => undefined);
+        if (started && !resolved) {
+          if (!ended) {
+            await xa.end(xid, XA.TMFAIL);
+          }
+          await xa.rollback(xid);
         }
       }
     }, 30_000);

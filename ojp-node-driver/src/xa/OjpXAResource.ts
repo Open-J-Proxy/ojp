@@ -49,7 +49,8 @@ function transportErrorCode(err: unknown): number {
  * library that speaks this shape). Obtained via `OjpClient.createXAResource()` (client
  * created with `{ xa: true }`) or `OjpXAConnection.getXAResource()`.
  *
- * All operations reject with an `OjpXaError` carrying a standard XA error code:
+ * Remote operation failures reject with an `OjpXaError` carrying an XA error code;
+ * local connection lifecycle and affinity errors are reported by the host:
  * - `errorCode === 0` — business-level failure reported by the server (`XaResponse.
  *   success === false`), mirroring the reference JDBC driver's `new XAException(message)`
  *   (uninitialized/default error code).

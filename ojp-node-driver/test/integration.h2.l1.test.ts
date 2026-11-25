@@ -67,8 +67,11 @@ if (enabled && !endpoint) {
           await statement.executeUpdate(`DROP TABLE IF EXISTS ${table}`);
         }
       } finally {
-        await statement.close();
-        await client.close();
+        try {
+          await statement.close();
+        } finally {
+          await client.close();
+        }
       }
     }, 60_000);
 

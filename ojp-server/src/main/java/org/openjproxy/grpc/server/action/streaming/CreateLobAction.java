@@ -323,7 +323,24 @@ public class CreateLobAction implements StreamingAction<LobDataBlock, LobReferen
         }
     }
 
-    // MariaDB's Clob.length() counts UTF-16 units, but its write position counts code points.
+    /**
+     * Converts a 1-based UTF-16 position to the code-point position used by MariaDB's CLOB writer.
+     * MariaDB's {@link Clob#length()} counts UTF-16 units, but its write positions count code points.
+     *
+     * <p>For example, {@code A🚀B} has four UTF-16 units (A, the emoji's two surrogate units, B)
+     * but three code points (A, 🚀, B). To write at B, the client sends UTF-16 position 4,
+     * but the MariaDB CLOB writer expects position 3. Passing 4 directly targets the wrong place.
+     *
+     * <p>For sequential chunks, the server tracks both positions as it writes, avoiding a scan.
+     * For non-sequential positions, this method scans the CLOB and counts each surrogate pair as
+     * one code point. It rejects position 3 in the example because it splits the emoji's pair,
+     * as well as positions before 1 or beyond the position immediately after the CLOB.
+     *
+     * @param clob the existing CLOB
+     * @param utf16Position the 1-based UTF-16 position
+     * @return the corresponding 1-based code-point position
+     * @throws SQLException if the position is invalid or the CLOB cannot be read
+     */
     static long mariaDbClobPosition(Clob clob, long utf16Position) throws SQLException {
         if (utf16Position < 1) {
             throw new SQLException("CLOB position must be at least 1");

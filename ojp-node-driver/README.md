@@ -11,8 +11,8 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L10** for PostgreSQL and SQL Server; **L8** for MariaDB and MySQL |
-| Cumulative level | **L1** for H2; **L8** for MariaDB and MySQL; **L10** for PostgreSQL and SQL Server |
+| Target level | **L10** for PostgreSQL and SQL Server; **L9** for MariaDB and MySQL |
+| Cumulative level | **L1** for H2; **L9** for MariaDB and MySQL; **L10** for PostgreSQL and SQL Server |
 | Higher-level features | PostgreSQL and SQL Server L10 combine multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -72,6 +72,8 @@ error classification through the public client.
 MariaDB and MySQL L8 suites add bounded stateless failover, outage transactions and
 consistent reads, recovery and redistribution, batch and continuous operations, and
 sticky-session, SQL-error and server-overload safety.
+Their L9 suites exercise XA lifecycle, SQL outcomes, prepared-branch recovery, resource
+identity, timeout behavior, errors, and strict multinode session affinity.
 SQL Server L1 passed in the
 [Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512);
 the SQL Server L2 suite passed in [run 43528198577](https://github.com/Open-J-Proxy/ojp/actions/runs/43528198577)
@@ -89,7 +91,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L6** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover temporary tables, session variables, transaction boundaries, close lifecycle, and bound-node failure without rerouting in their L6 suites. PostgreSQL verifies temporary-table and `SET LOCAL` state across calls/transactions, close lifecycle, and bound-node failure without rerouting; session and target-server propagation are managed internally. SQL Server also covers temporary-table state and sticky-node failure. |
 | **L7** | MariaDB, MySQL, PostgreSQL, SQL Server | The database-specific L7 suites verify least-connections selection, round-robin distribution, unavailable/recovered-node health, cached `connHash` reuse, stale-pool reconnect for stateless operations, and SQL-error classification. `test/multinodeClient.test.ts` also checks cluster-health propagation and retry limits. |
 | **L8** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover resilience and recovery in `test/integration.mariadb.l8.test.ts` and `test/integration.mysql.l8.test.ts`; PostgreSQL covers bounded stateless failover, recovery and redistribution, sticky-session loss, transaction failures, SQL errors, and server overload in `test/integration.postgres.l8.test.ts`. SQL Server covers the corresponding behavior in `test/integration.sqlServerL8.test.ts`. |
-| **L9** | PostgreSQL, SQL Server (certified) | PostgreSQL covers scoped XA session lifecycle, two-phase and one-phase commit, rollback, prepared-branch recovery with complete Xid matching, PostgreSQL's unsupported transaction-timeout behavior, sequential branch reuse, resource-manager identity, XA errors, and multinode affinity/failover safety. See `test/integration.xa.postgres.test.ts`. SQL Server also covers timeout support and the corresponding XA lifecycle in `test/integration.sqlServerXA.test.ts`. |
+| **L9** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover scoped XA sessions, CRUD, one- and two-phase commit, rollback, recovery with complete Xid matching, sequential branches, timeouts, resource identity, XA errors, and bound-node failure in `test/integration.mariadb.l9.test.ts` and `test/integration.mysql.l9.test.ts`. PostgreSQL and SQL Server cover the corresponding XA lifecycle in `test/integration.xa.postgres.test.ts` and `test/integration.sqlServerXA.test.ts`. |
 | **L10** | PostgreSQL, SQL Server (certified) | PostgreSQL `test/integration.postgres.l10.test.ts` and SQL Server `test/integration.sqlServerL10.test.ts` authenticate against each mTLS endpoint, verify local and XA commit/rollback/recovery outcomes, stateless failover and redistribution, sticky-session and XA affinity failures, and rejection of missing or untrusted client certificates. |
 
 PostgreSQL L5 uses the JDBC driver's supported `BYTEA`/`TEXT` hydrated path; PostgreSQL's
@@ -683,27 +685,22 @@ XA-capable PostgreSQL deployment needs it (see `postgresql.conf`'s
 
 ### XA session and recovery model
 
-The Node client keeps the current `SessionInfo` and its `targetServer` binding private,
-and does not retry XA operations whose outcome could be ambiguous. Only `start()` may
-recreate its session and retry on another healthy node after a transport failure;
-`end`, `prepare`, `commit`, `rollback`, `recover`, `forget`, timeout operations, and
-`isSameRM` remain pinned to their session.
+The Node client keeps the current `SessionInfo` and its `targetServer` binding private.
+All XA operations, including `start()`, stay pinned to their session and are not replayed
+after a transport failure; the outcome can be ambiguous. The caller receives
+`XAER_RMFAIL` and must resolve any uncertain branch through its transaction manager.
 
-The gRPC contract requires a valid `SessionInfo` on each XA RPC, including recovery
-scans. Consequently, a transaction manager recovering a prepared branch after its own
-process restart must retain or reconstruct the XA session/server binding; a bare Xid
-cannot identify a branch through this protocol. Within a live session, the client
-propagates that state automatically, so application code does not copy session tokens
-or endpoint details between calls.
-
-Only `start()` may retry: after a connection-level failure, the client recreates its
-XA session on another healthy node and retries within `maxFailoverAttempts`. Other XA
-operations are never replayed; they remain pinned to their original server and report
-`XAER_RMFAIL` if it is unavailable.
+The gRPC contract requires a valid XA session on each RPC. A new XA connection can
+scan prepared Xids without application-managed session tokens. Resolution depends on
+the OJP server's XA registry; in pooled mode, restarting the server or changing the
+endpoint list can discard its in-memory branch context even when the database still
+reports the Xid. Keep the same endpoint configuration while XA work is active and
+use a transaction manager to handle in-doubt branches.
 
 Validated end-to-end with real two-phase commit, rollback, one-phase commit
 optimization, `recover()`, `isSameRM()`, timeout operations, error mapping, and
-multinode XA affinity/failover against PostgreSQL
+multinode XA affinity/failure against MariaDB (`test/integration.mariadb.l9.test.ts`),
+MySQL (`test/integration.mysql.l9.test.ts`), PostgreSQL
 (`test/integration.xa.postgres.test.ts`) and SQL Server
 (`test/integration.sqlServerXA.test.ts`), each using real OJP servers.
 Run locally:
@@ -746,9 +743,9 @@ vendorCode from the original database exception, instead of a generic `"13 INTER
       failover, strict session stickiness, validated end-to-end against a real
       3-node cluster (see the dedicated section above).
 - [x] XA support (distributed transactions) — `OjpXADataSource`/`OjpXAConnection`/
-      `OjpXAResource`, validated end-to-end against a real `ojp-server` + PostgreSQL
+      `OjpXAResource`, validated against MariaDB, MySQL, PostgreSQL and SQL Server
       (two-phase commit, rollback, one-phase optimization, `recover`, `isSameRM`); see
-      the dedicated section above for known scope reductions vs. the JDBC reference.
+      the dedicated section above for the recovery model.
 - [ ] Framework adapters are outside this module.
 
 ## Scripts
@@ -782,6 +779,8 @@ OJP_ENABLE_MYSQL_L7_TESTS=true npm run test:mysql-l7 # MySQL multinode operation
 OJP_ENABLE_MARIADB_L7_TESTS=true npm run test:mariadb-l7 # MariaDB multinode operations
 OJP_ENABLE_MYSQL_L8_TESTS=true npm run test:mysql-l8 # MySQL recovery
 OJP_ENABLE_MARIADB_L8_TESTS=true npm run test:mariadb-l8 # MariaDB recovery
+OJP_ENABLE_MYSQL_L9_TESTS=true npm run test:mysql-l9 # MySQL XA
+OJP_ENABLE_MARIADB_L9_TESTS=true npm run test:mariadb-l9 # MariaDB XA
 npm run test:postgres-l8 # PostgreSQL L8 recovery; requires three OJP nodes and a maxConcurrentRequests=1 node
 npm run test:postgres-l10 # PostgreSQL L10 combined multinode/mTLS certification
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)
@@ -797,6 +796,9 @@ npm run test:sqlserver-xa # XA integration against ojp-server + SQL Server (requ
 The Node client workflow configures H2, PostgreSQL, SQL Server, three dedicated OJP
 nodes, a separate PostgreSQL L8 overload-test node, and dedicated PostgreSQL and SQL
 Server mTLS clusters; it runs every integration suite.
+The MySQL/MariaDB L9 suites require at least two dedicated OJP containers named by
+`OJP_TEST_NODE_CONTAINERS` with corresponding `OJP_TEST_NODE_PORTS`; they stop and
+restart those containers. MySQL's test user requires `XA_RECOVER_ADMIN`.
 For PostgreSQL L8, set `OJP_ENABLE_POSTGRES_L8_TESTS=true`,
 `OJP_TEST_NODE_CONTAINERS`, and `OJP_TEST_POSTGRES_L8_THROTTLED_NODE_CONTAINER` /
 `OJP_TEST_POSTGRES_L8_THROTTLED_NODE_PORT` for an OJP node started with

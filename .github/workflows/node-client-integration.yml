@@ -133,6 +133,11 @@ jobs:
           docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
             -S localhost -U sa -P "$password" -C -b -d master -Q 'EXEC sp_sqljdbc_xa_install;'
 
+      - name: Grant MySQL XA recovery permission
+        run: |
+          docker exec ${{ job.services.mysql.id }} mysql -uroot -prootpassword \
+            -e "GRANT XA_RECOVER_ADMIN ON *.* TO 'nodeuser'@'%';"
+
       - name: Start OJP servers
         run: |
           jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
@@ -267,6 +272,8 @@ jobs:
           OJP_ENABLE_MARIADB_L7_TESTS: 'true'
           OJP_ENABLE_MYSQL_L8_TESTS: 'true'
           OJP_ENABLE_MARIADB_L8_TESTS: 'true'
+          OJP_ENABLE_MYSQL_L9_TESTS: 'true'
+          OJP_ENABLE_MARIADB_L9_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L7_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L8_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L10_TESTS: 'true'

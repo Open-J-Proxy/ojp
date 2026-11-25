@@ -929,7 +929,7 @@ current_row = resp.values
 | `LT_UNICODE_STREAM` | Unicode character stream |
 | `LT_CHARACTER_STREAM` | Generic character stream |
 
-**Writing a LOB (createLob):** Open a client-streaming call to `createLob`. Send one or more `LobDataBlock` messages (recommended chunk size: 32–64 KB) with `session`, `position` (byte offset), `data`, `lobType`, and optional `metadata`. Close the stream. The server responds with a `LobReference` containing `uuid` (the LOB handle), `bytesWritten`, and `lobType`. Store the `LobReference.uuid` and pass it as a parameter value (§7.2) when binding the LOB.
+**Writing a LOB (createLob):** Open a client-streaming call to `createLob`. Send one or more `LobDataBlock` messages (recommended chunk size: 32–64 KB) with `session`, `position`, `data`, `lobType`, and optional `metadata`. Positions are 1-based: BLOB positions count bytes, while CLOB positions are passed directly to the server's JDBC CLOB writer and must use its units. For example, MariaDB Connector/J uses Unicode code points, while MySQL Connector/J uses UTF-16 units. CLOB chunks must not split UTF-8 characters. Close the stream. The server responds with a `LobReference` containing `uuid` (the LOB handle), `bytesWritten`, and `lobType`. Store the `LobReference.uuid` and pass it as a parameter value (§7.2) when binding the LOB.
 
 **Reading a LOB (readLob):** Call `readLob(ReadLobRequest)` and concatenate the `data` fields in order from the server-streaming response.
 
@@ -937,17 +937,20 @@ LOB handles are server-side objects. A connection with an open LOB must remain b
 
 ### Pseudo-code
 
+The BLOB upload example assumes an already pinned session. If the upload creates a
+session, wait for the first `LobReference` and use its session for subsequent blocks.
+
 ```python
 CHUNK_SIZE = 64 * 1024
 
-def write_lob(stub, session, data_bytes, lob_type=LT_BLOB):
+def write_blob(stub, session, data_bytes):
     def generate_blocks():
         for offset in range(0, len(data_bytes), CHUNK_SIZE):
-            yield LobDataBlock(session=session, position=offset,
-                               data=data_bytes[offset:offset+CHUNK_SIZE], lobType=lob_type)
+            yield LobDataBlock(session=session, position=offset + 1,
+                               data=data_bytes[offset:offset+CHUNK_SIZE], lobType=LT_BLOB)
     return stub.createLob(generate_blocks()).uuid
 
-lob_uuid = write_lob(stub, session, my_bytes)
+lob_uuid = write_blob(stub, session, my_bytes)
 stub.executeUpdate(StatementRequest(
     session=session, sql="INSERT INTO docs(content) VALUES(?)",
     parameters=[ParameterProto(index=1, type=PT_BLOB,

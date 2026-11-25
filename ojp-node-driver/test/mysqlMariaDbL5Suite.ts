@@ -121,6 +121,25 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         expect(result.rows).toEqual([{ body: content }]);
       }, 60_000);
 
+      if (options.database === 'MySQL') {
+        it('round-trips a multi-chunk Unicode CLOB on MySQL through MariaDB Connector/J', async () => {
+          const mariaJdbcUrl = jdbcUrl.replace(/^jdbc:mysql:/, 'jdbc:mariadb:');
+          const mariaClient = new OjpClient(ojpUrl(endpoint, mariaJdbcUrl), credentials);
+          await mariaClient.connect();
+          try {
+            const content = 'MariaDB Connector/J on MySQL 🚀 '.repeat(5_000);
+            const reference = await mariaClient.createLob(content, 'CLOB');
+            expect(await mariaClient.executeUpdate(
+              `INSERT INTO ${table} (id, body) VALUES (?, ?)`, [10, reference],
+            )).toBe(1);
+            expect((await mariaClient.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [10])).rows)
+              .toEqual([{ body: content }]);
+          } finally {
+            await mariaClient.close();
+          }
+        }, 60_000);
+      }
+
       it('reads BLOB and CLOB references as streams with exact bytes and UTF-8 content', async () => {
         const binary = Buffer.alloc(90_123);
         for (let index = 0; index < binary.length; index++) {

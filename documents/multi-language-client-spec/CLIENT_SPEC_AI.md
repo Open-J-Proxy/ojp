@@ -180,7 +180,7 @@ XidProto:
 
 LobDataBlock:
   session: SessionInfo
-  position: int64                 # byte offset of this chunk
+  position: int64                 # 1-based byte position for BLOB; JDBC driver units for CLOB
   data: bytes                     # chunk content; recommended size 32–64 KB
   lobType: LobType                # LT_BLOB | LT_CLOB | LT_BINARY_STREAM | LT_ASCII_STREAM |
                                   #   LT_UNICODE_STREAM | LT_CHARACTER_STREAM

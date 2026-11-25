@@ -87,6 +87,8 @@ export interface OjpClientOptions {
   failoverRetryDelayMs?: number;
   /** Shared per-pool admission control. Default: reactive. */
   clientThrottleMode?: ClientThrottleMode;
+  /** CLOB write position units; defaults to code points for mariadb URLs and UTF-16 units otherwise. */
+  clobPositionUnit?: 'codePoint' | 'utf16';
   /**
    * Opens this session as an XA (distributed transaction) resource. When `true`,
    * transaction demarcation must go through `createXAResource()` — `startTransaction`/
@@ -330,6 +332,10 @@ export class OjpClient {
     if (options.clientThrottleMode !== undefined
         && !['off', 'proactive', 'reactive', 'combined'].includes(options.clientThrottleMode)) {
       throw new TypeError('clientThrottleMode must be off, proactive, reactive, or combined.');
+    }
+    if (options.clobPositionUnit !== undefined
+        && !['codePoint', 'utf16'].includes(options.clobPositionUnit)) {
+      throw new TypeError('clobPositionUnit must be codePoint or utf16.');
     }
     this.clientUUID = CLIENT_UUID;
     if (!!options.tls?.privateKey !== !!options.tls?.certChain) {
@@ -1451,11 +1457,17 @@ export class OjpClient {
       let firstAckReceived = false;
       let settled = false;
 
-      // Blob positions count bytes; Clob.setCharacterStream positions count UTF-16 units.
+      const codePointPositions = (this.options.clobPositionUnit
+        ?? (this.parsedUrl.backendUrl.startsWith('mariadb:') ? 'codePoint' : 'utf16')) === 'codePoint';
       let position = 1;
       const writeChunk = (chunk: Buffer): Promise<void> => new Promise((writeResolve, writeReject) => {
         const chunkPosition = position;
-        position += isClob ? chunk.toString('utf8').length : chunk.length;
+        if (isClob) {
+          const text = chunk.toString('utf8');
+          position += codePointPositions ? [...text].length : text.length;
+        } else {
+          position += chunk.length;
+        }
         call.write(
           { session, position: chunkPosition.toString(), data: chunk, lobType: protoLobType },
           (err?: Error | null) => {

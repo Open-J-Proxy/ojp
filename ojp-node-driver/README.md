@@ -494,6 +494,12 @@ protocol treats LOBs as a separate resource, referenced by a `LobReference`
   hydration, and `readLobStream`; application code never passes session tokens or
   protocol session objects.
 
+CLOB upload positions default to Unicode code points for `mariadb:` URLs and UTF-16
+units for other URLs, matching the JDBC drivers used in the integration tests. If the
+server selects a different JDBC driver (for example MariaDB Connector/J with a
+`mysql:` URL), configure `clobPositionUnit: 'codePoint'` or `'utf16'` in the
+`OjpClient` options to match the server's JDBC driver.
+
 ```ts
 import { createReadStream } from 'fs';
 

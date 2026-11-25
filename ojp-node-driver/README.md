@@ -12,7 +12,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Assessment | Value |
 |---|---|
 | Target level | **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
-| Cumulative level | **L3** for H2; **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
+| Cumulative level | **L4** for H2; **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
 | Higher-level features | L10 combines multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -50,6 +50,12 @@ results, metadata and EOF, streamed and buffered results across 10,001 ordered r
 early cursor close with subsequent session usability. `OjpClient` propagates session
 state and closes result-set resources internally; callers do not manage protocol session
 tokens, result-set identifiers, or cursor cleanup.
+H2 L4 coverage in `test/integration.h2.l4.test.ts` verifies autocommit, durable commit and
+rollback, transaction isolation, managed transaction callbacks, named and nested
+savepoints, rollback-to-savepoint, release, prepared-batch rollback, duplicate-key
+recovery, and savepoint invalidation after rollback or commit. `OjpClient` propagates
+session state automatically; `withTransaction()` manages transaction completion without
+application-written transaction cleanup.
 MariaDB and MySQL L2 coverage is in `test/integration.mariadb.l2.test.ts` and
 `test/integration.mysql.l2.test.ts`; the shared suite verifies supported typed values,
 including URL, RowId, scalar Object, and character/binary stream parameters, reusable
@@ -101,7 +107,7 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L1** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | `connect`/`close`, parameterized CRUD, SQL errors and empty results. H2, MariaDB, and MySQL also verify closed clients are unusable, scoped calls create distinct clients and hide session propagation, and callback failures still close the session. See `test/integration.h2.l1.test.ts`, `test/integration.mariadb.l1.test.ts`, `test/integration.mysql.l1.test.ts`, `test/integration.postgres.l1.test.ts`, and `test/integration.sqlServerAg.test.ts`. |
 | **L2** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | H2 covers typed numeric, text, binary, temporal, NULL, scalar Object, RowId, and stream parameters; prepared/plain execution and batches; generated keys; result metadata; SQL errors; and direct/prepared `FINAL TABLE` queries in `test/integration.h2.l2.test.ts`. H2 rejects URL parameters. MariaDB and MySQL cover the same broad parameter/statement surface and URL parameters; MariaDB covers `INSERT ... RETURNING`, while MySQL asserts unsupported syntax is reported as a SQL error. PostgreSQL covers reusable prepared bindings, batches, generated keys, column-label metadata, and `RETURNING` DML; SQL Server adds the equivalent `OUTPUT` result-set path. `ARRAY` and `REF` are explicit, tested API omissions. |
 | **L3** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | H2 covers streamed and buffered 10,001-row results, metadata, EOF, paged `FINAL TABLE` results, concurrent cursors, and early cursor close in `test/integration.h2.l3.test.ts`. MariaDB and MySQL cover streamed and buffered 10,001-row results across server blocks, metadata, EOF, SQL pagination, concurrent cursors, and early cursor close in `test/integration.mariadb.l3.test.ts` and `test/integration.mysql.l3.test.ts`. PostgreSQL additionally covers paged `RETURNING` results; SQL Server covers streaming, pagination, metadata, EOF, concurrent cursors, and early close. |
-| **L4** | MariaDB, MySQL, PostgreSQL, SQL Server (certified) | MariaDB and MySQL cover durable commit/rollback, autocommit behavior, isolation-level get/set, managed transaction callbacks, named/unnamed and nested savepoints, rollback-to-savepoint, release, batch rollback, duplicate-key recovery, and transaction completion invalidation in `test/integration.mariadb.l4.test.ts` and `test/integration.mysql.l4.test.ts`. PostgreSQL covers the same transaction/savepoint semantics in `test/integration.postgres.l4.test.ts`; SQL Server additionally covers batch rollback and error recovery in `test/integration.sqlServerL4.test.ts`. |
+| **L4** | H2, MariaDB, MySQL, PostgreSQL, SQL Server (certified) | H2, MariaDB, and MySQL cover durable commit/rollback, autocommit behavior, isolation-level get/set, managed transaction callbacks, named/unnamed and nested savepoints, rollback-to-savepoint, release, prepared-batch rollback, duplicate-key recovery, and transaction completion invalidation in their database-specific L4 suites. PostgreSQL covers the same transaction/savepoint semantics; SQL Server additionally covers batch rollback and error recovery. |
 | **L5** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover BLOB/CLOB stream upload, Unicode, parameter binding, streamed reads, hydrated query results, empty versus NULL values, multi-chunk content, updates, and reusable references in `test/integration.mariadb.l5.test.ts` and `test/integration.mysql.l5.test.ts`. PostgreSQL validates the JDBC-compatible hydrated `BYTEA`/`TEXT` path. SQL Server covers multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references; its JDBC driver rejects ranged BLOB/CLOB reads, which the L5 suite asserts. H2 verifies exact stream contents and sizes in `test/integration.lob.stream.h2.test.ts`. |
 | **L6** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover temporary tables, session variables, transaction boundaries, close lifecycle, and bound-node failure without rerouting in their L6 suites. PostgreSQL verifies temporary-table and `SET LOCAL` state across calls/transactions, close lifecycle, and bound-node failure without rerouting; session and target-server propagation are managed internally. SQL Server also covers temporary-table state and sticky-node failure. |
 | **L7** | MariaDB, MySQL, PostgreSQL, SQL Server | The database-specific L7 suites verify least-connections selection, round-robin distribution, unavailable/recovered-node health, cached `connHash` reuse, stale-pool reconnect for stateless operations, and SQL-error classification. `test/multinodeClient.test.ts` also checks cluster-health propagation and retry limits. |
@@ -132,7 +138,7 @@ two dedicated containers in `OJP_TEST_NODE_CONTAINERS` and matching ports in
 `OJP_TEST_NODE_PORTS`. The tests stop and restart these containers.
 
 The Node integration workflow provisions all four databases and two-node OJP clusters
-that require client certificates; it runs the L10 suites alongside L1–L9. H2 is at L3.
+that require client certificates; it runs the L10 suites alongside L1–L9. H2 is at L4.
 To run the MariaDB or MySQL L10 suite, set `OJP_TEST_MTLS_CERT_DIR` to the certificate
 directory, `OJP_TEST_MYSQL_MARIADB_L10_MTLS_ENDPOINTS` to at least two distinct
 `localhost:port` endpoints, and `OJP_TEST_MYSQL_MARIADB_L10_MTLS_CONTAINERS` to the
@@ -846,6 +852,7 @@ server with the H2 JDBC driver and run:
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npx jest --runInBand test/integration.h2.l1.test.ts
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npm run test:h2-l2
 OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npm run test:h2-l3
+OJP_TEST_H2=true OJP_TEST_H2_ADDR=localhost:1059 npm run test:h2-l4
 ```
 
 Each suite reads every JDBC URL, username and password row from its CSV fixture.

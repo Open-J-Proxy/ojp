@@ -16,14 +16,79 @@ jobs:
     with:
       full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
 
-  integration:
+  h2-integration:
     needs: detect-changes
     if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ojp-node-driver/package-lock.json
+
+      - name: Install Node driver dependencies
+        working-directory: ojp-node-driver
+        run: npm ci
+
+      - name: Build OJP server
+        run: ./mvnw -q -pl ojp-server -am install -DskipTests -Dgpg.skip=true
+
+      - name: Download H2 JDBC driver
+        run: |
+          mkdir -p ojp-libs
+          curl -fsSL https://repo.maven.apache.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar -o ojp-libs/h2.jar
+
+      - name: Start OJP server
+        run: |
+          jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          test -n "$jar"
+          java -Duser.timezone=UTC -Dojp.libs.path="$PWD/ojp-libs" \
+            -jar "$jar" > "$RUNNER_TEMP/ojp-h2-server.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            if grep -q 'OJP gRPC Server started' "$RUNNER_TEMP/ojp-h2-server.log"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ojp-h2-server.log"
+          exit 1
+
+      - name: Run H2 integration suites
+        working-directory: ojp-node-driver
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+          OJP_ENABLE_LOB_H2_TESTS: 'true'
+        run: npx jest --runInBand 'test/integration\..*h2.*\.test\.ts$'
+
+      - name: Show OJP server log
+        if: always()
+        run: cat "$RUNNER_TEMP/ojp-h2-server.log" || true
+
+  integration:
+    name: ${{ matrix.database }} integration
+    needs: [detect-changes, h2-integration]
+    if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        database: ${{ fromJSON(needs.detect-changes.outputs.node == 'true' && '["postgres","mysql","mariadb","sqlserver"]' || '["postgres","sqlserver"]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       mysql:
-        image: mysql:8.0
+        image: ${{ matrix.database == 'mysql' && 'mysql:8.0' || '' }}
         env:
           MYSQL_DATABASE: node_test
           MYSQL_USER: nodeuser
@@ -37,7 +102,7 @@ jobs:
         ports:
           - 3306:3306
       mariadb:
-        image: mariadb:10.11
+        image: ${{ matrix.database == 'mariadb' && 'mariadb:10.11' || '' }}
         env:
           MARIADB_DATABASE: node_test
           MARIADB_USER: nodeuser
@@ -65,27 +130,29 @@ jobs:
           cache: npm
           cache-dependency-path: ojp-node-driver/package-lock.json
 
-      - name: Install, build and run unit tests
-        if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
+      - name: Install and build Node driver
         working-directory: ojp-node-driver
         run: |
           npm ci
           npm run build
+
+      - name: Run Node driver unit tests
+        if: matrix.database == 'postgres'
+        working-directory: ojp-node-driver
+        run: |
           npm test -- --runInBand
 
-      - name: Build Node driver for TypeORM adapter
-        if: needs.detect-changes.outputs.node_typeorm == 'true' && needs.detect-changes.outputs.node != 'true'
-        working-directory: ojp-node-driver
-        run: |
-          npm ci
-          npm run build
-
-      - name: Install, build and run TypeORM adapter unit tests
-        if: needs.detect-changes.outputs.node_typeorm == 'true'
+      - name: Install and build TypeORM adapter
+        if: needs.detect-changes.outputs.node_typeorm == 'true' && (matrix.database == 'postgres' || matrix.database == 'sqlserver')
         working-directory: ojp-node-typeorm-adapter
         run: |
           npm ci
           npm run build
+
+      - name: Run TypeORM adapter unit tests
+        if: needs.detect-changes.outputs.node_typeorm == 'true' && matrix.database == 'postgres'
+        working-directory: ojp-node-typeorm-adapter
+        run: |
           npm test -- --runInBand
 
       - name: Build OJP server
@@ -94,13 +161,14 @@ jobs:
       - name: Download JDBC drivers
         run: |
           mkdir -p ojp-libs
-          curl -fsSL https://repo.maven.apache.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar -o ojp-libs/h2.jar
           curl -fsSL https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.8/postgresql-42.7.8.jar -o ojp-libs/postgresql.jar
           curl -fsSL https://repo.maven.apache.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar -o ojp-libs/mysql-connector-j.jar
           curl -fsSL https://repo.maven.apache.org/maven2/org/mariadb/jdbc/mariadb-java-client/3.5.3/mariadb-java-client-3.5.3.jar -o ojp-libs/mariadb-java-client.jar
           curl -fsSL https://repo.maven.apache.org/maven2/com/microsoft/sqlserver/mssql-jdbc/12.8.2.jre11/mssql-jdbc-12.8.2.jre11.jar -o ojp-libs/mssql-jdbc.jar
 
       - name: Start databases
+        env:
+          DATABASE: ${{ matrix.database }}
         run: |
           password="NodeTest!$(openssl rand -hex 16)"
           echo "::add-mask::$password"
@@ -110,30 +178,39 @@ jobs:
             echo "OJP_TEST_SQLSERVER_PASSWORD=$password"
             echo "NODE_TEST_PREFIX=$prefix"
           } >> "$GITHUB_ENV"
-          docker run -d --name "$prefix-postgres" --network host \
-            -e POSTGRES_USER=nodeuser -e POSTGRES_DB=node_test \
-            -e POSTGRES_PASSWORD="$password" postgres:17 -c max_prepared_transactions=100
-          docker run -d --name "$prefix-sqlserver" --network host \
-            -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" mcr.microsoft.com/mssql/server:2022-latest
+          if [ "$DATABASE" = postgres ]; then
+            docker run -d --name "$prefix-postgres" --network host \
+              -e POSTGRES_USER=nodeuser -e POSTGRES_DB=node_test \
+              -e POSTGRES_PASSWORD="$password" postgres:17 -c max_prepared_transactions=100
+          elif [ "$DATABASE" = sqlserver ]; then
+            docker run -d --name "$prefix-sqlserver" --network host \
+              -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$password" mcr.microsoft.com/mssql/server:2022-latest
+          else
+            exit 0
+          fi
           for i in $(seq 1 90); do
-            if docker exec "$prefix-postgres" pg_isready -U nodeuser -d node_test >/dev/null 2>&1 &&
-               docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
+            if [ "$DATABASE" = postgres ] && docker exec "$prefix-postgres" pg_isready -U nodeuser -d node_test >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$DATABASE" = sqlserver ] && docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
                  -S localhost -U sa -P "$password" -C -b -Q 'SELECT 1' >/dev/null 2>&1; then
               break
             fi
             if [ "$i" -eq 90 ]; then
-              docker logs "$prefix-postgres"
-              docker logs "$prefix-sqlserver"
+              docker logs "$prefix-$DATABASE"
               exit 1
             fi
             sleep 2
           done
-          docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
-            -S localhost -U sa -P "$password" -C -b -Q 'CREATE DATABASE node_test'
-          docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
-            -S localhost -U sa -P "$password" -C -b -d master -Q 'EXEC sp_sqljdbc_xa_install;'
+          if [ "$DATABASE" = sqlserver ]; then
+            docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "$password" -C -b -Q 'CREATE DATABASE node_test'
+            docker exec "$prefix-sqlserver" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "$password" -C -b -d master -Q 'EXEC sp_sqljdbc_xa_install;'
+          fi
 
       - name: Grant MySQL XA recovery permission
+        if: matrix.database == 'mysql'
         run: |
           docker exec ${{ job.services.mysql.id }} mysql -uroot -prootpassword \
             -e "GRANT XA_RECOVER_ADMIN ON *.* TO 'nodeuser'@'%';"
@@ -260,13 +337,11 @@ jobs:
             echo "OJP_TEST_MYSQL_MARIADB_L10_MTLS_ENDPOINTS=localhost:10593,localhost:10594"
           } >> "$GITHUB_ENV"
 
-      - name: Run every client integration suite
+      - name: Run database client integration suites
         if: needs.detect-changes.outputs.node == 'true'
         working-directory: ojp-node-driver
         env:
-          OJP_TEST_H2: 'true'
-          OJP_TEST_H2_ADDR: localhost:1059
-          OJP_ENABLE_LOB_H2_TESTS: 'true'
+          DATABASE: ${{ matrix.database }}
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
           OJP_ENABLE_MYSQL_TESTS: 'true'
           OJP_ENABLE_MARIADB_TESTS: 'true'
@@ -292,17 +367,29 @@ jobs:
           OJP_ENABLE_SQLSERVER_XA_TESTS: 'true'
           OJP_ENABLE_MULTINODE_FAILOVER_TESTS: 'true'
         run: |
-          npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/node-integration.json"
+          case "$DATABASE" in
+            postgres) pattern='integration\.(postgres\.|xa\.postgres|ojpServer)' ;;
+            mysql) pattern='integration\.mysql\.' ;;
+            mariadb) pattern='integration\.mariadb\.' ;;
+            sqlserver) pattern='integration\.(sqlServer|multinode)' ;;
+          esac
+          npx jest --runInBand "$pattern" --json --outputFile="$RUNNER_TEMP/node-integration.json"
           node -e "const r=require(process.argv[1]); if (r.numFailedTests > 0 || r.numFailedTestSuites > 0 || r.numRuntimeErrorTestSuites > 0) process.exit(1)" "$RUNNER_TEMP/node-integration.json"
 
       - name: Run TypeORM adapter integration suites
-        if: needs.detect-changes.outputs.node_typeorm == 'true'
+        if: needs.detect-changes.outputs.node_typeorm == 'true' && (matrix.database == 'postgres' || matrix.database == 'sqlserver')
         working-directory: ojp-node-typeorm-adapter
         env:
+          DATABASE: ${{ matrix.database }}
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
           OJP_ENABLE_SQLSERVER_AG_TESTS: 'true'
         run: |
-          npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/typeorm-integration.json"
+          if [ "$DATABASE" = postgres ]; then
+            pattern='integration\.postgres\.test\.ts$'
+          else
+            pattern='integration\.mssql\.test\.ts$'
+          fi
+          npx jest --runInBand "$pattern" --json --outputFile="$RUNNER_TEMP/typeorm-integration.json"
           node -e "const r=require(process.argv[1]); if (r.numFailedTests > 0 || r.numFailedTestSuites > 0 || r.numRuntimeErrorTestSuites > 0) process.exit(1)" "$RUNNER_TEMP/typeorm-integration.json"
 
       - name: Show logs and clean up test containers

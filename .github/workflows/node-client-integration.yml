@@ -16,8 +16,68 @@ jobs:
     with:
       full-suite: ${{ github.event_name == 'workflow_dispatch' && inputs.full_suite }}
 
-  integration:
+  h2-integration:
     needs: detect-changes
+    if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ojp-node-driver/package-lock.json
+
+      - name: Install Node driver dependencies
+        working-directory: ojp-node-driver
+        run: npm ci
+
+      - name: Build OJP server
+        run: ./mvnw -q -pl ojp-server -am install -DskipTests -Dgpg.skip=true
+
+      - name: Download H2 JDBC driver
+        run: |
+          mkdir -p ojp-libs
+          curl -fsSL https://repo.maven.apache.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar -o ojp-libs/h2.jar
+
+      - name: Start OJP server
+        run: |
+          jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          test -n "$jar"
+          java -Duser.timezone=UTC -Dojp.libs.path="$PWD/ojp-libs" \
+            -jar "$jar" > "$RUNNER_TEMP/ojp-h2-server.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            if grep -q 'OJP gRPC Server started' "$RUNNER_TEMP/ojp-h2-server.log"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ojp-h2-server.log"
+          exit 1
+
+      - name: Run H2 integration suites
+        working-directory: ojp-node-driver
+        env:
+          OJP_TEST_H2: 'true'
+          OJP_TEST_H2_ADDR: localhost:1059
+          OJP_ENABLE_LOB_H2_TESTS: 'true'
+        run: npx jest --runInBand 'test/integration\..*h2.*\.test\.ts$'
+
+      - name: Show OJP server log
+        if: always()
+        run: cat "$RUNNER_TEMP/ojp-h2-server.log" || true
+
+  integration:
+    needs: [detect-changes, h2-integration]
     if: needs.detect-changes.outputs.node == 'true' || needs.detect-changes.outputs.node_typeorm == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -94,7 +154,6 @@ jobs:
       - name: Download JDBC drivers
         run: |
           mkdir -p ojp-libs
-          curl -fsSL https://repo.maven.apache.org/maven2/com/h2database/h2/2.3.232/h2-2.3.232.jar -o ojp-libs/h2.jar
           curl -fsSL https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.8/postgresql-42.7.8.jar -o ojp-libs/postgresql.jar
           curl -fsSL https://repo.maven.apache.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar -o ojp-libs/mysql-connector-j.jar
           curl -fsSL https://repo.maven.apache.org/maven2/org/mariadb/jdbc/mariadb-java-client/3.5.3/mariadb-java-client-3.5.3.jar -o ojp-libs/mariadb-java-client.jar
@@ -260,13 +319,10 @@ jobs:
             echo "OJP_TEST_MYSQL_MARIADB_L10_MTLS_ENDPOINTS=localhost:10593,localhost:10594"
           } >> "$GITHUB_ENV"
 
-      - name: Run every client integration suite
+      - name: Run remaining client integration suites
         if: needs.detect-changes.outputs.node == 'true'
         working-directory: ojp-node-driver
         env:
-          OJP_TEST_H2: 'true'
-          OJP_TEST_H2_ADDR: localhost:1059
-          OJP_ENABLE_LOB_H2_TESTS: 'true'
           OJP_ENABLE_INTEGRATION_TESTS: 'true'
           OJP_ENABLE_MYSQL_TESTS: 'true'
           OJP_ENABLE_MARIADB_TESTS: 'true'
@@ -292,7 +348,7 @@ jobs:
           OJP_ENABLE_SQLSERVER_XA_TESTS: 'true'
           OJP_ENABLE_MULTINODE_FAILOVER_TESTS: 'true'
         run: |
-          npm run test:integration:all -- --json --outputFile="$RUNNER_TEMP/node-integration.json"
+          npm run test:integration:all -- --testPathIgnorePatterns='integration\..*h2.*\.test\.ts$' --json --outputFile="$RUNNER_TEMP/node-integration.json"
           node -e "const r=require(process.argv[1]); if (r.numFailedTests > 0 || r.numFailedTestSuites > 0 || r.numRuntimeErrorTestSuites > 0) process.exit(1)" "$RUNNER_TEMP/node-integration.json"
 
       - name: Run TypeORM adapter integration suites

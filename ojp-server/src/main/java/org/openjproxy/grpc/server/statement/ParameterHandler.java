@@ -322,7 +322,7 @@ public class ParameterHandler {
             ps.setClob(idx, (Clob) null);
         } else {
             Clob clob = requireLob(sessionManager.<Clob>getLob(session, (String) clobUUID), clobUUID);
-            ps.setClob(idx, new SurrogateSafeReader(clob.getCharacterStream()));
+            ps.setClob(idx, clob.getCharacterStream());
         }
     }
 
@@ -333,7 +333,7 @@ public class ParameterHandler {
             ps.setNull(idx, java.sql.Types.NCLOB);
         } else {
             Clob clob = requireLob(sessionManager.<Clob>getLob(session, (String) clobUUID), clobUUID);
-            ps.setNClob(idx, new SurrogateSafeReader(clob.getCharacterStream()));
+            ps.setNClob(idx, clob.getCharacterStream());
         }
     }
 

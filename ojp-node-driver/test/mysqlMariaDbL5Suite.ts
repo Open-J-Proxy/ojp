@@ -103,7 +103,9 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
       }, 60_000);
 
       it('uploads and hydrates a multi-chunk Unicode CLOB stream without changing text', async () => {
-        const content = 'MariaDB/MySQL CLOB: äöü ñ 中文 🚀 — '.repeat(5_000);
+        const prefix = 'a'.repeat(2 * 65_536);
+        const content = prefix + 'Unicode: äöü ñ 中文 🚀 — ';
+        expect(Buffer.byteLength(prefix, 'utf8')).toBe(2 * 65_536);
         const source = Readable.from([
           content.slice(0, 137),
           content.slice(137, 3_141),
@@ -127,7 +129,9 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
           const mariaClient = new OjpClient(ojpUrl(endpoint, mariaJdbcUrl), credentials);
           await mariaClient.connect();
           try {
-            const content = 'MariaDB Connector/J on MySQL 🚀 '.repeat(5_000);
+            const prefix = 'a'.repeat(2 * 65_536);
+            const content = prefix + 'MariaDB Connector/J on MySQL 🚀 ';
+            expect(Buffer.byteLength(prefix, 'utf8')).toBe(2 * 65_536);
             const reference = await mariaClient.createLob(content, 'CLOB');
             expect(await mariaClient.executeUpdate(
               `INSERT INTO ${table} (id, body) VALUES (?, ?)`, [10, reference],

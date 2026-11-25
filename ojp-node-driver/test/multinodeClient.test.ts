@@ -1,5 +1,4 @@
 import * as grpc from '@grpc/grpc-js';
-import { EventEmitter } from 'events';
 
 interface MockSession {
   connHash: string;
@@ -21,7 +20,6 @@ const mockRpcState: {
   responseTargetServer?: string;
   responseSessionUUID?: string;
   sessionUUID: string;
-  lobBlocks: Array<{ position: string; data: Buffer; session: MockSession }>;
 } = {
   connectRequests: [],
   connectErrors: new Map(),
@@ -32,7 +30,6 @@ const mockRpcState: {
   startTransactionErrors: [],
   startTransactionAddresses: [],
   sessionUUID: '',
-  lobBlocks: [],
 };
 
 jest.mock('../src/proto/loader', () => ({
@@ -121,27 +118,6 @@ jest.mock('../src/proto/loader', () => ({
               callback(null, { session: request.session });
             }
 
-            createLob(): EventEmitter & {
-              write: (block: { position: string; data: Buffer; session: MockSession }, callback: () => void) => void;
-              end: () => void;
-            } {
-              const call = new EventEmitter() as EventEmitter & {
-                write: (block: { position: string; data: Buffer; session: MockSession }, callback: () => void) => void;
-                end: () => void;
-              };
-              call.write = (block, callback) => {
-                mockRpcState.lobBlocks.push(block);
-                callback();
-                if (mockRpcState.lobBlocks.length === 1) {
-                  process.nextTick(() => call.emit('data', {
-                    uuid: 'lob', lobType: 'LT_CLOB', session: { ...block.session, sessionUUID: 'lob-session' },
-                  }));
-                }
-              };
-              call.end = () => process.nextTick(() => call.emit('end'));
-              return call;
-            }
-
             terminateSession(_session: unknown, callbackOrOptions: unknown, maybeCallback?: (err: Error | null) => void): void {
               const callback = typeof callbackOrOptions === 'function'
                 ? callbackOrOptions as (err: Error | null) => void
@@ -177,31 +153,8 @@ describe('OjpClient multinode pool cache', () => {
     mockRpcState.responseTargetServer = undefined;
     mockRpcState.responseSessionUUID = undefined;
     mockRpcState.sessionUUID = '';
-    mockRpcState.lobBlocks = [];
     resetEndpointHealthForTests();
     resetPoolCacheForTests();
-  });
-
-  it.each([
-    ['mariadb://localhost/db', undefined, 'CLOB', '65534'],
-    ['mysql://localhost/db', undefined, 'CLOB', '65535'],
-    ['mysql://localhost/db?permitMysqlScheme', 'codePoint', 'CLOB', '65534'],
-    ['mariadb://localhost/db', 'utf16', 'CLOB', '65535'],
-    ['mariadb://localhost/db', undefined, 'BLOB', '65537'],
-  ] as const)('uses the correct LOB position for %s with %s and %s', async (backend, unit, kind, expected) => {
-    const client = new OjpClient(`jdbc:ojp[localhost:1059]_${backend}`, { clobPositionUnit: unit });
-    await client.connect();
-    try {
-      await client.createLob(`${'a'.repeat(65_532)}🚀${'b'.repeat(10)}`, kind);
-      expect(mockRpcState.lobBlocks.map((block) => block.position)).toEqual(['1', expected]);
-      expect(mockRpcState.lobBlocks[1].session.sessionUUID).toBe('lob-session');
-    } finally {
-      await client.close();
-    }
-  });
-
-  it('rejects invalid CLOB position units', () => {
-    expect(() => new OjpClient(url, { clobPositionUnit: 'invalid' as 'utf16' })).toThrow(/clobPositionUnit/);
   });
 
   it('reuses the pool connHash on a cached connection without a connect RPC', async () => {

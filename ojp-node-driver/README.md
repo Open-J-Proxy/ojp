@@ -845,7 +845,7 @@ For PostgreSQL L8, set `OJP_ENABLE_POSTGRES_L8_TESTS=true`,
 `-Dojp.server.maxConcurrentRequests=1`. MySQL and MariaDB L8 use the same dedicated
 cluster and require `OJP_TEST_L8_THROTTLED_NODE_CONTAINER` and
 `OJP_TEST_L8_THROTTLED_NODE_PORT` for a distinct node with that limit. The suites stop
-and restart their configured containers. For the H2 L1-L3 suites, start an OJP
+and restart their configured containers. For the H2 L1-L4 suites, start an OJP
 server with the H2 JDBC driver and run:
 
 ```bash

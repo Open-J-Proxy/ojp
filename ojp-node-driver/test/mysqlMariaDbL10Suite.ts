@@ -108,6 +108,12 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
       }
     };
 
+    const expectOne = async (client: OjpClient, column: string): Promise<void> => {
+      const result = await client.executeQuery(`SELECT 1 AS ${column}`);
+      expect(result.rows).toHaveLength(1);
+      expect(Number(result.rows[0][column])).toBe(1);
+    };
+
     const stopNode = async (port: number): Promise<void> => {
       const node = nodes.find((candidate) => candidate.port === port);
       if (!node) {
@@ -137,8 +143,7 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
     it('authenticates to every mTLS endpoint and verifies SQL, local transactions, and XA outcomes', async () => {
       for (const endpoint of endpoints) {
         await withClient(async (client) => {
-          await expect(client.executeQuery('SELECT 1 AS authenticated'))
-            .resolves.toMatchObject({ rows: [{ authenticated: 1 }] });
+          await expectOne(client, 'authenticated');
         }, ojpUrl(endpoint, jdbcUrl));
       }
 
@@ -158,9 +163,7 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
           await client.executeUpdate('DROP TEMPORARY TABLE ojp_node_l10_session');
           await expect(client.executeUpdate('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
           expect(client.boundEndpoint?.port).toBe(endpointBeforeSqlError);
-          await expect(client.executeQuery('SELECT 1 AS usable')).resolves.toMatchObject({
-            rows: [{ usable: 1 }],
-          });
+          await expectOne(client, 'usable');
 
           await expect(client.withTransaction(async (connection) => {
             expect(await connection.executeUpdate(
@@ -306,10 +309,9 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
           const client = await newClient(clusterUrl, 'trusted', 'round-robin');
           try {
             selected.add(client.boundEndpoint!.port);
-            await expect(client.executeQuery('SELECT 1 AS healthy'))
-              .resolves.toMatchObject({ rows: [{ healthy: 1 }] });
+            await expectOne(client, 'healthy');
           } finally {
-            await client.close().catch(() => undefined);
+            await client.close();
           }
         }
         expect(selected).toEqual(new Set(nodes.map(({ port }) => port)));
@@ -377,8 +379,7 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
         resetPoolCacheForTests();
         resetEndpointHealthForTests();
         await withClient(async (client) => {
-          await expect(client.executeQuery('SELECT 1 AS authenticated'))
-            .resolves.toMatchObject({ rows: [{ authenticated: 1 }] });
+          await expectOne(client, 'authenticated');
         }, ojpUrl(endpoint, jdbcUrl));
         await expect(newClient(ojpUrl(endpoint, jdbcUrl), 'none')).rejects.toBeInstanceOf(OjpConnectionError);
       }
@@ -389,8 +390,7 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
         resetPoolCacheForTests();
         resetEndpointHealthForTests();
         await withClient(async (client) => {
-          await expect(client.executeQuery('SELECT 1 AS authenticated'))
-            .resolves.toMatchObject({ rows: [{ authenticated: 1 }] });
+          await expectOne(client, 'authenticated');
         }, ojpUrl(endpoint, jdbcUrl));
         await expect(newClient(ojpUrl(endpoint, jdbcUrl), 'untrusted')).rejects.toBeInstanceOf(OjpConnectionError);
       }

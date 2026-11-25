@@ -74,8 +74,8 @@ These entries describe the levels targeted by the language client modules; they 
 | C++ ODBC (`ojp-client-cpp-odbc`) | SQL Server | **L10** | SQL Server combined multinode/XA suite runs against two mTLS servers and checks trusted, missing and untrusted client certificates. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | PostgreSQL | **L10** | PostgreSQL combined multinode/XA suite runs against two mTLS servers and checks trusted, missing and untrusted client certificates. |
 | C++ ODBC (`ojp-client-cpp-odbc`) | MariaDB / MySQL | **L10** | Shared MariaDB combined multinode/XA suite runs every database CSV row against two mTLS servers, including certificate rejection checks. |
-| Node.js (`ojp-node-driver`) | MariaDB | **L8** | `test/integration.mariadb.l8.test.ts` covers stateless failover, recovery, redistribution, transaction and batch operations, and overload safety. |
-| Node.js (`ojp-node-driver`) | MySQL | **L8** | `test/integration.mysql.l8.test.ts` covers stateless failover, recovery, redistribution, transaction and batch operations, and overload safety. |
+| Node.js (`ojp-node-driver`) | MariaDB | **L8** | XA lifecycle coverage exists, but unused XA sessions leak server pool capacity. |
+| Node.js (`ojp-node-driver`) | MySQL | **L8** | XA lifecycle coverage exists, but unused XA sessions leak server pool capacity. |
 | Go (`ojp-client-go-database-sql`) | H2 | **L3** | L1-L3 are covered by `client/h2_l1_integration_test.go`, `client/h2_l2_integration_test.go`, `client/h2_l3_integration_test.go`, and `client/h2_l3_fetch_integration_test.go`. |
 | Dart (`ojp-client-dart-drift`) | H2 | **L1** | `test/h2_l1_integration_test.dart` exercises the real-server CRUD and lifecycle path. |
 | .NET ADO.NET (`ojp-client-dotnet-ado-net`) | H2 | **L1** | `tests/Ojp.Client.IntegrationTests/H2L1IntegrationTests.cs` exercises the real-server CRUD/lifecycle path using `TestData/h2_l1_connection.csv`. |

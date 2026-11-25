@@ -3,11 +3,14 @@ package org.openjproxy.grpc.server;
 import com.openjproxy.grpc.SessionInfo;
 import org.junit.jupiter.api.Test;
 
+import javax.sql.DataSource;
 import java.sql.Connection;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * Unit tests for {@link Session#hasConnectionPermit()} and the wiring around
@@ -48,5 +51,18 @@ class SessionConnectionPermitTest {
                 "Closing the session should release the permit and clear ownership");
         assertTrue(releaseCount.get() == 1,
                 "Terminate should run the release hook exactly once");
+    }
+
+    @Test
+    void shouldNotAcquireConnectionsAfterSessionTerminates() throws Exception {
+        DataSource primary = mock(DataSource.class);
+        DataSource replica = mock(DataSource.class);
+        Session session = new Session(primary, replica, "conn-hash", "client-uuid", null);
+
+        session.terminate();
+
+        assertThrows(RuntimeException.class, session::getConnection);
+        assertThrows(RuntimeException.class, session::getOrCreateReplicaConnection);
+        verifyNoInteractions(primary, replica);
     }
 }

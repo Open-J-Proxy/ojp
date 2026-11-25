@@ -58,6 +58,12 @@ public class Session {
     @Getter
     private Object backendSession; // Holds XABackendSession for XA pooling (avoids hard dependency)
     @Getter
+    @lombok.Setter
+    private org.openjproxy.xa.pool.XATransactionRegistry xaPoolRegistry;
+    @Getter
+    @lombok.Setter
+    private boolean xaTransactionStarted;
+    @Getter
     private final CacheConfiguration cacheConfiguration;  // Can be null if caching not configured
     private Map<String, ResultSet> resultSetMap;
     private Map<String, Statement> statementMap;
@@ -226,6 +232,7 @@ public class Session {
      *         datasource and no eagerly-supplied connection
      */
     public synchronized Connection getConnection() {
+        this.notClosed();
         // For XA sessions with backend session, always get fresh connection reference
         // This ensures we get the updated connection after sanitization
         if (isXA && backendSession != null && backendSession instanceof org.openjproxy.xa.pool.XABackendSession) {
@@ -274,6 +281,7 @@ public class Session {
      * @throws SQLException if acquiring the connection from the pool fails
      */
     public synchronized Connection getOrCreateReplicaConnection(DataSource fallbackReplicaDs) throws SQLException {
+        this.notClosed();
         if (replicaConnection == null) {
             DataSource ds = (replicaDataSource != null) ? replicaDataSource : fallbackReplicaDs;
             if (ds != null) {

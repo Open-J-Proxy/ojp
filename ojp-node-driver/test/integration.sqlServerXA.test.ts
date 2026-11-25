@@ -263,19 +263,16 @@ describeIfEnabled.each(connections)('OjpXAResource - SQL Server: %s', (jdbcUrl, 
     await expect(connection.rollback()).rejects.toThrow(/createXAResource/);
   }, 30_000);
 
-  it('recreates an XA session and retries xaStart on a different healthy node', async () => {
+  it('does not retry xaStart on another node after the bound node is lost', async () => {
     xaConn = await dataSource.getXAConnection();
     const client = xaConn.getConnection();
     const oldPort = client.boundEndpoint!.port;
     const xid = newXid();
 
     await stopBoundNode(client);
-    await expect(xaConn.getXAResource().start(xid, XA.TMNOFLAGS)).resolves.toBeUndefined();
-    expect(client.boundEndpoint?.port).not.toBe(oldPort);
-
-    const xa = xaConn.getXAResource();
-    await xa.end(xid, XA.TMSUCCESS);
-    await xa.commit(xid, true);
+    await expect(xaConn.getXAResource().start(xid, XA.TMNOFLAGS))
+      .rejects.toMatchObject({ errorCode: XA.XAER_RMFAIL });
+    expect(client.boundEndpoint?.port).toBe(oldPort);
   }, 120_000);
 
   it('surfaces bound-node loss as XAER_RMFAIL without rerouting an active XA branch', async () => {

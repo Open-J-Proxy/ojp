@@ -369,6 +369,7 @@ public class HandleXAConnectionWithPoolingAction {
             Session session = context.getSessionManager().getSession(sessionInfo);
             if (session != null) {
                 session.setBackendSession(backendSession);
+                session.setXaPoolRegistry(registry);
             }
 
             log.info("Created XA session (pooled, eager allocation) with client UUID: {} for connHash: {}",

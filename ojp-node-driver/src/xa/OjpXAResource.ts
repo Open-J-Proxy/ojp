@@ -33,7 +33,6 @@ export interface OjpXAResourceHost {
   getClient(): StatementServiceClient;
   getSession(): SessionInfo;
   updateSession(session: SessionInfo): void;
-  startWithFailover(operation: (client: StatementServiceClient, session: SessionInfo) => Promise<XaResponse>): Promise<XaResponse>;
   /** Maps a raw gRPC error to this driver's error hierarchy, marking the bound endpoint unhealthy as a side effect when applicable. */
   mapError(err: unknown): Error;
 }
@@ -50,7 +49,8 @@ function transportErrorCode(err: unknown): number {
  * library that speaks this shape). Obtained via `OjpClient.createXAResource()` (client
  * created with `{ xa: true }`) or `OjpXAConnection.getXAResource()`.
  *
- * All operations reject with an `OjpXaError` carrying a standard XA error code:
+ * Remote operation failures reject with an `OjpXaError` carrying an XA error code;
+ * local connection lifecycle and affinity errors are reported by the host:
  * - `errorCode === 0` — business-level failure reported by the server (`XaResponse.
  *   success === false`), mirroring the reference JDBC driver's `new XAException(message)`
  *   (uninitialized/default error code).
@@ -59,26 +59,19 @@ function transportErrorCode(err: unknown): number {
  * - `XAER_RMERR` — any other resource-manager-side error, including all non-connection-
  *   level transport failures.
  *
- * `start()` alone may recreate the XA session and retry on another endpoint after a
- * connection-level failure. Every other operation remains bound and is never replayed.
+ * XA operations remain bound to their session and are never replayed after a
+ * connection-level failure, including `start()` whose outcome may be ambiguous.
  */
 export class OjpXAResource {
   constructor(private readonly host: OjpXAResourceHost) {}
 
   /** Starts work on behalf of a transaction branch. `flags`: `TMNOFLAGS` (new branch), `TMJOIN`, or `TMRESUME`. */
   async start(xid: Xid, flags: number = XA.TMNOFLAGS): Promise<void> {
-    let response: XaResponse;
-    try {
-      response = await this.host.startWithFailover((client, session) => {
-        const request: XaStartRequest = { session, xid: toXidProto(xid), flags };
-        return new Promise<XaResponse>((resolve, reject) => {
-          client.xaStart(request, (err, result) => (err ? reject(err) : resolve(result)));
-        });
-      });
-    } catch (err) {
-      const mapped = this.host.mapError(err);
-      throw new OjpXaError(mapped.message, transportErrorCode(err), err);
-    }
+    const request: XaStartRequest = { session: this.host.getSession(), xid: toXidProto(xid), flags };
+    const response = await this.runUnary<XaResponse>(
+      (client, cb) => client.xaStart(request, cb),
+      transportErrorCode,
+    );
     this.assertSuccess(response);
   }
 

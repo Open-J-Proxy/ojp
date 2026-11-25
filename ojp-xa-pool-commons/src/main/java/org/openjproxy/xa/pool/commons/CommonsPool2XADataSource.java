@@ -284,6 +284,12 @@ public class CommonsPool2XADataSource implements XADataSource, AutoCloseable {
 
         try {
             pool.invalidateObject(session);
+            if (housekeepingConfig.isLeakDetectionEnabled()) {
+                borrowedSessions.remove(session);
+                if (session instanceof BackendSessionImpl) {
+                    ((BackendSessionImpl) session).onReturn();
+                }
+            }
 
             // Record validation failure metric
             poolMetrics.recordValidationFailure(poolName);

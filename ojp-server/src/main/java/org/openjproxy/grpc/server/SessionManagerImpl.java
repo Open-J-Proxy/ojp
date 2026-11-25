@@ -254,7 +254,7 @@ public class SessionManagerImpl implements SessionManager {
     @Override
     public void terminateSession(SessionInfo sessionInfo) throws SQLException {
         log.debug("Terminating session -> {}", sessionInfo.getSessionUUID());
-        Session targetSession = this.sessionMap.remove(sessionInfo.getSessionUUID());
+        Session targetSession = this.sessionMap.get(sessionInfo.getSessionUUID());
 
         // Handle case where session doesn't exist on this server (multinode scenario)
         if (targetSession == null) {
@@ -263,20 +263,32 @@ public class SessionManagerImpl implements SessionManager {
             return;
         }
 
-        if (!sessionInfo.getClientUUID().isEmpty()) {
-            deregisterClientUUID(sessionInfo.getConnHash(), sessionInfo.getClientUUID());
-        }
+        synchronized (targetSession) {
+            if (this.sessionMap.get(sessionInfo.getSessionUUID()) != targetSession) {
+                return;
+            }
+            try {
+                if (!sessionInfo.getClientUUID().isEmpty()) {
+                    deregisterClientUUID(sessionInfo.getConnHash(), sessionInfo.getClientUUID());
+                }
 
-        // Roll back any dangling transaction based on the physical connection's actual
-        // autoCommit state, not the client-reported transaction status. A client can report
-        // TRX_COMMITED (e.g. optimistically, or due to a client-side bug) while the physical
-        // connection is still left in manual-commit mode with an uncommitted transaction; relying
-        // solely on the client-reported status would silently skip the safety rollback below.
-        if (!targetSession.getConnection().getAutoCommit()) {
-            log.debug("Rolling back active transaction on session termination");
-            targetSession.getConnection().rollback();
+                try {
+                    // Roll back any dangling transaction based on the physical connection's actual
+                    // autoCommit state, not the client-reported transaction status. A client can report
+                    // TRX_COMMITED (e.g. optimistically, or due to a client-side bug) while the physical
+                    // connection is still left in manual-commit mode with an uncommitted transaction; relying
+                    // solely on the client-reported status would silently skip the safety rollback below.
+                    if (!targetSession.getConnection().getAutoCommit()) {
+                        log.debug("Rolling back active transaction on session termination");
+                        targetSession.getConnection().rollback();
+                    }
+                } finally {
+                    targetSession.terminate();
+                }
+            } finally {
+                this.sessionMap.remove(sessionInfo.getSessionUUID(), targetSession);
+            }
         }
-        targetSession.terminate();
     }
 
     @SneakyThrows

@@ -50,8 +50,10 @@ function makeHost(client: unknown, session: SessionInfo): OjpXAResourceHost & { 
     updatedSessions,
     getClient: () => client as StatementServiceClient,
     getSession: () => session,
-    updateSession: (s) => updatedSessions.push(s),
-    startWithFailover: (operation) => operation(client as StatementServiceClient, session),
+    updateSession: (s) => {
+      session = s;
+      updatedSessions.push(s);
+    },
     mapError: (err) => (err instanceof Error ? err : new Error(String(err))),
   };
 }
@@ -137,6 +139,26 @@ describe('OjpXAResource', () => {
     expect(host.updatedSessions).toEqual([responseSession]);
   });
 
+  it('propagates updated sessions across XA operations without caller plumbing', async () => {
+    const client = makeFakeClient();
+    const initial = makeSession();
+    const started = { ...initial, sessionUUID: 'started' };
+    const ended = { ...initial, sessionUUID: 'ended' };
+    client.xaStart.mockImplementation((_req, cb) =>
+      cb(null, { session: started, success: true, message: '' }));
+    client.xaEnd.mockImplementation((_req, cb) =>
+      cb(null, { session: ended, success: true, message: '' }));
+    client.xaPrepare.mockImplementation((_req, cb) => cb(null, { session: ended, result: XA.XA_OK }));
+    const resource = new OjpXAResource(makeHost(client, initial));
+
+    await resource.start(xid);
+    await resource.end(xid);
+    expect(await resource.prepare(xid)).toBe(XA.XA_OK);
+    expect(client.xaStart.mock.calls[0][0].session).toEqual(initial);
+    expect(client.xaEnd.mock.calls[0][0].session).toEqual(started);
+    expect(client.xaPrepare.mock.calls[0][0].session).toEqual(ended);
+  });
+
   it('start() throws OjpXaError(errorCode=0) on a business-level failure', async () => {
     const client = makeFakeClient();
     client.xaStart.mockImplementation((_req, cb) =>
@@ -154,6 +176,7 @@ describe('OjpXAResource', () => {
     const resource = new OjpXAResource(makeHost(client, makeSession()));
 
     await expect(resource.start(xid)).rejects.toMatchObject({ errorCode: XA.XAER_RMFAIL });
+    expect(client.xaStart).toHaveBeenCalledTimes(1);
   });
 
   it('start() maps a non-connection-level failure to XAER_RMERR', async () => {

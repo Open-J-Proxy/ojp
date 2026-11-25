@@ -172,6 +172,91 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
       });
     }, 30_000);
 
+    it('binds URL values and returns the original URL text', async () => {
+      const urlValue = 'https://example.test/items/42?source=ojp';
+      const result = await client.executeQuery(
+        'SELECT ? AS "url_value"',
+        [new OjpTypedParam(new URL(urlValue), ParameterType.URL)],
+      );
+      expect(result.columns).toEqual(['url_value']);
+      expect(result.rows).toEqual([{ url_value: urlValue }]);
+    }, 15_000);
+
+    it('binds scalar OBJECT values', async () => {
+      const result = await client.executeQuery(
+        'SELECT ? AS "object_value"',
+        [new OjpTypedParam(42, ParameterType.OBJECT)],
+      );
+      expect(result.rows).toEqual([{ object_value: 42 }]);
+    }, 15_000);
+
+    it('binds opaque ROW_ID bytes without altering their contents', async () => {
+      const rowIdBytes = Buffer.from([0, 0x41, 0xff, 0x00]);
+      const result = await client.executeQuery(
+        'SELECT CAST(? AS BINARY(4)) AS "row_id_value"',
+        [new OjpTypedParam(rowIdBytes, ParameterType.ROW_ID)],
+      );
+      expect(result.rows).toHaveLength(1);
+      expect((result.rows[0].row_id_value as Buffer).equals(rowIdBytes)).toBe(true);
+    }, 15_000);
+
+    it('round-trips ASCII, character-reader, and national-character stream parameters', async () => {
+      const values: Array<[number, string, ParameterType]> = [
+        [61, 'ascii stream text', ParameterType.ASCII_STREAM],
+        [62, 'character reader text', ParameterType.CHARACTER_READER],
+        [63, 'national stream π text', ParameterType.N_CHARACTER_STREAM],
+      ];
+      const insert = client.prepareStatement(`INSERT INTO ${table} (id, stream_text) VALUES (?, ?)`);
+      try {
+        for (const [id, text, type] of values) {
+          insert.setParameter(1, id);
+          insert.setParameter(2, new OjpTypedParam(text, type));
+          expect(await insert.executeUpdate()).toBe(1);
+        }
+      } finally {
+        await insert.close();
+      }
+      expect((await client.executeQuery(
+        `SELECT id AS "id", stream_text AS "stream_text" FROM ${table} WHERE id BETWEEN 61 AND 63 ORDER BY id`,
+      )).rows).toEqual(values.map(([id, text]) => ({ id: BigInt(id), stream_text: text })));
+    }, 30_000);
+
+    it('classifies CTE queries as result-producing statements', async () => {
+      const statement = client.createStatement();
+      try {
+        const cte = await statement.execute('WITH numbers AS (SELECT 7 AS "n") SELECT "n" FROM numbers');
+        expect(cte).toMatchObject({ kind: 'query', result: { rows: [{ n: 7 }] } });
+      } finally {
+        await statement.close();
+      }
+    }, 15_000);
+
+    it('classifies a query with a leading comment as result-producing', async () => {
+      const statement = client.createStatement();
+      try {
+        const commented = await statement.execute('/* leading comment */ SELECT 8 AS "n"');
+        expect(commented).toMatchObject({ kind: 'query', result: { rows: [{ n: 8 }] } });
+      } finally {
+        await statement.close();
+      }
+    }, 15_000);
+
+    it('classifies VALUES statements as result-producing', async () => {
+      const statement = client.createStatement();
+      try {
+        const values = await statement.execute('VALUES (9), (10)');
+        expect(values.kind).toBe('query');
+        if (values.kind !== 'query') {
+          throw new Error('H2 VALUES statement did not return a result set.');
+        }
+        expect(values.result.rows).toHaveLength(2);
+        expect(Object.values(values.result.rows[0])).toEqual([9]);
+        expect(Object.values(values.result.rows[1])).toEqual([10]);
+      } finally {
+        await statement.close();
+      }
+    }, 30_000);
+
     it('rebinds prepared parameters and executes prepared queries and updates', async () => {
       const insert = client.prepareStatement(`INSERT INTO ${table} (id, label) VALUES (?, ?)`);
       try {
@@ -264,13 +349,44 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
           { id: 31n, label: 'plain batch one' },
           { id: 32n, label: 'plain batch two' },
         ]);
+        await batch.addBatch(`INSERT INTO ${table} (id, label) VALUES (33, 'cleared batch')`);
+        await batch.clearBatch();
+        expect(await batch.executeBatch()).toEqual([]);
+        expect((await client.executeQuery(`SELECT id FROM ${table} WHERE id = ?`, [33])).rows).toEqual([]);
       } finally {
         await batch.close();
       }
     }, 30_000);
 
-    it('returns generated keys for plain and prepared inserts', async () => {
-      const keyTable = `${table}_keys`;
+    it('rejects duplicate-key inserts with the server SQL error and leaves existing data intact', async () => {
+      await client.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [34, 'original']);
+      const insert = client.prepareStatement(`INSERT INTO ${table} (id, label) VALUES (?, ?)`);
+      try {
+        insert.setParameter(1, 34);
+        insert.setParameter(2, 'duplicate');
+        await expect(insert.executeUpdate()).rejects.toMatchObject({
+          name: 'OjpSqlError',
+          sqlState: '23505',
+        });
+      } finally {
+        await insert.close();
+      }
+      expect((await client.executeQuery(`SELECT label FROM ${table} WHERE id = ?`, [34])).rows)
+        .toEqual([{ label: 'original' }]);
+    }, 15_000);
+
+    it('rejects plain Statement operations after close', async () => {
+      const statement = client.createStatement();
+      await statement.close();
+      await expect(statement.executeQuery('SELECT 1')).rejects.toThrow('Statement is closed.');
+      await expect(statement.executeUpdate('UPDATE OJP_MISSING_TABLE SET ID = 1'))
+        .rejects.toThrow('Statement is closed.');
+      await expect(statement.addBatch('SELECT 1')).rejects.toThrow('Statement is closed.');
+      await expect(statement.close()).resolves.toBeUndefined();
+    }, 15_000);
+
+    it('returns generated keys for plain inserts', async () => {
+      const keyTable = `${table}_plain_keys`;
       await client.executeUpdate(
         `CREATE TABLE ${keyTable} (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, label VARCHAR(100))`,
       );
@@ -292,24 +408,31 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         } finally {
           await plain.close();
         }
-
-        const prepared = client.prepareStatement(
-          `INSERT INTO ${keyTable} (label) VALUES (?)`,
-          { generatedKeys: true },
-        );
-        try {
-          expect(await prepared.executeUpdate(['prepared key'])).toBe(1);
-          const keys = await prepared.getGeneratedKeys();
-          expect(keys.columns).toHaveLength(1);
-          expect(keys.rows).toHaveLength(1);
-          const id = keys.rows[0][keys.columns[0]];
-          expect(typeof id).toBe('bigint');
-          expect((await client.executeQuery(`SELECT label FROM ${keyTable} WHERE id = ?`, [id])).rows)
-            .toEqual([{ label: 'prepared key' }]);
-        } finally {
-          await prepared.close();
-        }
       } finally {
+        await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
+      }
+    }, 30_000);
+
+    it('returns generated keys for prepared inserts', async () => {
+      const keyTable = `${table}_prepared_keys`;
+      await client.executeUpdate(
+        `CREATE TABLE ${keyTable} (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, label VARCHAR(100))`,
+      );
+      const prepared = client.prepareStatement(
+        `INSERT INTO ${keyTable} (label) VALUES (?)`,
+        { generatedKeys: true },
+      );
+      try {
+        expect(await prepared.executeUpdate(['prepared key'])).toBe(1);
+        const keys = await prepared.getGeneratedKeys();
+        expect(keys.columns).toHaveLength(1);
+        expect(keys.rows).toHaveLength(1);
+        const id = keys.rows[0][keys.columns[0]];
+        expect(typeof id).toBe('bigint');
+        expect((await client.executeQuery(`SELECT label FROM ${keyTable} WHERE id = ?`, [id])).rows)
+          .toEqual([{ label: 'prepared key' }]);
+      } finally {
+        await prepared.close();
         await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
       }
     }, 30_000);
@@ -361,7 +484,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
       });
     }, 15_000);
 
-    it('returns rows from direct and prepared H2 data-changing table queries', async () => {
+    it('returns rows from direct H2 data-changing table queries', async () => {
       const statement = client.createStatement();
       try {
         const direct = await statement.execute(
@@ -372,29 +495,34 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         if (direct.kind !== 'query') {
           throw new Error('H2 data-changing table expression did not return rows.');
         }
-        expect(direct.result.rows).toEqual([{ id: 41n, label: 'direct returning' }]);
+        expect(direct.result.rows).toEqual([{ ID: 41n, LABEL: 'direct returning' }]);
         expect(direct.result.metadata).toEqual({
           columnCount: 2,
           columns: [{ index: 1, label: 'ID' }, { index: 2, label: 'LABEL' }],
         });
-
-        const prepared = client.prepareStatement(
-          `SELECT id, label FROM FINAL TABLE (INSERT INTO ${table} (id, label) VALUES (?, ?))`,
-        );
-        try {
-          const rows = await prepared.executeQuery([42, 'prepared returning']);
-          expect(rows.rows).toEqual([{ id: 42n, label: 'prepared returning' }]);
-          expect(rows.columns).toEqual(['ID', 'LABEL']);
-        } finally {
-          await prepared.close();
-        }
       } finally {
         await statement.close();
       }
     }, 30_000);
 
-    it('surfaces SQL errors and rejects unsupported protocol parameter shapes', async () => {
+    it('returns rows from prepared H2 data-changing table queries', async () => {
+      const prepared = client.prepareStatement(
+        `SELECT id, label FROM FINAL TABLE (INSERT INTO ${table} (id, label) VALUES (?, ?))`,
+      );
+      try {
+        const rows = await prepared.executeQuery([42, 'prepared returning']);
+        expect(rows.rows).toEqual([{ ID: 42n, LABEL: 'prepared returning' }]);
+        expect(rows.columns).toEqual(['ID', 'LABEL']);
+      } finally {
+        await prepared.close();
+      }
+    }, 30_000);
+
+    it('surfaces invalid SQL as an OJP SQL error', async () => {
       await expect(client.executeQuery('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
+    }, 15_000);
+
+    it('rejects unsupported ARRAY and REF parameter shapes explicitly', async () => {
       await expect(client.executeUpdate(
         'SELECT ?',
         [new OjpTypedParam([], ParameterType.ARRAY)],

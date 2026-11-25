@@ -4,8 +4,10 @@ import com.openjproxy.grpc.SessionInfo;
 import com.openjproxy.grpc.SessionTerminationStatus;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
+import org.openjproxy.grpc.server.Session;
 import org.openjproxy.grpc.server.action.Action;
 import org.openjproxy.grpc.server.action.ActionContext;
+import org.openjproxy.xa.pool.XABackendSession;
 import org.openjproxy.xa.pool.XATransactionRegistry;
 
 import java.sql.SQLException;
@@ -60,24 +62,19 @@ public class TerminateSessionAction implements Action<SessionInfo, SessionTermin
             log.debug("[XA-TERMINATE] terminateSession called for sessionUUID={}, isXA={}, connHash={}",
                     sessionInfo.getSessionUUID(), sessionInfo.getIsXA(), sessionInfo.getConnHash());
 
-            if (sessionInfo.getIsXA()) {
-                String connHash = sessionInfo.getConnHash();
-                XATransactionRegistry registry = context.getXaRegistries().get(connHash);
-                log.debug("[XA-TERMINATE] Looking up XA registry for connHash={}, found={}", connHash, registry != null);
-                if (registry != null) {
-                    log.debug("[XA-TERMINATE] Calling returnCompletedSessions for ojpSessionId={}", sessionInfo.getSessionUUID());
-                    int returnedCount = registry.returnCompletedSessions(sessionInfo.getSessionUUID());
-                    log.debug("[XA-TERMINATE] returnCompletedSessions returned count={}", returnedCount);
-                    if (returnedCount > 0) {
-                        log.info("Returned {} completed XA backend sessions to pool on session termination", returnedCount);
+            Session session = context.getSessionManager().getSession(sessionInfo);
+            if (session != null) {
+                synchronized (session) {
+                    if (context.getSessionManager().getSession(sessionInfo) == session) {
+                        terminateSession(context, sessionInfo, session);
+                    } else if (session.isXA()) {
+                        returnCompletedSessions(context, session.getConnectionHash(), sessionInfo.getSessionUUID());
                     }
-                } else {
-                    log.warn("[XA-TERMINATE] No XA registry found for connHash={}", connHash);
                 }
+            } else if (sessionInfo.getIsXA()) {
+                returnCompletedSessions(context, sessionInfo.getConnHash(), sessionInfo.getSessionUUID());
             }
 
-            log.debug("[XA-TERMINATE] Calling sessionManager.terminateSession for sessionUUID={}", sessionInfo.getSessionUUID());
-            context.getSessionManager().terminateSession(sessionInfo);
             responseObserver.onNext(SessionTerminationStatus.newBuilder().setTerminated(true).build());
             responseObserver.onCompleted();
         } catch (SQLException se) {
@@ -86,6 +83,47 @@ public class TerminateSessionAction implements Action<SessionInfo, SessionTermin
         } catch (Exception e) {
             log.error("Unexpected error during terminateSession", e);
             sendSQLExceptionMetadata(new SQLException("Unable to terminate session: " + e.getMessage()), responseObserver);
+        }
+    }
+
+    private void returnCompletedSessions(ActionContext context, String connHash, String sessionId) {
+        XATransactionRegistry registry = context.getXaRegistries().get(connHash);
+        if (registry != null) {
+            registry.returnCompletedSessions(sessionId);
+        }
+    }
+
+    private void terminateSession(ActionContext context, SessionInfo sessionInfo, Session session) throws Exception {
+        XATransactionRegistry registry = session.isXA()
+                ? context.getXaRegistries().get(session.getConnectionHash()) : null;
+        XATransactionRegistry origin = session.getXaPoolRegistry();
+        XABackendSession backend = (XABackendSession) session.getBackendSession();
+        boolean noTransactions = registry == null || !registry.hasTransactionsForSession(session.getSessionUUID());
+        boolean closeUnused = session.isXA() && origin != null && backend != null
+                && !session.isXaTransactionStarted() && noTransactions
+                && (origin == registry || !origin.hasTransactionsForSession(session.getSessionUUID()));
+
+        if (session.isXA() && registry != null) {
+            registry.returnCompletedSessions(session.getSessionUUID());
+        }
+        Exception cleanupError = null;
+        try {
+            context.getSessionManager().terminateSession(sessionInfo);
+        } catch (Exception e) {
+            cleanupError = e;
+        }
+        if (closeUnused) {
+            try {
+                context.getXaPoolProvider().invalidateSession(origin.getPooledXADataSource(), backend);
+            } catch (Exception e) {
+                if (cleanupError == null) {
+                    throw e;
+                }
+                cleanupError.addSuppressed(e);
+            }
+        }
+        if (cleanupError != null) {
+            throw cleanupError;
         }
     }
 }

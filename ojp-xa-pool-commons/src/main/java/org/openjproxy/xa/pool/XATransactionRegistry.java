@@ -212,6 +212,11 @@ public class XATransactionRegistry {
      * @throws XAException if flags are invalid, xid already exists, or XA start fails
      */
     public void registerExistingSession(XidKey xid, XABackendSession session, int flags, String ojpSessionId) throws XAException {
+        registerExistingSession(xid, session, flags, ojpSessionId, () -> { });
+    }
+
+    public void registerExistingSession(XidKey xid, XABackendSession session, int flags,
+                                        String ojpSessionId, Runnable onStartSuccess) throws XAException {
         log.debug("registerExistingSession: xid={}, flags={}, ojpSessionId={}", xid, flagsToString(flags), ojpSessionId);
 
         // Validate flags - only TMNOFLAGS allowed for new transaction
@@ -236,6 +241,7 @@ public class XATransactionRegistry {
 
             // Call XAResource.start on backend with the stored Xid
             session.getXAResource().start(actualXid, flags);
+            onStartSuccess.run();
 
             log.info("XA transaction registered with existing session: xid={}, ojpSessionId={}", xid, ojpSessionId);
         } catch (XAException e) {
@@ -653,6 +659,10 @@ public class XATransactionRegistry {
         return contexts.get(xid);
     }
 
+    public boolean hasTransactionsForSession(String ojpSessionId) {
+        return contexts.values().stream().anyMatch(ctx -> ojpSessionId.equals(ctx.getOjpSessionId()));
+    }
+
     /**
      * Returns the backend session associated with a transaction.
      * <p>
@@ -688,7 +698,7 @@ public class XATransactionRegistry {
      * @param ojpSessionId the OJP session identifier (from SessionInfo)
      * @return the number of sessions returned to pool
      */
-    public int returnCompletedSessions(String ojpSessionId) {
+    public synchronized int returnCompletedSessions(String ojpSessionId) {
         log.debug("[XA-RETURN-SESSIONS] returnCompletedSessions called for ojpSessionId={}, total contexts={}",
                 ojpSessionId, contexts.size());
         int returnedCount = 0;
@@ -755,7 +765,7 @@ public class XATransactionRegistry {
      * Returns all active sessions to the pool and clears transaction contexts.
      * </p>
      */
-    public void close() {
+    public synchronized void close() {
         try {
             if (!contexts.isEmpty()) {
                 log.warn("Closing XATransactionRegistry with {} active transactions", contexts.size());

@@ -9,6 +9,7 @@ import org.openjproxy.xa.pool.commons.CommonsPool2XADataSource;
 
 import javax.sql.XAConnection;
 import javax.sql.XADataSource;
+import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.util.HashMap;
 import java.util.Map;
@@ -138,6 +139,21 @@ class LeakDetectionTest {
 
         // Return the session
         pooledDataSource.returnSession(session);
+    }
+
+    @Test
+    void shouldRemoveInvalidatedSessionFromLeakTracking() throws Exception {
+        pooledDataSource = new CommonsPool2XADataSource(mockXADataSource, Map.of("xa.maxPoolSize", "1"));
+        Field field = CommonsPool2XADataSource.class.getDeclaredField("borrowedSessions");
+        field.setAccessible(true);
+        Map<?, ?> tracked = (Map<?, ?>) field.get(pooledDataSource);
+        XABackendSession session = pooledDataSource.borrowSession();
+        assertTrue(tracked.containsKey(session));
+
+        pooledDataSource.invalidateSession(session);
+
+        assertFalse(tracked.containsKey(session));
+        assertEquals(0, pooledDataSource.getNumActive());
     }
 
     @Test

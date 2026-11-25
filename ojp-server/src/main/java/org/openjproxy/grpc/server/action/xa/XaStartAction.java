@@ -48,13 +48,18 @@ public class XaStartAction
                 throw new SQLException("Session is not an XA session");
             }
 
-            // Branch based on XA pooling configuration
-            if (context.getXaPoolProvider() != null) {
-                // **NEW PATH: Use XATransactionRegistry**
-                handleXAStartWithPooling(context, request, session, responseObserver);
-            } else {
-                // **OLD PATH: Pass-through (legacy)**
-                handleXAStartPassThrough(context, request, session, responseObserver);
+            synchronized (session) {
+                if (context.getSessionManager().getSession(request.getSession()) != session) {
+                    throw new SQLException("Session is closed");
+                }
+                // Branch based on XA pooling configuration
+                if (context.getXaPoolProvider() != null) {
+                    // **NEW PATH: Use XATransactionRegistry**
+                    handleXAStartWithPooling(context, request, session, responseObserver);
+                } else {
+                    // **OLD PATH: Pass-through (legacy)**
+                    handleXAStartPassThrough(context, request, session, responseObserver);
+                }
             }
 
         } catch (Exception e) {
@@ -102,7 +107,8 @@ public class XaStartAction
             if (backendSession == null) {
                 throw new SQLException("No XABackendSession found in session");
             }
-            registry.registerExistingSession(xidKey, backendSession, flags, ojpSessionId);
+            registry.registerExistingSession(xidKey, backendSession, flags, ojpSessionId,
+                    () -> session.setXaTransactionStarted(true));
 
         } else if (flags == javax.transaction.xa.XAResource.TMJOIN ||
                 flags == javax.transaction.xa.XAResource.TMRESUME) {

@@ -11,8 +11,8 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L10** for PostgreSQL and SQL Server; **L7** for MariaDB and MySQL |
-| Cumulative level | **L1** for H2; **L5** for MariaDB and MySQL; **L10** for PostgreSQL and SQL Server |
+| Target level | **L10** for PostgreSQL and SQL Server; **L8** for MariaDB and MySQL |
+| Cumulative level | **L1** for H2; **L8** for MariaDB and MySQL; **L10** for PostgreSQL and SQL Server |
 | Higher-level features | PostgreSQL and SQL Server L10 combine multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
@@ -64,12 +64,14 @@ query hydration. Callers explicitly start a LOB upload with `createLob()` and bi
 returned reference; they never pass session or endpoint-routing metadata.
 MariaDB and MySQL L6 affinity scenarios are in `test/integration.mariadb.l6.test.ts` and
 `test/integration.mysql.l6.test.ts`. They cover temporary tables, session variables,
-transaction boundaries, client close, and bound-node failure. The known Unicode CLOB
-corruption described below prevents a full cumulative L6 conformance claim.
+transaction boundaries, client close, and bound-node failure.
 MariaDB and MySQL L7 multinode scenarios are in `test/integration.mariadb.l7.test.ts`
 and `test/integration.mysql.l7.test.ts`. They exercise load balancing, node health and
 recovery, pool-identity reuse and stale-pool reconnect, sticky-node failure, and SQL
 error classification through the public client.
+MariaDB and MySQL L8 suites add bounded stateless failover, outage transactions and
+consistent reads, recovery and redistribution, batch and continuous operations, and
+sticky-session, SQL-error and server-overload safety.
 SQL Server L1 passed in the
 [Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512);
 the SQL Server L2 suite passed in [run 43528198577](https://github.com/Open-J-Proxy/ojp/actions/runs/43528198577)
@@ -83,10 +85,10 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L2** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover numeric, decimal, text, binary, date/time, NULL, URL, RowId, scalar Object, and stream bindings; prepared/plain execution and batches; generated keys; and result metadata. MariaDB covers `INSERT ... RETURNING`; MySQL asserts its unsupported syntax is reported as a SQL error. PostgreSQL covers reusable prepared bindings, batches, generated keys, column-label metadata, and `RETURNING` DML; SQL Server adds the equivalent `OUTPUT` result-set path. `ARRAY` and `REF` are explicit, tested API omissions. |
 | **L3** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover streamed and buffered 10,001-row results across server blocks, metadata, EOF, SQL pagination, concurrent cursors, and early cursor close in `test/integration.mariadb.l3.test.ts` and `test/integration.mysql.l3.test.ts`. PostgreSQL additionally covers paged `RETURNING` results; SQL Server covers streaming, pagination, metadata, EOF, concurrent cursors, and early close. |
 | **L4** | MariaDB, MySQL, PostgreSQL, SQL Server (certified) | MariaDB and MySQL cover durable commit/rollback, autocommit behavior, isolation-level get/set, managed transaction callbacks, named/unnamed and nested savepoints, rollback-to-savepoint, release, batch rollback, duplicate-key recovery, and transaction completion invalidation in `test/integration.mariadb.l4.test.ts` and `test/integration.mysql.l4.test.ts`. PostgreSQL covers the same transaction/savepoint semantics in `test/integration.postgres.l4.test.ts`; SQL Server additionally covers batch rollback and error recovery in `test/integration.sqlServerL4.test.ts`. |
-| **L5** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover BLOB/CLOB stream upload, parameter binding, streamed reads, hydrated query results, empty versus NULL values, multi-chunk content, updates, and reusable references in `test/integration.mariadb.l5.test.ts` and `test/integration.mysql.l5.test.ts`. Large Unicode CLOBs can be corrupted; see [issue #832](https://github.com/Open-J-Proxy/ojp/issues/832). PostgreSQL validates the JDBC-compatible hydrated `BYTEA`/`TEXT` path. SQL Server covers multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references; its JDBC driver rejects ranged BLOB/CLOB reads, which the L5 suite asserts. H2 verifies exact stream contents and sizes in `test/integration.lob.stream.h2.test.ts`. |
-| **L6** | PostgreSQL, SQL Server (certified); MariaDB, MySQL affinity scenarios | MariaDB and MySQL cover temporary tables, session variables, transaction boundaries, close lifecycle, and bound-node failure without rerouting in their L6 suites. PostgreSQL verifies temporary-table and `SET LOCAL` state across calls/transactions, close lifecycle, and bound-node failure without rerouting; session and target-server propagation are managed internally. SQL Server also covers temporary-table state and sticky-node failure. |
-| **L7** | PostgreSQL, SQL Server (certified); MariaDB, MySQL multinode scenarios | The database-specific L7 suites verify least-connections selection, round-robin distribution, unavailable/recovered-node health, cached `connHash` reuse, stale-pool reconnect for stateless operations, and SQL-error classification. `test/multinodeClient.test.ts` also checks cluster-health propagation and retry limits. |
-| **L8** | PostgreSQL, SQL Server (certified) | PostgreSQL covers bounded stateless failover, recovery and redistribution, and verifies sticky-session loss, transaction failures, SQL errors, and server overload do not trigger unsafe rerouting or replay. See `test/integration.postgres.l8.test.ts`. SQL Server covers the same resilience behavior in `test/integration.sqlServerL8.test.ts`, `test/multinodeClient.test.ts`, and `test/errors.test.ts`. |
+| **L5** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover BLOB/CLOB stream upload, Unicode, parameter binding, streamed reads, hydrated query results, empty versus NULL values, multi-chunk content, updates, and reusable references in `test/integration.mariadb.l5.test.ts` and `test/integration.mysql.l5.test.ts`. PostgreSQL validates the JDBC-compatible hydrated `BYTEA`/`TEXT` path. SQL Server covers multi-chunk BLOB/CLOB upload and binding, Unicode, empty and NULL values, updates, and reusable references; its JDBC driver rejects ranged BLOB/CLOB reads, which the L5 suite asserts. H2 verifies exact stream contents and sizes in `test/integration.lob.stream.h2.test.ts`. |
+| **L6** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover temporary tables, session variables, transaction boundaries, close lifecycle, and bound-node failure without rerouting in their L6 suites. PostgreSQL verifies temporary-table and `SET LOCAL` state across calls/transactions, close lifecycle, and bound-node failure without rerouting; session and target-server propagation are managed internally. SQL Server also covers temporary-table state and sticky-node failure. |
+| **L7** | MariaDB, MySQL, PostgreSQL, SQL Server | The database-specific L7 suites verify least-connections selection, round-robin distribution, unavailable/recovered-node health, cached `connHash` reuse, stale-pool reconnect for stateless operations, and SQL-error classification. `test/multinodeClient.test.ts` also checks cluster-health propagation and retry limits. |
+| **L8** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover resilience and recovery in `test/integration.mariadb.l8.test.ts` and `test/integration.mysql.l8.test.ts`; PostgreSQL covers bounded stateless failover, recovery and redistribution, sticky-session loss, transaction failures, SQL errors, and server overload in `test/integration.postgres.l8.test.ts`. SQL Server covers the corresponding behavior in `test/integration.sqlServerL8.test.ts`. |
 | **L9** | PostgreSQL, SQL Server (certified) | PostgreSQL covers scoped XA session lifecycle, two-phase and one-phase commit, rollback, prepared-branch recovery with complete Xid matching, PostgreSQL's unsupported transaction-timeout behavior, sequential branch reuse, resource-manager identity, XA errors, and multinode affinity/failover safety. See `test/integration.xa.postgres.test.ts`. SQL Server also covers timeout support and the corresponding XA lifecycle in `test/integration.sqlServerXA.test.ts`. |
 | **L10** | PostgreSQL, SQL Server (certified) | PostgreSQL `test/integration.postgres.l10.test.ts` and SQL Server `test/integration.sqlServerL10.test.ts` authenticate against each mTLS endpoint, verify local and XA commit/rollback/recovery outcomes, stateless failover and redistribution, sticky-session and XA affinity failures, and rejection of missing or untrusted client certificates. |
 
@@ -114,8 +116,7 @@ two dedicated containers in `OJP_TEST_NODE_CONTAINERS` and matching ports in
 
 The Node integration workflow provisions MySQL and MariaDB, plus separate two-node
 PostgreSQL and SQL Server OJP clusters that require client certificates; it runs both L10
-suites alongside their L1–L9 suites. H2 is at L1; MariaDB and MySQL include L6 affinity
-coverage in addition to their existing L5 assessment.
+suites alongside their L1–L9 suites. H2 is at L1; MariaDB and MySQL are at L8.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent
@@ -125,9 +126,7 @@ tests cover successful BLOB/CLOB reads and exact byte/character contents. The No
 protocol's column labels; it does not expose JDBC's full vendor-specific `ResultSetMetaData`
 surface or JDBC-style `DatabaseMetaData` and `ParameterMetaData` APIs.
 
-Large multi-chunk Unicode CLOBs can be corrupted with MySQL and MariaDB; see
-[issue #832](https://github.com/Open-J-Proxy/ojp/issues/832). MySQL and MariaDB
-temporary tables can also survive session close when a server-side pooled physical
+MySQL and MariaDB temporary tables can survive session close when a server-side pooled physical
 connection is reused. Drop temporary tables and clear session variables explicitly
 before closing when this state must not leak to a subsequent client.
 
@@ -210,6 +209,13 @@ transport failures; partially streamed results, server-bound sessions, active tr
 SQL errors, and pool exhaustion are never replayed. The Node API intentionally remains a direct
 gRPC-contract client rather than emulating JDBC; use `withOjpClient()` and
 `withTransaction()` to avoid connect/close and transaction-cleanup boilerplate.
+An update may have reached the database before a transport failure, so an automatic
+retry cannot guarantee exactly-once execution. Use transactions or idempotent writes
+when duplicate effects would be unsafe.
+
+The client also shares a fail-fast admission limit across clients for the same pool.
+`clientThrottleMode` selects `reactive` (default), `proactive`, `combined`, or `off`.
+Active transactions bypass admission checks; callers do not manage permits.
 - The `.proto` contract is consumed from [`@ojp/grpc-contract`](../ojp-grpc-contract), a
   versioned, hash-pinned package distributing the same contract used by `ojp-jdbc-driver`
   and `ojp-server` (see that package's README for its versioning policy and how it's kept
@@ -487,6 +493,14 @@ protocol treats LOBs as a separate resource, referenced by a `LobReference`
   The client manages `SessionInfo` internally for upload, binding, transparent CLOB
   hydration, and `readLobStream`; application code never passes session tokens or
   protocol session objects.
+
+For multi-chunk CLOB uploads, the client advances positions in UTF-16 units. MariaDB
+Connector/J uses code-point positions, so supplementary characters (such as 🚀)
+before a later chunk can cause incorrect writes. Supplying smaller input chunks does
+not avoid this: the client combines them into blocks of up to 64 KB. Arrange such
+characters in the final block to avoid this position mismatch. Even then, JDBC binding
+may corrupt a supplementary character split across reader chunks. Arbitrary
+supplementary Unicode CLOB round trips are not guaranteed with these drivers.
 
 ```ts
 import { createReadStream } from 'fs';
@@ -766,6 +780,8 @@ OJP_ENABLE_MYSQL_TESTS=true npm run test:mysql-l6 # MySQL session affinity
 OJP_ENABLE_MARIADB_TESTS=true npm run test:mariadb-l6 # MariaDB session affinity
 OJP_ENABLE_MYSQL_L7_TESTS=true npm run test:mysql-l7 # MySQL multinode operations
 OJP_ENABLE_MARIADB_L7_TESTS=true npm run test:mariadb-l7 # MariaDB multinode operations
+OJP_ENABLE_MYSQL_L8_TESTS=true npm run test:mysql-l8 # MySQL recovery
+OJP_ENABLE_MARIADB_L8_TESTS=true npm run test:mariadb-l8 # MariaDB recovery
 npm run test:postgres-l8 # PostgreSQL L8 recovery; requires three OJP nodes and a maxConcurrentRequests=1 node
 npm run test:postgres-l10 # PostgreSQL L10 combined multinode/mTLS certification
 npm run test:lob-h2       # LOB integration against ojp-server + H2 (requires OJP_ENABLE_LOB_H2_TESTS=true)
@@ -784,7 +800,10 @@ Server mTLS clusters; it runs every integration suite.
 For PostgreSQL L8, set `OJP_ENABLE_POSTGRES_L8_TESTS=true`,
 `OJP_TEST_NODE_CONTAINERS`, and `OJP_TEST_POSTGRES_L8_THROTTLED_NODE_CONTAINER` /
 `OJP_TEST_POSTGRES_L8_THROTTLED_NODE_PORT` for an OJP node started with
-`-Dojp.server.maxConcurrentRequests=1`. For the H2 L1 suite alone, start an OJP
+`-Dojp.server.maxConcurrentRequests=1`. MySQL and MariaDB L8 use the same dedicated
+cluster and require `OJP_TEST_L8_THROTTLED_NODE_CONTAINER` and
+`OJP_TEST_L8_THROTTLED_NODE_PORT` for a distinct node with that limit. The suites stop
+and restart their configured containers. For the H2 L1 suite alone, start an OJP
 server with the H2 JDBC driver and run:
 
 ```bash

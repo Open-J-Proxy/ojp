@@ -102,8 +102,10 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         expect(hydrated.equals(content)).toBe(true);
       }, 60_000);
 
-      it.skip('uploads and hydrates a multi-chunk Unicode CLOB stream without changing text', async () => {
-        const content = 'MariaDB/MySQL CLOB: äöü ñ 中文 🚀 — '.repeat(5_000);
+      it('uploads and hydrates a multi-chunk Unicode CLOB stream without changing text', async () => {
+        const prefix = 'a'.repeat(2 * 65_536);
+        const content = prefix + 'Unicode: äöü ñ 中文 🚀 — ';
+        expect(Buffer.byteLength(prefix, 'utf8')).toBe(2 * 65_536);
         const source = Readable.from([
           content.slice(0, 137),
           content.slice(137, 3_141),
@@ -111,6 +113,7 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         ]);
         const reference = await client.createLob(source, 'CLOB');
 
+        expect((await readStream(reference)).toString('utf8')).toBe(content);
         expect(await client.executeUpdate(
           `INSERT INTO ${table} (id, body) VALUES (?, ?)`,
           [3, reference],
@@ -119,6 +122,27 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
 
         expect(result.rows).toEqual([{ body: content }]);
       }, 60_000);
+
+      if (options.database === 'MySQL') {
+        it('round-trips a multi-chunk Unicode CLOB on MySQL through MariaDB Connector/J', async () => {
+          const mariaJdbcUrl = jdbcUrl.replace(/^jdbc:mysql:/, 'jdbc:mariadb:');
+          const mariaClient = new OjpClient(ojpUrl(endpoint, mariaJdbcUrl), credentials);
+          await mariaClient.connect();
+          try {
+            const prefix = 'a'.repeat(2 * 65_536);
+            const content = prefix + 'MariaDB Connector/J on MySQL 🚀 ';
+            expect(Buffer.byteLength(prefix, 'utf8')).toBe(2 * 65_536);
+            const reference = await mariaClient.createLob(content, 'CLOB');
+            expect(await mariaClient.executeUpdate(
+              `INSERT INTO ${table} (id, body) VALUES (?, ?)`, [10, reference],
+            )).toBe(1);
+            expect((await mariaClient.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [10])).rows)
+              .toEqual([{ body: content }]);
+          } finally {
+            await mariaClient.close();
+          }
+        }, 60_000);
+      }
 
       it('reads BLOB and CLOB references as streams with exact bytes and UTF-8 content', async () => {
         const binary = Buffer.alloc(90_123);
@@ -137,6 +161,17 @@ export function registerDatabaseL5Suite(options: DatabaseL5Options): void {
         expect(clobResult.length).toBe(Buffer.byteLength(text, 'utf8'));
         expect(clobResult.toString('utf8')).toBe(text);
       }, 60_000);
+
+      it('preserves a Unicode character split across input string chunks', async () => {
+        const content = 'before 🚀 after';
+        const reference = await client.createLob(
+          Readable.from([content.slice(0, 8), content.slice(8)]), 'CLOB',
+        );
+        expect((await readStream(reference)).toString('utf8')).toBe(content);
+        expect(await client.executeUpdate(`INSERT INTO ${table} (id, body) VALUES (?, ?)`, [9, reference])).toBe(1);
+        expect((await client.executeQuery(`SELECT body FROM ${table} WHERE id = ?`, [9])).rows)
+          .toEqual([{ body: content }]);
+      }, 30_000);
 
       it('preserves empty BLOB/CLOB values separately from SQL NULL', async () => {
         const emptyBlob = await client.createLob(Buffer.alloc(0), 'BLOB');

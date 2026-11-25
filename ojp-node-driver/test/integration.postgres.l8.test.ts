@@ -45,7 +45,7 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L8: %s', (jdbcUrl, u
   const singleNodeUrl = (port: number): string => ojpUrl(`localhost:${port}`, jdbcUrl);
   const connectClient = async (
     url = clusterUrl(),
-    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number } = {},
+    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number; clientThrottleMode?: 'off' } = {},
   ): Promise<{ client: OjpClient; session: Awaited<ReturnType<OjpClient['connect']>> }> => {
     const client = new OjpClient(url, {
       user,
@@ -58,7 +58,7 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L8: %s', (jdbcUrl, u
   };
   const newClient = async (
     url = clusterUrl(),
-    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number } = {},
+    options: { loadBalancingStrategy?: 'least-connections' | 'round-robin'; healthCheckIntervalMs?: number; clientThrottleMode?: 'off' } = {},
   ): Promise<OjpClient> => (await connectClient(url, options)).client;
   const stoppedContainers = new Set<string>();
 
@@ -336,7 +336,7 @@ describeIfEnabled.each(connections)('OjpClient - PostgreSQL L8: %s', (jdbcUrl, u
   it('surfaces pool exhaustion without retrying on another PostgreSQL node', async () => {
     const alternate = nodes[0];
     const holder = await newClient(singleNodeUrl(alternate.port));
-    const client = await newClient(clusterUrl([throttledNode, alternate]));
+    const client = await newClient(clusterUrl([throttledNode, alternate]), { clientThrottleMode: 'off' });
     expect(client.boundEndpoint?.port).toBe(throttledNode.port);
 
     const running = client.executeQuery('SELECT 42 AS held FROM pg_sleep(2)');

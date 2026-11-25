@@ -136,6 +136,7 @@ jest.mock('../src/proto/loader', () => ({
 import { OjpClient, OjpConnectionError, OjpSqlError } from '../src';
 import { resetPoolCacheForTests } from '../src/client/OjpClient';
 import { isEndpointHealthy, markEndpointUnhealthy, resetEndpointHealthForTests } from '../src/client/endpointHealth';
+import { throttleFor } from '../src/client/clientThrottle';
 
 describe('OjpClient multinode pool cache', () => {
   const url = 'jdbc:ojp[localhost:1059]_h2:mem:l7';
@@ -171,6 +172,33 @@ describe('OjpClient multinode pool cache', () => {
       await expect(second.executeUpdate('INSERT INTO t VALUES (1)')).resolves.toBe(1);
     } finally {
       await second.close();
+    }
+  });
+
+  it('shares admission limits across clients and bypasses them inside transactions', async () => {
+    const first = new OjpClient(url);
+    const second = new OjpClient(url);
+    await first.connect();
+    await second.connect();
+    const throttle = throttleFor('pool-hash');
+    throttle.update({
+      connHash: 'pool-hash', clientUUID: 'client', sessionUUID: '',
+      sessionStatus: 'SESSION_ACTIVE', maxAdmission: 1, clientCount: 1,
+    });
+    const release = throttle.acquire('reactive', false);
+    try {
+      await expect(second.executeUpdate('INSERT INTO t VALUES (1)')).rejects.toThrow(/overload/i);
+      expect(mockRpcState.updateAddresses).toHaveLength(0);
+      await first.startTransaction();
+      await expect(first.executeUpdate('INSERT INTO t VALUES (2)')).resolves.toBe(1);
+      await first.rollback();
+      release();
+      await expect(second.executeUpdate('INSERT INTO t VALUES (3)')).resolves.toBe(1);
+      expect(mockRpcState.updateAddresses).toHaveLength(2);
+    } finally {
+      release();
+      await second.close();
+      await first.close();
     }
   });
 

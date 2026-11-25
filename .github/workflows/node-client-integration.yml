@@ -179,6 +179,8 @@ jobs:
           {
             echo "OJP_TEST_POSTGRES_L8_THROTTLED_NODE_CONTAINER=$NODE_TEST_PREFIX-postgres-l8-throttled"
             echo "OJP_TEST_POSTGRES_L8_THROTTLED_NODE_PORT=1062"
+            echo "OJP_TEST_L8_THROTTLED_NODE_CONTAINER=$NODE_TEST_PREFIX-postgres-l8-throttled"
+            echo "OJP_TEST_L8_THROTTLED_NODE_PORT=1062"
           } >> "$GITHUB_ENV"
 
       - name: Start two SQL Server mTLS OJP servers
@@ -263,6 +265,8 @@ jobs:
           OJP_ENABLE_MARIADB_TESTS: 'true'
           OJP_ENABLE_MYSQL_L7_TESTS: 'true'
           OJP_ENABLE_MARIADB_L7_TESTS: 'true'
+          OJP_ENABLE_MYSQL_L8_TESTS: 'true'
+          OJP_ENABLE_MARIADB_L8_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L7_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L8_TESTS: 'true'
           OJP_ENABLE_POSTGRES_L10_TESTS: 'true'

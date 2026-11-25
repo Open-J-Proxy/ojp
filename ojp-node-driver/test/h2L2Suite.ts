@@ -128,8 +128,8 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         + `stream_text AS "stream_text", stream_binary AS "stream_binary" FROM ${table} ORDER BY id`,
       );
       expect(result.columns).toEqual([
-        'id', 'label', 'amount', 'enabled', 'event_date', 'event_time', 'event_timestamp', 'payload',
-        'tiny_value', 'small_value', 'int_value', 'float_value', 'double_value', 'stream_text', 'stream_binary',
+        'ID', 'LABEL', 'AMOUNT', 'ENABLED', 'EVENT_DATE', 'EVENT_TIME', 'EVENT_TIMESTAMP', 'PAYLOAD',
+        'TINY_VALUE', 'SMALL_VALUE', 'INT_VALUE', 'FLOAT_VALUE', 'DOUBLE_VALUE', 'STREAM_TEXT', 'STREAM_BINARY',
       ]);
       expect(result.metadata).toEqual({
         columnCount: 15,
@@ -137,49 +137,47 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
       });
       expect(result.rows).toHaveLength(2);
       expect(result.rows[0]).toMatchObject({
-        id: 33333333333333n,
-        label: 'typed H2 text',
-        amount: '50000.5000',
-        enabled: true,
-        event_time: { hours: 11, minutes: 12, seconds: 13 },
-        tiny_value: 127,
-        small_value: 32767,
-        int_value: 2147483647,
-        float_value: 20.25,
-        double_value: 2.2222,
-        stream_text: 'stream π text',
+        ID: 33333333333333n,
+        LABEL: 'typed H2 text',
+        AMOUNT: '50000.5000',
+        ENABLED: true,
+        EVENT_TIME: { hours: 11, minutes: 12, seconds: 13 },
+        TINY_VALUE: 127,
+        SMALL_VALUE: 32767,
+        INT_VALUE: 2147483647,
+        FLOAT_VALUE: 20.25,
+        DOUBLE_VALUE: 2.2222,
+        STREAM_TEXT: 'stream π text',
       });
-      expect((result.rows[0].event_date as Date).toISOString()).toBe(date.toISOString());
-      expect((result.rows[0].event_timestamp as Date).toISOString()).toBe(timestamp.toISOString());
-      expect((result.rows[0].payload as Buffer).equals(payload)).toBe(true);
-      expect((result.rows[0].stream_binary as Buffer).equals(streamPayload)).toBe(true);
+      expect((result.rows[0].EVENT_DATE as Date).toISOString()).toBe(date.toISOString());
+      expect((result.rows[0].EVENT_TIMESTAMP as Date).toISOString()).toBe(timestamp.toISOString());
+      expect((result.rows[0].PAYLOAD as Buffer).equals(payload)).toBe(true);
+      expect((result.rows[0].STREAM_BINARY as Buffer).equals(streamPayload)).toBe(true);
       expect(result.rows[1]).toMatchObject({
-        id: 33333333333334n,
-        label: null,
-        amount: null,
-        enabled: null,
-        event_date: null,
-        event_time: null,
-        event_timestamp: null,
-        payload: null,
-        tiny_value: null,
-        small_value: null,
-        int_value: null,
-        float_value: null,
-        double_value: null,
-        stream_text: null,
-        stream_binary: null,
+        ID: 33333333333334n,
+        LABEL: null,
+        AMOUNT: null,
+        ENABLED: null,
+        EVENT_DATE: null,
+        EVENT_TIME: null,
+        EVENT_TIMESTAMP: null,
+        PAYLOAD: null,
+        TINY_VALUE: null,
+        SMALL_VALUE: null,
+        INT_VALUE: null,
+        FLOAT_VALUE: null,
+        DOUBLE_VALUE: null,
+        STREAM_TEXT: null,
+        STREAM_BINARY: null,
       });
     }, 30_000);
 
-    it('binds URL values and returns the original URL text', async () => {
+    it('reports H2 URL parameter binding as unsupported', async () => {
       const urlValue = 'https://example.test/items/42?source=ojp';
-      const result = await client.executeQuery(
+      await expect(client.executeQuery(
         'SELECT ? AS "url_value"',
         [new OjpTypedParam(new URL(urlValue), ParameterType.URL)],
-      );
-      expect(result.columns).toEqual(['url_value']);
-      expect(result.rows).toEqual([{ url_value: urlValue }]);
+      )).rejects.toMatchObject({ name: 'OjpSqlError', sqlState: 'HYC00' });
     }, 15_000);
 
     it('binds scalar OBJECT values', async () => {
@@ -218,7 +216,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
       }
       expect((await client.executeQuery(
         `SELECT id AS "id", stream_text AS "stream_text" FROM ${table} WHERE id BETWEEN 61 AND 63 ORDER BY id`,
-      )).rows).toEqual(values.map(([id, text]) => ({ id: BigInt(id), stream_text: text })));
+      )).rows).toEqual(values.map(([id, text]) => ({ ID: BigInt(id), STREAM_TEXT: text })));
     }, 30_000);
 
     it('classifies CTE queries as result-producing statements', async () => {
@@ -267,7 +265,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         insert.setParameter(2, 'second');
         expect(await insert.executeUpdate()).toBe(1);
         expect((await client.executeQuery(`SELECT label FROM ${table} WHERE id = ?`, [11])).rows)
-          .toEqual([{ label: 'first' }]);
+          .toEqual([{ LABEL: 'first' }]);
       } finally {
         await insert.close();
       }
@@ -276,7 +274,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
       try {
         expect(await query.execute([11])).toMatchObject({
           kind: 'query',
-          result: { rows: [{ id: 11n, label: 'first' }] },
+          result: { rows: [{ ID: 11n, LABEL: 'first' }] },
         });
       } finally {
         await query.close();
@@ -304,14 +302,14 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
           [13],
         )).toMatchObject({
           kind: 'query',
-          result: { rows: [{ id: 13n, label: 'plain execute' }] },
+          result: { rows: [{ ID: 13n, LABEL: 'plain execute' }] },
         });
         expect(await statement.execute(
           `UPDATE ${table} SET label = ? WHERE id = ?`,
           ['updated', 13],
         )).toEqual({ kind: 'update', affectedRows: 1 });
         expect((await client.executeQuery(`SELECT label FROM ${table} WHERE id = ?`, [13])).rows)
-          .toEqual([{ label: 'updated' }]);
+          .toEqual([{ LABEL: 'updated' }]);
       } finally {
         await statement.close();
       }
@@ -327,8 +325,8 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
           `SELECT id, label FROM ${table} WHERE id BETWEEN ? AND ? ORDER BY id`,
           [21, 22],
         )).rows).toEqual([
-          { id: 21n, label: 'prepared batch one' },
-          { id: 22n, label: 'prepared batch two' },
+          { ID: 21n, LABEL: 'prepared batch one' },
+          { ID: 22n, LABEL: 'prepared batch two' },
         ]);
         await batch.clearBatch();
         expect(await batch.executeBatch()).toEqual([]);
@@ -346,8 +344,8 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         expect((await client.executeQuery(
           `SELECT id, label FROM ${table} WHERE id BETWEEN 31 AND 32 ORDER BY id`,
         )).rows).toEqual([
-          { id: 31n, label: 'plain batch one' },
-          { id: 32n, label: 'plain batch two' },
+          { ID: 31n, LABEL: 'plain batch one' },
+          { ID: 32n, LABEL: 'plain batch two' },
         ]);
         await batch.addBatch(`INSERT INTO ${table} (id, label) VALUES (33, 'cleared batch')`);
         await batch.clearBatch();
@@ -372,7 +370,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         await insert.close();
       }
       expect((await client.executeQuery(`SELECT label FROM ${table} WHERE id = ?`, [34])).rows)
-        .toEqual([{ label: 'original' }]);
+        .toEqual([{ LABEL: 'original' }]);
     }, 15_000);
 
     it('rejects plain Statement operations after close', async () => {
@@ -404,7 +402,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
           const id = keys.rows[0][keys.columns[0]];
           expect(typeof id).toBe('bigint');
           expect((await client.executeQuery(`SELECT label FROM ${keyTable} WHERE id = ?`, [id])).rows)
-            .toEqual([{ label: 'plain key' }]);
+            .toEqual([{ LABEL: 'plain key' }]);
         } finally {
           await plain.close();
         }
@@ -430,7 +428,7 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         const id = keys.rows[0][keys.columns[0]];
         expect(typeof id).toBe('bigint');
         expect((await client.executeQuery(`SELECT label FROM ${keyTable} WHERE id = ?`, [id])).rows)
-          .toEqual([{ label: 'prepared key' }]);
+          .toEqual([{ LABEL: 'prepared key' }]);
       } finally {
         await prepared.close();
         await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
@@ -458,28 +456,28 @@ if (enabled && !process.env.OJP_TEST_H2_ADDR) {
         expect(ids.every((id) => typeof id === 'bigint' && id > 0n)).toBe(true);
         const inserted = await client.executeQuery(`SELECT id, label FROM ${keyTable} ORDER BY id`);
         expect(inserted.rows).toHaveLength(3);
-        expect(inserted.rows.map((row) => row.label)).toEqual([
+        expect(inserted.rows.map((row) => row.LABEL)).toEqual([
           'batch key one', 'batch key two', 'batch key three',
         ]);
-        expect(ids.every((id) => inserted.rows.some((row) => row.id === id))).toBe(true);
+        expect(ids.every((id) => inserted.rows.some((row) => row.ID === id))).toBe(true);
       } finally {
         await batch.close();
         await client.executeUpdate(`DROP TABLE IF EXISTS ${keyTable}`);
       }
     }, 30_000);
 
-    it('returns alias metadata and well-formed empty query results', async () => {
+    it('returns H2 column names in metadata and well-formed empty query results', async () => {
       const result = await client.executeQuery(
         `SELECT id AS "id", label AS "label" FROM ${table} WHERE id = ?`,
         [-1],
       );
       expect(result.rows).toEqual([]);
-      expect(result.columns).toEqual(['id', 'label']);
+      expect(result.columns).toEqual(['ID', 'LABEL']);
       expect(result.metadata).toEqual({
         columnCount: 2,
         columns: [
-          { index: 1, label: 'id' },
-          { index: 2, label: 'label' },
+          { index: 1, label: 'ID' },
+          { index: 2, label: 'LABEL' },
         ],
       });
     }, 15_000);

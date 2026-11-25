@@ -161,7 +161,9 @@ export function registerDatabaseL10Suite(options: SuiteOptions): void {
           await expect(client.executeQuery('SELECT value FROM ojp_node_l10_session'))
             .resolves.toMatchObject({ rows: [{ value: 7 }] });
           await client.executeUpdate('DROP TEMPORARY TABLE ojp_node_l10_session');
-          await expect(client.executeUpdate('THIS IS NOT VALID SQL')).rejects.toBeInstanceOf(OjpSqlError);
+          const invalidSql = client.executeUpdate('THIS IS NOT VALID SQL');
+          await expect(invalidSql).rejects.toBeInstanceOf(OjpSqlError);
+          await expect(invalidSql).rejects.toMatchObject({ sqlState: expect.stringMatching(/^42/) });
           expect(client.boundEndpoint?.port).toBe(endpointBeforeSqlError);
           await expectOne(client, 'usable');
 

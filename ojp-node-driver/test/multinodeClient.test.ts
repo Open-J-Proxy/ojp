@@ -192,6 +192,36 @@ describe('OjpClient multinode pool cache', () => {
     }
   });
 
+  it('only reuses cached pools with the same TLS identity and trust roots', async () => {
+    const createSsl = jest.spyOn(grpc.credentials, 'createSsl')
+      .mockReturnValue(grpc.credentials.createInsecure());
+    const tls = {
+      rootCert: Buffer.from('root'),
+      privateKey: Buffer.from('key'),
+      certChain: Buffer.from('certificate'),
+    };
+    try {
+      const options = [
+        { tls },
+        { tls: { ...tls } },
+        { tls: { rootCert: tls.rootCert } },
+        { tls: { ...tls, certChain: Buffer.from('other certificate') } },
+        { tls: { ...tls, privateKey: Buffer.from('other key') } },
+        { tls: { ...tls, rootCert: Buffer.from('other root') } },
+        { insecure: true },
+      ];
+      for (const [index, option] of options.entries()) {
+        const client = new OjpClient(url, option);
+        await client.connect();
+        await client.close();
+        expect(mockRpcState.connectRequests.filter(({ url: value }) => value !== ''))
+          .toHaveLength(index === 0 ? 1 : index);
+      }
+    } finally {
+      createSsl.mockRestore();
+    }
+  });
+
   it('shares admission limits across clients and bypasses them inside transactions', async () => {
     const first = new OjpClient(url);
     const second = new OjpClient(url);

@@ -200,13 +200,17 @@ function endpointKey(endpoint: OjpServerEndpoint): string {
   return `${endpoint.host}:${endpoint.port}`;
 }
 
-function connectionKey(details: ConnectionDetails): string {
+function connectionKey(details: ConnectionDetails, options: OjpClientOptions): string {
   const identity = JSON.stringify([
     details.url,
     details.user,
     details.password,
     details.properties ?? [],
     details.isXA ?? false,
+    options.tls || options.insecure === false ? 'tls' : 'plaintext',
+    options.tls?.rootCert?.toString('base64') ?? null,
+    options.tls?.certChain?.toString('base64') ?? null,
+    options.tls?.privateKey?.toString('base64') ?? null,
   ]);
   return createHash('sha256').update(identity).digest('hex');
 }
@@ -345,7 +349,7 @@ export class OjpClient {
       )
       : grpc.credentials.createInsecure();
     this.autoCommit = !options.xa;
-    this.poolKey = connectionKey(this.buildConnectionDetails());
+    this.poolKey = connectionKey(this.buildConnectionDetails(), options);
   }
 
   /** The ojp-server endpoint this session is currently bound to (undefined before a successful `connect()`). */

@@ -11,9 +11,9 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L10** for PostgreSQL and SQL Server; **L9** for MariaDB and MySQL |
-| Cumulative level | **L1** for H2; **L8** for MariaDB and MySQL; **L10** for PostgreSQL and SQL Server |
-| Higher-level features | PostgreSQL and SQL Server L10 combine multinode recovery and XA behavior over mTLS |
+| Target level | **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
+| Cumulative level | **L1** for H2; **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
+| Higher-level features | L10 combines multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
 The H2, MariaDB, MySQL, PostgreSQL, and SQL Server L1 suites exercise CRUD, errors, and
@@ -74,6 +74,8 @@ consistent reads, recovery and redistribution, batch and continuous operations, 
 sticky-session, SQL-error and server-overload safety.
 Their L9 suites exercise XA lifecycle, SQL outcomes, prepared-branch recovery, resource
 identity, timeout behavior, errors, and strict multinode session affinity.
+Their L10 suites combine SQL, streaming and LOBs, local and XA transactions, recovery
+and failover over mTLS, and reject missing and untrusted client certificates.
 SQL Server L1 passed in the
 [Node client integration workflow](https://github.com/Open-J-Proxy/ojp/actions/runs/43517201512);
 the SQL Server L2 suite passed in [run 43528198577](https://github.com/Open-J-Proxy/ojp/actions/runs/43528198577)
@@ -91,8 +93,8 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L6** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover temporary tables, session variables, transaction boundaries, close lifecycle, and bound-node failure without rerouting in their L6 suites. PostgreSQL verifies temporary-table and `SET LOCAL` state across calls/transactions, close lifecycle, and bound-node failure without rerouting; session and target-server propagation are managed internally. SQL Server also covers temporary-table state and sticky-node failure. |
 | **L7** | MariaDB, MySQL, PostgreSQL, SQL Server | The database-specific L7 suites verify least-connections selection, round-robin distribution, unavailable/recovered-node health, cached `connHash` reuse, stale-pool reconnect for stateless operations, and SQL-error classification. `test/multinodeClient.test.ts` also checks cluster-health propagation and retry limits. |
 | **L8** | MariaDB, MySQL, PostgreSQL, SQL Server | MariaDB and MySQL cover resilience and recovery in `test/integration.mariadb.l8.test.ts` and `test/integration.mysql.l8.test.ts`; PostgreSQL covers bounded stateless failover, recovery and redistribution, sticky-session loss, transaction failures, SQL errors, and server overload in `test/integration.postgres.l8.test.ts`. SQL Server covers the corresponding behavior in `test/integration.sqlServerL8.test.ts`. |
-| **L9** | PostgreSQL, SQL Server | MariaDB and MySQL have XA lifecycle coverage in `test/integration.mariadb.l9.test.ts` and `test/integration.mysql.l9.test.ts`, but the server's pooled XA session leak prevents cumulative L9 compliance. PostgreSQL and SQL Server cover the XA lifecycle in `test/integration.xa.postgres.test.ts` and `test/integration.sqlServerXA.test.ts`. |
-| **L10** | PostgreSQL, SQL Server (certified) | PostgreSQL `test/integration.postgres.l10.test.ts` and SQL Server `test/integration.sqlServerL10.test.ts` authenticate against each mTLS endpoint, verify local and XA commit/rollback/recovery outcomes, stateless failover and redistribution, sticky-session and XA affinity failures, and rejection of missing or untrusted client certificates. |
+| **L9** | MariaDB, MySQL, PostgreSQL, SQL Server | The MariaDB and MySQL L9 suites cover XA lifecycle, resource recovery and unused-session cleanup. PostgreSQL and SQL Server cover the XA lifecycle in `test/integration.xa.postgres.test.ts` and `test/integration.sqlServerXA.test.ts`. |
+| **L10** | MariaDB, MySQL, PostgreSQL, SQL Server | The database-specific L10 suites authenticate against each mTLS endpoint, verify local and XA commit/rollback/recovery outcomes, stateless failover and redistribution, sticky-session and XA affinity failures, and reject missing or untrusted client certificates. MariaDB and MySQL also exercise LOB and streaming operations and unused XA session cleanup over mTLS. |
 
 PostgreSQL L5 uses the JDBC driver's supported `BYTEA`/`TEXT` hydrated path; PostgreSQL's
 JDBC driver does not implement native `createBlob()`/`createClob()`. Binary stream
@@ -116,9 +118,15 @@ suites with `OJP_ENABLE_MYSQL_L7_TESTS=true npm run test:mysql-l7` and
 two dedicated containers in `OJP_TEST_NODE_CONTAINERS` and matching ports in
 `OJP_TEST_NODE_PORTS`. The tests stop and restart these containers.
 
-The Node integration workflow provisions MySQL and MariaDB, plus separate two-node
-PostgreSQL and SQL Server OJP clusters that require client certificates; it runs both L10
-suites alongside their L1–L9 suites. H2 is at L1; MariaDB and MySQL are at L8.
+The Node integration workflow provisions all four databases and two-node OJP clusters
+that require client certificates; it runs the L10 suites alongside L1–L9. H2 is at L1.
+To run the MariaDB or MySQL L10 suite, set `OJP_TEST_MTLS_CERT_DIR` to the certificate
+directory, `OJP_TEST_MYSQL_MARIADB_L10_MTLS_ENDPOINTS` to at least two distinct
+`localhost:port` endpoints, and `OJP_TEST_MYSQL_MARIADB_L10_MTLS_CONTAINERS` to the
+corresponding dedicated Docker containers in the same order. The suite stops and restarts
+those containers. Run `OJP_ENABLE_MARIADB_L10_TESTS=true npm run test:mariadb-l10` or
+`OJP_ENABLE_MYSQL_L10_TESTS=true npm run test:mysql-l10`; database fixture and password
+overrides are shared with the L1–L9 suites.
 
 SQL Server's L5 coverage documents that the JDBC driver rejects ranged BLOB/CLOB reads
 with “This operation is not supported”; this affects `readLobStream` and transparent
@@ -190,6 +198,13 @@ const result = await withOjpClient(ojpUrl, async (db) => {
 `privateKey` and `certChain` must be supplied together. `tls` enables TLS; `rootCert`
 configures server verification, while omitting both client-identity fields uses regular
 server-authenticated TLS.
+
+Pool identity caching is separated by transport mode, trust roots, and client identity,
+so a client using different TLS credentials does not inherit another client's cached
+connection. Session tokens and endpoint routing remain internal; applications still
+explicitly upload LOBs with `createLob()` and supply the resulting reference when binding
+them. XA transaction managers explicitly drive the XA branch lifecycle, while
+`withXAConnection()` scopes connection cleanup.
 
 ### Multinode routing
 

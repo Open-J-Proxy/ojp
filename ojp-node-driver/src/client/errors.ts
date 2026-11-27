@@ -63,7 +63,8 @@ export function toOjpError(err: unknown): Error {
       if (Buffer.isBuffer(raw)) {
         const decoded = decodeSqlErrorResponse(raw);
         if (decoded) {
-          if (decoded.sqlErrorType === 'SQL_TRANSIENT_CONNECTION_EXCEPTION') {
+          if (decoded.sqlErrorType === 'SQL_TRANSIENT_CONNECTION_EXCEPTION'
+              && !isPoolExhaustion(decoded.reason)) {
             return new OjpConnectionError(decoded.reason || grpcError.message, err);
           }
           return new OjpSqlError(decoded.reason || grpcError.message, decoded);
@@ -90,6 +91,7 @@ export function toOjpError(err: unknown): Error {
  * matching done by `GrpcExceptionHandler` in the reference JDBC driver.
  */
 const CONNECTION_LEVEL_MESSAGE_PATTERN = /connection|timeout|unavailable|failed to connect|no healthy servers/i;
+const isPoolExhaustion = (message: string): boolean => /pool.{0,30}exhaust|exhaust.{0,30}pool/i.test(message);
 
 /**
  * Classifies whether a raw gRPC error represents a connection-level/transport failure
@@ -108,7 +110,7 @@ export function isConnectionLevelError(err: unknown): boolean {
   } | undefined;
   const rawMessage = `${grpcError?.message ?? ''} ${grpcError?.details ?? ''}`;
   if (grpcError?.code === grpc.status.RESOURCE_EXHAUSTED
-      || /pool.{0,30}exhaust|exhaust.{0,30}pool/i.test(rawMessage)) {
+      || isPoolExhaustion(rawMessage)) {
     return false;
   }
   const lowerMessage = rawMessage.toLowerCase();
@@ -123,7 +125,7 @@ export function isConnectionLevelError(err: unknown): boolean {
   if (Buffer.isBuffer(raw)) {
     const decoded = decodeSqlErrorResponse(raw);
     if (decoded) {
-      if (/pool.{0,30}exhaust|exhaust.{0,30}pool/i.test(decoded.reason)) {
+      if (isPoolExhaustion(decoded.reason)) {
         return false;
       }
       return decoded.sqlErrorType === 'SQL_TRANSIENT_CONNECTION_EXCEPTION';

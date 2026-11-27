@@ -1,4 +1,6 @@
 import * as grpc from '@grpc/grpc-js';
+import { loadSync } from 'protobufjs';
+import { PropertyEntry } from '../src/proto/types';
 
 interface MockSession {
   connHash: string;
@@ -9,12 +11,13 @@ interface MockSession {
 }
 
 const mockRpcState: {
-  connectRequests: Array<{ url: string; address: string; clusterHealth?: string; serverEndpoints?: string[] }>;
+  connectRequests: Array<{ url: string; address: string; clusterHealth?: string; serverEndpoints?: string[]; properties?: PropertyEntry[] }>;
   connectErrors: Map<string, Error>;
   probeErrors: Map<string, Error>;
   updateErrors: Array<Error | undefined>;
   updateAddresses: string[];
   updateTargetServers: Array<string | undefined>;
+  updateProperties: Array<PropertyEntry[] | undefined>;
   startTransactionErrors: Array<Error | undefined>;
   startTransactionAddresses: string[];
   xaStartAddresses: string[];
@@ -28,6 +31,7 @@ const mockRpcState: {
   updateErrors: [],
   updateAddresses: [],
   updateTargetServers: [],
+  updateProperties: [],
   startTransactionErrors: [],
   startTransactionAddresses: [],
   xaStartAddresses: [],
@@ -43,7 +47,7 @@ jest.mock('../src/proto/loader', () => ({
             constructor(private readonly address: string) {}
 
             connect(
-              request: { url: string; clientUUID: string; clusterHealth?: string; serverEndpoints?: string[] },
+              request: { url: string; clientUUID: string; clusterHealth?: string; serverEndpoints?: string[]; properties?: PropertyEntry[] },
               callbackOrOptions: unknown,
               maybeCallback?: (err: Error | null, session: MockSession) => void,
             ): void {
@@ -55,6 +59,7 @@ jest.mock('../src/proto/loader', () => ({
                 address: this.address,
                 clusterHealth: request.clusterHealth,
                 serverEndpoints: request.serverEndpoints,
+                properties: request.properties,
               });
               const connectError = request.url
                 ? mockRpcState.connectErrors.get(this.address)
@@ -72,11 +77,12 @@ jest.mock('../src/proto/loader', () => ({
             }
 
             executeUpdate(
-              request: { session: MockSession },
+              request: { session: MockSession; properties?: PropertyEntry[] },
               callback: (err: Error | null, result: { intValue: number; session: MockSession }) => void,
             ): void {
               mockRpcState.updateAddresses.push(this.address);
               mockRpcState.updateTargetServers.push(request.session.targetServer);
+              mockRpcState.updateProperties.push(request.properties);
               const error = mockRpcState.updateErrors.shift();
               if (error) {
                 callback(error, { intValue: 0, session: request.session });
@@ -164,6 +170,7 @@ describe('OjpClient multinode pool cache', () => {
     mockRpcState.updateErrors = [];
     mockRpcState.updateAddresses = [];
     mockRpcState.updateTargetServers = [];
+    mockRpcState.updateProperties = [];
     mockRpcState.startTransactionErrors = [];
     mockRpcState.startTransactionAddresses = [];
     mockRpcState.xaStartAddresses = [];
@@ -189,6 +196,63 @@ describe('OjpClient multinode pool cache', () => {
       await expect(second.executeUpdate('INSERT INTO t VALUES (1)')).resolves.toBe(1);
     } finally {
       await second.close();
+    }
+  });
+
+  it('passes stable server connection properties and separates cached configurations', async () => {
+    const properties = { 'ojp.connection.pool.maximumPoolSize': '2', 'ojp.connection.pool.minimumIdle': '0' };
+    const first = new OjpClient(url, { connectionProperties: properties });
+    properties['ojp.connection.pool.maximumPoolSize'] = '9';
+    await first.connect();
+    await first.close();
+    const second = new OjpClient(url, {
+      connectionProperties: { 'ojp.connection.pool.minimumIdle': '0', 'ojp.connection.pool.maximumPoolSize': '2' },
+    });
+    await second.connect();
+    await second.close();
+    expect(mockRpcState.connectRequests).toHaveLength(1);
+    expect(mockRpcState.connectRequests[0].properties).toEqual([
+      { key: 'ojp.connection.pool.maximumPoolSize', stringValue: '2' },
+      { key: 'ojp.connection.pool.minimumIdle', stringValue: '0' },
+    ]);
+
+    const third = new OjpClient(url, { connectionProperties: properties });
+    await third.connect();
+    await third.close();
+    expect(mockRpcState.connectRequests).toHaveLength(2);
+    expect(mockRpcState.connectRequests[1].properties?.[0].stringValue).toBe('9');
+    expect(() => new OjpClient(url, { connectionProperties: { 'ojp.datasource.name': 'wrong' } }))
+      .toThrow(/datasource name/);
+  });
+
+  it('encodes named generated-key columns using the contract container format', async () => {
+    const client = new OjpClient(url);
+    await client.connect();
+    try {
+      const statement = client.prepareStatement('INSERT INTO t(value) VALUES (?)', {
+        generatedKeys: ['ID', 'OTHER_ID'],
+      });
+      await statement.executeUpdate(['value']);
+      const property = mockRpcState.updateProperties[0]?.[0];
+      expect(property?.key).toBe('STATEMENT_COLUMN_NAMES_KEY');
+      const container = loadSync(require.resolve('@ojp/grpc-contract/proto/containers.proto'))
+        .lookupType('ojp.transport.v1.Container');
+      expect(container.toObject(container.decode(property!.bytesValue!))).toEqual({
+        array: { values: [{ s: 'ID' }, { s: 'OTHER_ID' }] },
+      });
+      await client.createStatement().executeUpdate('INSERT INTO t(value) VALUES (?)', ['value'], {
+        generatedKeys: ['ID'],
+      });
+      const plainProperty = mockRpcState.updateProperties[1]?.[0];
+      expect(plainProperty?.key).toBe('STATEMENT_COLUMN_NAMES_KEY');
+      expect(container.toObject(container.decode(plainProperty!.bytesValue!))).toEqual({
+        array: { values: [{ s: 'ID' }] },
+      });
+      await expect(client.prepareStatement('INSERT INTO t VALUES (?)', { generatedKeys: [] })
+        .executeUpdate([1])).rejects.toThrow(TypeError);
+      expect(mockRpcState.updateProperties).toHaveLength(2);
+    } finally {
+      await client.close();
     }
   });
 

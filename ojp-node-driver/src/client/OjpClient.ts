@@ -1,6 +1,7 @@
 import * as grpc from '@grpc/grpc-js';
 import { createHash, randomUUID } from 'crypto';
 import { PassThrough, Readable } from 'stream';
+import { loadSync, Type } from 'protobufjs';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
 import { decodeSqlErrorResponse, SQL_ERROR_METADATA_KEY } from '../proto/errorCodec';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
@@ -42,8 +43,8 @@ export { OjpLobRef, OjpTypedParam } from './valueMapper';
 export { OjpNullParam } from './valueMapper';
 
 export interface OjpClientStatementOptions {
-  /** Request generated keys from an update, where the database supports them. */
-  generatedKeys?: boolean;
+  /** Request generated keys, optionally naming columns (for example, Oracle identity columns). */
+  generatedKeys?: boolean | string[];
 }
 
 export interface QueryColumnMetadata {
@@ -86,6 +87,8 @@ export interface OjpClientOptions {
   failoverRetryDelayMs?: number;
   /** Shared per-pool admission control. Default: reactive. */
   clientThrottleMode?: ClientThrottleMode;
+  /** String-valued OJP server connection properties, such as server-side pool settings. */
+  connectionProperties?: Readonly<Record<string, string>>;
   /**
    * Opens this session as an XA (distributed transaction) resource. When `true`,
    * transaction demarcation must go through `createXAResource()` — `startTransaction`/
@@ -195,6 +198,25 @@ interface CachedPool {
 }
 
 const poolCache = new Map<string, CachedPool>();
+let transportContainer: Type | undefined;
+
+function generatedKeyProperties(generatedKeys: boolean | string[] | undefined): PropertyEntry[] {
+  if (!generatedKeys) {
+    return [];
+  }
+  if (generatedKeys === true) {
+    return [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }];
+  }
+  if (!generatedKeys.length || generatedKeys.some((name) => typeof name !== 'string' || !name.trim())) {
+    throw new TypeError('generatedKeys must contain at least one non-empty column name.');
+  }
+  transportContainer ??= loadSync(require.resolve('@ojp/grpc-contract/proto/containers.proto'))
+    .lookupType('ojp.transport.v1.Container');
+  const bytesValue = Buffer.from(transportContainer.encode({
+    array: { values: generatedKeys.map((name) => ({ s: name })) },
+  }).finish());
+  return [{ key: 'STATEMENT_COLUMN_NAMES_KEY', bytesValue }];
+}
 
 function endpointKey(endpoint: OjpServerEndpoint): string {
   return `${endpoint.host}:${endpoint.port}`;
@@ -272,6 +294,19 @@ async function* chunkLobInput(input: LobInput, clob: boolean): AsyncGenerator<Bu
         while (chunkSize > 0 && (pending[chunkSize] & 0xc0) === 0x80) {
           chunkSize -= 1;
         }
+        if (pending.length === LOB_CHUNK_SIZE) {
+          let start = chunkSize - 1;
+          while (start > 0 && (pending[start] & 0xc0) === 0x80) {
+            start -= 1;
+          }
+          const lead = pending[start];
+          const length = lead >= 0xf0 && lead <= 0xf4 ? 4
+            : lead >= 0xe0 && lead <= 0xef ? 3
+              : lead >= 0xc2 && lead <= 0xdf ? 2 : 1;
+          if (chunkSize - start < length) {
+            chunkSize = start;
+          }
+        }
       }
       yield pending.subarray(0, chunkSize);
       pending = pending.subarray(chunkSize);
@@ -308,6 +343,7 @@ export class OjpClient {
   private readonly parsedUrl: ParsedOjpUrl;
   private readonly clientUUID: string;
   private readonly poolKey: string;
+  private readonly connectionProperties: PropertyEntry[];
   private endpointRegistered = false;
   private healthCheckTimer?: NodeJS.Timeout;
   private connecting = false;
@@ -321,6 +357,14 @@ export class OjpClient {
 
   constructor(ojpUrl: string, private readonly options: OjpClientOptions = {}) {
     this.parsedUrl = parseOjpUrl(ojpUrl);
+    this.connectionProperties = Object.entries(options.connectionProperties ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => {
+        if (!key.trim() || key === 'ojp.datasource.name' || typeof value !== 'string') {
+          throw new TypeError('Connection properties require non-empty keys and string values; use the URL for the datasource name.');
+        }
+        return { key, stringValue: value };
+      });
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
     if (!Number.isSafeInteger(options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS)
         || (options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS) < 0) {
@@ -372,9 +416,12 @@ export class OjpClient {
   }
 
   private buildConnectionDetails(): ConnectionDetails {
-    const properties = this.parsedUrl.dataSourceName
-      ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
-      : [];
+    const properties = [
+      ...(this.parsedUrl.dataSourceName
+        ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
+        : []),
+      ...this.connectionProperties,
+    ];
     return {
       // The ojp-server passes this URL to its JDBC connection pool provider, which
       // requires the "jdbc:" prefix (e.g. jdbc:postgresql://host/db). The OJP connection
@@ -805,6 +852,7 @@ export class OjpClient {
     additionalProperties: PropertyEntry[],
   ): Promise<OpResult> {
     const parameters = toParameterProtos(params);
+    const keyProperties = generatedKeyProperties(options.generatedKeys);
     const invoke = (): Promise<OpResult> => {
       const request: StatementRequest = {
         session: this.requireSession(),
@@ -813,7 +861,7 @@ export class OjpClient {
         statementUUID,
         properties: [
           ...additionalProperties,
-          ...(options.generatedKeys ? [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }] : []),
+          ...keyProperties,
         ],
       };
 
@@ -1555,7 +1603,12 @@ export class OjpClient {
         call.cancel();
         return;
       }
-      if (block.position !== '-1' && block.data?.length && !output.write(block.data)) {
+      if (block.position === '-1') {
+        output.destroy(new OjpConnectionError('The server could not find the LOB reference.'));
+        call.cancel();
+        return;
+      }
+      if (block.data?.length && !output.write(block.data)) {
         call.pause();
       }
     });
@@ -1605,9 +1658,10 @@ export class OjpClient {
           stream.cancel();
           return;
         }
-        // position === "-1" is the sentinel for "LOB reference not found"
-        // (see ReadLobAction); in that case there is no data to concatenate.
         if (block.position === '-1') {
+          settled = true;
+          reject(new OjpConnectionError('The server could not find the LOB reference.'));
+          stream.cancel();
           return;
         }
         if (block.data?.length) {

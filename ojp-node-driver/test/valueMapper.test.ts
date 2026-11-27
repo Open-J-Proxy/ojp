@@ -59,6 +59,15 @@ describe('valueMapper', () => {
     expect(roundTrip.getTime()).toBe(date.getTime());
   });
 
+  it('encodes timestamps before the epoch with non-negative nanos', () => {
+    const date = new Date('1969-12-31T23:59:59.123Z');
+    for (const value of [date, new OjpTypedParam(date, ParameterType.TIMESTAMP)]) {
+      const proto = toParameterProto(1, value);
+      expect(proto.values[0].timestampValue?.instant).toEqual({ seconds: '-1', nanos: 123000000 });
+      expect(fromParameterValue(proto.values[0])).toEqual(date);
+    }
+  });
+
   it('should throw an error for unsupported types', () => {
     expect(() => toParameterProto(1, Symbol('x'))).toThrow(TypeError);
   });

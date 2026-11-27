@@ -152,7 +152,7 @@ export function toParameterProto(index: number, value: unknown): ParameterProto 
           timestampValue: {
             instant: {
               seconds: Math.floor(value.getTime() / 1000).toString(),
-              nanos: (value.getTime() % 1000) * 1_000_000,
+              nanos: value.getUTCMilliseconds() * 1_000_000,
             },
             timezone: 'UTC',
             // TEMPORAL_TYPE_TIMESTAMP makes the server reconstruct a java.sql.Timestamp,
@@ -241,7 +241,7 @@ function toTypedParameterProto(
             timestampValue: {
               instant: {
                 seconds: Math.floor(asDate.getTime() / 1000).toString(),
-                nanos: (asDate.getTime() % 1000) * 1_000_000,
+                nanos: asDate.getUTCMilliseconds() * 1_000_000,
               },
               timezone: 'UTC',
               originalType: temporalType ?? 'TEMPORAL_TYPE_TIMESTAMP',

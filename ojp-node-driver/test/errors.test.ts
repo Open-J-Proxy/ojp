@@ -68,5 +68,6 @@ describe('SQL error metadata', () => {
     );
     const raw = Object.assign(new Error('RPC failed'), { code: grpc.status.INTERNAL, metadata });
     expect(isConnectionLevelError(raw)).toBe(false);
+    expect(toOjpError(raw)).toBeInstanceOf(OjpSqlError);
   });
 });

@@ -11,7 +11,7 @@ interface MockSession {
 }
 
 const mockRpcState: {
-  connectRequests: Array<{ url: string; address: string; clusterHealth?: string; serverEndpoints?: string[] }>;
+  connectRequests: Array<{ url: string; address: string; clusterHealth?: string; serverEndpoints?: string[]; properties?: PropertyEntry[] }>;
   connectErrors: Map<string, Error>;
   probeErrors: Map<string, Error>;
   updateErrors: Array<Error | undefined>;
@@ -47,7 +47,7 @@ jest.mock('../src/proto/loader', () => ({
             constructor(private readonly address: string) {}
 
             connect(
-              request: { url: string; clientUUID: string; clusterHealth?: string; serverEndpoints?: string[] },
+              request: { url: string; clientUUID: string; clusterHealth?: string; serverEndpoints?: string[]; properties?: PropertyEntry[] },
               callbackOrOptions: unknown,
               maybeCallback?: (err: Error | null, session: MockSession) => void,
             ): void {
@@ -59,6 +59,7 @@ jest.mock('../src/proto/loader', () => ({
                 address: this.address,
                 clusterHealth: request.clusterHealth,
                 serverEndpoints: request.serverEndpoints,
+                properties: request.properties,
               });
               const connectError = request.url
                 ? mockRpcState.connectErrors.get(this.address)
@@ -196,6 +197,32 @@ describe('OjpClient multinode pool cache', () => {
     } finally {
       await second.close();
     }
+  });
+
+  it('passes stable server connection properties and separates cached configurations', async () => {
+    const properties = { 'ojp.connection.pool.maximumPoolSize': '2', 'ojp.connection.pool.minimumIdle': '0' };
+    const first = new OjpClient(url, { connectionProperties: properties });
+    properties['ojp.connection.pool.maximumPoolSize'] = '9';
+    await first.connect();
+    await first.close();
+    const second = new OjpClient(url, {
+      connectionProperties: { 'ojp.connection.pool.minimumIdle': '0', 'ojp.connection.pool.maximumPoolSize': '2' },
+    });
+    await second.connect();
+    await second.close();
+    expect(mockRpcState.connectRequests).toHaveLength(1);
+    expect(mockRpcState.connectRequests[0].properties).toEqual([
+      { key: 'ojp.connection.pool.maximumPoolSize', stringValue: '2' },
+      { key: 'ojp.connection.pool.minimumIdle', stringValue: '0' },
+    ]);
+
+    const third = new OjpClient(url, { connectionProperties: properties });
+    await third.connect();
+    await third.close();
+    expect(mockRpcState.connectRequests).toHaveLength(2);
+    expect(mockRpcState.connectRequests[1].properties?.[0].stringValue).toBe('9');
+    expect(() => new OjpClient(url, { connectionProperties: { 'ojp.datasource.name': 'wrong' } }))
+      .toThrow(/datasource name/);
   });
 
   it('encodes named generated-key columns using the contract container format', async () => {

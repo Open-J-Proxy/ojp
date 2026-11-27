@@ -260,6 +260,23 @@ const result = await withOjpClient(ojpUrl, async (db) => {
 configures server verification, while omitting both client-identity fields uses regular
 server-authenticated TLS.
 
+Server-side connection properties can be supplied as strings, for example:
+
+```ts
+const client = new OjpClient(url, {
+  user,
+  password,
+  connectionProperties: {
+    'ojp.connection.pool.maximumPoolSize': '20',
+    'ojp.connection.pool.minimumIdle': '2',
+  },
+});
+```
+
+These settings configure the server's pool, not a Node connection pool. A server
+identifies an existing pool by database URL, credentials, and datasource name;
+use the datasource name in the OJP URL to isolate differently configured pools.
+
 Pool identity caching is separated by transport mode, trust roots, and client identity,
 so a client using different TLS credentials does not inherit another client's cached
 connection. Session tokens and endpoint routing remain internal; applications still

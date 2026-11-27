@@ -87,6 +87,8 @@ export interface OjpClientOptions {
   failoverRetryDelayMs?: number;
   /** Shared per-pool admission control. Default: reactive. */
   clientThrottleMode?: ClientThrottleMode;
+  /** String-valued OJP server connection properties, such as server-side pool settings. */
+  connectionProperties?: Readonly<Record<string, string>>;
   /**
    * Opens this session as an XA (distributed transaction) resource. When `true`,
    * transaction demarcation must go through `createXAResource()` — `startTransaction`/
@@ -341,6 +343,7 @@ export class OjpClient {
   private readonly parsedUrl: ParsedOjpUrl;
   private readonly clientUUID: string;
   private readonly poolKey: string;
+  private readonly connectionProperties: PropertyEntry[];
   private endpointRegistered = false;
   private healthCheckTimer?: NodeJS.Timeout;
   private connecting = false;
@@ -354,6 +357,14 @@ export class OjpClient {
 
   constructor(ojpUrl: string, private readonly options: OjpClientOptions = {}) {
     this.parsedUrl = parseOjpUrl(ojpUrl);
+    this.connectionProperties = Object.entries(options.connectionProperties ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => {
+        if (!key.trim() || key === 'ojp.datasource.name' || typeof value !== 'string') {
+          throw new TypeError('Connection properties require non-empty keys and string values; use the URL for the datasource name.');
+        }
+        return { key, stringValue: value };
+      });
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000;
     if (!Number.isSafeInteger(options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS)
         || (options.maxFailoverAttempts ?? DEFAULT_MAX_FAILOVER_ATTEMPTS) < 0) {
@@ -405,9 +416,12 @@ export class OjpClient {
   }
 
   private buildConnectionDetails(): ConnectionDetails {
-    const properties = this.parsedUrl.dataSourceName
-      ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
-      : [];
+    const properties = [
+      ...(this.parsedUrl.dataSourceName
+        ? [{ key: 'ojp.datasource.name', stringValue: this.parsedUrl.dataSourceName }]
+        : []),
+      ...this.connectionProperties,
+    ];
     return {
       // The ojp-server passes this URL to its JDBC connection pool provider, which
       // requires the "jdbc:" prefix (e.g. jdbc:postgresql://host/db). The OJP connection

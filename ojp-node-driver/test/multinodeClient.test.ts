@@ -1,4 +1,6 @@
 import * as grpc from '@grpc/grpc-js';
+import { loadSync } from 'protobufjs';
+import { PropertyEntry } from '../src/proto/types';
 
 interface MockSession {
   connHash: string;
@@ -15,6 +17,7 @@ const mockRpcState: {
   updateErrors: Array<Error | undefined>;
   updateAddresses: string[];
   updateTargetServers: Array<string | undefined>;
+  updateProperties: Array<PropertyEntry[] | undefined>;
   startTransactionErrors: Array<Error | undefined>;
   startTransactionAddresses: string[];
   xaStartAddresses: string[];
@@ -28,6 +31,7 @@ const mockRpcState: {
   updateErrors: [],
   updateAddresses: [],
   updateTargetServers: [],
+  updateProperties: [],
   startTransactionErrors: [],
   startTransactionAddresses: [],
   xaStartAddresses: [],
@@ -72,11 +76,12 @@ jest.mock('../src/proto/loader', () => ({
             }
 
             executeUpdate(
-              request: { session: MockSession },
+              request: { session: MockSession; properties?: PropertyEntry[] },
               callback: (err: Error | null, result: { intValue: number; session: MockSession }) => void,
             ): void {
               mockRpcState.updateAddresses.push(this.address);
               mockRpcState.updateTargetServers.push(request.session.targetServer);
+              mockRpcState.updateProperties.push(request.properties);
               const error = mockRpcState.updateErrors.shift();
               if (error) {
                 callback(error, { intValue: 0, session: request.session });
@@ -164,6 +169,7 @@ describe('OjpClient multinode pool cache', () => {
     mockRpcState.updateErrors = [];
     mockRpcState.updateAddresses = [];
     mockRpcState.updateTargetServers = [];
+    mockRpcState.updateProperties = [];
     mockRpcState.startTransactionErrors = [];
     mockRpcState.startTransactionAddresses = [];
     mockRpcState.xaStartAddresses = [];
@@ -189,6 +195,29 @@ describe('OjpClient multinode pool cache', () => {
       await expect(second.executeUpdate('INSERT INTO t VALUES (1)')).resolves.toBe(1);
     } finally {
       await second.close();
+    }
+  });
+
+  it('encodes named generated-key columns using the contract container format', async () => {
+    const client = new OjpClient(url);
+    await client.connect();
+    try {
+      const statement = client.prepareStatement('INSERT INTO t(value) VALUES (?)', {
+        generatedKeys: ['ID', 'OTHER_ID'],
+      });
+      await statement.executeUpdate(['value']);
+      const property = mockRpcState.updateProperties[0]?.[0];
+      expect(property?.key).toBe('STATEMENT_COLUMN_NAMES_KEY');
+      const container = loadSync(require.resolve('@ojp/grpc-contract/proto/containers.proto'))
+        .lookupType('ojp.transport.v1.Container');
+      expect(container.toObject(container.decode(property!.bytesValue!))).toEqual({
+        array: { values: [{ s: 'ID' }, { s: 'OTHER_ID' }] },
+      });
+      await expect(client.prepareStatement('INSERT INTO t VALUES (?)', { generatedKeys: [] })
+        .executeUpdate([1])).rejects.toThrow(TypeError);
+      expect(mockRpcState.updateProperties).toHaveLength(1);
+    } finally {
+      await client.close();
     }
   });
 

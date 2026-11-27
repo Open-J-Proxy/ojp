@@ -359,6 +359,9 @@ const generatedKeys = await insert.getGeneratedKeys();
 await insert.close();
 ```
 
+For databases such as Oracle that require named generated-key columns, use
+`{ generatedKeys: ['ID'] }` instead of `{ generatedKeys: true }`.
+
 For prepared batches, call `addBatch(values)` for each parameter set and then
 `executeBatch()`. Close prepared wrappers when finished; closing the owning client also
 terminates the OJP session and releases its server-side resources.

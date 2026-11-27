@@ -1,6 +1,7 @@
 import * as grpc from '@grpc/grpc-js';
 import { createHash, randomUUID } from 'crypto';
 import { PassThrough, Readable } from 'stream';
+import { loadSync, Type } from 'protobufjs';
 import { loadStatementServiceGrpcObject } from '../proto/loader';
 import { decodeSqlErrorResponse, SQL_ERROR_METADATA_KEY } from '../proto/errorCodec';
 import { OjpServerEndpoint, ParsedOjpUrl, parseOjpUrl } from './connectionString';
@@ -42,8 +43,8 @@ export { OjpLobRef, OjpTypedParam } from './valueMapper';
 export { OjpNullParam } from './valueMapper';
 
 export interface OjpClientStatementOptions {
-  /** Request generated keys from an update, where the database supports them. */
-  generatedKeys?: boolean;
+  /** Request generated keys, optionally naming columns (for example, Oracle identity columns). */
+  generatedKeys?: boolean | string[];
 }
 
 export interface QueryColumnMetadata {
@@ -195,6 +196,25 @@ interface CachedPool {
 }
 
 const poolCache = new Map<string, CachedPool>();
+let transportContainer: Type | undefined;
+
+function generatedKeyProperties(generatedKeys: boolean | string[] | undefined): PropertyEntry[] {
+  if (!generatedKeys) {
+    return [];
+  }
+  if (generatedKeys === true) {
+    return [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }];
+  }
+  if (!generatedKeys.length || generatedKeys.some((name) => typeof name !== 'string' || !name.trim())) {
+    throw new TypeError('generatedKeys must contain at least one non-empty column name.');
+  }
+  transportContainer ??= loadSync(require.resolve('@ojp/grpc-contract/proto/containers.proto'))
+    .lookupType('ojp.transport.v1.Container');
+  const bytesValue = Buffer.from(transportContainer.encode({
+    array: { values: generatedKeys.map((name) => ({ s: name })) },
+  }).finish());
+  return [{ key: 'STATEMENT_COLUMN_NAMES_KEY', bytesValue }];
+}
 
 function endpointKey(endpoint: OjpServerEndpoint): string {
   return `${endpoint.host}:${endpoint.port}`;
@@ -818,6 +838,7 @@ export class OjpClient {
     additionalProperties: PropertyEntry[],
   ): Promise<OpResult> {
     const parameters = toParameterProtos(params);
+    const keyProperties = generatedKeyProperties(options.generatedKeys);
     const invoke = (): Promise<OpResult> => {
       const request: StatementRequest = {
         session: this.requireSession(),
@@ -826,7 +847,7 @@ export class OjpClient {
         statementUUID,
         properties: [
           ...additionalProperties,
-          ...(options.generatedKeys ? [{ key: 'STATEMENT_AUTO_GENERATED_KEYS_KEY', intValue: 1 }] : []),
+          ...keyProperties,
         ],
       };
 

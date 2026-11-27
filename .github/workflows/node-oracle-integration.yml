@@ -61,7 +61,7 @@ jobs:
         env:
           ORACLE_CONTAINER: ${{ job.services.oracle.id }}
         run: |
-          docker exec -i "$ORACLE_CONTAINER" sqlplus -s system/testpassword@localhost/XEPDB1 <<'SQL'
+          docker exec -i "$ORACLE_CONTAINER" sqlplus -s sys/testpassword@localhost/XEPDB1 as sysdba <<'SQL'
           WHENEVER SQLERROR EXIT SQL.SQLCODE
           GRANT SELECT ON sys.dba_pending_transactions TO testuser;
           GRANT SELECT ON sys.pending_trans$ TO testuser;

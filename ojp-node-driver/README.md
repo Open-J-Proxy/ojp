@@ -11,7 +11,7 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 
 | Assessment | Value |
 |---|---|
-| Target level | **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
+| Target level | **L10** for MariaDB, MySQL, Oracle, PostgreSQL and SQL Server |
 | Cumulative level | **L9** for H2; **L10** for MariaDB, MySQL, PostgreSQL and SQL Server |
 | Higher-level features | L10 combines multinode recovery and XA behavior over mTLS |
 
@@ -128,6 +128,22 @@ datasource selection using `testdata/h2_connections.csv`.
 | **L8** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | H2, MariaDB, and MySQL cover failover, recovery and redistribution, sticky-session and active-transaction loss, SQL-error classification, and pool-exhaustion safety. PostgreSQL and SQL Server cover the corresponding bounded resilience behavior in their L8 suites. |
 | **L9** | H2, MariaDB, MySQL, PostgreSQL, SQL Server | H2, MariaDB, and MySQL cover XA lifecycle, SQL outcomes, prepared-branch recovery, resource identity, timeout behavior, errors, and strict multinode affinity. PostgreSQL and SQL Server cover XA lifecycle in `test/integration.xa.postgres.test.ts` and `test/integration.sqlServerXA.test.ts`. |
 | **L10** | MariaDB, MySQL, PostgreSQL, SQL Server | The database-specific L10 suites authenticate against each mTLS endpoint, verify local and XA commit/rollback/recovery outcomes, stateless failover and redistribution, sticky-session and XA affinity failures, and reject missing or untrusted client certificates. MariaDB and MySQL also exercise LOB and streaming operations and unused XA session cleanup over mTLS. |
+
+Oracle's L1–L10 suites use `testdata/oracle_connections.csv` and exercise CRUD,
+typed values and generated keys, cursors, transactions, LOBs, affinity, multinode
+recovery, XA and mTLS. The Node API does not expose Oracle `RETURNING INTO` output
+binds or vendor-specific ARRAY/REF construction. Oracle 21c has no SQL BOOLEAN
+column type, and its JDBC driver does not support releasing savepoints.
+The Oracle workflow runs after the H2 integration gate alongside the other Node
+database jobs. To run L1–L5 against a local OJP server and Oracle database:
+
+```sh
+OJP_ENABLE_ORACLE_TESTS=true npx jest --runInBand 'test/integration\.oracle\.l[1-5]\.test\.ts'
+```
+
+The L6–L10 suites additionally require dedicated OJP containers, with two
+certificate-authenticated endpoints for L10; see the Oracle workflow for their
+environment variables and setup.
 
 PostgreSQL L5 uses the JDBC driver's supported `BYTEA`/`TEXT` hydrated path; PostgreSQL's
 JDBC driver does not implement native `createBlob()`/`createClob()`. Binary stream
@@ -606,7 +622,8 @@ during development (multi-chunk uploads were silently failing).
 | **H2** | ✅ | ❌ | H2's free-standing `Blob`/`Clob` (`Connection.createBlob()/createClob()`) only accept **a single** write call (`setBytes`/`setCharacterStream`); a second call at another chunk throws `SQLFeatureNotSupportedException` ("Allocate a new object to set its value.", SQLState `HYC00`). Limitation of H2's JDBC driver, not of OJP or of this driver. |
 | **PostgreSQL** (`pgjdbc`) | ❌ | ❌ | `PgConnection.createBlob()`/`createClob()` immediately throw `SQLFeatureNotSupportedException` ("not yet implemented") — feature not implemented in `pgjdbc`. Note: this message is localized based on the server JVM's default locale (e.g. Portuguese on a pt-BR JVM), so don't assert on the English wording specifically — the method name (`createBlob`) is the only locale-invariant part. **Warning**: if `createLob` fails like this mid-session, that session's physical connection becomes unusable for subsequent calls — always use a dedicated connection to test/probe for LOB support, never a long-lived shared connection. |
 | **MySQL / MariaDB** | ✅ | ✅ | L5 integration suites validate single- and multi-chunk BLOB/CLOB upload, binding, hydrated query results, and streamed reads. |
-| Oracle / DB2 | untested | untested | Not covered by the Node driver integration suites. |
+| **Oracle** | Oracle L5 suite | Oracle L5 suite | Exercises BLOB/CLOB upload and binding, including multi-chunk values and streamed reads. |
+| DB2 | untested | untested | Not covered by the Node driver integration suites. |
 
 ## Multinode failover / round-robin between endpoints
 

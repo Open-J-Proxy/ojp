@@ -246,7 +246,7 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
         'ojp.connection.pool.connectionCreationGracePeriod': '0',
       };
       const namedUrl = (endpoints: string): string =>
-        `jdbc:ojp[${endpoints}(${dataSourceName})]_${jdbcUrl}`;
+        ojpUrl(`${endpoints}(${dataSourceName})`, jdbcUrl);
       const poolClient = (url: string): OjpClient => new OjpClient(url, {
         user,
         password,

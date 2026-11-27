@@ -1,6 +1,17 @@
 import { parseOjpUrl } from '../src/client/connectionString';
+import { ojpUrl } from './connectionFixtures';
 
 describe('parseOjpUrl', () => {
+  it('should format a named Oracle URL without duplicating the JDBC prefix', () => {
+    const url = ojpUrl(
+      'localhost:1059(oraclePool)',
+      'jdbc:oracle:thin:@localhost:1521/XEPDB1',
+    );
+
+    expect(url).toBe('jdbc:ojp[localhost:1059(oraclePool)]_oracle:thin:@localhost:1521/XEPDB1');
+    expect(parseOjpUrl(url).backendUrl).toBe('oracle:thin:@localhost:1521/XEPDB1');
+  });
+
   it('should parse a simple URL with a single endpoint', () => {
     const result = parseOjpUrl('jdbc:ojp[localhost:1059]_postgresql://localhost:5432/mydb');
     expect(result.endpoints).toEqual([{ host: 'localhost', port: 1059 }]);

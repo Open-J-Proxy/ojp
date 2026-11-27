@@ -1555,7 +1555,12 @@ export class OjpClient {
         call.cancel();
         return;
       }
-      if (block.position !== '-1' && block.data?.length && !output.write(block.data)) {
+      if (block.position === '-1') {
+        output.destroy(new OjpConnectionError('The server could not find the LOB reference.'));
+        call.cancel();
+        return;
+      }
+      if (block.data?.length && !output.write(block.data)) {
         call.pause();
       }
     });
@@ -1605,9 +1610,10 @@ export class OjpClient {
           stream.cancel();
           return;
         }
-        // position === "-1" is the sentinel for "LOB reference not found"
-        // (see ReadLobAction); in that case there is no data to concatenate.
         if (block.position === '-1') {
+          settled = true;
+          reject(new OjpConnectionError('The server could not find the LOB reference.'));
+          stream.cancel();
           return;
         }
         if (block.data?.length) {

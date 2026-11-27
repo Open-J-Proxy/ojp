@@ -253,6 +253,11 @@ automates XA connection cleanup. Because Node.js has no standard XA API, the tra
 manager still creates the Xid and explicitly drives the XA branch lifecycle; it never
 needs to propagate OJP session tokens or routing metadata.
 
+For large LOB parameters, a future convenience wrapper could upload the supplied stream
+and bind its reference in one operation. Explicit `OjpTypedParam`/`OjpNullParam` hints
+are still needed when JavaScript values do not identify the intended SQL type; a
+schema-aware adapter could supply those hints on behalf of an application.
+
 ### Multinode routing
 
 When the OJP URL contains multiple endpoints, the client chooses the healthy endpoint

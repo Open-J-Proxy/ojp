@@ -2,7 +2,8 @@
  * Real OJP server and H2 LOB integration, enabled by OJP_ENABLE_LOB_H2_TESTS=true.
  * Every CSV connection row runs the full suite.
  */
-import { OjpClient } from '../src/client/OjpClient';
+import { Readable } from 'stream';
+import { OjpClient, OjpTypedParam, ParameterType } from '../src';
 import { ojpUrl, readConnectionFixtures } from './connectionFixtures';
 
 const enabled = process.env.OJP_ENABLE_LOB_H2_TESTS === 'true';
@@ -66,6 +67,81 @@ describeIfEnabled.each(connections)('OjpClient - H2 LOBs: %s', (jdbcUrl, OJP_USE
     const { rows } = await client.executeQuery(`SELECT payload FROM ${tableName} WHERE id = ?`, [4]);
     expect((rows[0].PAYLOAD as Buffer).length).toBe(0);
   }, 15_000);
+
+  it('should distinguish empty LOB values from SQL NULL', async () => {
+    const emptyBlob = await client.createLob(Buffer.alloc(0), 'BLOB');
+    const emptyClob = await client.createLob('', 'CLOB');
+    await client.executeUpdate(
+      `INSERT INTO ${tableName} (id, payload, big_text) VALUES (?, ?, ?)`,
+      [5, emptyBlob, emptyClob],
+    );
+    await client.executeUpdate(
+      `INSERT INTO ${tableName} (id, payload, big_text) VALUES (?, ?, ?)`,
+      [6, null, null],
+    );
+
+    const { rows } = await client.executeQuery(
+      `SELECT payload, big_text FROM ${tableName} WHERE id IN (?, ?) ORDER BY id`,
+      [5, 6],
+    );
+    expect(rows[0].PAYLOAD).toEqual(Buffer.alloc(0));
+    expect(rows[0].BIG_TEXT).toBe('');
+    expect(rows[1].PAYLOAD).toBeNull();
+    expect(rows[1].BIG_TEXT).toBeNull();
+  }, 15_000);
+
+  it('should reuse an uploaded LOB reference for inserts and updates', async () => {
+    const content = Buffer.from('reusable H2 BLOB reference');
+    const ref = await client.createLob(content, 'BLOB');
+    await client.executeUpdate(`INSERT INTO ${tableName} (id, payload) VALUES (?, ?)`, [7, ref]);
+    await client.executeUpdate(`INSERT INTO ${tableName} (id, payload) VALUES (?, ?)`, [8, ref]);
+    await client.executeUpdate(`UPDATE ${tableName} SET payload = ? WHERE id = ?`, [ref, 7]);
+
+    const { rows } = await client.executeQuery(
+      `SELECT payload FROM ${tableName} WHERE id IN (?, ?) ORDER BY id`,
+      [7, 8],
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect((row.PAYLOAD as Buffer).equals(content)).toBe(true);
+    }
+  }, 15_000);
+
+  it('should upload a BLOB from a Node readable stream', async () => {
+    const content = Buffer.from('readable stream upload through OJP');
+    const ref = await client.createLob(
+      Readable.from([content.subarray(0, 9), content.subarray(9)]),
+      'BLOB',
+    );
+    await client.executeUpdate(`INSERT INTO ${tableName} (id, payload) VALUES (?, ?)`, [9, ref]);
+
+    const { rows } = await client.executeQuery(`SELECT payload FROM ${tableName} WHERE id = ?`, [9]);
+    expect((rows[0].PAYLOAD as Buffer).equals(content)).toBe(true);
+  }, 15_000);
+
+  it('should round-trip large binary and Unicode stream parameters through H2 LOB columns', async () => {
+    const binary = Buffer.alloc(200_000);
+    for (let index = 0; index < binary.length; index++) {
+      binary[index] = (index * 31) % 256;
+    }
+    const text = 'H2 Unicode stream: äöü ñ 中文 🚀 — '.repeat(5_000);
+    await client.executeUpdate(
+      `INSERT INTO ${tableName} (id, payload, big_text) VALUES (?, ?, ?)`,
+      [
+        10,
+        new OjpTypedParam(binary, ParameterType.BINARY_STREAM),
+        new OjpTypedParam(text, ParameterType.UNICODE_STREAM),
+      ],
+    );
+
+    const { rows } = await client.executeQuery(
+      `SELECT payload, big_text FROM ${tableName} WHERE id = ?`,
+      [10],
+    );
+    expect((rows[0].PAYLOAD as Buffer).length).toBe(binary.length);
+    expect((rows[0].PAYLOAD as Buffer).equals(binary)).toBe(true);
+    expect(rows[0].BIG_TEXT).toBe(text);
+  }, 30_000);
 
   /**
    * Known H2 limitation (not a driver bug): a "free-standing" Blob/Clob (created via

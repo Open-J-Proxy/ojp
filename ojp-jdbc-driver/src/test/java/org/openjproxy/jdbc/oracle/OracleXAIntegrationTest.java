@@ -11,11 +11,15 @@ import org.openjproxy.jdbc.xa.OjpXADataSource;
 import javax.sql.XAConnection;
 import javax.transaction.xa.XAResource;
 import javax.transaction.xa.Xid;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Arrays;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
@@ -216,6 +220,77 @@ public class OracleXAIntegrationTest {
                     assertTrue(rs.next());
                     assertEquals(0, rs.getInt(1), "Should not find rolled-back row");
                 }
+            }
+
+            @ParameterizedTest
+            @CsvFileSource(resources = "/oracle_xa_connection.csv")
+            void shouldRecoverAndCommitPreparedTransaction(String driverClass, String url, String user, String password)
+                    throws Exception {
+                setUp(driverClass, url, user, password);
+
+                String uniqueId = UUID.randomUUID().toString().replace("-", "");
+                String tableName = "xa_recover_" + uniqueId.substring(0, 12);
+                Xid xid = new TestXid(0x4f4a50, uniqueId.getBytes(StandardCharsets.US_ASCII),
+                        "branch-1".getBytes(StandardCharsets.US_ASCII));
+                XAResource resource = xaConnection.getXAResource();
+
+                try (Connection verification = DriverManager.getConnection(url, user, password);
+                     Statement statement = verification.createStatement()) {
+                    statement.executeUpdate("CREATE TABLE " + tableName + " (id NUMBER PRIMARY KEY, label VARCHAR2(100))");
+                    try {
+                        boolean started = false;
+                        boolean ended = false;
+                        boolean completed = false;
+                        try {
+                            resource.start(xid, XAResource.TMNOFLAGS);
+                            started = true;
+                            try (PreparedStatement insert = connection.prepareStatement(
+                                    "INSERT INTO " + tableName + " (id, label) VALUES (?, ?)")) {
+                                insert.setInt(1, 1);
+                                insert.setString(2, "recovered commit");
+                                assertEquals(1, insert.executeUpdate());
+                            }
+                            resource.end(xid, XAResource.TMSUCCESS);
+                            ended = true;
+                            assertEquals(XAResource.XA_OK, resource.prepare(xid));
+
+                            Xid[] recovered = resource.recover(XAResource.TMSTARTRSCAN | XAResource.TMENDRSCAN);
+                            Xid[] matches = Arrays.stream(recovered).filter(candidate -> sameXid(candidate, xid))
+                                    .toArray(Xid[]::new);
+                            assertEquals(1, matches.length, "Recovery must return the prepared branch exactly once");
+                            resource.commit(matches[0], false);
+                            completed = true;
+
+                            assertFalse(Arrays.stream(resource.recover(XAResource.TMSTARTRSCAN | XAResource.TMENDRSCAN))
+                                    .anyMatch(candidate -> sameXid(candidate, xid)),
+                                    "A committed branch must not appear in a later recovery scan");
+                            try (ResultSet rows = statement.executeQuery("SELECT id, label FROM " + tableName)) {
+                                assertTrue(rows.next(), "The recovered transaction should have committed its row");
+                                assertEquals(1, rows.getInt(1));
+                                assertEquals("recovered commit", rows.getString(2));
+                                assertFalse(rows.next(), "The transaction should commit exactly one row");
+                            }
+                        } finally {
+                            if (started && !completed) {
+                                try {
+                                    if (!ended) {
+                                        resource.end(xid, XAResource.TMFAIL);
+                                    }
+                                } finally {
+                                    resource.rollback(xid);
+                                }
+                            }
+                        }
+                    } finally {
+                        statement.executeUpdate("DROP TABLE " + tableName);
+                    }
+                }
+            }
+
+            private static boolean sameXid(Xid left, Xid right) {
+                return left.getFormatId() == right.getFormatId()
+                        && Arrays.equals(left.getGlobalTransactionId(), right.getGlobalTransactionId())
+                        && Arrays.equals(left.getBranchQualifier(), right.getBranchQualifier());
             }
 
             xaResource.end(xid2, XAResource.TMSUCCESS);

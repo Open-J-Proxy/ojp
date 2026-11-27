@@ -2149,6 +2149,7 @@ jobs:
           GRANT SELECT ON sys.dba_2pc_neighbors TO testuser;
           GRANT EXECUTE ON sys.dbms_xa TO testuser;
           GRANT EXECUTE ON sys.dbms_system TO testuser;
+          GRANT EXECUTE ON sys.dbms_lock TO testuser;
           GRANT FORCE ANY TRANSACTION TO testuser;
           
           -- Verify grants

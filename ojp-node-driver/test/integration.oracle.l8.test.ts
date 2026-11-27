@@ -236,10 +236,70 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
       }
     }, 60_000);
 
-    it.skip(
-      'database connection-pool exhaustion is not tested: this fixture limits OJP request admission, not JDBC pool capacity',
-      () => {},
-    );
+    it('surfaces Oracle JDBC pool exhaustion without failover, then succeeds after the holder releases its connection', async () => {
+      const dataSourceName = `${prefix}_pool_exhaustion`;
+      const poolConnectionProperties = {
+        'ojp.connection.pool.maximumPoolSize': '2',
+        'ojp.connection.pool.minimumIdle': '0',
+        'ojp.connection.pool.connectionTimeout': '1000',
+        // Avoid the server's default connection-creation grace retries masking an exhausted pool.
+        'ojp.connection.pool.connectionCreationGracePeriod': '0',
+      };
+      const namedUrl = (endpoints: string): string =>
+        `jdbc:ojp[${endpoints}(${dataSourceName})]_${jdbcUrl}`;
+      const poolClient = (url: string): OjpClient => new OjpClient(url, {
+        user,
+        password,
+        healthCheckIntervalMs: 0,
+        failoverRetryDelayMs: 0,
+        clientThrottleMode: 'off',
+        connectionProperties: poolConnectionProperties,
+      });
+
+      const poolEndpoints = nodes.slice(0, 2);
+      const client = poolClient(namedUrl(poolEndpoints.map(({ port }) => `localhost:${port}`).join(',')));
+      let holder: OjpClient | undefined;
+      let transactionStarted = false;
+      try {
+        await client.connect();
+        const boundPort = client.boundEndpoint?.port;
+        if (!boundPort || !poolEndpoints.some(({ port }) => port === boundPort)) {
+          throw new Error(`Pool-test client bound to unexpected Oracle OJP port ${boundPort ?? 'unknown'}`);
+        }
+        const boundEndpoint = { host: 'localhost', port: boundPort };
+
+        holder = poolClient(namedUrl(`localhost:${boundPort}`));
+        await holder.connect();
+        await holder.startTransaction();
+        transactionStarted = true;
+        await holder.executeQuery('SELECT dummy AS "DUMMY" FROM dual');
+
+        await expect(client.executeQuery('SELECT dummy AS "DUMMY" FROM dual')).rejects.toMatchObject({
+          name: 'OjpSqlError',
+          sqlState: '08001',
+          message: expect.stringMatching(/pool exhausted/i),
+        });
+        expect(client.boundEndpoint?.port).toBe(boundPort);
+        expect(isEndpointHealthy(boundEndpoint)).toBe(true);
+
+        await holder.rollback();
+        transactionStarted = false;
+        await holder.close();
+        holder = undefined;
+
+        await expect(client.executeQuery('SELECT dummy AS "DUMMY" FROM dual'))
+          .resolves.toMatchObject({ rows: [{ DUMMY: 'X' }] });
+        expect(client.boundEndpoint?.port).toBe(boundPort);
+      } finally {
+        if (holder) {
+          if (transactionStarted) {
+            await holder.rollback().catch(() => undefined);
+          }
+          await holder.close().catch(() => undefined);
+        }
+        await client.close().catch(() => undefined);
+      }
+    }, 60_000);
   },
 );
 

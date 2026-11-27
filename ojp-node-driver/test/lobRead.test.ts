@@ -1,8 +1,10 @@
 import { Readable } from 'stream';
+import { EventEmitter } from 'events';
 import { OjpClient, OjpLobRef } from '../src';
 import { ReadLobRequest, SessionInfo, StatementRequest } from '../src/proto/types';
 
 let mockPosition = '-1';
+let mockWrites: Array<{ position: string; data: Buffer }> = [];
 
 jest.mock('../src/proto/loader', () => ({
   loadStatementServiceGrpcObject: () => ({
@@ -40,6 +42,23 @@ jest.mock('../src/proto/loader', () => ({
           }], { objectMode: true }), { cancel: jest.fn() });
         }
 
+        createLob(): EventEmitter {
+          const call = new EventEmitter();
+          return Object.assign(call, {
+            write: (block: { session: SessionInfo; position: string; data: Buffer }, callback: () => void) => {
+              mockWrites.push(block);
+              callback();
+              queueMicrotask(() => call.emit('data', {
+                session: block.session,
+                uuid: 'clob',
+                lobType: 'LT_CLOB',
+              }));
+            },
+            end: () => queueMicrotask(() => call.emit('end')),
+            destroy: (error: Error) => queueMicrotask(() => call.emit('error', error)),
+          });
+        }
+
         terminateSession(_session: SessionInfo, _options: unknown, callback: (error: null) => void): void {
           callback(null);
         }
@@ -55,6 +74,7 @@ describe('LOB reference reads', () => {
 
   beforeEach(async () => {
     mockPosition = '-1';
+    mockWrites = [];
     client = new OjpClient('jdbc:ojp[localhost:1059]_h2:mem:lob-read-test');
     await client.connect();
   });
@@ -85,5 +105,13 @@ describe('LOB reference reads', () => {
     }
     expect(Buffer.concat(chunks)).toEqual(Buffer.alloc(0));
     expect((await client.executeQuery('SELECT text FROM lob_test')).rows[0].TEXT).toBe('');
+  });
+
+  it('does not split a UTF-8 character when an input chunk ends at the upload boundary', async () => {
+    const text = `${'a'.repeat(65535)}🚀end`;
+    const bytes = Buffer.from(text);
+    await client.createLob(Readable.from([bytes.subarray(0, 65536), bytes.subarray(65536)]), 'CLOB');
+    expect(mockWrites.map((block) => block.position)).toEqual(['1', '65536']);
+    expect(mockWrites.map((block) => block.data.toString('utf8')).join('')).toBe(text);
   });
 });

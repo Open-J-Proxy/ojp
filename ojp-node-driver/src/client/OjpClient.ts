@@ -272,6 +272,19 @@ async function* chunkLobInput(input: LobInput, clob: boolean): AsyncGenerator<Bu
         while (chunkSize > 0 && (pending[chunkSize] & 0xc0) === 0x80) {
           chunkSize -= 1;
         }
+        if (pending.length === LOB_CHUNK_SIZE) {
+          let start = chunkSize - 1;
+          while (start > 0 && (pending[start] & 0xc0) === 0x80) {
+            start -= 1;
+          }
+          const lead = pending[start];
+          const length = lead >= 0xf0 && lead <= 0xf4 ? 4
+            : lead >= 0xe0 && lead <= 0xef ? 3
+              : lead >= 0xc2 && lead <= 0xdf ? 2 : 1;
+          if (chunkSize - start < length) {
+            chunkSize = start;
+          }
+        }
       }
       yield pending.subarray(0, chunkSize);
       pending = pending.subarray(chunkSize);

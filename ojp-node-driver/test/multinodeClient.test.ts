@@ -213,9 +213,17 @@ describe('OjpClient multinode pool cache', () => {
       expect(container.toObject(container.decode(property!.bytesValue!))).toEqual({
         array: { values: [{ s: 'ID' }, { s: 'OTHER_ID' }] },
       });
+      await client.createStatement().executeUpdate('INSERT INTO t(value) VALUES (?)', ['value'], {
+        generatedKeys: ['ID'],
+      });
+      const plainProperty = mockRpcState.updateProperties[1]?.[0];
+      expect(plainProperty?.key).toBe('STATEMENT_COLUMN_NAMES_KEY');
+      expect(container.toObject(container.decode(plainProperty!.bytesValue!))).toEqual({
+        array: { values: [{ s: 'ID' }] },
+      });
       await expect(client.prepareStatement('INSERT INTO t VALUES (?)', { generatedKeys: [] })
         .executeUpdate([1])).rejects.toThrow(TypeError);
-      expect(mockRpcState.updateProperties).toHaveLength(1);
+      expect(mockRpcState.updateProperties).toHaveLength(2);
     } finally {
       await client.close();
     }

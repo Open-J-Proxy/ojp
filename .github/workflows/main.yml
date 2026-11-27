@@ -18,7 +18,7 @@
 # 4. mysql-test: MySQL database tests (needs: h2-integration-gate, resolve-version)
 # 5. mariadb-test: MariaDB database tests (needs: h2-integration-gate, resolve-version)
 # 6. cockroachdb-test: CockroachDB database tests (needs: h2-integration-gate, resolve-version)
-# 7. db2-test: IBM DB2 database tests (needs: h2-integration-gate, resolve-version)
+# 7. db2-test: IBM DB2 JDBC suites and DB2 multinode/mTLS tests (needs: h2-integration-gate, resolve-version)
 # 8. multinode-test: Multinode failover/recovery tests (needs: h2-integration-gate, resolve-version)
 # 9. multinode-xa-test: Multinode XA integration tests (needs: h2-integration-gate, resolve-version)
 # 10. oracle-test: Oracle database tests (needs: h2-integration-gate, resolve-version)
@@ -577,6 +577,7 @@ jobs:
   # Database: PostgreSQL 17
   # Matrix strategy: Tests against Java 11, 17, 21, 25
   # Execution: Runs after all selected Main CI H2 jobs succeed.
+  # JDK 25 also runs DB2-specific two-node failover, recovery, XA, and mTLS tests.
   #
   # SQL Enhancer Testing:
   # All PostgreSQL tests run twice per matrix configuration:
@@ -1203,9 +1204,226 @@ jobs:
       - name: Test (ojp-jdbc-driver) with DB2 enabled
         run: mvn test -pl ojp-jdbc-driver -Dgpg.skip=true -DenableDb2Tests=true
 
+      - name: Generate DB2 mTLS test certificates
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          bash scripts/generate-jdbc-mtls-test-certificates.sh "$RUNNER_TEMP/ojp-db2-mtls-certs"
+          chmod 755 "$RUNNER_TEMP/ojp-db2-mtls-certs"
+          chmod 644 "$RUNNER_TEMP/ojp-db2-mtls-certs/server-keystore.p12" \
+            "$RUNNER_TEMP/ojp-db2-mtls-certs/server-truststore.p12"
+
+      - name: Start two DB2 mTLS OJP servers
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          for node in 1 2; do
+            if [ "$node" = 1 ]; then
+              port=10591
+              metrics_port=9159
+            else
+              port=10592
+              metrics_port=9160
+            fi
+            docker run --detach --name "ojp-db2-mtls-server-$node" \
+              --network host \
+              --volume "$RUNNER_TEMP/ojp-db2-mtls-certs:/etc/ojp/mtls:ro" \
+              --env JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.port=$port -Dojp.prometheus.port=$metrics_port -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=/etc/ojp/mtls/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=/etc/ojp/mtls/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true" \
+              "$OJP_IMAGE"
+            for attempt in $(seq 1 120); do
+              if nc -z localhost "$port"; then
+                break
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' "ojp-db2-mtls-server-$node")" != true ]; then
+                docker logs "ojp-db2-mtls-server-$node"
+                exit 1
+              fi
+              sleep 1
+            done
+            if ! nc -z localhost "$port"; then
+              docker logs "ojp-db2-mtls-server-$node"
+              exit 1
+            fi
+          done
+
+      - name: Verify DB2 JDBC, XA, affinity, and multinode behavior over mTLS
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          mtls_password_property=ojp.db2.mtls.password
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          test_database_password=testpass
+          db2_multinode_url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb'
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MtlsIntegrationTest#shouldRunJdbcAndXaOperationsAgainstEveryMutuallyAuthenticatedServer \
+            -Dojp.db2.mtls.tests.enabled=true \
+            -Dojp.db2.mtls.jdbc.url="$db2_multinode_url" \
+            -Dojp.db2.mtls.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.db2.mtls.user=db2inst1 "-D${mtls_password_property}=${test_database_password}" \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MultinodeIntegrationTest,Db2SessionAffinityIntegrationTest \
+            -DenableDb2Tests=true \
+            -Dojp.db2.multinode.url="$db2_multinode_url" \
+            -Dojp.db2.multinode.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.db2.user=db2inst1 "-Dojp.db2.password=${test_database_password}" \
+            -Dojp.db2.multinode.tests.enabled=true \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Verify DB2 stateless failover while one server is unavailable
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          docker stop ojp-db2-mtls-server-1
+          sleep 10
+          test_store_password=ojp-test-only
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MultinodeIntegrationTest#shouldCompleteStatelessRequestsWhileOneServerIsUnavailable \
+            -DenableDb2Tests=true \
+            -Dojp.db2.multinode.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb' \
+            -Dojp.db2.multinode.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.db2.user=db2inst1 -Dojp.db2.password=testpass \
+            -Dojp.db2.multinode.tests.enabled=true \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Verify DB2 recovery after the first server returns
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          docker start ojp-db2-mtls-server-1
+          timeout 120 bash -c 'until nc -z localhost 10591; do sleep 1; done'
+          sleep 10
+          test_store_password=ojp-test-only
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MultinodeIntegrationTest#shouldResumeOperationsAfterARecoveredServerReturns \
+            -DenableDb2Tests=true \
+            -Dojp.db2.multinode.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb' \
+            -Dojp.db2.multinode.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.db2.user=db2inst1 -Dojp.db2.password=testpass \
+            -Dojp.db2.multinode.tests.enabled=true \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Verify DB2 stateless failover while the second server is unavailable
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          docker stop ojp-db2-mtls-server-2
+          sleep 10
+          test_store_password=ojp-test-only
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MultinodeIntegrationTest#shouldCompleteStatelessRequestsWhileOneServerIsUnavailable \
+            -DenableDb2Tests=true \
+            -Dojp.db2.multinode.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb' \
+            -Dojp.db2.multinode.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.db2.user=db2inst1 -Dojp.db2.password=testpass \
+            -Dojp.db2.multinode.tests.enabled=true \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Verify DB2 recovery after the second server returns
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          docker start ojp-db2-mtls-server-2
+          timeout 120 bash -c 'until nc -z localhost 10592; do sleep 1; done'
+          sleep 10
+          test_store_password=ojp-test-only
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MultinodeIntegrationTest#shouldResumeOperationsAfterARecoveredServerReturns \
+            -DenableDb2Tests=true \
+            -Dojp.db2.multinode.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb' \
+            -Dojp.db2.multinode.endpoints=localhost:10591,localhost:10592 \
+            -Dojp.db2.user=db2inst1 -Dojp.db2.password=testpass \
+            -Dojp.db2.multinode.tests.enabled=true \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Reject DB2 clients without a certificate
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MtlsIntegrationTest#shouldRejectConnectionWithoutClientCertificate \
+            -Dojp.db2.mtls.tests.enabled=true \
+            -Dojp.db2.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb' \
+            -Dojp.db2.mtls.user=db2inst1 -Dojp.db2.mtls.password=testpass \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
+      - name: Reject DB2 clients with untrusted certificates
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2MtlsIntegrationTest#shouldRejectConnectionWithUntrustedClientCertificate \
+            -Dojp.db2.mtls.tests.enabled=true \
+            -Dojp.db2.mtls.jdbc.url='jdbc:ojp[localhost:10591(multinode),localhost:10592(multinode)]_db2://localhost:50000/testdb' \
+            -Dojp.db2.mtls.user=db2inst1 -Dojp.db2.mtls.password=testpass \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/untrusted-client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12
+
       - name: Show ojp-server.log
         if: always()
         run: docker logs ojp-server 2>&1 || echo "ojp-server container not found"
+
+      - name: Show DB2 mTLS OJP server logs and clean up
+        if: always() && matrix.java-version == 25
+        run: |
+          for node in 1 2; do
+            docker logs "ojp-db2-mtls-server-$node" 2>&1 || true
+            docker rm --force "ojp-db2-mtls-server-$node" || true
+          done
 
   # ===========================================================================
   # JOB 7: Multinode Integration Tests

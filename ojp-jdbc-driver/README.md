@@ -19,7 +19,7 @@ This table describes what is currently demonstrated by tests in `ojp-jdbc-driver
 | **MariaDB** | **L6** | Covered mainly through shared MySQL/MariaDB suites and generic CRUD paths; dedicated MariaDB operational/XA depth is limited. |
 | **Oracle** | **L9** | Strong CRUD/types/LOB/transaction coverage plus Oracle XA (`OracleXAIntegrationTest`); full multinode-XA conformance not database-dedicated. |
 | **SQL Server** | **L9** | Broad SQL Server suites including metadata/result-set/LOB/session-affinity and XA (`SQLServerXAIntegrationTest`). |
-| **DB2** | **L8** | Strong CRUD/types/LOB/transaction/session-affinity coverage; no dedicated DB2 XA integration suite. |
+| **DB2** | **L10** | DB2 CRUD/types/metadata/LOB/transaction/session affinity and XA suites, plus database-specific multinode failover/recovery and mTLS acceptance/rejection against two OJP servers. |
 | **CockroachDB** | **L8** | CRUD/types/LOB/transaction and large result-set coverage; no dedicated XA coverage. |
 
 Level definitions: [`../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-language-client-spec/CLIENT_IMPLEMENTATION_LEVELS.md)
@@ -60,3 +60,7 @@ mvn test -pl ojp-jdbc-driver -Dtest=MtlsIntegrationTest#shouldRunJdbcAndXaOperat
 ```
 
 Run the missing-certificate test with the same URL, database credentials, and client truststore, but omit all client keystore settings and select `MtlsIntegrationTest#shouldRejectConnectionWithoutClientCertificate`. Run the untrusted-certificate case with the same settings, replace the client keystore path with `/tmp/ojp-mtls-certs/untrusted-client-keystore.p12`, and select `MtlsIntegrationTest#shouldRejectConnectionWithUntrustedClientCertificate`. Keep these generated certificates and test-only passwords out of production.
+
+## DB2 L10 multinode and mTLS integration tests
+
+The `db2-test` Main CI job runs the DB2 JDBC suites across the Java matrix. On JDK 25 it additionally starts two OJP servers that require client certificates and connect to the same DB2 instance. `Db2BasicCrudIntegrationTest`, `Db2TransactionCommitRollbackIntegrationTest`, `Db2MultinodeIntegrationTest`, `Db2SessionAffinityIntegrationTest`, `Db2XAIntegrationTest`, and `Db2MtlsIntegrationTest` verify CRUD and connection lifecycle, transaction semantics, endpoint operations, DB2 temporary-table session affinity, stateless operations through node outages and recovery, XA commit/rollback/recovery, trusted client-certificate operations, and rejection of missing or untrusted certificates.

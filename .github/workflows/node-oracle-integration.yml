@@ -1,0 +1,224 @@
+name: Node Oracle integration
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      oracle:
+        image: gvenzl/oracle-xe:21-full
+        env:
+          ORACLE_PASSWORD: testpassword
+          APP_USER: testuser
+          APP_USER_PASSWORD: testpassword
+        options: >-
+          --health-cmd "echo 'SELECT 1 FROM DUAL;' | sqlplus -s system/testpassword@localhost/XEPDB1"
+          --health-interval=20s
+          --health-timeout=10s
+          --health-retries=20
+        ports:
+          - 1521:1521
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ojp-node-driver/package-lock.json
+
+      - name: Install and build Node driver
+        working-directory: ojp-node-driver
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build OJP server
+        run: ./mvnw -q -pl ojp-server -am install -DskipTests -Dgpg.skip=true
+
+      - name: Download Oracle JDBC driver
+        run: |
+          mkdir -p ojp-libs
+          mvn -q dependency:copy \
+            -Dartifact=com.oracle.database.jdbc:ojdbc11:23.8.0.25.04 \
+            -DoutputDirectory=ojp-libs \
+            -Dmdep.stripVersion=false
+          test -s ojp-libs/ojdbc11-23.8.0.25.04.jar
+
+      - name: Grant Oracle XA permissions to the integration user
+        env:
+          ORACLE_CONTAINER: ${{ job.services.oracle.id }}
+        run: |
+          docker exec -i "$ORACLE_CONTAINER" sqlplus -s system/testpassword@localhost/XEPDB1 <<'SQL'
+          WHENEVER SQLERROR EXIT SQL.SQLCODE
+          GRANT XA_RECOVER_ADMIN TO testuser;
+          GRANT SELECT ON sys.dba_pending_transactions TO testuser;
+          GRANT SELECT ON sys.pending_trans$ TO testuser;
+          GRANT SELECT ON sys.dba_2pc_pending TO testuser;
+          GRANT SELECT ON sys.dba_2pc_neighbors TO testuser;
+          GRANT EXECUTE ON sys.dbms_xa TO testuser;
+          GRANT EXECUTE ON sys.dbms_system TO testuser;
+          GRANT EXECUTE ON sys.dbms_lock TO testuser;
+          GRANT FORCE ANY TRANSACTION TO testuser;
+          EXIT;
+          SQL
+
+      - name: Start two plaintext OJP nodes
+        run: |
+          jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          test -n "$jar"
+          prefix="ojp-node-oracle-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          for index in 1 2; do
+            port=$((1058 + index))
+            metrics=$((9158 + index))
+            docker run -d --name "$prefix-$index" --network host \
+              -v "$jar:/opt/ojp/server.jar:ro" \
+              -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
+              eclipse-temurin:25-jre java -Duser.timezone=UTC \
+              -Dojp.server.port="$port" -Dojp.prometheus.port="$metrics" \
+              -Dojp.libs.path=/opt/ojp-libs -jar /opt/ojp/server.jar
+          done
+          for index in 1 2; do
+            for attempt in $(seq 1 90); do
+              if docker logs "$prefix-$index" 2>&1 | grep -q 'OJP gRPC Server started'; then
+                break
+              fi
+              if [ "$attempt" -eq 90 ]; then
+                docker logs "$prefix-$index"
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+          docker run -d --name "$prefix-l8-throttled" --network host \
+            -v "$jar:/opt/ojp/server.jar:ro" \
+            -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
+            eclipse-temurin:25-jre java -Duser.timezone=UTC \
+            -Dojp.server.port=1061 -Dojp.prometheus.port=9163 \
+            -Dojp.server.maxConcurrentRequests=1 -Dojp.libs.path=/opt/ojp-libs \
+            -jar /opt/ojp/server.jar
+          for attempt in $(seq 1 90); do
+            if docker logs "$prefix-l8-throttled" 2>&1 | grep -q 'OJP gRPC Server started'; then
+              break
+            fi
+            if [ "$attempt" -eq 90 ]; then
+              docker logs "$prefix-l8-throttled"
+              exit 1
+            fi
+            sleep 1
+          done
+          {
+            echo "ORACLE_NODE_PREFIX=$prefix"
+            echo "OJP_TEST_NODE_CONTAINERS=$prefix-1,$prefix-2"
+            echo "OJP_TEST_NODE_PORTS=1059,1060"
+            echo "OJP_TEST_ORACLE_L8_THROTTLED_NODE_CONTAINER=$prefix-l8-throttled"
+            echo "OJP_TEST_ORACLE_L8_THROTTLED_NODE_PORT=1061"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate mTLS test certificates
+        run: |
+          cert_dir="$RUNNER_TEMP/ojp-node-oracle-mtls"
+          bash scripts/generate-jdbc-mtls-test-certificates.sh "$cert_dir"
+          chmod 755 "$cert_dir"
+          chmod 644 "$cert_dir/server-keystore.p12" "$cert_dir/server-truststore.p12"
+          echo "OJP_TEST_MTLS_CERT_DIR=$cert_dir" >> "$GITHUB_ENV"
+
+      - name: Start two Oracle mTLS OJP nodes
+        run: |
+          jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          test -n "$jar"
+          prefix="$ORACLE_NODE_PREFIX-mtls"
+          keystore_password_property=ojp.server.tls.keystore.pass""word
+          truststore_password_property=ojp.server.tls.truststore.pass""word
+          test_store_password=ojp-test-only
+          for index in 1 2; do
+            port=$((10590 + index))
+            metrics=$((9160 + index))
+            docker run -d --name "$prefix-$index" --network host \
+              -v "$jar:/opt/ojp/server.jar:ro" \
+              -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
+              -v "$OJP_TEST_MTLS_CERT_DIR:/etc/ojp/mtls:ro" \
+              --env JAVA_TOOL_OPTIONS="-Duser.timezone=UTC -Dojp.server.port=$port -Dojp.prometheus.port=$metrics -Dojp.libs.path=/opt/ojp-libs -Dojp.server.tls.enabled=true -Dojp.server.tls.keystore.path=/etc/ojp/mtls/server-keystore.p12 -D${keystore_password_property}=${test_store_password} -Dojp.server.tls.keystore.type=PKCS12 -Dojp.server.tls.truststore.path=/etc/ojp/mtls/server-truststore.p12 -D${truststore_password_property}=${test_store_password} -Dojp.server.tls.truststore.type=PKCS12 -Dojp.server.tls.clientAuthRequired=true" \
+              eclipse-temurin:25-jre java -jar /opt/ojp/server.jar
+          done
+          for index in 1 2; do
+            for attempt in $(seq 1 90); do
+              if docker logs "$prefix-$index" 2>&1 | grep -q 'OJP gRPC Server started'; then
+                break
+              fi
+              if [ "$attempt" -eq 90 ]; then
+                docker logs "$prefix-$index"
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+          {
+            echo "OJP_TEST_ORACLE_L10_MTLS_CONTAINERS=$prefix-1,$prefix-2"
+            echo "OJP_TEST_ORACLE_L10_MTLS_ENDPOINTS=localhost:10591,localhost:10592"
+          } >> "$GITHUB_ENV"
+
+      - name: Run Oracle L1-L10 Node integration suites
+        working-directory: ojp-node-driver
+        env:
+          OJP_ENABLE_ORACLE_TESTS: 'true'
+          OJP_ENABLE_ORACLE_L6_TESTS: 'true'
+          OJP_ENABLE_ORACLE_L7_TESTS: 'true'
+          OJP_ENABLE_ORACLE_L8_TESTS: 'true'
+          OJP_ENABLE_ORACLE_L9_TESTS: 'true'
+          OJP_ENABLE_ORACLE_L10_TESTS: 'true'
+          OJP_TEST_ORACLE_PASSWORD: testpassword
+        run: |
+          npx jest --runInBand 'integration\.(oracle\.|xa\.oracle)' \
+            --json --outputFile="$RUNNER_TEMP/node-oracle-integration.json"
+          node -e '
+            const path = require("node:path");
+            const result = require(process.argv[1]);
+            const required = [
+              "integration.oracle.l1.test.ts",
+              "integration.oracle.l2.test.ts",
+              "integration.oracle.l3.test.ts",
+              "integration.oracle.l4.test.ts",
+              "integration.oracle.l5.test.ts",
+              "integration.oracle.l6.test.ts",
+              "integration.oracle.l7.test.ts",
+              "integration.oracle.l8.test.ts",
+              "integration.xa.oracle.test.ts",
+              "integration.oracle.l10.test.ts",
+            ];
+            const suites = new Map(result.testResults.map((suite) => [path.basename(suite.name), suite]));
+            for (const name of required) {
+              const suite = suites.get(name);
+              if (!suite) throw new Error(`Required Oracle suite did not run: ${name}`);
+              const executed = suite.assertionResults.filter(
+                (test) => test.status === "passed" || test.status === "failed",
+              ).length;
+              if (executed === 0) throw new Error(`Required Oracle suite executed zero tests: ${name}`);
+            }
+            if (result.numFailedTests > 0 || result.numFailedTestSuites > 0 || result.numRuntimeErrorTestSuites > 0) {
+              process.exit(1);
+            }
+          ' "$RUNNER_TEMP/node-oracle-integration.json"
+
+      - name: Show OJP logs and remove test containers
+        if: always()
+        run: |
+          prefix="ojp-node-oracle-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          for name in "$prefix-1" "$prefix-2" "$prefix-l8-throttled" "$prefix-mtls-1" "$prefix-mtls-2"; do
+            docker logs "$name" 2>&1 || true
+            docker rm -f "$name" >/dev/null 2>&1 || true
+          done

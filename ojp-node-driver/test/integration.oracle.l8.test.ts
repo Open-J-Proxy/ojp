@@ -34,7 +34,10 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
     const clusterUrl = ojpUrl(nodes.map(({ port }) => `localhost:${port}`).join(','), jdbcUrl);
     const singleNodeUrl = (port: number): string => ojpUrl(`localhost:${port}`, jdbcUrl);
     const stopped = new Set<string>();
-    const newClient = async (url = clusterUrl, options: { clientThrottleMode?: 'off' } = {}) => {
+    const newClient = async (url = clusterUrl, options: {
+      clientThrottleMode?: 'off';
+      loadBalancingStrategy?: 'least-connections' | 'round-robin';
+    } = {}) => {
       const client = new OjpClient(url, {
         user, password, healthCheckIntervalMs: 0, failoverRetryDelayMs: 0, ...options,
       });
@@ -210,7 +213,7 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
       const client = await newClient(ojpUrl(
         `localhost:${throttledNode.port},localhost:${alternate.port}`,
         jdbcUrl,
-      ), { clientThrottleMode: 'off' });
+      ), { clientThrottleMode: 'off', loadBalancingStrategy: 'round-robin' });
       expect(client.boundEndpoint?.port).toBe(throttledNode.port);
       let running: Promise<unknown> | undefined;
 
@@ -236,14 +239,11 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
       }
     }, 60_000);
 
-    it('surfaces Oracle JDBC pool exhaustion without failover, then succeeds after the holder releases its connection', async () => {
-      const dataSourceName = `${prefix}_pool_exhaustion`;
-      const poolConnectionProperties = {
+    it('rejects concurrent work at the OJP admission limit without failover, then succeeds after the holder closes', async () => {
+      const dataSourceName = `${prefix}_admission_limit`;
+      const admissionConnectionProperties = {
         'ojp.connection.pool.maximumPoolSize': '2',
         'ojp.connection.pool.minimumIdle': '0',
-        'ojp.connection.pool.connectionTimeout': '1000',
-        // Avoid the server's default connection-creation grace retries masking an exhausted pool.
-        'ojp.connection.pool.connectionCreationGracePeriod': '0',
       };
       const namedUrl = (endpoints: string): string =>
         ojpUrl(`${endpoints}(${dataSourceName})`, jdbcUrl);
@@ -253,7 +253,7 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
         healthCheckIntervalMs: 0,
         failoverRetryDelayMs: 0,
         clientThrottleMode: 'off',
-        connectionProperties: poolConnectionProperties,
+        connectionProperties: admissionConnectionProperties,
       });
 
       const poolEndpoints = nodes.slice(0, 2);
@@ -276,8 +276,7 @@ const throttledNode = { container: throttledContainer ?? '', port: throttledPort
 
         await expect(client.executeQuery('SELECT dummy AS "DUMMY" FROM dual')).rejects.toMatchObject({
           name: 'OjpSqlError',
-          sqlState: '08001',
-          message: expect.stringMatching(/pool exhausted/i),
+          message: expect.stringMatching(/admission control/i),
         });
         expect(client.boundEndpoint?.port).toBe(boundPort);
         expect(isEndpointHealthy(boundEndpoint)).toBe(true);

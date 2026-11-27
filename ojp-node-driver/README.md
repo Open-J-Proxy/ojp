@@ -614,7 +614,7 @@ LOB on a different connection and the upload fails. The driver already handles t
 internally; it's documented here only because it was the cause of a real bug fixed
 during development (multi-chunk uploads were silently failing).
 
-### Backend compatibility (validated in this session)
+### Backend compatibility
 
 | Backend | `createLob` (1 chunk, ≤64KB) | `createLob` (multi-chunk) | Notes |
 |---|---|---|---|

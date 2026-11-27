@@ -1285,6 +1285,61 @@ jobs:
             "-D${client_truststore_password_property}=${test_store_password}" \
             -Dojp.client.tls.truststore.type=PKCS12
 
+      - name: Verify DB2 sticky-session failure does not reroute
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          ready_file="$RUNNER_TEMP/db2-affinity-ready"
+          continue_file="$RUNNER_TEMP/db2-affinity-continue"
+          test_log="$RUNNER_TEMP/db2-affinity-test.log"
+          rm -f "$ready_file" "$continue_file" "$test_log"
+          test_store_password=ojp-test-only
+          client_keystore_password_property=ojp.client.tls.keystore.pass""word
+          client_truststore_password_property=ojp.client.tls.truststore.pass""word
+          mvn test -pl ojp-jdbc-driver -Dgpg.skip=true \
+            -Dtest=Db2SessionAffinityIntegrationTest#testStickyDb2SessionFailsInsteadOfReroutingWhenItsServerStops \
+            -DenableDb2Tests=true \
+            -Dojp.db2.user=db2inst1 -Dojp.db2.password=testpass \
+            -Dojp.db2.affinity.url='jdbc:ojp[localhost:10591{1},localhost:10592{2}]_db2://localhost:50000/testdb' \
+            -Dojp.db2.affinity.ready.file="$ready_file" \
+            -Dojp.db2.affinity.continue.file="$continue_file" \
+            -Dojp.client.tls.enabled=true \
+            -Dojp.client.tls.keystore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-keystore.p12" \
+            "-D${client_keystore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.keystore.type=PKCS12 \
+            -Dojp.client.tls.truststore.path="$RUNNER_TEMP/ojp-db2-mtls-certs/client-truststore.p12" \
+            "-D${client_truststore_password_property}=${test_store_password}" \
+            -Dojp.client.tls.truststore.type=PKCS12 > "$test_log" 2>&1 &
+          test_pid=$!
+          ready=false
+          for attempt in $(seq 1 240); do
+            if [ -f "$ready_file" ]; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$test_pid" 2>/dev/null; then
+              cat "$test_log"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            kill "$test_pid" 2>/dev/null || true
+            wait "$test_pid" 2>/dev/null || true
+            cat "$test_log"
+            exit 1
+          fi
+          docker stop ojp-db2-mtls-server-1
+          touch "$continue_file"
+          wait "$test_pid" || { cat "$test_log"; exit 1; }
+          cat "$test_log"
+
+      - name: Restart DB2 affinity server
+        if: ${{ matrix.java-version == 25 }}
+        run: |
+          docker start ojp-db2-mtls-server-1
+          timeout 120 bash -c 'until nc -z localhost 10591; do sleep 1; done'
+          sleep 10
+
       - name: Verify DB2 stateless failover while one server is unavailable
         if: ${{ matrix.java-version == 25 }}
         run: |

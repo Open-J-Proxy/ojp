@@ -1,1 +1,1 @@
-jdbc:h2:file:/tmp/ojp_node_h2_multinode;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1,sa,
+jdbc:h2:file:/tmp/ojp-h2-data/ojp_node_h2_multinode;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1,sa,

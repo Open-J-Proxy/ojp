@@ -16,6 +16,10 @@ Level definitions: [`CLIENT_IMPLEMENTATION_LEVELS.md`](../documents/multi-langua
 | Higher-level features | L10 combines multinode recovery and XA behavior over mTLS |
 
 Levels are cumulative: partial support for a higher level does not make it achieved.
+The DB2 L1 suite uses `testdata/db2_connections.csv`; set `OJP_ENABLE_DB2_TESTS=true`
+and run `npm run test:db2-l1` against an OJP server with the DB2 JDBC driver and a DB2
+database. `OJP_TEST_DB2_CSV`, `OJP_TEST_DB2_PASSWORD`, and `OJP_TEST_SERVER_ENDPOINT`
+override the fixture, password, and OJP endpoint respectively.
 The H2, MariaDB, MySQL, PostgreSQL, and SQL Server L1 suites exercise CRUD, errors, and
 session lifecycle through a real OJP server and database. H2, MariaDB, and MySQL run the
 same four L1 scenarios through their public Node API, matching the JDBC

@@ -107,11 +107,17 @@ describe('LOB reference reads', () => {
     expect((await client.executeQuery('SELECT text FROM lob_test')).rows[0].TEXT).toBe('');
   });
 
-  it('does not split a UTF-8 character when an input chunk ends at the upload boundary', async () => {
-    const text = `${'a'.repeat(65535)}🚀end`;
+  it.each(['é', '中', '🚀'])('does not split %s at the upload boundary', async (character) => {
+    const text = `${'a'.repeat(65535)}${character}end`;
     const bytes = Buffer.from(text);
     await client.createLob(Readable.from([bytes.subarray(0, 65536), bytes.subarray(65536)]), 'CLOB');
     expect(mockWrites.map((block) => block.position)).toEqual(['1', '65536']);
     expect(mockWrites.map((block) => block.data.toString('utf8')).join('')).toBe(text);
+  });
+
+  it('writes a complete boundary-sized CLOB block without waiting for another chunk', async () => {
+    await client.createLob(`${'a'.repeat(65534)}é`, 'CLOB');
+    expect(mockWrites).toHaveLength(1);
+    expect(mockWrites[0].data.length).toBe(65536);
   });
 });

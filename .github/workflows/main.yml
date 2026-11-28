@@ -2198,9 +2198,17 @@ jobs:
 
       - name: Start OJP Server container with Oracle driver from ojp-server/ojp-libs
         run: |
+          cat > "$RUNNER_TEMP/oracle-jdbc-logging.properties" <<'EOF'
+          handlers=java.util.logging.ConsoleHandler
+          .level=WARNING
+          java.util.logging.ConsoleHandler.level=WARNING
+          oracle.jdbc.level=WARNING
+          EOF
+          chmod 644 "$RUNNER_TEMP/oracle-jdbc-logging.properties"
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -v "$RUNNER_TEMP/oracle-jdbc-logging.properties:/tmp/oracle-jdbc-logging.properties:ro" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Doracle.jdbc.diagnostic.enableLogging=true -Djava.util.logging.config.file=/tmp/oracle-jdbc-logging.properties" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start

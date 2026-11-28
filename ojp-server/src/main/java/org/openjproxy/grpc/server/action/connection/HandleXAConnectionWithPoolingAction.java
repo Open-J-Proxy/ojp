@@ -85,6 +85,19 @@ public class HandleXAConnectionWithPoolingAction {
         borrowSessionAndRespond(context, connectionDetails, connHash, actualMaxXaTransactions, xaStartTimeoutMillis, registry, responseObserver);
     }
 
+    /**
+     * Adds the endpoint settings required to configure a pooled DB2 XA datasource.
+     * The XA pool creates a {@code DB2XADataSource} through bean properties, so the
+     * regular JDBC URL alone does not reliably supply its remote endpoint or select
+     * the Type 4 driver. Type 4 avoids requiring DB2's native Type 2 client library.
+     *
+     * <p>This helper is called for any datasource URL, but changes the configuration
+     * only for {@code jdbc:db2://} URLs. Other database configurations are left
+     * untouched.</p>
+     *
+     * @param xaPoolConfig configuration passed to the XA pool provider
+     * @param jdbcUrl the parsed JDBC URL for the datasource
+     */
     static void configureDb2XaDataSource(Map<String, String> xaPoolConfig, String jdbcUrl) {
         if (jdbcUrl == null || !jdbcUrl.regionMatches(true, 0, "jdbc:db2://", 0, "jdbc:db2://".length())) {
             return;

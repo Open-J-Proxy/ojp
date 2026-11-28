@@ -22,9 +22,8 @@ import java.sql.SQLException;
  * The {@link #reset()} method cleans session state to prepare for reuse:
  * </p>
  * <ul>
- *   <li>Rolls back any open local transaction (should not happen in XA mode)</li>
  *   <li>Clears warnings</li>
- *   <li>Restores auto-commit to true</li>
+ *   <li>Resets transaction isolation when configured</li>
  *   <li>Does NOT close the physical connection</li>
  * </ul>
  *
@@ -180,63 +179,36 @@ public class BackendSessionImpl implements XABackendSession {
                 sessionId, System.identityHashCode(connection));
 
         try {
-            // Roll back any uncommitted local transaction
-            // (should not happen in XA mode, but defensive programming)
-            if (!connection.getAutoCommit()) {
-                try {
-                    connection.rollback();
-                } catch (SQLException e) {
-                    log.warn("Error rolling back during reset", e);
-                }
-            }
-
-            // Clear warnings
-            try {
-                connection.clearWarnings();
-            } catch (SQLException e) {
-                log.warn("Error clearing warnings during reset", e);
-            }
-
-            // Restore auto-commit to true
-            try {
-                if (!connection.getAutoCommit()) {
-                    connection.setAutoCommit(true);
-                }
-            } catch (SQLException e) {
-                log.error("Error restoring auto-commit during reset", e);
-                throw e;
-            }
-
-            // Reset transaction isolation level
-            // This handles cases where the client changed isolation but didn't commit an XA transaction
-            // (so sanitizeAfterTransaction() wasn't called)
-            if (defaultTransactionIsolation != null) {
-                try {
-                    int currentIsolation = connection.getTransactionIsolation();
-                    log.debug("[{}] reset() - Current isolation: {}, Default isolation: {}",
-                            sessionId, currentIsolation, defaultTransactionIsolation);
-                    if (currentIsolation != defaultTransactionIsolation) {
-                        log.debug("[{}] reset() - Resetting transaction isolation from {} to default {}",
-                                sessionId, currentIsolation, defaultTransactionIsolation);
-                        connection.setTransactionIsolation(defaultTransactionIsolation);
-                        int afterSet = connection.getTransactionIsolation();
-                        log.debug("[{}] reset() - After setTransactionIsolation, isolation is now: {}",
-                                sessionId, afterSet);
-                    } else {
-                        log.debug("[{}] reset() - Transaction isolation already at default {}", sessionId, defaultTransactionIsolation);
-                    }
-                } catch (SQLException e) {
-                    log.warn("[{}] reset() - Error resetting transaction isolation: {}", sessionId, e.getMessage());
-                    // Don't throw - continue with reset even if isolation reset fails
-                }
-            }
-
-            log.debug("Backend session reset completed");
-
+            connection.clearWarnings();
         } catch (SQLException e) {
-            log.error("Failed to reset session", e);
-            throw e;
+            log.warn("Error clearing warnings during reset", e);
         }
+
+        // Reset transaction isolation level
+        // This handles cases where the client changed isolation but didn't commit an XA transaction
+        // (so sanitizeAfterTransaction() wasn't called)
+        if (defaultTransactionIsolation != null) {
+            try {
+                int currentIsolation = connection.getTransactionIsolation();
+                log.debug("[{}] reset() - Current isolation: {}, Default isolation: {}",
+                        sessionId, currentIsolation, defaultTransactionIsolation);
+                if (currentIsolation != defaultTransactionIsolation) {
+                    log.debug("[{}] reset() - Resetting transaction isolation from {} to default {}",
+                            sessionId, currentIsolation, defaultTransactionIsolation);
+                    connection.setTransactionIsolation(defaultTransactionIsolation);
+                    int afterSet = connection.getTransactionIsolation();
+                    log.debug("[{}] reset() - After setTransactionIsolation, isolation is now: {}",
+                            sessionId, afterSet);
+                } else {
+                    log.debug("[{}] reset() - Transaction isolation already at default {}", sessionId, defaultTransactionIsolation);
+                }
+            } catch (SQLException e) {
+                log.warn("[{}] reset() - Error resetting transaction isolation: {}", sessionId, e.getMessage());
+                // Don't throw - continue with reset even if isolation reset fails
+            }
+        }
+
+        log.debug("Backend session reset completed");
     }
 
     @Override

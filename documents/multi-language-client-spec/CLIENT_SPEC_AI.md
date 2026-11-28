@@ -582,7 +582,7 @@ Canonical source for human-readable guidance: [`CLIENT_IMPLEMENTATION_LEVELS.md`
 | MariaDB | L6 |
 | Oracle | L9 |
 | SQL Server | L9 |
-| DB2 | L8 |
+| DB2 | L10 |
 | CockroachDB | L8 |
 
 The H2 Java reference client now has an XA lifecycle integration suite in

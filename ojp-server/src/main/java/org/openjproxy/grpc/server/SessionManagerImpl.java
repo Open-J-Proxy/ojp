@@ -273,12 +273,9 @@ public class SessionManagerImpl implements SessionManager {
                 }
 
                 try {
-                    // Roll back any dangling transaction based on the physical connection's actual
-                    // autoCommit state, not the client-reported transaction status. A client can report
-                    // TRX_COMMITED (e.g. optimistically, or due to a client-side bug) while the physical
-                    // connection is still left in manual-commit mode with an uncommitted transaction; relying
-                    // solely on the client-reported status would silently skip the safety rollback below.
-                    if (!targetSession.getConnection().getAutoCommit()) {
+                    // Roll back dangling local transactions using the physical connection state.
+                    // XA branches must be completed through XAResource, not JDBC rollback.
+                    if (!targetSession.isXA() && !targetSession.getConnection().getAutoCommit()) {
                         log.debug("Rolling back active transaction on session termination");
                         targetSession.getConnection().rollback();
                     }

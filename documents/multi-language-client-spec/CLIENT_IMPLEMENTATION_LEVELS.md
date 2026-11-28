@@ -55,10 +55,10 @@ This table describes what is currently demonstrated by tests in `ojp-jdbc-driver
 | **MariaDB** | **L6** | Covered mainly through shared MySQL/MariaDB suites and generic CRUD paths; dedicated MariaDB operational/XA depth is limited. |
 | **Oracle** | **L9** | Strong CRUD/types/LOB/transaction coverage plus Oracle XA (`OracleXAIntegrationTest`); full multinode-XA conformance not database-dedicated. |
 | **SQL Server** | **L9** | Broad SQL Server suites including metadata/result-set/LOB/session-affinity and XA (`SQLServerXAIntegrationTest`). |
-| **DB2** | **L8** | Strong CRUD/types/LOB/transaction/session-affinity coverage; no dedicated DB2 XA integration suite found. |
+| **DB2** | **L10** | DB2 CRUD/types/metadata/LOB/transaction/session-affinity and XA suites, plus DB2-specific two-server stateless failover/recovery, sticky-session failure without rerouting, and mTLS acceptance/rejection coverage. |
 | **CockroachDB** | **L8** | CRUD/types/LOB/transaction and large result-set coverage; no dedicated XA coverage found. |
 
-The JDBC PostgreSQL L10 CI job runs `MtlsIntegrationTest` with two OJP servers and a shared PostgreSQL database. Other database levels remain as listed above; mTLS coverage against PostgreSQL does not certify L10 for another database.
+The JDBC PostgreSQL L10 CI job runs `MtlsIntegrationTest` with two OJP servers and a shared PostgreSQL database. The DB2 job runs its own DB2 XA, session-affinity, multinode failover/recovery, and mTLS suites against two DB2-connected OJP servers.
 
 The H2 Java reference client now has an XA lifecycle integration suite in
 `ojp-jdbc-driver/src/test/java/org/openjproxy/jdbc/h2/H2XAIntegrationTest.java`.

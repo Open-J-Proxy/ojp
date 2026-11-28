@@ -20,6 +20,7 @@ import org.openjproxy.xa.pool.XABackendSession;
 import org.openjproxy.xa.pool.XATransactionRegistry;
 
 import javax.sql.XAConnection;
+import java.net.URI;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -82,6 +83,45 @@ public class HandleXAConnectionWithPoolingAction {
         // Now borrow from pool WITHOUT holding the lock
         // This allows multiple threads to borrow concurrently from the same pool
         borrowSessionAndRespond(context, connectionDetails, connHash, actualMaxXaTransactions, xaStartTimeoutMillis, registry, responseObserver);
+    }
+
+    /**
+     * Adds the endpoint settings required to configure a pooled DB2 XA datasource.
+     * The XA pool creates a {@code DB2XADataSource} through bean properties, so the
+     * regular JDBC URL alone does not reliably supply its remote endpoint or select
+     * the Type 4 driver. Type 4 avoids requiring DB2's native Type 2 client library.
+     *
+     * <p>This helper is called for any datasource URL, but changes the configuration
+     * only for {@code jdbc:db2://} URLs. Other database configurations are left
+     * untouched.</p>
+     *
+     * @param xaPoolConfig configuration passed to the XA pool provider
+     * @param jdbcUrl the parsed JDBC URL for the datasource
+     */
+    static void configureDb2XaDataSource(Map<String, String> xaPoolConfig, String jdbcUrl) {
+        if (jdbcUrl == null || !jdbcUrl.regionMatches(true, 0, "jdbc:db2://", 0, "jdbc:db2://".length())) {
+            return;
+        }
+
+        URI db2Url = URI.create(jdbcUrl.substring("jdbc:".length()));
+        String path = db2Url.getPath();
+        if (db2Url.getHost() == null || path == null || path.length() < 2) {
+            throw new IllegalArgumentException("Invalid DB2 JDBC URL: " + jdbcUrl);
+        }
+
+        String databaseName = path.substring(1);
+        int propertiesStart = databaseName.indexOf(':');
+        if (propertiesStart >= 0) {
+            databaseName = databaseName.substring(0, propertiesStart);
+        }
+        if (databaseName.isEmpty()) {
+            throw new IllegalArgumentException("Invalid DB2 JDBC URL: " + jdbcUrl);
+        }
+
+        xaPoolConfig.put("xa.serverName", db2Url.getHost());
+        xaPoolConfig.put("xa.portNumber", String.valueOf(db2Url.getPort() < 0 ? 50000 : db2Url.getPort()));
+        xaPoolConfig.put("xa.databaseName", databaseName);
+        xaPoolConfig.put("xa.property.driverType", "4");
     }
 
     /**
@@ -246,6 +286,7 @@ public class HandleXAConnectionWithPoolingAction {
                         String.valueOf(CommonConstants.FAIL_FAST_POOL_CONNECTION_TIMEOUT_MS));
                 xaPoolConfig.put("xa.idleTimeoutMs", String.valueOf(xaConfig.getIdleTimeout()));
                 xaPoolConfig.put("xa.maxLifetimeMs", String.valueOf(xaConfig.getMaxLifetime()));
+                configureDb2XaDataSource(xaPoolConfig, parsedUrl);
                 // Evictor configuration
                 xaPoolConfig.put("xa.timeBetweenEvictionRunsMs", String.valueOf(xaConfig.getTimeBetweenEvictionRuns()));
                 xaPoolConfig.put("xa.numTestsPerEvictionRun", String.valueOf(xaConfig.getNumTestsPerEvictionRun()));

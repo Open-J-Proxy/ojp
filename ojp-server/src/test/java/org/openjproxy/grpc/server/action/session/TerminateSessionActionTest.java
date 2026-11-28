@@ -282,19 +282,22 @@ class TerminateSessionActionTest {
         registry.registerExistingSession(xid, backend, XAResource.TMNOFLAGS, info.getSessionUUID());
         registry.xaEnd(xid, XAResource.TMSUCCESS);
         registry.xaCommit(xid, true);
+        Session session = manager.getSession(info);
         CountDownLatch cleaning = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        when(connection.getAutoCommit()).thenAnswer(invocation -> {
-            cleaning.countDown();
-            assertTrue(release.await(5, TimeUnit.SECONDS));
-            return true;
-        });
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
             Future<?> cleanup = executor.submit(() -> {
-                try {
-                    manager.terminateSession(info);
-                } catch (SQLException e) {
-                    throw new IllegalStateException(e);
+                synchronized (session) {
+                    cleaning.countDown();
+                    try {
+                        assertTrue(release.await(5, TimeUnit.SECONDS));
+                        manager.terminateSession(info);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    } catch (SQLException e) {
+                        throw new IllegalStateException(e);
+                    }
                 }
             });
             try {

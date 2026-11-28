@@ -22,12 +22,15 @@ import org.openjproxy.xa.pool.XATransactionRegistry;
 import org.openjproxy.xa.pool.spi.XAConnectionPoolProvider;
 
 import javax.sql.XADataSource;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -101,6 +104,36 @@ class HandleXAConnectionWithPoolingActionTest {
         assertEquals(2, registry.getMinIdle());
         verify(provider, times(1)).createXADataSource(any());
         verify((AutoCloseable) dataSource, never()).close();
+    }
+
+    @Test
+    void shouldConfigureDb2XaDataSourceForTypeFourConnections() {
+        Map<String, String> xaPoolConfig = new HashMap<>();
+
+        HandleXAConnectionWithPoolingAction.configureDb2XaDataSource(
+                xaPoolConfig, "jdbc:db2://db2.example:50001/testdb:currentSchema=DB2INST1");
+
+        assertEquals("db2.example", xaPoolConfig.get("xa.serverName"));
+        assertEquals("50001", xaPoolConfig.get("xa.portNumber"));
+        assertEquals("testdb", xaPoolConfig.get("xa.databaseName"));
+        assertEquals("4", xaPoolConfig.get("xa.property.driverType"));
+    }
+
+    @Test
+    void shouldUseDb2DefaultPortWhenNotSpecified() {
+        Map<String, String> xaPoolConfig = new HashMap<>();
+
+        HandleXAConnectionWithPoolingAction.configureDb2XaDataSource(
+                xaPoolConfig, "jdbc:db2://db2.example/testdb");
+
+        assertEquals("50000", xaPoolConfig.get("xa.portNumber"));
+    }
+
+    @Test
+    void shouldRejectDb2XaUrlWithoutDatabaseName() {
+        assertThrows(IllegalArgumentException.class, () ->
+                HandleXAConnectionWithPoolingAction.configureDb2XaDataSource(
+                        new HashMap<>(), "jdbc:db2://db2.example:50000"));
     }
 
     @Test

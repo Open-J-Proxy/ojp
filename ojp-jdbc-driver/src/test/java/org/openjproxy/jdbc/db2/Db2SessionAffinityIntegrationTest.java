@@ -15,12 +15,14 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class Db2SessionAffinityIntegrationTest {
 
@@ -77,6 +79,7 @@ class Db2SessionAffinityIntegrationTest {
     @Test
     void testStickyDb2SessionFailsInsteadOfReroutingWhenItsServerStops() throws Exception {
         assumeFalse(isTestDisabled, "DB2 tests are disabled");
+        assumeTrue(hasAffinityTestConfiguration(), "Dedicated DB2 affinity test properties are not configured");
         String url = requiredProperty("ojp.db2.affinity.url");
         String user = requiredProperty("ojp.db2.user");
         String password = requiredProperty("ojp.db2.password");
@@ -139,5 +142,18 @@ class Db2SessionAffinityIntegrationTest {
             throw new IllegalStateException("Missing required system property: " + name);
         }
         return value;
+    }
+
+    private static boolean hasAffinityTestConfiguration() {
+        return Stream.of(
+                        "ojp.db2.affinity.url",
+                        "ojp.db2.user",
+                        "ojp.db2.password",
+                        "ojp.db2.affinity.ready.file",
+                        "ojp.db2.affinity.continue.file")
+                .allMatch(name -> {
+                    String value = System.getProperty(name);
+                    return value != null && !value.isBlank();
+                });
     }
 }

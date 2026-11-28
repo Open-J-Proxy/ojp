@@ -1151,6 +1151,9 @@ jobs:
             echo "WARNING: DB2 connectivity test timed out, but continuing..."
             docker logs ojp-db2 2>&1 | tail -50
           fi
+
+          docker exec ojp-db2 su - db2inst1 -c \
+            "db2 connect to testdb && db2 'CREATE USER TEMPORARY TABLESPACE OJP_USR_TEMP PAGESIZE 4K MANAGED BY AUTOMATIC STORAGE' && db2 terminate"
           
           echo "DB2 initialization complete"
 

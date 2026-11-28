@@ -167,20 +167,15 @@ class TerminateSessionActionTest {
     }
 
     @Test
-    void shouldInvalidateUnusedBackendWhenSessionCleanupFails() throws Exception {
+    void shouldNotUseLocalTransactionCleanupForXaSession() throws Exception {
         SessionInfo info = newSession();
-        Session session = manager.getSession(info);
-        when(connection.getAutoCommit()).thenThrow(new SQLException("cleanup failed"));
-        @SuppressWarnings("unchecked")
-        StreamObserver<SessionTerminationStatus> observer = mock(StreamObserver.class);
+        when(connection.getAutoCommit()).thenReturn(false);
 
-        TerminateSessionAction.getInstance().execute(context, info, observer);
+        terminate(info);
 
-        verify(observer).onError(org.mockito.ArgumentMatchers.any());
-        assertThrows(RuntimeException.class, session::getConnection);
+        verify(connection, never()).getAutoCommit();
+        verify(connection, never()).rollback();
         verify(provider).invalidateSession(pool, backend);
-        verify(provider, never()).returnSession(pool, backend);
-        assertNull(manager.getSession(info));
     }
 
     @Test

@@ -108,6 +108,27 @@ class BackendSessionTransactionIsolationTest {
     }
 
     @Test
+    @DisplayName("Session reset should not use local transaction methods on an XA connection")
+    void testSessionResetDoesNotManageTransactionsThroughJdbc() throws Exception {
+        XADataSource mockXADataSource = mock(XADataSource.class);
+        XAConnection mockXAConnection = mock(XAConnection.class);
+        Connection mockConnection = mock(Connection.class);
+
+        when(mockXADataSource.getXAConnection()).thenReturn(mockXAConnection);
+        when(mockXAConnection.getConnection()).thenReturn(mockConnection);
+
+        BackendSessionImpl session = (BackendSessionImpl) new BackendSessionFactory(mockXADataSource)
+                .makeObject().getObject();
+
+        session.reset();
+
+        verify(mockConnection, never()).rollback();
+        verify(mockConnection, never()).getAutoCommit();
+        verify(mockConnection, never()).setAutoCommit(true);
+        session.close();
+    }
+
+    @Test
     @DisplayName("Session reset should not reset isolation if not changed")
     void testSessionResetSkipsIfNotChanged() throws Exception {
         XADataSource mockXADataSource = mock(XADataSource.class);

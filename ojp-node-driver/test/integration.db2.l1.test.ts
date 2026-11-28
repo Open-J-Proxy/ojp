@@ -20,7 +20,7 @@ const endpoint = process.env.OJP_TEST_SERVER_ENDPOINT ?? 'localhost:1059';
       try {
         await expect(client.connect()).rejects.toBeInstanceOf(OjpConnectionError);
         expect((await client.executeQuery(scalar)).rows).toEqual([{ VALUE: 1 }]);
-        await client.executeUpdate(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, label VARCHAR(100) NOT NULL)`);
+        await client.executeUpdate(`CREATE TABLE ${table} (id INTEGER NOT NULL PRIMARY KEY, label VARCHAR(100) NOT NULL)`);
         try {
           expect(await client.executeUpdate(`INSERT INTO ${table} (id, label) VALUES (?, ?)`, [1, 'before'])).toBe(1);
           expect((await client.executeQuery(`SELECT id, label FROM ${table} WHERE id = ?`, [1])).rows)

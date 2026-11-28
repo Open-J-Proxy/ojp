@@ -2132,15 +2132,11 @@ jobs:
           # Grant XA permissions to testuser
           echo "=== Granting XA permissions to testuser ==="
           
-          docker exec ojp-oracle sqlplus -s system/testpassword@localhost/XEPDB1 <<'EOF'
+          docker exec -i ojp-oracle sqlplus -s sys/testpassword@localhost/XEPDB1 as sysdba <<'EOF'
           SET ECHO ON
           SET FEEDBACK ON
           SET SERVEROUTPUT ON
           WHENEVER SQLERROR EXIT SQL.SQLCODE
-          
-          -- Grant XA_RECOVER_ADMIN role (Oracle 12c+) for XA transaction recovery
-          -- This role includes necessary privileges for XA operations
-          GRANT XA_RECOVER_ADMIN TO testuser;
           
           -- XA transaction permissions (additional grants for completeness)
           GRANT SELECT ON sys.dba_pending_transactions TO testuser;
@@ -2149,6 +2145,7 @@ jobs:
           GRANT SELECT ON sys.dba_2pc_neighbors TO testuser;
           GRANT EXECUTE ON sys.dbms_xa TO testuser;
           GRANT EXECUTE ON sys.dbms_system TO testuser;
+          GRANT EXECUTE ON sys.dbms_lock TO testuser;
           GRANT FORCE ANY TRANSACTION TO testuser;
           
           -- Verify grants
@@ -2166,6 +2163,12 @@ jobs:
             echo "ERROR: Failed to grant XA permissions!"
             exit 1
           fi
+
+          docker exec -i ojp-oracle sqlplus -L -s testuser/testpassword@localhost/XEPDB1 <<'EOF'
+          WHENEVER SQLERROR EXIT SQL.SQLCODE
+          SELECT COUNT(*) FROM sys.dba_pending_transactions;
+          EXIT;
+          EOF
           
           echo "=== XA permissions granted successfully ==="
 
@@ -2197,9 +2200,17 @@ jobs:
 
       - name: Start OJP Server container with Oracle driver from ojp-server/ojp-libs
         run: |
+          cat > "$RUNNER_TEMP/oracle-jdbc-logging.properties" <<'EOF'
+          handlers=java.util.logging.ConsoleHandler
+          .level=WARNING
+          java.util.logging.ConsoleHandler.level=WARNING
+          oracle.jdbc.level=WARNING
+          EOF
+          chmod 644 "$RUNNER_TEMP/oracle-jdbc-logging.properties"
           docker run -d --name ojp-server \
             --network host \
-            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true" \
+            -v "$RUNNER_TEMP/oracle-jdbc-logging.properties:/tmp/oracle-jdbc-logging.properties:ro" \
+            -e JAVA_TOOL_OPTIONS="-Dojp.server.slowQuerySegregation.enabled=true -Doracle.jdbc.diagnostic.enableLogging=true -Djava.util.logging.config.file=/tmp/oracle-jdbc-logging.properties" \
             ${{ env.OJP_IMAGE }}
 
       - name: Wait for ojp-server to start

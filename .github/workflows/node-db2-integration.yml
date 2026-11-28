@@ -1,0 +1,95 @@
+name: Node DB2 integration
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ojp-node-driver/package-lock.json
+      - name: Install and build Node driver
+        working-directory: ojp-node-driver
+        run: |
+          npm ci
+          npm run build
+      - name: Build OJP server
+        run: ./mvnw -q -pl ojp-server -am install -DskipTests -Dgpg.skip=true
+      - name: Download DB2 JDBC driver
+        run: |
+          mkdir -p ojp-libs
+          curl -fsSL https://repo.maven.apache.org/maven2/com/ibm/db2/jcc/11.5.9.0/jcc-11.5.9.0.jar -o ojp-libs/db2-jcc.jar
+      - name: Start DB2
+        run: |
+          prefix="ojp-node-db2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "NODE_DB2_PREFIX=$prefix" >> "$GITHUB_ENV"
+          docker run -d --name "$prefix-db" --privileged \
+            -e LICENSE=accept -e DB2INSTANCE=db2inst1 -e DB2INST1_PASSWORD=testpass \
+            -e DBNAME=testdb -e AUTOCONFIG=false -e ARCHIVE_LOGS=false \
+            -p 50000:50000 ibmcom/db2:11.5.8.0
+          for attempt in $(seq 1 80); do
+            if docker logs "$prefix-db" 2>&1 | grep -q 'Setup has completed'; then
+              break
+            fi
+            if [ "$attempt" -eq 80 ]; then
+              docker logs "$prefix-db"
+              exit 1
+            fi
+            sleep 15
+          done
+          for attempt in $(seq 1 60); do
+            if docker exec "$prefix-db" su - db2inst1 -c \
+                'db2 connect to testdb user db2inst1 using testpass' 2>&1 | grep -q 'Database Connection Information'; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs "$prefix-db"
+              exit 1
+            fi
+            sleep 5
+          done
+      - name: Start OJP server
+        run: |
+          jar=$(find "$PWD/ojp-server/target" -maxdepth 1 -name 'ojp-server-*.jar' \
+            ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)
+          test -n "$jar"
+          docker run -d --name "$NODE_DB2_PREFIX-server" --network host \
+            -v "$jar:/opt/ojp/server.jar:ro" -v "$PWD/ojp-libs:/opt/ojp-libs:ro" \
+            eclipse-temurin:25-jre java -Duser.timezone=UTC \
+            -Dojp.server.port=1059 -Dojp.prometheus.port=9159 \
+            -Dojp.libs.path=/opt/ojp-libs -jar /opt/ojp/server.jar
+          for attempt in $(seq 1 60); do
+            if docker logs "$NODE_DB2_PREFIX-server" 2>&1 | grep -q 'OJP gRPC Server started'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$NODE_DB2_PREFIX-server"
+          exit 1
+      - name: Run DB2 integration suites
+        working-directory: ojp-node-driver
+        env:
+          OJP_ENABLE_DB2_TESTS: 'true'
+        run: npx jest --runInBand 'test/integration\.db2\..*\.test\.ts$'
+      - name: Show logs and clean up
+        if: always() && env.NODE_DB2_PREFIX != ''
+        run: |
+          for name in "$NODE_DB2_PREFIX-server" "$NODE_DB2_PREFIX-db"; do
+            docker logs "$name" 2>&1 || true
+            docker rm -f "$name" || true
+          done

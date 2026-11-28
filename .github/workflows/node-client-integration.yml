@@ -116,6 +116,12 @@ jobs:
     if: needs.detect-changes.outputs.node == 'true'
     uses: ./.github/workflows/node-oracle-integration.yml
 
+  db2-integration:
+    name: DB2 integration
+    needs: [detect-changes, h2-integration]
+    if: needs.detect-changes.outputs.node == 'true'
+    uses: ./.github/workflows/node-db2-integration.yml
+
   integration:
     name: ${{ matrix.database }} integration
     needs: [detect-changes, h2-integration]
